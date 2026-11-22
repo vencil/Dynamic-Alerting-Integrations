@@ -385,34 +385,39 @@ data:
     n\"\n  - record: tenant:kube_pod_labels:count\n    expr: \"count by(tenant, da_cluster)\
     \ (\\n  label_replace(kube_pod_labels{namespace=~\\\"db-.+\\\"}, \\\"tenant\\\"\
     , \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\")\\n)\\n\"\n  - alert: VersionAwareThresholdInert\n\
-    \    expr: '(count(max by(tenant, version, severity) (user_threshold{component=\"\
-    container\", metric=\"cpu\", version=~\".+\"})) or vector(0)) > 0\n\n      and\n\
-    \n      (count(tenant:kube_pod_info:count) or vector(0)) > 0\n\n      and\n\n\
-    \      (count(tenant:kube_pod_labels:count) or vector(0)) == 0\n\n      '\n  \
-    \  for: 10m\n    labels:\n      maintenance: page\n      severity: warning\n \
-    \     tenant: ''\n    annotations:\n      description: '{{ $value | printf \"\
-    %.0f\" }} version-specific container CPU threshold(s) declared and tenant pods\
-    \ are running, but kube-state-metrics emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version].'\n\
-    \      description_zh: 已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值且租戶 Pod\
-    \ 正在運行，但 kube-state-metrics 完全未暴露 pod 標籤。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。\n\
+    \    expr: \"count(max by(tenant, version, severity) (user_threshold{component=\\\
+    \"container\\\", metric=\\\"cpu\\\", version=~\\\".+\\\"}))\\n* on() group_right()\\\
+    n(\\n  group by(da_cluster) (tenant:kube_pod_info:count)\\n  unless on(da_cluster)\\\
+    n  group by(da_cluster) (tenant:kube_pod_labels:count)\\n)\\n\"\n    for: 10m\n\
+    \    labels:\n      maintenance: page\n      severity: warning\n      tenant:\
+    \ ''\n    annotations:\n      description: '{{ $value | printf \"%.0f\" }} version-specific\
+    \ container CPU threshold(s) declared and tenant pods are running{{ with $labels.da_cluster\
+    \ }} in cluster {{ . }}{{ end }}, but {{ with $labels.da_cluster }}that cluster''s\
+    \ {{ end }}kube-state-metrics emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version]{{\
+    \ with $labels.da_cluster }} there{{ end }}.'\n      description_zh: 已宣告 {{ $value\
+    \ | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值且{{ with $labels.da_cluster }}叢集 {{ . }}\
+    \ 有{{ end }}租戶 Pod 正在運行，但{{ with $labels.da_cluster }}該叢集的{{ end }} kube-state-metrics\
+    \ 完全未暴露 pod 標籤。請為{{ with $labels.da_cluster }}該叢集的{{ end }} KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。\n\
     \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      platform_runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/version-aware-thresholds.md#for-platform-operators-ksm-allowlist-remediation\n\
     \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
     \ }}'\n      summary: Version-aware thresholds declared but kube-state-metrics\
-    \ exposes no pod labels — feature inert\n      summary_zh: 已宣告版本專屬閾值，但 kube-state-metrics\
-    \ 未暴露 pod 標籤 — 功能靜默失效\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    - name: kubernetes-metric-source-sentinels\n  rules:\n  - record: tenant:containers_without_metrics:count\n\
-    \    expr: \"count by(tenant, da_cluster) (\\n  label_replace(\\n    (\\n    \
-    \  (kube_pod_container_status_running{namespace=~\\\"db-.+\\\"} == 1)\\n     \
-    \ and on(namespace, pod, container, da_cluster)\\n        (kube_pod_container_status_running{namespace=~\\\
-    \"db-.+\\\"} offset 5m == 1)\\n    )\\n    unless on(namespace, pod, container,\
-    \ da_cluster)\\n      last_over_time(container_memory_working_set_bytes{namespace=~\\\
-    \"db-.+\\\"}[5m]),\\n    \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\
-    \"\\n  )\\n)\\n\"\n  - record: tenant:container_metrics:count\n    expr: \"count\
-    \ by(tenant, da_cluster) (\\n  label_replace(\\n    container_memory_working_set_bytes{namespace=~\\\
+    \ exposes no pod labels{{ with $labels.da_cluster }} in cluster {{ . }}{{ end\
+    \ }} — feature inert\n      summary_zh: 已宣告版本專屬閾值，但{{ with $labels.da_cluster\
+    \ }}叢集 {{ . }} 的{{ end }} kube-state-metrics 未暴露 pod 標籤 — 功能靜默失效\n      tier:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n- name: kubernetes-metric-source-sentinels\n\
+    \  rules:\n  - record: tenant:containers_without_metrics:count\n    expr: \"count\
+    \ by(tenant, da_cluster) (\\n  label_replace(\\n    (\\n      (kube_pod_container_status_running{namespace=~\\\
+    \"db-.+\\\"} == 1)\\n      and on(namespace, pod, container, da_cluster)\\n  \
+    \      (kube_pod_container_status_running{namespace=~\\\"db-.+\\\"} offset 5m\
+    \ == 1)\\n    )\\n    unless on(namespace, pod, container, da_cluster)\\n    \
+    \  last_over_time(container_memory_working_set_bytes{namespace=~\\\"db-.+\\\"\
+    }[5m]),\\n    \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\"\\n \
+    \ )\\n)\\n\"\n  - record: tenant:container_metrics:count\n    expr: \"count by(tenant,\
+    \ da_cluster) (\\n  label_replace(\\n    container_memory_working_set_bytes{namespace=~\\\
     \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"},\\n    \\\"tenant\\\"\
     , \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\"\\n  )\\n)\\n\"\n  - record: tenant:pod_state_metrics:count\n\
     \    expr: \"count by(tenant, da_cluster) (\\n  label_replace(kube_pod_info{namespace=~\\\
@@ -472,38 +477,44 @@ data:
     \")\\n)\\n\"\n  - record: tenant:kubelet_volume_stats:count\n    expr: 'count\
     \ by(tenant, da_cluster) (kubelet_volume_stats_available_bytes{tenant=~\".+\"\
     })\n\n      and on(tenant, da_cluster)\n\n      count by(tenant, da_cluster) (kubelet_volume_stats_capacity_bytes{tenant=~\"\
-    .+\"})\n\n      '\n  - alert: CustomRecipeDiskInert\n    expr: \"(\\n  max by(tenant)\
+    .+\"})\n\n      '\n  - alert: CustomRecipeDiskInert\n    expr: \"(\\n  max by(tenant,\
+    \ da_cluster) (tenant:kube_pods_running:count)\\n  and on(tenant)\\n  max by(tenant)\
     \ (\\n    user_threshold{component=\\\"custom\\\", metric=\\\"kubelet_volume_stats_available_bytes\\\
     \"}\\n    or\\n    user_threshold{component=\\\"custom\\\", metric=\\\"kubelet_volume_stats_used_bytes\\\
-    \"}\\n  )\\n  and on(tenant)\\n  tenant:kube_pods_running:count\\n)\\nunless on(tenant)\\\
-    ntenant:kubelet_volume_stats:count\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 15m\n    labels:\n      maintenance: mute\n\
-    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: You declared a disk-fill custom alert, but the platform sees\
-    \ no disk (volume) metrics for your workload, so the alert can never fire. This\
-    \ usually means your service mounts no PersistentVolumeClaim — check your deployment.\
-    \ If you DO use a PVC, contact the platform team to investigate disk-metric collection.\n\
-    \      description_zh: 您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載\
-    \ PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。\n      owner: '{{\
-    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_runbook_url:\
-    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md\n\
+    \"}\\n  )\\n)\\nunless on(tenant, da_cluster)\\ntenant:kubelet_volume_stats:count\\\
+    nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\
+    \n    for: 15m\n    labels:\n      maintenance: mute\n      severity: warning\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: You\
+    \ declared a disk-fill custom alert, but the platform sees no disk (volume) metrics\
+    \ for your workload{{ with $labels.da_cluster }} in cluster {{ . }}{{ end }},\
+    \ so the alert can never fire{{ with $labels.da_cluster }} there{{ end }}. This\
+    \ usually means your service mounts no PersistentVolumeClaim{{ with $labels.da_cluster\
+    \ }} in that cluster{{ end }} — check your deployment. If you DO use a PVC, contact\
+    \ the platform team to investigate disk-metric collection.\n      description_zh:\
+    \ 您設定了磁碟填滿告警，但平台偵測不到您工作負載{{ with $labels.da_cluster }}在叢集 {{ . }} {{ end }}的磁碟(volume)指標，該告警{{\
+    \ with $labels.da_cluster }}在該叢集{{ end }}永遠不會觸發。這通常表示您的服務{{ with $labels.da_cluster\
+    \ }}在該叢集{{ end }}沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。\n\
+    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      platform_runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md\n\
     \      platform_summary: '[SRE] {{ $labels.tenant }} disk recipe inert — volume-stats\
-    \ absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side);\
-    \ (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats\
-    \ support (kind''s default local-path does not).'\n      platform_summary_zh:\
-    \ '[SRE] 租戶 {{ $labels.tenant }} disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛\
-    \ PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3)\
-    \ CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。'\n      runbook_url: '{{\
-    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ Disk alert declared but no disk data is visible for {{ $labels.tenant }}\n \
-    \     summary_zh: 已設定磁碟告警，但偵測不到 {{ $labels.tenant }} 的磁碟資料\n      tier: '{{ with\
-    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
-    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n- name: kubernetes-node-health\n\
-    \  rules:\n  - record: tenant:node_owner:info\n    expr: \"max by(node, tenant,\
-    \ da_cluster) (\\n  label_replace(\\n    kube_pod_info{namespace=~\\\"db-.+\\\"\
-    }\\n    and on(namespace, pod, uid, da_cluster)\\n      (kube_pod_status_phase{phase=\\\
+    \ absent{{ with $labels.da_cluster }} in cluster {{ . }}{{ end }}. Check in order:\
+    \ (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats\
+    \ scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind''s\
+    \ default local-path does not).'\n      platform_summary_zh: '[SRE] 租戶 {{ $labels.tenant\
+    \ }} disk recipe inert — volume-stats 缺席{{ with $labels.da_cluster }}（叢集 {{ .\
+    \ }}）{{ end }}。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job\
+    \ 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path\
+    \ 不實作)。'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Disk alert declared but no disk data is visible for {{ $labels.tenant\
+    \ }}{{ with $labels.da_cluster }} in cluster {{ . }}{{ end }}\n      summary_zh:\
+    \ 已設定磁碟告警，但偵測不到 {{ $labels.tenant }}{{ with $labels.da_cluster }} 在叢集 {{ . }}{{\
+    \ end }} 的磁碟資料\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    - name: kubernetes-node-health\n  rules:\n  - record: tenant:node_owner:info\n\
+    \    expr: \"max by(node, tenant, da_cluster) (\\n  label_replace(\\n    kube_pod_info{namespace=~\\\
+    \"db-.+\\\"}\\n    and on(namespace, pod, uid, da_cluster)\\n      (kube_pod_status_phase{phase=\\\
     \"Running\\\"} == 1),\\n    \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
     (.*)\\\"\\n  )\\n)\\n\"\n  - record: rule_pack_kubernetes:node_not_ready:core\n\
     \    expr: \"(\\n  tenant:node_owner:info\\n  and on(node, da_cluster)\\n    (kube_node_status_condition{condition=\\\

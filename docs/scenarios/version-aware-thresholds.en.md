@@ -62,6 +62,8 @@ Which metrics accept a `version` label is declared by the platform under `dimens
 ## For Platform Operators: KSM Allowlist Remediation
 
 > **This section is for platform operators / SRE.** If a `VersionAwareThresholdInert` alert sent you here: **this is not a tenant YAML mistake — kube-state-metrics is not exposing the pod version label**, so version-aware thresholds are silently inert platform-wide. Remediation below. The heading is kept English + stable because the alert's `runbook_url` deep-links to this anchor (do not rename).
+>
+> **With several clusters**: each cluster has its own kube-state-metrics. On a Prometheus that holds every cluster's data, this alert fires once for each cluster that has tenant pods and no pod-label data at all, and the alert's `da_cluster` and annotations say which cluster's KSM to fix; another cluster being configured does not keep it quiet ([ADR-006](../adr/006-tenant-mapping-topologies.en.md), "One tenant in several clusters").
 
 ### Root cause
 

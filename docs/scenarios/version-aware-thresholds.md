@@ -62,6 +62,8 @@ cutover 不是你按一個鈕，而是 **emergent**：pod 升到 v2 後，它的
 ## For Platform Operators: KSM Allowlist Remediation
 
 > **此段為平台維運 / SRE。** 若你是被 `VersionAwareThresholdInert` 告警導到這裡：**這不是租戶的 YAML 寫錯，是 kube-state-metrics 沒暴露 pod 版號 label**，導致全平台的版本感知閾值靜默失效。以下是搶修步驟。標題保持英文 + 穩定，因為告警的 `runbook_url` 直連此 anchor（勿改名）。
+>
+> **多個叢集時**：每個叢集有自己的 kube-state-metrics。在收了各叢集資料的 Prometheus 上，這條告警對「有租戶 Pod、卻完全沒有 Pod label 資料」的每個叢集各發一則，告警的 `da_cluster` 與 annotation 指出要修的是哪個叢集的 KSM；別的叢集設好了不會讓它不響（[ADR-006](../adr/006-tenant-mapping-topologies.md)「多叢集同租戶」）。
 
 ### 根因
 

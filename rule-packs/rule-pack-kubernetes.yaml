@@ -924,12 +924,18 @@ groups:
   # expose pod labels, so the (0a) join matches nothing and every version threshold
   # silently degrades to default.
   #
-  # Three legs (all `or vector(0)` → scalar-safe so `and` matches on {}):
+  # Three legs, legs 2 and 3 judged PER CLUSTER (#4097, ADR-006):
   #   1. version-specific thresholds ARE declared (someone wants version-aware), AND
-  #   2. tenant pods ARE running (kube_pod_info > 0) — guards the scale-to-zero false
-  #      positive: if everything is scaled to 0 there is legitimately nothing to label,
-  #      AND
-  #   3. KSM emits ZERO `kube_pod_labels` series cluster-wide for tenant namespaces.
+  #   2. tenant pods ARE running in the cluster (kube_pod_info) — guards the
+  #      scale-to-zero false positive: if everything is scaled to 0 there is
+  #      legitimately nothing to label, AND
+  #   3. that cluster's KSM emits ZERO `kube_pod_labels` series for tenant namespaces.
+  # Each cluster has its own kube-state-metrics, so one with the allowlist set
+  # says nothing about another: counted fleet-wide, the configured cluster's pod
+  # labels kept the alert quiet for the one that has none. One alert per such
+  # cluster, carrying its `da_cluster`. Where no series carries the label (a
+  # single Prometheus) everything is one group with no `da_cluster` and the
+  # alert fires exactly when the fleet-wide form did.
   #
   # Why leg 3 counts ALL pod labels (not just version labels): empirically verified on
   # kind — with the allowlist ON, KSM emits a BASE `kube_pod_labels{ns,pod,uid}` series
@@ -947,9 +953,9 @@ groups:
   # per-tenant recordings at the EDGE (label_replace namespace→tenant, the
   # established idiom), federate THOSE, and let the alert read only recordings.
   # The recordings carry per-tenant series COUNTS but the alert consumes PRESENCE
-  # only (count()>0 / ==0), so the 3-leg semantics — incl. the scale-to-zero
-  # guard — are unchanged (promtool cases A–E pin this). Records + alert share
-  # one group (sequential same-cycle eval, as node-health does).
+  # only (`group by(da_cluster)` … `unless`), so the 3-leg semantics — incl. the
+  # scale-to-zero guard — are unchanged (promtool cases A–E pin this). Records +
+  # alert share one group (sequential same-cycle eval, as node-health does).
   - name: kubernetes-version-aware-sentinel
     rules:
       # Leg-2 signal: per-tenant kube_pod_info series count (ALL phases — the
@@ -962,37 +968,55 @@ groups:
 
       # Leg-3 signal: per-tenant kube_pod_labels series count. With the KSM
       # allowlist OFF, KSM emits NO kube_pod_labels at all → this recording emits
-      # NO series → absent after federation → the alert's `or vector(0)` turns
-      # that absence into 0 (the fire condition), exactly as the raw leg behaved.
+      # NO series for that cluster → absent after federation → nothing for the
+      # alert's `unless on(da_cluster)` to remove (the fire condition), exactly
+      # as the raw leg behaved.
       - record: tenant:kube_pod_labels:count
         expr: |
           count by(tenant, da_cluster) (
             label_replace(kube_pod_labels{namespace=~"db-.+"}, "tenant", "$1", "namespace", "(.+)")
           )
 
+      # Shape: <how many version-specific thresholds> × <1 per inert cluster>.
+      #   * `group by(da_cluster)` is 1 per cluster that has the series, so the
+      #     product — the alert's value, which the descriptions print — stays
+      #     the number of declared thresholds, as before.
+      #   * the threshold count has no labels (thresholds are per tenant, not
+      #     per cluster: ADR-006 contract 3) and meets every cluster's row
+      #     through `on() group_right()`; with no threshold declared `count()`
+      #     returns nothing and so does the product — no `or vector(0)` needed.
+      #   * the gate is fleet-wide on purpose: narrowing it to clusters where a
+      #     tenant that HAS such a threshold runs would join the threshold's
+      #     `tenant` to the pod recordings' `tenant` (a db-* namespace), which
+      #     the fleet-wide form never did — in a single Prometheus the alert
+      #     would stop firing wherever the two do not meet. So a cluster that
+      #     runs only OTHER tenants alerts too when it has no pod labels.
       - alert: VersionAwareThresholdInert
         expr: |
-          (count(max by(tenant, version, severity) (user_threshold{component="container", metric="cpu", version=~".+"})) or vector(0)) > 0
-          and
-          (count(tenant:kube_pod_info:count) or vector(0)) > 0
-          and
-          (count(tenant:kube_pod_labels:count) or vector(0)) == 0
+          count(max by(tenant, version, severity) (user_threshold{component="container", metric="cpu", version=~".+"}))
+          * on() group_right()
+          (
+            group by(da_cluster) (tenant:kube_pod_info:count)
+            unless on(da_cluster)
+            group by(da_cluster) (tenant:kube_pod_labels:count)
+          )
         for: 10m
         labels:
           severity: warning
           maintenance: page
-          # Platform-scoped: the count() expr yields no tenant, so the alert has
-          # none — same as the *ExporterAbsent sentinels. Written as "" (no
+          # Platform-scoped: the expr keeps `da_cluster` only and yields no
+          # tenant, so the alert has none — same as the *ExporterAbsent
+          # sentinels. Written as "" (no
           # tenant: Prometheus drops an empty label, the label set is what
           # `{{ $labels.tenant }}` rendered) for custom-rule-policy
           # required_labels; a copy of $labels.tenant would be judged by
           # preserved_labels, which this result does not keep (#4098).
           tenant: ""
         annotations:
-          summary: "Version-aware thresholds declared but kube-state-metrics exposes no pod labels — feature inert"
-          summary_zh: "已宣告版本專屬閾值，但 kube-state-metrics 未暴露 pod 標籤 — 功能靜默失效"
-          description: "{{ $value | printf \"%.0f\" }} version-specific container CPU threshold(s) declared and tenant pods are running, but kube-state-metrics emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version]."
-          description_zh: "已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值且租戶 Pod 正在運行，但 kube-state-metrics 完全未暴露 pod 標籤。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。"
+          summary: "Version-aware thresholds declared but kube-state-metrics exposes no pod labels{{ with $labels.da_cluster }} in cluster {{ . }}{{ end }} — feature inert"
+          summary_zh: "已宣告版本專屬閾值，但{{ with $labels.da_cluster }}叢集 {{ . }} 的{{ end }} kube-state-metrics 未暴露 pod 標籤 — 功能靜默失效"
+          description: "{{ $value | printf \"%.0f\" }} version-specific container CPU threshold(s) declared and tenant pods are running{{ with $labels.da_cluster }} in cluster {{ . }}{{ end }}, but {{ with $labels.da_cluster }}that cluster's {{ end }}kube-state-metrics emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version]{{ with $labels.da_cluster }} there{{ end }}."
+          description_zh: "已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值且{{ with $labels.da_cluster }}叢集 {{ . }} 有{{ end }}租戶 Pod 正在運行，但{{ with $labels.da_cluster }}該叢集的{{ end }} kube-state-metrics 完全未暴露 pod 標籤。請為{{ with $labels.da_cluster }}該叢集的{{ end }} KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。"
           # JIT lifecycle hook (ADR-024 docs): this platform-scoped alert deep-links
           # the on-call SRE straight to the KSM-remediation section. ⚠ The anchor
           # `#for-platform-operators-ksm-allowlist-remediation` is a CONTRACT with that
@@ -1071,8 +1095,8 @@ groups:
             )
           )
 
-      # Per tenant AND cluster (the sentinel group's tenant:kube_pod_info:count
-      # is per tenant only, and stays so for VersionAwareThresholdInert).
+      # Same expression as the sentinel group's tenant:kube_pod_info:count,
+      # kept under its own name: the two alerts that read them are independent.
       - record: tenant:pod_state_metrics:count
         expr: |
           count by(tenant, da_cluster) (
@@ -1141,6 +1165,18 @@ groups:
   # tenant who DECLARED a disk recipe and HAS running pods, but whose volume-stats
   # series are absent, fires CustomRecipeDiskInert.
   #
+  # PER CLUSTER (#4097, ADR-006): "has running pods" and "volume-stats absent"
+  # are read in the same cluster. The alert starts from the tenant's running
+  # pods — one row per cluster the tenant runs in — keeps the tenants that
+  # declared a recipe (`and on(tenant)`: the recipe is the tenant's, not a
+  # cluster's), and removes the clusters that do have volume-stats
+  # (`unless on(tenant, da_cluster)`). Starting from the recipe instead (a row
+  # with no cluster) let the volume-stats of ONE cluster answer for all of them.
+  # Where no series carries `da_cluster` there is one row per tenant and the
+  # alert is the one it was. The pods row is re-aggregated `by(tenant,
+  # da_cluster)` so the alert carries those two labels and nothing a federation
+  # hop added to the recording (job / instance of the scrape).
+  #
   # PER-TENANT (unlike the platform-scoped VersionAwareThresholdInert above): it
   # routes to the DECLARING tenant so they can self-serve the dominant case (their
   # workload mounts no PVC), and carries a platform_summary pair for the SRE who
@@ -1159,7 +1195,8 @@ groups:
   # mirrors every other pack alert. The declared-signal aggregates user_threshold with
   # `max by(tenant)` (NOT count): HA-invariant (§4.3) — user_threshold doubles under
   # replicaCount=2, max dedupes; only the per-tenant PRESENCE matters here (the value is
-  # unused, it just feeds the `and on(tenant)` set join). The pods/volume-stats legs use
+  # unused, it just feeds the `and on(tenant)` set join; the alert's own value is the
+  # running-pod count of that cluster, which no annotation prints). The pods/volume-stats legs use
   # `count` — those come from KSM/kubelet (single-source, not doubled by exporter HA). NOTE: deliberately NOT an expected-vs-reporting
   # per-PVC diff — a tenant with SOME volume-stats is "covered"; a single non-volume-
   # stats PVC (NFS / Pending) must not flood SRE (adversarial-review reject).
@@ -1220,15 +1257,15 @@ groups:
       - alert: CustomRecipeDiskInert
         expr: |
           (
+            max by(tenant, da_cluster) (tenant:kube_pods_running:count)
+            and on(tenant)
             max by(tenant) (
               user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes"}
               or
               user_threshold{component="custom", metric="kubelet_volume_stats_used_bytes"}
             )
-            and on(tenant)
-            tenant:kube_pods_running:count
           )
-          unless on(tenant)
+          unless on(tenant, da_cluster)
           tenant:kubelet_volume_stats:count
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -1238,12 +1275,12 @@ groups:
           maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
-          summary: "Disk alert declared but no disk data is visible for {{ $labels.tenant }}"
-          summary_zh: "已設定磁碟告警，但偵測不到 {{ $labels.tenant }} 的磁碟資料"
-          platform_summary: "[SRE] {{ $labels.tenant }} disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
-          platform_summary_zh: "[SRE] 租戶 {{ $labels.tenant }} disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
-          description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
-          description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
+          summary: "Disk alert declared but no disk data is visible for {{ $labels.tenant }}{{ with $labels.da_cluster }} in cluster {{ . }}{{ end }}"
+          summary_zh: "已設定磁碟告警，但偵測不到 {{ $labels.tenant }}{{ with $labels.da_cluster }} 在叢集 {{ . }}{{ end }} 的磁碟資料"
+          platform_summary: "[SRE] {{ $labels.tenant }} disk recipe inert — volume-stats absent{{ with $labels.da_cluster }} in cluster {{ . }}{{ end }}. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
+          platform_summary_zh: "[SRE] 租戶 {{ $labels.tenant }} disk recipe inert — volume-stats 缺席{{ with $labels.da_cluster }}（叢集 {{ . }}）{{ end }}。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
+          description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload{{ with $labels.da_cluster }} in cluster {{ . }}{{ end }}, so the alert can never fire{{ with $labels.da_cluster }} there{{ end }}. This usually means your service mounts no PersistentVolumeClaim{{ with $labels.da_cluster }} in that cluster{{ end }} — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
+          description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載{{ with $labels.da_cluster }}在叢集 {{ . }} {{ end }}的磁碟(volume)指標，該告警{{ with $labels.da_cluster }}在該叢集{{ end }}永遠不會觸發。這通常表示您的服務{{ with $labels.da_cluster }}在該叢集{{ end }}沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
           platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
