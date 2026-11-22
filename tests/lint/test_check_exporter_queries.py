@@ -17,19 +17,22 @@ Pinned contracts
    is a finding by itself in both halves, and — with query-exporter installed
    — it is not derived as served, so a pack reading it gets the headline
    finding. A query whose `metrics` is not a list of names is "cannot run".
+8. every metric a reference-validation waveform library of a query-exporter
+   pack is written on (tests/rulepacks/reference-validation/) is one the pack's
+   queries file serves (#4088): a signature on any other name can only MISS.
+   A library that names no single pack, or no metric, is a failure — not a
+   file the check stops reading.
 9. a file whose shape the check cannot walk (#4119) — `metrics` / `queries`
    not a mapping, a metric or query that is not a mapping, a name that is not a
    string, a query's `metrics` / `databases` null or not a list of names — is
    rc 2 naming the file and the entry, without query-exporter too; every such
    shape is one query-exporter refuses as well (never stricter than it). What
    query-exporter refuses beyond that is rc 2 with its own location and reason.
-10. the runtime half compares a counter's type under its TYPE line's name,
-   <name>_total (#4119): a gauge served as a counter, and the reverse, are findings.
-8. every metric a reference-validation waveform library of a query-exporter
-   pack is written on (tests/rulepacks/reference-validation/) is one the pack's
-   queries file serves (#4088): a signature on any other name can only MISS.
-   A library that names no single pack, or no metric, is a failure — not a
-   file the check stops reading.
+10. the runtime half finds a counter's TYPE line under <name>_total (text format)
+   or without `_total` (OpenMetrics), and an enum is exposed as a gauge or a
+   stateset (#4119): a gauge served as a counter, and the reverse, are findings.
+11. `interval` and `timeout` are read as query-exporter reads them (#4119): a
+   malformed value is not a traceback, and "1e1" is a 10 s timeout.
 
 The tests of 6, 7 and 8 that need query-exporter skip without it — and the
 Python Tests job does not install it. They are not left to that: ci.yml's
@@ -476,6 +479,71 @@ def test_compare_served_reads_a_counters_type_off_its_total_line(tree, tmp_path)
                for f in found), found
 
 
+@pytest.mark.parametrize("declared, lines, wrong", [
+    # an enum: a gauge in the text format, a stateset in OpenMetrics
+    ({"type": "enum", "states": ["a", "b"], "expiration": "1m"}, ["# TYPE st gauge"], False),
+    ({"type": "enum", "states": ["a", "b"], "expiration": "1m"}, ["# TYPE st stateset"], False),
+    ({"type": "enum", "states": ["a", "b"], "expiration": "1m"}, ["# TYPE st counter"], True),
+], ids=["enum-text", "enum-openmetrics", "enum-as-counter"])
+def test_compare_served_knows_how_each_type_is_exposed(tree, tmp_path, declared, lines, wrong):
+    doc = yaml.safe_load(yaml.safe_dump(QUERIES))
+    doc["metrics"]["st"] = declared
+    doc["queries"]["x_main"]["metrics"].append("st")
+    tree(["x_up == 0"], queries=doc)
+    found = ceq.compare_served("x", _scrape(lines + ['st{st="a"} 1.0'], tmp_path))
+    assert any("st is served as" in f for f in found) is wrong, found
+
+
+def test_openmetrics_type_of_a_counter_declared_with_total():
+    """OpenMetrics names a counter's TYPE line without `_total`, also when the
+    file declares the counter as <x>_total."""
+    assert ceq.served_type({"c": "gauge"}, "c_total") == "gauge"
+    assert ceq.served_type({"c_total": "counter"}, "c") == "counter"
+    assert ceq.served_type({"c": "counter"}, "c") == "counter"
+    assert ceq.served_type({}, "c") is None
+
+
+@pytest.mark.parametrize("field, value", [("timeout", "."), ("interval", "."),
+                                          ("interval", "1.2.3"), ("timeout", [1])])
+def test_a_malformed_interval_or_timeout_is_no_traceback(tree, field, value):
+    """#4119: left to query-exporter's validation (which names its location),
+    not a ValueError in this check's own parse."""
+    doc = yaml.safe_load(yaml.safe_dump(QUERIES))
+    doc["queries"]["x_main"][field] = value
+    tree(["x_up == 0"], queries=doc)
+
+
+def test_a_timeout_query_exporter_reads_as_a_float_is_compared():
+    """"1e1" is a 10 s timeout to query-exporter; with a 5 s interval it is late."""
+    assert ceq.timeout_seconds("1e1") == 10
+    assert ceq.interval_seconds("5") == 5
+
+
+_PARSE_VALUES = [15, 15.0, 1.5, "15", "2m", "1h", "1d", "15s", "1e1", "1.5", ".", "1.2.3",
+                 " 15", "15 ", "m", "", "-5", "0", 0.3, 0.15, True, None, [1], {"a": 1}]
+
+
+@pytest.mark.parametrize("value", _PARSE_VALUES, ids=[repr(v) for v in _PARSE_VALUES])
+def test_interval_and_timeout_parse_as_query_exporter_does(value):
+    """interval_seconds / timeout_seconds against query-exporter's own field
+    types (schema.TimeInterval, schema.Timeout): a value it accepts reads to
+    the same number of seconds here. A value it refuses (by validation error or
+    by its own crash) must not raise here — query-exporter then refuses the
+    file in served_names, so what it reads as does not reach a verdict. A
+    query-exporter that changes either field turns this red."""
+    _need_query_exporter()
+    from pydantic import TypeAdapter, ValidationError  # noqa: PLC0415
+    from query_exporter import schema  # noqa: PLC0415
+    for adapter, mine in ((TypeAdapter(schema.TimeInterval), ceq.interval_seconds),
+                          (TypeAdapter(schema.Timeout), ceq.timeout_seconds)):
+        got = mine(value)                      # never raises
+        try:
+            want = float(adapter.validate_python(value))
+        except (ValidationError, TypeError):
+            continue
+        assert want == got, (value, want, got)
+
+
 @pytest.mark.parametrize("text, bad", [
     ("query_timestamp{query='x_gone'}", "x_gone"),                    # single quotes
     ('query_interval{query=~"x_liveness|x_gone"}', "x_gone"),         # alternation
@@ -530,7 +598,7 @@ def test_a_gauge_outside_the_rated_argument_is_fine(tree):
 def test_query_without_timeout_or_with_a_late_one(tree):
     q = yaml.safe_load(yaml.safe_dump(QUERIES))
     del q["queries"]["x_main"]["timeout"]
-    q["queries"]["x_liveness"]["timeout"] = "15s"
+    q["queries"]["x_liveness"]["timeout"] = 15   # a float to query-exporter: "15s" it refuses
     found = tree(["x_up == 0"], queries=q)
     assert any("query x_main has no timeout" in f for f in found), found
     assert any("query x_liveness timeout 15s is not below its interval 15s" in f

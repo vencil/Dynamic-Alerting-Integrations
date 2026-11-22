@@ -266,14 +266,33 @@ _BUILTIN_SELECTOR = re.compile(
     r"\b(query_timestamp|query_interval)\s*\{((?:[^{}\"'`]|" + _STR + r")*)\}")
 
 
-def _seconds(value: "int | float | str") -> float:
-    """A query-exporter duration: a number of seconds, or a number with s/m/h/d."""
-    if isinstance(value, (int, float)):
-        return float(value)
-    m = re.fullmatch(r"\s*([0-9.]+)\s*([smhd]?)\s*", str(value))
-    if not m:
+def interval_seconds(value: object) -> float:
+    """A query's `interval` in seconds, as query-exporter reads it: a string
+    ``^[0-9]+[smhd]?$``, or anything int() takes. A value query-exporter
+    refuses may read as anything here but never raises: query-exporter then
+    refuses the file by location in served_names, and the run is "cannot run"
+    whatever this said. Pinned by test_interval_and_timeout_parse_as_query_exporter_does
+    (#4119)."""
+    multiplier = 1
+    if isinstance(value, str):
+        m = re.fullmatch(r"([0-9]+)([smhd]?)", value)
+        if not m:
+            return float("nan")
+        value = m.group(1)
+        multiplier = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+    try:
+        return float(int(value) * multiplier)  # type: ignore[call-overload]
+    except (TypeError, ValueError, OverflowError):
         return float("nan")
-    return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+
+
+def timeout_seconds(value: object) -> float:
+    """A query's `timeout` in seconds, as query-exporter reads it: a float (a
+    number, or a string that is one — "1e1" is 10; "15s" is no timeout to it)."""
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return float("nan")
 
 
 _GO_SIMPLE = {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
@@ -440,9 +459,9 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
         if not timeout:
             out.append(f"{rel}: query {name} has no timeout — a hung statement holds "
                        "the database's only connection and every other query waits")
-        elif interval and _seconds(timeout) >= _seconds(interval):
-            out.append(f"{rel}: query {name} timeout {_seconds(timeout):g}s is not below "
-                       f"its interval {_seconds(interval):g}s")
+        elif interval and timeout_seconds(timeout) >= interval_seconds(interval):
+            out.append(f"{rel}: query {name} timeout {timeout_seconds(timeout):g}s is not below "
+                       f"its interval {interval_seconds(interval):g}s")
     # The query the presence check names is the liveness query. It runs on a
     # database entry no other query uses: each database entry has its own
     # connection pool and worker, so a hung query cannot hold the connection
@@ -494,6 +513,21 @@ def _parse_exposition(text: str) -> list[tuple[str, dict[str, str], float]]:
     return out
 
 
+# The TYPE a declared query-exporter metric type is exposed as (prometheus_client):
+# an enum is a gauge in the text format and a stateset in OpenMetrics (#4119).
+_SERVED_TYPES = {"enum": {"gauge", "stateset"}}
+
+
+def served_type(types: dict[str, str], name: str) -> "str | None":
+    """The TYPE line of the declared metric *name* in a scrape. The text format
+    names a counter's TYPE line <name>_total; OpenMetrics names it without
+    `_total`, also for a counter declared as <x>_total (#4119)."""
+    for candidate in (name, f"{name}_total", name.removesuffix("_total")):
+        if candidate in types:
+            return types[candidate]
+    return None
+
+
 def compare_served(pack: str, scrape: Path) -> list[str]:
     """Findings of the runtime half for *pack* against the scrape in *scrape*."""
     match = [b for b in bindings() if b[0] == pack]
@@ -532,10 +566,8 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
         out.append(f"{name} is derived from {queries.relative_to(_REPO)} but not served")
     for name, spec in sorted((doc.get("metrics") or {}).items()):
         want = (spec or {}).get("type")
-        # The text format names a counter's TYPE line <name>_total (prometheus_client;
-        # OpenMetrics uses <name>), so a counter is found under either (#4119).
-        got = types.get(name) if name in types else types.get(f"{name}_total")
-        if want and got and got != want:
+        got = served_type(types, name)
+        if want and got and got not in _SERVED_TYPES.get(want, {want}):
             out.append(f"{name} is served as {got}, the file declares {want}")
     # What the pack itself reads, query-exporter's built-ins included: for those,
     # a series per `query` label value the pack (or its presence check) names.
