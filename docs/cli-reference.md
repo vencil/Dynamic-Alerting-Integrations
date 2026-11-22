@@ -488,7 +488,7 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
    ```
    每一項產生一組比對：新查詢 `new_query` 是 migrate 產生的 recording rule；舊查詢 `old_query` 是原規則的左半邊以同一種方式依租戶聚合，rate 類規則保留 `rate()`（例如 `sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))` 對 `tenant:custom_mysql_global_status_slow_queries:sum`）。兩邊量綱相同，recording rule 有載入並正常評估時數值會一致。原始 series 沒有 `tenant` label 時，舊查詢會多出一個沒有租戶的組，報告裡列為新側缺值。字典判定改用黃金標準的項（有 `golden_rule`）migrate 不產出 recording rule，沒有這兩欄，validate 跳過並在 stderr 列出。
    舊版 migrate 產的檔沒有 `old_query`／`new_query`，validate 會在 stderr 警告並退回「原始指標 對 `tenant:<key>:max`」：rate 類與 `:sum` 的組在這種檔上比不出來，請用新版 migrate 重產。⚠️ v2.9.0 映像的 migrate 與 validate 都還是舊行為。 <!-- image-caveat: v2.9.0 -->
-   不能用的項目會讓整次執行以結束碼 2 停下，stderr 一行點名每個項目的 key 與原因，不比對任何一組（[#4210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4210)；先前是靜默略過，剩下的組照常比對）。不能用的形狀：值不是 mapping（例如留空成 null）、key 不是字串、`old_query`／`new_query`／`original_metric` 有寫但不是非空字串、`old_query` 與 `new_query` 只寫了一個、兩者都沒有且也沒有 `original_metric` 或 `golden_rule`。migrate 寫出的每一項都帶 `original_metric`，所以這些只會來自手改或損毀的檔。
+   不能用的項目會讓整次執行以結束碼 2 停下，stderr 一行點名每個項目的 key 與原因，不比對任何一組（[#4210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4210)；先前是靜默略過，剩下的組照常比對）。不能用的形狀：值不是 mapping（例如留空成 null）、key 不是字串、`old_query`／`new_query` 有寫但不是非空字串、退回舊格式比對時 `original_metric` 不是非空字串、`old_query` 與 `new_query` 只寫了一個、兩者都沒有且也沒有 `original_metric` 或 `golden_rule`。migrate 正常產出的檔不會碰到；`original_metric` 只在退回舊格式比對時才檢查。
 
 2. **Query 模式**：`--old <query> --new <query>`
    直接指定兩組 PromQL

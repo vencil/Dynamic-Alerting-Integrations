@@ -215,6 +215,7 @@ class TestLoadMappingPairs:
          "new_query 不是非空字串（實為數字）"),
         ("custom_x: {original_metric: [m]}\n",
          "original_metric 不是非空字串（實為清單）"),
+        ("2026-01-01: {original_metric: m}\n", "key 不是字串（實為其他型別）"),
     ])
     def test_an_unusable_entry_is_named_and_refused(self, tmp_path, text, reason):
         """#4210: each of these was skipped without a word (or crashed, for a
@@ -247,6 +248,37 @@ class TestLoadMappingPairs:
         assert [(x["label"], x["new_query"]) for x in pairs] == [
             ("pair", "tenant:pair:max"), ("legacy_critical", "tenant:legacy:max")]
         assert "gold" in capsys.readouterr().err
+
+    def test_original_metric_is_judged_only_where_it_is_read(self, tmp_path):
+        """migrate writes `original_metric: ""` for a key equal to the
+        prefix; beside a usable pair (or a golden rule) it is never read."""
+        p = tmp_path / "mapping.yaml"
+        p.write_text("x: {old_query: 'sum(a)', new_query: 't:x', original_metric: ''}\n"
+                     "g: {golden_rule: G, original_metric: ''}\n", encoding="utf-8")
+        assert [x["label"] for x in vm.load_mapping_pairs(_mapping_args(p))] == ["x"]
+
+    def test_a_key_is_printed_safe_and_cut(self, tmp_path, capsys):
+        from _lib_exitcodes import CallerError
+        p = tmp_path / "mapping.yaml"
+        long_key = "k" * 500
+        p.write_text('"bad\\n[PASS] ok\\x1b[2J":\n'
+                     f"{long_key}:\n"
+                     '"g\\x1b[31m": {golden_rule: G, original_metric: m}\n', encoding="utf-8")
+        with pytest.raises(CallerError) as exc:
+            vm.load_mapping_pairs(_mapping_args(p))
+        said = str(exc.value)
+        assert "\n" not in said and "\x1b" not in said
+        assert "bad?[PASS] ok?[2J（" in said
+        assert "k" * 120 + "…（" in said and "k" * 121 not in said
+
+    def test_the_golden_list_is_printed_safe(self, tmp_path, capsys):
+        p = tmp_path / "mapping.yaml"
+        p.write_text('ok: {original_metric: m}\n'
+                     '"g\\x1b[31m": {golden_rule: G, original_metric: m}\n'
+                     '"l\\x1b[32m_critical": {original_metric: m}\n', encoding="utf-8")
+        vm.load_mapping_pairs(_mapping_args(p))
+        err = capsys.readouterr().err
+        assert "\x1b" not in err and "g?[31m" in err and "l?[32m_critical" in err
 
     def test_the_cli_exits_2_naming_the_entry_before_any_query(self, tmp_path):
         import subprocess

@@ -160,31 +160,51 @@ _KIND = {type(None): "空值", str: "字串", int: "數字", float: "數字",
          bool: "布林值", list: "清單", dict: "映射"}
 
 
+_KEY_SHOWN = 120  # a key longer than this is cut in the refusal line
+
+
 def _kind(value):
-    return _KIND.get(type(value), type(value).__name__)
+    return _KIND.get(type(value), "其他型別")
+
+
+def _shown_key(key):
+    """*key* as the refusal line names it: control characters neutralised,
+    a non-string as its repr, a very long one cut."""
+    label = safe_label(key if isinstance(key, str) else repr(key))
+    return label if len(label) <= _KEY_SHOWN else label[:_KEY_SHOWN] + "…"
 
 
 def _unusable_reason(key, info):
     """Why the `--mapping` entry *key* → *info* cannot become a pair, or None.
 
     A field counts as given when it is there and not null; a given field
-    must be a non-empty string. Usable: `old_query` and `new_query` both
-    given; or neither, and a truthy `golden_rule` (skipped, said) or a given
-    `original_metric` (the legacy pair).
+    the entry is read by must be a non-empty string. Usable: `old_query` and
+    `new_query` both given; or neither, and a truthy `golden_rule` (skipped,
+    said) or a given `original_metric` (the legacy pair). `original_metric`
+    is judged only on the legacy path, the one that reads it: migrate can
+    write it empty (a key equal to the prefix) beside a usable pair.
     """
     if not isinstance(key, str):
         return f"key 不是字串（實為{_kind(key)}）"
     if not isinstance(info, dict):
         return f"值不是映射（實為{_kind(info)}）"
-    for field in ("old_query", "new_query", "original_metric"):
-        value = info.get(field)
-        if value is not None and not (isinstance(value, str) and value.strip()):
-            return f"{field} 不是非空字串（實為{_kind(value)}）"
+    for field in ("old_query", "new_query"):
+        reason = _not_a_string(info, field)
+        if reason:
+            return reason
     if (info.get("old_query") is None) != (info.get("new_query") is None):
         return "old_query 與 new_query 只有一個"
-    if (info.get("old_query") is None and not info.get("golden_rule")
-            and info.get("original_metric") is None):
+    if info.get("old_query") is not None or info.get("golden_rule"):
+        return None
+    if info.get("original_metric") is None:
         return "沒有 old_query／new_query，也沒有 original_metric 或 golden_rule"
+    return _not_a_string(info, "original_metric")
+
+
+def _not_a_string(info, field):
+    value = info.get(field)
+    if value is not None and not (isinstance(value, str) and value.strip()):
+        return f"{field} 不是非空字串（實為{_kind(value)}）"
     return None
 
 
@@ -201,8 +221,8 @@ def load_mapping_pairs(args):
     舊檔對它們組出的 `tenant:<key>:max` 不存在、只會報新側缺值，所以跳過並說明。
 
     ⛔ 不能用的項目是 caller error（#4210，dev-rules §13 的 supplied-but-unusable，
-    比照 #1649）：先前它們被靜默略過，使用者以為那個 key 比對過了。migrate 寫的
-    每一項都帶 `original_metric`，所以這些只會來自手改或損毀的檔；全部點名
+    比照 #1649）：先前它們被靜默略過，使用者以為那個 key 比對過了。migrate 正常
+    產出的檔不會碰到，碰到的是手改或損毀的檔；全部點名
     （key 與原因）後以 rc 2 結束，而不是只比對剩下的。形狀見 `_unusable_reason`。
     """
     # #3415 / #3445: the path and the content judged by the lib — missing,
@@ -217,8 +237,7 @@ def load_mapping_pairs(args):
     for prefixed_key, info in mapping.items():
         reason = _unusable_reason(prefixed_key, info)
         if reason:
-            label = prefixed_key if isinstance(prefixed_key, str) else repr(prefixed_key)
-            unusable.append(f"{safe_label(label)}（{reason}）")
+            unusable.append(f"{_shown_key(prefixed_key)}（{reason}）")
             continue
         original = info.get("original_metric")
         old_query, new_query = info.get("old_query"), info.get("new_query")
@@ -245,11 +264,11 @@ def load_mapping_pairs(args):
             reason="mapping_entry_unusable")
     if golden:
         print(f"ℹ️  {len(golden)} 項改用黃金標準，migrate 沒有為它們產生 recording rule，"
-              f"不在這裡比對: {', '.join(golden)}", file=sys.stderr)
+              f"不在這裡比對: {', '.join(map(safe_label, golden))}", file=sys.stderr)
     if legacy:
         print(f"⚠️  {mapping_path} 沒有 old_query／new_query（舊版 migrate 產出），"
               f"{len(legacy)} 組改用「原始指標 vs tenant:<key>:max」比對；rate 類或 :sum "
-              f"的組會比不出來。請用新版 migrate 重產這個檔: {', '.join(legacy)}",
+              f"的組會比不出來。請用新版 migrate 重產這個檔: {', '.join(map(safe_label, legacy))}",
               file=sys.stderr)
     return pairs
 
