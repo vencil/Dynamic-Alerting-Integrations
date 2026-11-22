@@ -118,6 +118,8 @@ Dangling Defaults Guard check (routing: generate-routes)
 conf.d/ tree (GitOps merge)
 ```
 
+> ⚠️ The diagram is the design. The Profile Builder → `da-batchpr apply` steps are not wired today (experimental, see [`batch-pr`](../cli-reference.en.md#batch-pr)); to import customer rules, use the per-tenant [`migrate`](../cli-reference.en.md#migrate).
+
 ### 5.2 MetricsQL handling and anti-vendor-lock-in
 
 - **Dialect detection**: `da-parser import` tags each rule as `prom` / `metricsql` / `ambiguous`
@@ -190,8 +192,7 @@ After finding your path via the §1 decision tree:
 
 - [ ] Run `da-parser import` against the customer PromRule corpus
 - [ ] Check dialect distribution + non-portable ratio
-- [ ] Extract cluster + Profile-as-Directory-Default via the Profile Builder library (the standalone `da-tools profile build` CLI is not yet shipped — planned) <!-- datools-cmd-ignore: planned CLI, not shipped -->
-- [ ] Run `da-batchpr apply` to open Base + tenant chunk PRs
+- [ ] Run [`da-tools migrate`](../cli-reference.en.md#migrate) per tenant to produce conf.d tenant files (the Profile Builder and `da-batchpr apply` are not wired, see [`batch-pr`](../cli-reference.en.md#batch-pr))
 - [ ] Run `da-guard` through the schema / cardinality / redundant-override checks; on exit 4 (the tree holds routing or domain policy, which da-guard no longer judges since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)) also run `da-tools generate-routes --config-dir <conf.d> --validate --strict`
 - [ ] Details → [Migration Toolkit Installation](../migration-toolkit-installation.en.md)
 

@@ -104,24 +104,73 @@ def load_queries(path: Path) -> dict:
         raise CannotRun(f"cannot read {path}: {e}") from e
     if not isinstance(doc, dict):
         raise CannotRun(f"{path}: the top-level YAML document is not a mapping")
+    problem = shape_problem(doc)
+    if problem:
+        raise CannotRun(f"{path}: {problem}")
     return doc
+
+
+def _names(value: object) -> bool:
+    """A non-empty list of strings: what query-exporter takes for a query's
+    `metrics` and `databases`."""
+    return isinstance(value, list) and bool(value) and all(isinstance(v, str) for v in value)
+
+
+def shape_problem(doc: dict) -> "str | None":
+    """The first shape of *doc* this tool cannot walk, named; None if it can.
+
+    Only the containers this tool reads (#4119): `metrics` and `queries` are
+    mappings keyed by name, every metric and query is a mapping, and a query's
+    `metrics` and `databases` are lists of names. Everything else (types,
+    intervals, SQL parameters) is left to query-exporter's own validation in
+    served_names(). Checked without query-exporter, so a malformed file is
+    "cannot run" by name, never a traceback. Each shape refused here is one
+    query-exporter refuses too (test_every_shape_refused_here_query_exporter_refuses):
+    this is never stricter than the exporter."""
+    for section, item in (("metrics", "metric"), ("queries", "query")):
+        entries = doc.get(section)
+        if entries is None:
+            continue
+        if not isinstance(entries, dict):
+            return f"`{section}` must be a mapping of {item} names, not {type(entries).__name__}"
+        for name, spec in entries.items():
+            if not isinstance(name, str):
+                return f"`{section}`: {item} name {name!r} is not a string"
+            if not isinstance(spec, dict):
+                return f"{item} {name} must be a mapping, not {type(spec).__name__}"
+            if section == "queries":
+                for key in ("metrics", "databases"):
+                    if not _names(spec.get(key)):
+                        return f"query {name}: `{key}` must be a non-empty list of names"
+    return None
 
 
 def unattached_metrics(doc: dict) -> set[str]:
     """Metrics the file declares that no query lists under its `metrics:`.
 
     Read off the YAML, so it answers without query-exporter installed; a shape
-    query-exporter would refuse (a query's `metrics` that is not a list of
-    names) is "cannot run" by name here too, not a traceback."""
+    query-exporter would refuse (shape_problem) is "cannot run" by name here
+    too, not a traceback."""
+    problem = shape_problem(doc)
+    if problem:
+        raise CannotRun(problem)
     attached: set[str] = set()
-    for qname, q in (doc.get("queries") or {}).items():
-        listed = (q or {}).get("metrics") if isinstance(q, dict) else None
-        if listed is None:
-            continue
-        if not isinstance(listed, list) or not all(isinstance(m, str) for m in listed):
-            raise CannotRun(f"query {qname}: `metrics` must be a list of metric names")
-        attached |= set(listed)
+    for q in (doc.get("queries") or {}).values():
+        attached |= set(q["metrics"])
     return set(doc.get("metrics") or {}) - attached
+
+
+def rejection_text(error: Exception) -> str:
+    """query-exporter's refusal, with where and why: its ConfigError says only
+    "N validation error(s)" and carries each one's location and message in
+    `.details` (#4119)."""
+    details = getattr(error, "details", None) or ()
+    parts = []
+    for d in details:
+        if isinstance(d, dict):
+            where, why = d.get("location"), d.get("error")
+            parts.append(f"{where}: {why}" if where else str(why))
+    return f"{error} ({'; '.join(parts)})" if parts else str(error)
 
 
 def served_names(path: Path, doc: dict) -> set[str]:
@@ -149,7 +198,7 @@ def served_names(path: Path, doc: dict) -> set[str]:
         try:
             config = load_config([stub, path])
         except Exception as e:  # query-exporter's own validation error
-            raise CannotRun(f"{path}: query-exporter rejects it: {e}") from e
+            raise CannotRun(f"{path}: query-exporter rejects it: {rejection_text(e)}") from e
     # config.metrics also holds query-exporter's built-ins (query_interval, …),
     # which no query lists and which are served all the same: only a metric of
     # the FILE that no loaded query lists is left out.
@@ -217,14 +266,35 @@ _BUILTIN_SELECTOR = re.compile(
     r"\b(query_timestamp|query_interval)\s*\{((?:[^{}\"'`]|" + _STR + r")*)\}")
 
 
-def _seconds(value: "int | float | str") -> float:
-    """A query-exporter duration: a number of seconds, or a number with s/m/h/d."""
-    if isinstance(value, (int, float)):
-        return float(value)
-    m = re.fullmatch(r"\s*([0-9.]+)\s*([smhd]?)\s*", str(value))
-    if not m:
+def interval_seconds(value: object) -> float:
+    """A query's `interval` in seconds, as query-exporter reads it: a string
+    ``^[0-9]+[smhd]?$``, or anything int() takes. A value query-exporter
+    refuses may read as anything here but never raises: query-exporter then
+    refuses the file by location in served_names, and the run is "cannot run"
+    whatever this said. Pinned by test_interval_and_timeout_parse_as_query_exporter_does
+    (#4119)."""
+    # The same steps as query-exporter's _validate_interval: `$` there also
+    # takes a trailing newline (`interval: |` then `15` is "15\n", 15 s).
+    multiplier = 1
+    if isinstance(value, str):
+        if not re.match(r"^[0-9]+[smhd]?$", value):
+            return float("nan")
+        multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+        if value[-1] in multipliers:
+            value, multiplier = value[:-1], multipliers[value[-1]]
+    try:
+        return float(int(value) * multiplier)  # type: ignore[call-overload]
+    except (TypeError, ValueError, OverflowError):
         return float("nan")
-    return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+
+
+def timeout_seconds(value: object) -> float:
+    """A query's `timeout` in seconds, as query-exporter reads it: a float (a
+    number, or a string that is one — "1e1" is 10; "15s" is no timeout to it)."""
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return float("nan")
 
 
 _GO_SIMPLE = {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
@@ -391,9 +461,9 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
         if not timeout:
             out.append(f"{rel}: query {name} has no timeout — a hung statement holds "
                        "the database's only connection and every other query waits")
-        elif interval and _seconds(timeout) >= _seconds(interval):
-            out.append(f"{rel}: query {name} timeout {_seconds(timeout):g}s is not below "
-                       f"its interval {_seconds(interval):g}s")
+        elif interval and timeout_seconds(timeout) >= interval_seconds(interval):
+            out.append(f"{rel}: query {name} timeout {timeout_seconds(timeout):g}s is not below "
+                       f"its interval {interval_seconds(interval):g}s")
     # The query the presence check names is the liveness query. It runs on a
     # database entry no other query uses: each database entry has its own
     # connection pool and worker, so a hung query cannot hold the connection
@@ -445,6 +515,21 @@ def _parse_exposition(text: str) -> list[tuple[str, dict[str, str], float]]:
     return out
 
 
+# The TYPE a declared query-exporter metric type is exposed as (prometheus_client):
+# an enum is a gauge in the text format and a stateset in OpenMetrics (#4119).
+_SERVED_TYPES = {"enum": {"gauge", "stateset"}}
+
+
+def served_type(types: dict[str, str], name: str) -> "str | None":
+    """The TYPE line of the declared metric *name* in a scrape. The text format
+    names a counter's TYPE line <name>_total; OpenMetrics names it without
+    `_total`, also for a counter declared as <x>_total (#4119)."""
+    for candidate in (name, f"{name}_total", name.removesuffix("_total")):
+        if candidate in types:
+            return types[candidate]
+    return None
+
+
 def compare_served(pack: str, scrape: Path) -> list[str]:
     """Findings of the runtime half for *pack* against the scrape in *scrape*."""
     match = [b for b in bindings() if b[0] == pack]
@@ -483,8 +568,8 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
         out.append(f"{name} is derived from {queries.relative_to(_REPO)} but not served")
     for name, spec in sorted((doc.get("metrics") or {}).items()):
         want = (spec or {}).get("type")
-        got = types.get(name)
-        if want and got and got != want:
+        got = served_type(types, name)
+        if want and got and got not in _SERVED_TYPES.get(want, {want}):
             out.append(f"{name} is served as {got}, the file declares {want}")
     # What the pack itself reads, query-exporter's built-ins included: for those,
     # a series per `query` label value the pack (or its presence check) names.

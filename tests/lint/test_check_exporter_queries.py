@@ -22,6 +22,17 @@ Pinned contracts
    queries file serves (#4088): a signature on any other name can only MISS.
    A library that names no single pack, or no metric, is a failure — not a
    file the check stops reading.
+9. a file whose shape the check cannot walk (#4119) — `metrics` / `queries`
+   not a mapping, a metric or query that is not a mapping, a name that is not a
+   string, a query's `metrics` / `databases` null or not a list of names — is
+   rc 2 naming the file and the entry, without query-exporter too; every such
+   shape is one query-exporter refuses as well (never stricter than it). What
+   query-exporter refuses beyond that is rc 2 with its own location and reason.
+10. the runtime half finds a counter's TYPE line under <name>_total (text format)
+   or without `_total` (OpenMetrics), and an enum is exposed as a gauge or a
+   stateset (#4119): a gauge served as a counter, and the reverse, are findings.
+11. `interval` and `timeout` are read as query-exporter reads them (#4119): a
+   malformed value is not a traceback, and "1e1" is a 10 s timeout.
 
 The tests of 6, 7 and 8 that need query-exporter skip without it — and the
 Python Tests job does not install it. They are not left to that: ci.yml's
@@ -33,6 +44,7 @@ step in place).
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -208,13 +220,92 @@ def test_a_pack_reading_an_unattached_metric_fails_with_the_real_derivation(tree
     assert any("reads x_sessions, which" in f and "does not serve" in f for f in found), found
 
 
-@pytest.mark.parametrize("listed", [[{"x_up": None}], 5, [["x_up"]], "x_up"],
-                         ids=["dict-item", "int", "nested-list", "string"])
+@pytest.mark.parametrize("listed", [[{"x_up": None}], 5, [["x_up"]], "x_up", None, []],
+                         ids=["dict-item", "int", "nested-list", "string", "null", "empty"])
 def test_a_query_whose_metrics_is_not_a_list_of_names_cannot_run(listed):
     doc = yaml.safe_load(yaml.safe_dump(QUERIES))
     doc["queries"]["x_main"]["metrics"] = listed
     with pytest.raises(ceq.CannotRun, match="x_main"):
         ceq.unattached_metrics(doc)
+
+
+def _malformed(case: str) -> dict:
+    """QUERIES with one shape the check cannot walk (#4119)."""
+    doc = yaml.safe_load(yaml.safe_dump(QUERIES))
+    if case == "query-null":
+        doc["queries"]["x_main"] = None
+    elif case == "query-string":
+        doc["queries"]["x_main"] = "SELECT 1"
+    elif case == "queries-list":
+        doc["queries"] = list(doc["queries"].values())
+    elif case == "metrics-list":
+        doc["metrics"] = [{k: v} for k, v in doc["metrics"].items()]
+    elif case == "metric-int-key":
+        doc["metrics"][42] = {"type": "gauge", "expiration": "2m"}
+    elif case == "metric-string":
+        doc["metrics"]["x_sessions"] = "gauge"
+    elif case == "query-metrics-null":
+        doc["queries"]["x_main"]["metrics"] = None
+    elif case == "query-databases-string":
+        doc["queries"]["x_main"]["databases"] = "db"
+    return doc
+
+
+# (case, a word the refusal must carry: the entry, or the section)
+MALFORMED = [("query-null", "x_main"), ("query-string", "x_main"),
+             ("queries-list", "`queries`"), ("metrics-list", "`metrics`"),
+             ("metric-int-key", "42"), ("metric-string", "x_sessions"),
+             ("query-metrics-null", "x_main"), ("query-databases-string", "x_main")]
+
+
+@pytest.mark.parametrize("case, named", MALFORMED, ids=[c for c, _ in MALFORMED])
+def test_a_malformed_file_cannot_run_by_name(tree, monkeypatch, capsys, case, named):
+    """#4119: rc 2 naming the file and the entry, not a traceback — and without
+    query-exporter (the `tree` fixture stands in for its derivation)."""
+    with pytest.raises(ceq.CannotRun, match=re.escape(named)):
+        tree(["x_up == 0"], queries=_malformed(case))
+    monkeypatch.setattr(sys, "argv", ["check_exporter_queries.py", "--ci"])
+    assert ceq.main() == 2
+    err = capsys.readouterr().err
+    assert "rule-packs/exporters/x.yaml" in err and named in err, err
+
+
+@pytest.mark.parametrize("case", [c for c, _ in MALFORMED])
+def test_every_shape_refused_here_query_exporter_refuses(tmp_path, case):
+    """shape_problem is a precondition of this tool's own walk, not a second
+    schema: each shape it refuses, query-exporter's loader refuses too — an
+    exporter that starts accepting one turns this red, and the check must follow."""
+    _need_query_exporter()
+    from query_exporter.config import load_config  # noqa: PLC0415
+    db = tmp_path / "databases.yaml"
+    db.write_text(yaml.safe_dump({"databases": {d: {"dsn": "sqlite://"}
+                                                for d in ("db", "db_live")}}), encoding="utf-8")
+    q = tmp_path / "q.yaml"
+    q.write_text(yaml.safe_dump(_malformed(case)), encoding="utf-8")
+    assert ceq.shape_problem(_malformed(case))
+    # Refused = the loader does not return a config. Not pinned to ConfigError:
+    # query-exporter 5.2.3 refuses a list `queries` / `metrics` by crashing in its
+    # own merge (TypeError: unhashable type) — which is why this check walks the
+    # shape itself rather than leaving it to the exporter.
+    with pytest.raises(Exception):  # noqa: B017,PT011
+        load_config([db, q])
+
+
+def test_a_well_formed_file_has_no_shape_problem():
+    assert ceq.shape_problem(QUERIES) is None
+    assert ceq.shape_problem({}) is None          # absent sections: query-exporter's to judge
+
+
+def test_query_exporter_refusal_names_where_and_why(tmp_path):
+    """#4119: a refusal beyond the shapes above carries query-exporter's own
+    location and reason, not only "1 validation error"."""
+    _need_query_exporter()
+    doc = yaml.safe_load(yaml.safe_dump(QUERIES))
+    doc["queries"]["x_main"]["interval"] = "soon"
+    q = tmp_path / "q.yaml"
+    q.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    with pytest.raises(ceq.CannotRun, match=r"queries\.x_main\.interval: .*interval"):
+        ceq.served_names(q, doc)
 
 
 def test_the_runtime_half_names_an_unattached_metric_too(tree, tmp_path):
@@ -362,6 +453,97 @@ def test_compare_served_checks_types_and_the_builtins_the_pack_reads(tree, tmp_p
     assert any("x_sessions is served as counter" in f for f in found), found
 
 
+def test_compare_served_reads_a_counters_type_off_its_total_line(tree, tmp_path):
+    """#4119: prometheus_client's text format writes a counter's TYPE line as
+    <name>_total, so a lookup under <name> alone never compared a counter."""
+    tree(["x_up == 0"])
+    base = [
+        "# TYPE x_up gauge", 'x_up{database="db"} 1.0',
+        "# TYPE x_sessions gauge", 'x_sessions{database="db"} 3.0',
+        "# TYPE x_waits_total counter", 'x_waits_total{database="db"} 2.0',
+        "# TYPE x_waits_created gauge", 'x_waits_created{database="db"} 1.0',
+        'queries_total{database="db",query="x_liveness",status="success"} 2.0',
+        'queries_total{database="db",query="x_main",status="success"} 2.0',
+    ]
+    assert ceq.compare_served("x", _scrape(base, tmp_path)) == []
+    # x_waits (a counter in the file) served as a gauge
+    as_gauge = [line.replace("# TYPE x_waits_total counter", "# TYPE x_waits_total gauge")
+                for line in base]
+    found = ceq.compare_served("x", _scrape(as_gauge, tmp_path))
+    assert any("x_waits is served as gauge, the file declares counter" in f for f in found), found
+    # x_sessions (a gauge in the file) served as a counter
+    as_counter = [line.replace("# TYPE x_sessions gauge", "# TYPE x_sessions_total counter")
+                  for line in base]
+    found = ceq.compare_served("x", _scrape(as_counter, tmp_path))
+    assert any("x_sessions is served as counter, the file declares gauge" in f
+               for f in found), found
+
+
+@pytest.mark.parametrize("declared, lines, wrong", [
+    # an enum: a gauge in the text format, a stateset in OpenMetrics
+    ({"type": "enum", "states": ["a", "b"], "expiration": "1m"}, ["# TYPE st gauge"], False),
+    ({"type": "enum", "states": ["a", "b"], "expiration": "1m"}, ["# TYPE st stateset"], False),
+    ({"type": "enum", "states": ["a", "b"], "expiration": "1m"}, ["# TYPE st counter"], True),
+], ids=["enum-text", "enum-openmetrics", "enum-as-counter"])
+def test_compare_served_knows_how_each_type_is_exposed(tree, tmp_path, declared, lines, wrong):
+    doc = yaml.safe_load(yaml.safe_dump(QUERIES))
+    doc["metrics"]["st"] = declared
+    doc["queries"]["x_main"]["metrics"].append("st")
+    tree(["x_up == 0"], queries=doc)
+    found = ceq.compare_served("x", _scrape(lines + ['st{st="a"} 1.0'], tmp_path))
+    assert any("st is served as" in f for f in found) is wrong, found
+
+
+def test_openmetrics_type_of_a_counter_declared_with_total():
+    """OpenMetrics names a counter's TYPE line without `_total`, also when the
+    file declares the counter as <x>_total."""
+    assert ceq.served_type({"c": "gauge"}, "c_total") == "gauge"
+    assert ceq.served_type({"c_total": "counter"}, "c") == "counter"
+    assert ceq.served_type({"c": "counter"}, "c") == "counter"
+    assert ceq.served_type({}, "c") is None
+
+
+@pytest.mark.parametrize("field, value", [("timeout", "."), ("interval", "."),
+                                          ("interval", "1.2.3"), ("timeout", [1])])
+def test_a_malformed_interval_or_timeout_is_no_traceback(tree, field, value):
+    """#4119: left to query-exporter's validation (which names its location),
+    not a ValueError in this check's own parse."""
+    doc = yaml.safe_load(yaml.safe_dump(QUERIES))
+    doc["queries"]["x_main"][field] = value
+    tree(["x_up == 0"], queries=doc)
+
+
+def test_a_timeout_query_exporter_reads_as_a_float_is_compared():
+    """"1e1" is a 10 s timeout to query-exporter; with a 5 s interval it is late."""
+    assert ceq.timeout_seconds("1e1") == 10
+    assert ceq.interval_seconds("5") == 5
+
+
+_PARSE_VALUES = [15, 15.0, 1.5, "15", "2m", "1h", "1d", "15s", "1e1", "1.5", ".", "1.2.3",
+                 " 15", "15 ", "15\n", "15s\n", "m", "", "-5", "0", 0.3, 0.15, True, None, [1], {"a": 1}]
+
+
+@pytest.mark.parametrize("value", _PARSE_VALUES, ids=[repr(v) for v in _PARSE_VALUES])
+def test_interval_and_timeout_parse_as_query_exporter_does(value):
+    """interval_seconds / timeout_seconds against query-exporter's own field
+    types (schema.TimeInterval, schema.Timeout): a value it accepts reads to
+    the same number of seconds here. A value it refuses (by validation error or
+    by its own crash) must not raise here — query-exporter then refuses the
+    file in served_names, so what it reads as does not reach a verdict. A
+    query-exporter that changes either field turns this red."""
+    _need_query_exporter()
+    from pydantic import TypeAdapter, ValidationError  # noqa: PLC0415
+    from query_exporter import schema  # noqa: PLC0415
+    for adapter, mine in ((TypeAdapter(schema.TimeInterval), ceq.interval_seconds),
+                          (TypeAdapter(schema.Timeout), ceq.timeout_seconds)):
+        got = mine(value)                      # never raises
+        try:
+            want = float(adapter.validate_python(value))
+        except (ValidationError, TypeError):
+            continue
+        assert want == got, (value, want, got)
+
+
 @pytest.mark.parametrize("text, bad", [
     ("query_timestamp{query='x_gone'}", "x_gone"),                    # single quotes
     ('query_interval{query=~"x_liveness|x_gone"}', "x_gone"),         # alternation
@@ -416,7 +598,7 @@ def test_a_gauge_outside_the_rated_argument_is_fine(tree):
 def test_query_without_timeout_or_with_a_late_one(tree):
     q = yaml.safe_load(yaml.safe_dump(QUERIES))
     del q["queries"]["x_main"]["timeout"]
-    q["queries"]["x_liveness"]["timeout"] = "15s"
+    q["queries"]["x_liveness"]["timeout"] = 15   # a float to query-exporter: "15s" it refuses
     found = tree(["x_up == 0"], queries=q)
     assert any("query x_main has no timeout" in f for f in found), found
     assert any("query x_liveness timeout 15s is not below its interval 15s" in f

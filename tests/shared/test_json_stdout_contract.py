@@ -21,9 +21,9 @@ The observable form of the contract, per recipe:
     json.loads(stdout)   # when non-empty: must succeed on the FULL text
 
 Whether a Report reached ``run()`` is observed, not inferred: every recipe
-runs under ``_report_probe_runner``, which logs each one. The tools #3216
-left printing their one document themselves are listed
-(``SELF_PRINTED_DOCUMENT``) and held to the second line only.
+runs under ``_report_probe_runner``, which logs each one. No tool of this
+population is excepted (#3216: the last one that printed its own document
+returns a Report now).
 
 Full-text ``json.loads`` is deliberate: it simultaneously proves (a) valid JSON
 and (b) no leading/trailing prose.  We never scan for "the first ``{``" — a
@@ -1573,21 +1573,6 @@ def _run(recipe: Recipe, tmp_path: Path, stub: str, sandbox_root: Path,
     return subprocess.run(argv, capture_output=True, timeout=TIMEOUT_S, cwd=str(root), env=env)
 
 
-#: #3216, owner 2026-11-03 "先不動": the --json tools of this population that
-#: still print their one document themselves (`encode_json`, then their own
-#: write) instead of returning a Report. They keep "exactly one document" (C3)
-#: and are held to it here; the "iff a Report" half waits for #3216. Only
-#: shrinks: a tool that moves to Report fails `..._still_prints_itself`.
-SELF_PRINTED_DOCUMENT = frozenset({"migrate_to_operator"})
-
-
-def test_the_self_printed_list_is_still_true():
-    assert SELF_PRINTED_DOCUMENT <= set(JSON_TOOLS)
-    for tool in SELF_PRINTED_DOCUMENT:
-        src = (REPO_ROOT / JSON_TOOL_PATHS[tool]).read_text(encoding="utf-8")
-        assert "Report(" not in src, f"{tool} returns a Report now: drop it from the list"
-
-
 @pytest.mark.parametrize("recipe", RECIPES, ids=[r.id for r in RECIPES])
 def test_json_mode_stdout_is_one_document_iff_the_tool_returned_a_report(
     recipe: Recipe, tmp_path: Path, stub_url: str, sandbox_repo: Path,
@@ -1639,13 +1624,12 @@ def test_json_mode_stdout_is_one_document_iff_the_tool_returned_a_report(
             f"EXIT_CALLER_ERROR ({EXIT_CALLER_ERROR}), got {proc.returncode}"
         )
     assert len(reports) <= 1, fail("more than one Report reached run()")
-    if recipe.tool in SELF_PRINTED_DOCUMENT:  # #3216: one document, its own write
-        assert not reports, fail("listed as printing itself, yet returned a Report")
-    else:
-        assert bool(stdout) == bool(reports), fail(
-            "stdout is not empty but the tool returned no Report (it printed a "
-            "document or prose itself)" if stdout else
-            "the tool returned a Report but stdout is empty")
+    # No exception list (#3216: migrate-to-operator, the last tool that
+    # printed its own document, returns a Report now).
+    assert bool(stdout) == bool(reports), fail(
+        "stdout is not empty but the tool returned no Report (it printed a "
+        "document or prose itself)" if stdout else
+        "the tool returned a Report but stdout is empty")
     assert bool(stdout) == recipe.expect_document, fail(
         f"this path is pinned to {'carry' if recipe.expect_document else 'carry no'} "
         f"document (Recipe.expect_document)")

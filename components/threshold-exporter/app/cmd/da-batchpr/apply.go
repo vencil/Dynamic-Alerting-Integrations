@@ -54,8 +54,8 @@ func parseApplyFlags(args []string, errOut io.Writer) (*applyFlags, error) {
 	fs.SetOutput(errOut)
 	f := &applyFlags{}
 
-	fs.StringVar(&f.planPath, "plan", "", "Path to a Plan JSON file (from BuildPlan). Required.")
-	fs.StringVar(&f.emitDir, "emit-dir", "", "C-9 emit output directory (recursive walk). Required.")
+	fs.StringVar(&f.planPath, "plan", "", "Path to a Plan JSON file (batchpr.Plan shape; experimental: no shipped tool produces one). Required.")
+	fs.StringVar(&f.emitDir, "emit-dir", "", "Directory of the files to push (recursive walk; experimental: no shipped tool produces it). Required.")
 	fs.StringVar(&f.repoFlag, "repo", "", "GitHub repo, 'owner/name'. Required.")
 	fs.StringVar(&f.baseBranch, "base-branch", "main", "Branch new PRs target.")
 	fs.StringVar(&f.branchPrefix, "branch-prefix", "", "Prefix for generated branches; empty → batchpr default.")

@@ -18,8 +18,9 @@ the actual batch-PR orchestration lives in Go for two reasons:
 
 Subcommands (mirrors `da-batchpr <subcommand> [flags]` directly):
 
-  apply           Open or update tenant chunk PRs from a Plan +
-                  C-9 emit output.
+  apply           Open or update tenant chunk PRs from a Plan + an
+                  emit directory. Experimental: no shipped tool
+                  produces either (docs/cli-reference.md#batch-pr).
   refresh         Rebase tenant branches after Base PR merges
                   (PR-3 mode).
   refresh-source  Re-apply data-layer hot-fix files into existing
@@ -70,9 +71,11 @@ _USAGE_EN = (
     "Usage: da-tools batch-pr <subcommand> [flags]\n"
     "\n"
     "Subcommands:\n"
-    "  apply           Open or update tenant chunk PRs from a Plan +\n"
-    "                  C-9 emit output. Requires --plan, --emit-dir,\n"
-    "                  --repo, --workdir.\n"
+    "  apply           Open or update tenant chunk PRs from a Plan + an\n"
+    "                  emit directory. Requires --plan, --emit-dir,\n"
+    "                  --repo, --workdir. Experimental: no shipped tool\n"
+    "                  produces --plan or --emit-dir; see\n"
+    "                  docs/cli-reference.md#batch-pr.\n"
     "  refresh         Rebase tenant branches after Base PR merges.\n"
     "                  Requires --input (RefreshInput JSON) + --workdir.\n"
     "  refresh-source  Re-apply data-layer hot-fix files into existing\n"
@@ -103,8 +106,10 @@ _USAGE_ZH = (
     "用法: da-tools batch-pr <子命令> [選項]\n"
     "\n"
     "子命令:\n"
-    "  apply           從 Plan + C-9 emit 輸出開出或更新 tenant chunk PR。\n"
+    "  apply           從 Plan + emit 目錄開出或更新 tenant chunk PR。\n"
     "                  必填: --plan, --emit-dir, --repo, --workdir。\n"
+    "                  experimental：沒有出貨的工具產生 --plan 與\n"
+    "                  --emit-dir，見 docs/cli-reference.md#batch-pr。\n"
     "  refresh         Base PR merge 後 rebase tenant branches。\n"
     "                  必填: --input (RefreshInput JSON) + --workdir。\n"
     "  refresh-source  把 data-layer hot-fix 檔案套進現有 tenant branches。\n"
