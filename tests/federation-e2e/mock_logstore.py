@@ -82,16 +82,19 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             time.sleep(max(0.0, min(secs, 25.0)))
 
-    def _handle(self) -> None:
+    def _handle(self, body: bytes = b"") -> None:
         # Echo what the gateway injected + the rows for that partition. The driver
         # reads `received_account_id` to assert the verified value won, and `rows`
-        # to assert cross-tenant isolation.
+        # to assert cross-tenant isolation. `received_path` / `received_body` show
+        # the params that reached the store (the query-limit scenarios, VL13/VL14).
         self._hold()
         acct = self._received_account()
         proj = self.headers.get("ProjectID", "")
         self._respond(200, {
             "received_account_id": acct,
             "received_project_id": proj,
+            "received_path": self.path,
+            "received_body": body.decode("utf-8", "replace"),
             # Echo whether the client's spoof header survived (it must NOT — the
             # gateway replace() overwrites it; this is belt-and-suspenders so the
             # assertion message is informative if it ever regresses).
@@ -104,9 +107,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         # Drain the body (LogsQL form-POST) so the connection closes cleanly.
         length = int(self.headers.get("Content-Length", 0) or 0)
-        if length:
-            self.rfile.read(length)
-        self._handle()
+        body = self.rfile.read(length) if length else b""
+        self._handle(body)
 
 
 def main(port: int = 9428) -> None:

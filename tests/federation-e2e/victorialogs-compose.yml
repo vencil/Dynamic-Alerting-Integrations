@@ -54,6 +54,7 @@ services:
       - ./rendered/victorialogs/envoy.yaml:/etc/envoy/envoy.yaml:ro
       - ./rendered/victorialogs/revoked_check.lua:/etc/envoy/revoked_check.lua:ro
       - ./rendered/victorialogs/audit_extract.lua:/etc/envoy/audit_extract.lua:ro
+      - ./rendered/victorialogs/query_limit.lua:/etc/envoy/query_limit.lua:ro
       - ./rendered/victorialogs/inflight_limit.lua:/etc/envoy/inflight_limit.lua:ro
       - ./rendered/jwks.json:/etc/jwks/jwks.json:ro
       - ./rendered/victorialogs/revoked.txt:/etc/revoked/revoked.txt

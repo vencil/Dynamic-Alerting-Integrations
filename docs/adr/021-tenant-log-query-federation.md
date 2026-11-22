@@ -21,9 +21,9 @@ updated_at: 2026-11-22
 - 2026-10-11 修訂：AccountID 帳本與 federation 白名單、子集移出 conf.d 的 git 樹，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap，單機是一個目錄），寫入改為 compare-and-swap（先比對版本、相同才寫入），不再 commit。原因：那些 commit 從不 push，chart 預設的 emptyDir 一重啟就沒了，帳本遺失正是本 ADR 要防的 AccountID 重發。同日另一項修訂：開機時比對仍有效的日誌 token 與帳本，不一致就拒絕啟動；備份改經 `tenant-api state restore` 合併還原，不再直接覆蓋。
 - 2026-10-13 修訂：AccountID 的高水位另記在 federation token store ConfigMap，運行中被蓋回的舊帳本會被擋下；`state restore` 的計數器加上安全邊際。見「單調性靠什麼守」。
 - 2026-11-07 修訂：日誌庫前方加上依消費端授權的 vmauth，gateway 以自己的帳密連線；它不做租戶路由，與「不用 vmauth 做租戶路由」的決定不衝突，見替代方案。
+- 2026-11-22 修訂：兩項 gateway 變更。其一，gateway 開始限制 `/select/logsql/query`、`field_values`、`stream_field_values` 的 `limit`：不合法、超過上限或重複出現一律拒絕（`400`），缺少時 `/query` 拒絕、另外兩個端點補上上限值，見「查詢端點白名單」。其二，ADR-020 新增的每 token 並發上限在日誌查詢模式同樣生效，「Gateway 限流」與「已知限制」改寫為限流加並發上限。
 - 2026-11-22 修訂：實作「該蓋章卻落進 `0:0`」的偵測：Vector 計數帶已驗證 AccountID 卻沒進租戶分區的 audit 列，rule pack 以 `TenantProjectionStampMissing` 告警。見「日誌進入端的契約」。
 - 2026-11-22 修訂：租戶自選的可見度子集已實作。租戶經 tenant-api 選擇自己的日誌副本保留哪些欄位，選擇存在 state store；平台把它抄進 Vector 的租戶投影設定，在寫入時套用，只能縮小平台策展的欄位。見「租戶自選的可見度子集」。
-- 2026-11-22 修訂：gateway 新增的每 token 並發上限（ADR-020）在日誌查詢模式同樣生效，「Gateway 限流」與「已知限制」改寫為限流加並發上限。
 
 **範圍**：租戶查「平台**關於它**的營運日誌」（目前是它自己的 federation 查詢稽核紀錄）已實作。租戶查**自己工作負載的應用日誌**延後，要等日誌進入端的另一份設計（見「已知限制」）。
 
@@ -259,7 +259,7 @@ tenantProjections:
 
 ### 三層資源防護
 
-沿用 ADR-020 的三層分工，但日誌的資源模型不同於 Prometheus：沒有 sample／series 上限，主要靠**時間範圍上限**。
+沿用 ADR-020 的三層分工，但日誌的資源模型不同於 Prometheus：沒有 sample／series 上限，主要靠**時間範圍上限**，`/select/logsql/query` 另由 gateway 強制**回傳筆數上限**（見「查詢端點白名單」）。
 
 #### 儲存後端的查詢上限
 
@@ -283,7 +283,22 @@ tenantProjections:
 VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/federation-gateway` 的 `victorialogs.allowedEndpoints` 預設放行 `/select/logsql/` 下的 `query`、`hits`、`facets`、`stats_query`、`stats_query_range`、`streams`、`stream_ids`、`stream_field_names`、`stream_field_values`、`field_names`、`field_values`，其餘（包括 `/select/logsql/tail`、`/insert/*` 與任何新端點）一律 403。比對時只容許結尾多一個斜線，子路徑與相似名稱的兄弟端點都擋。
 
 - 刻意不放行 `/tail`：它是即時的長連線，`-search.maxQueryDuration` 管的是查詢執行、不管串流連線的壽命，它會長期佔住並發名額；查稽核日誌也不需要即時追蹤。
-- `/query` 是串流回應，風險在於沒帶 `limit` 時回傳量沒有上限；它靠 `-search.maxQueryTimeRange` 收斂。租戶指南要求查詢帶時間過濾與 `limit`。
+- `/query` 是串流回應：沒帶 `limit` 時，時間範圍內每一筆符合的日誌都會回傳。`field_values` 與 `stream_field_values` 列出一個欄位的所有不同值，`field_values?field=_msg` 列出的就是日誌本文。VictoriaLogs 對這三個端點都把沒帶、空值或 `0` 的 `limit` 當成「不限筆數」。所以 gateway 在 `-search.maxQueryTimeRange` 之外，再限制它們的 `limit`，上限是 chart 值 `victorialogs.maxQueryLimit`（預設 `1000`，三個端點共用），規則如下。
+
+  | 請求 | `/query` | `field_values`、`stream_field_values` |
+  |---|---|---|
+  | 剛好一個 `limit`，值是 `1` 到上限的十進位整數 | 原樣轉送 | 原樣轉送 |
+  | 沒帶 `limit`，或在 URL 帶一個全為 `0` 的 `limit` | `400` | 在 URL 改成 `limit=<上限>` 再轉送 |
+  | POST body 裡帶 `limit=0` | `400` | `400` |
+  | 空值、負數、帶正負號、非整數、超過上限 | `400`，內文寫明上限 | `400` |
+  | `limit` 出現兩次以上（URL 與 POST body 合計；百分比編碼過的參數名稱如 `%6Cimit` 也算） | `400` | `400` |
+  | POST 的 body 不是 `application/x-www-form-urlencoded`（例如 multipart），或帶 `Content-Encoding` | `415` | `415` |
+
+  - **為什麼 `/query` 拒絕、不補上預設值或調降**：補值或調降會讓租戶拿到被截斷的結果卻無從得知，容易被當成完整的稽核紀錄；直接拒絕讓請求者自己決定要縮小範圍還是分批查，也與 gateway 其他檢查一致：不確定的請求不轉送。
+  - **為什麼另外兩個端點補值**：Grafana 的 VictoriaLogs data source（v0.34.0）只在 `limit` 大於 0 時才帶上它；變數查詢把筆數設成 `0`（介面上寫的是「移除上限」）或舊的變數沒有設定時，就不帶 `limit` 呼叫 `field_values`。拒絕會讓這些變數與下拉選單直接失效；被截斷的候選值清單可以接受，被截斷的稽核紀錄不行。補值寫進 URL：VictoriaLogs 在 body 沒有 `limit` 時讀 URL，所以補完後日誌庫只會看到一個 `limit`。body 裡的 `limit=0` 會壓過 URL 的值，gateway 不改寫 body，所以這種情況拒絕。
+  - **為什麼也看 POST body**：VictoriaLogs 用 Go 的 `Request.FormValue` 讀參數，POST 的 form body 優先於 URL，租戶指南的 curl 範例也是以 form body 送出。只看 URL 的話，「URL 帶小 `limit`、body 帶大 `limit`」就能繞過。檢查放在 body 緩衝之後、每 token 並發上限之前的 Lua filter（`files/query_limit.lua`；被它拒絕的請求不佔並發名額），URL 與 body 一起數；gateway 讀不懂的 body（multipart、壓縮過的）直接拒絕，不留 gateway 與日誌庫各讀到不同值的空間。重複的 `limit` 也因此拒絕：Go 取第一個，別的解析器可能取最後一個。
+  - **查詢文字裡的 `| limit N` 不必檢查**：VictoriaLogs 把請求的 `limit` 以 `| offset … | limit …` 接在租戶自己所有 pipe 的**最後面**，回傳筆數一定不超過它；租戶的 `| limit` 不論寫在哪裡，都只能讓結果更少。
+  - 被拒的請求仍會寫進稽核日誌（檢查排在稽核擷取之後），並計入 `tenant_log_query_requests_total{status="bad_request"}`。
 - 路由前先把路徑正規化（包括解碼 `%2F`），`/select/logsql%2Fquery` 這類變形無法繞過白名單。
 
 ### 稽核
@@ -312,12 +327,19 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 **已知限制**
 
 - **蓋章失效的偵測只看得到帶已驗證 AccountID 的列。** `TenantProjectionStampMissing`（見「日誌進入端的契約」）的判準是 logs token 寫進稽核列的 `account_id`，所以：從不查日誌的租戶沒有列可數；同一租戶用指標 token 產生的列不計；列被投影到**錯的**分區（`tenantProjections` 的號碼與 claim 不符時，Vector 照對映表蓋章）不算「落進 `0:0`」，那是啟動時投影閘門比對帳本的範圍。投影 VRL 執行錯誤、閘門把租戶 sink 拿掉、租戶 sink 丟棄 batch 也不在它的範圍，各有自己的告警。目前會進租戶分區的只有 `federation_audit`，所以它涵蓋的也只有這個類別；將來開放其他類別時，判準要跟著那個類別的可信身分來源一起設計。`account_id` 本身不影響蓋章（蓋章只看 `tenant_id` 與 `tenantProjections`），所以偽造它最多造成誤報。但能在 gateway 的命名空間起 pod、帶 gateway 標籤的人，能做的不只誤報：pod 的 owner 名稱不符 gateway 的 workload 前綴時，列被改判 `suspicious_audit`，計為 `origin_rejected`；owner 名稱符合（例如一個叫 `federation-gateway-x` 的 Deployment）時，列就是 `federation_audit`，`tenant_id` 對映不到時計為 `not_projected`，對映得到時會照常蓋進那個租戶的分區。最後這種是既有的風險，不是這個偵測造成的，也不是它能擋的（見「日誌進入端的契約」對節點與命名空間隔離的前提）。沒有已驗證身分、卻對映不到 AccountID 的列（指標 token 的流量、偽造或畸形 payload）仍只由 `TenantProjectionFanoutDiscardSpike` 以「高於自己一天平均三倍」偵測，量小或長期存在的落差會被併入基準而不觸發。
+- **`limit` 只管 `/query`、`field_values`、`stream_field_values`，其他白名單端點仍能不受上限地回傳以日誌內容為鍵的結果。** 這些端點目前只受時間範圍上限、執行時限與 VictoriaLogs 每個 pipe 的記憶體狀態預算限制：
+  - `stats_query`、`stats_query_range`：列數等於 `by (…)` 分組的組數，沒有 `limit` 參數。`by (_msg)` 分組時，每一個不同的日誌本文是一列。
+  - `hits`：帶 `field=_msg` 時，每一個不同的日誌本文是一條時間序列；`fields_limit` 選填，不帶或 `0` 就全部回傳。
+  - `facets`：預設每個欄位最多回 10 個值，並略過長於 128 位元組的值與不同值超過 1000 個的欄位；這三個預設都能用請求參數（`limit`、`max_value_len`、`max_values_per_field`）調高，gateway 不限制，調高後 `_msg` 這類長欄位也會回傳。
+  - `streams`、`stream_ids`：回傳 stream 的標籤組合與 ID，不含 `_msg`；`limit` 選填，不帶就全部回傳，數量隨 stream 數成長。
+  - `field_names`、`stream_field_names`：只回欄位名稱，沒有 `limit` 參數。
+- **`/query` 的 `offset` 沒有上限。** 回傳筆數仍不超過 `limit`，但 VictoriaLogs 會把 `offset X | limit Y` 改寫成取前 X+Y 筆的排序，排序狀態放在記憶體、受同一個狀態預算限制，所以很大的 `offset` 花的是排序記憶體。
+- **查詢文字裡的 `| limit` 抬不高上限，靠的是 VictoriaLogs 的行為。** 「請求的 `limit` 是查詢的最後一個 pipe」是對照 VictoriaLogs v1.53.0（`helm/victorialogs` 目前釘的版本）原始碼確認的；gateway 的 E2E 用模擬日誌庫，驗證的是 gateway 擋下或放行哪些請求，驗不到這一點。升級 VictoriaLogs 時要重新確認。
 - **租戶的可見度選擇要平台抄進 Vector 才生效。** tenant-api 存的是租戶要的；Vector 讀的是 `tenantProjections[].visibleFields` 這份副本，抄寫與 AccountID 一樣靠 PR review，沒有機制比對兩者。沒抄或抄到舊的，租戶的副本保留的是平台預設或舊的選擇：仍在平台策展的範圍內，只是沒有縮小，不會多出白名單外的欄位。`GET` 回的是租戶的選擇（`selected_visible_fields` 是套用後會保留的欄位），不是 Vector 實際套用的設定。改由機制同步的觸發條件：投影改由帳本自動產生時（見下「租戶應用日誌延後」）一併從 state store 產生；或有租戶把某個欄位不保留列為合規要求。
 - **只能選欄位，不能選日誌類別。** 平台目前只策展 `federation_audit` 一個類別，選類別等於「全部或不投影」。平台策展第二個類別時再擴充成類別加欄位。
 - **tenant-api 的可選清單是 chart 預設白名單的鏡像。** 兩者由 `components/tenant-api/internal/federation/logvis/logvis_test.go` 比對 `helm/vector/values.yaml`。部署端若覆寫了 `tenantProjectionKeepFields`：新增的欄位租戶選不到（沒選擇時仍看得到）；被移除的欄位若出現在某租戶抄過來的選擇裡，chart 渲染失敗，要把那一項從 `visibleFields` 拿掉。
 - **租戶目前只能直接呼叫 API 設定。** portal 沒有對應的畫面，與指標子集相同。
 - **退回前一版 tenant-api 後，備份還原會拒絕含可見度紀錄的備份。** 前一版的 `state restore` 不認得 `_log_visibility.*` 鍵，會把整份備份判為「不是 tenant-api state 備份」。要退版又要還原，先從備份移除這些鍵。孤兒偵測也不涵蓋這些紀錄，退租時要手動刪（見 offboarding runbook）。
-- **已決定、尚未實作：在 gateway 強制 `/query` 帶 `limit`。** 本 ADR 決定 `/query` 除了時間範圍上限，還要強制帶 `limit` 收斂串流回傳量；gateway 目前不檢查也不補上 `limit`，只靠時間範圍上限與租戶指南。
 - **VictoriaLogs 本身的分區沒有被平台測試驗證。** 選原生分區的理由之一是它同樣套在 metadata 類端點（`field_values`、`stream_field_values` 等）上，不像 ADR-020 要顯式開 `-enable-label-apis`。但 gateway 的 E2E（`tests/federation-e2e/test_victorialogs_e2e.py`）用的是模擬日誌庫，驗證的是 gateway 送出的 header，不是 VictoriaLogs 對每個端點的隔離。
 - **租戶應用日誌延後。** 要先有另一份日誌進入端的設計，依 namespace 蓋章並滿足上面的契約與節點隔離硬化；屆時沿用同一個 gateway 模式，`ProjectID=1`，Vector 的對映改由帳本產生，解決固定 sink 在大量租戶下無法擴展的問題。觸發條件：合約把「應用日誌代管與合規稽核」列為必選；或客戶願意付加值授權費，足以支撐儲存擴容與節點採集架構的常態維運成本。
 - **不同日誌類別無法有不同保留期。** 社群版 VictoriaLogs 的 `-retentionPeriod` 是全域單一值（`helm/victorialogs` 預設 30 天）；應用日誌若需要更長的合規保留，要另起一個 VictoriaLogs 實例或用企業版。
@@ -370,4 +392,4 @@ vmauth 只看第一個 header；後兩個原封轉給 VictoriaLogs。設定方�
 - [ADR-009](./009-tenant-manager-crud-api.md)：tenant-api 的端點慣例，AccountID 配發沿用。
 - [ADR-028](028-federation-revocation-tamper-evidence.md)：撤銷紀錄被竄改的偵測，同樣用 Vector 與 VictoriaLogs。
 - [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md)：Vector／VictoriaLogs 維運；[`log-visibility-2tier-catalogue.md`](../internal/log-visibility-2tier-catalogue.md)：租戶可見的類別與欄位；[`tenant-log-query.md`](../integration/tenant-log-query.md)：租戶上手指南。
-- 實作位置：`helm/federation-gateway/`（`files/revoked_check.lua`、`files/envoy.yaml`）、`helm/vector/`（`templates/configmap.yaml` 的租戶投影、可見度選擇與 `tenant_stamp_check` 計數、`tests/projection_tests.yaml`）、`rule-packs/rule-pack-platform.yaml`（`TenantProjectionStampMissing`）、`helm/victorialogs/`、`components/tenant-api/internal/federation/account/`、`components/tenant-api/internal/federation/logvis/`（可見度選擇的驗證）、`components/tenant-api/internal/handler/federation/log_visibility.go`、`components/tenant-api/cmd/server/state_cmd.go`。
+- 實作位置：`helm/federation-gateway/`（`files/revoked_check.lua`、`files/query_limit.lua`、`files/envoy.yaml`）、`helm/vector/`（`templates/configmap.yaml` 的租戶投影、可見度選擇與 `tenant_stamp_check` 計數、`tests/projection_tests.yaml`）、`rule-packs/rule-pack-platform.yaml`（`TenantProjectionStampMissing`）、`helm/victorialogs/`、`components/tenant-api/internal/federation/account/`、`components/tenant-api/internal/federation/logvis/`（可見度選擇的驗證）、`components/tenant-api/internal/handler/federation/log_visibility.go`、`components/tenant-api/cmd/server/state_cmd.go`。
