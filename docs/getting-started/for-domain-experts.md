@@ -139,7 +139,7 @@ python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 1. **正規化 recording rule**：在 `<db>-normalization` group 加一條 `tenant:<指標>:<函式>`。
 2. **閾值正規化 recording rule**：在 `<db>-threshold-normalization` group 加 `tenant:alert_threshold:<key>`，selector 用拆開後的 `component` 與 `metric`（見上方第二部分）。要有 critical 等級就再加一條 `severity="critical"` 的 `<key>_critical`。
 3. **alert rule**：照第三部分的形狀寫，保留 `unless … maintenance` 與 `tenant_metadata_info` 兩段。
-4. **宣告閾值 key**：在 `rule-packs/threshold-registry.yaml` 的 `keys:` 加一筆，`tier` 寫 `defaults`（平台出貨預設值）或 `optional_overrides`（只宣告、由租戶自己設值）；新的 pack 也要在同檔 `packs:` 登記。然後重生（`scaffold_tenant.RULE_PACKS` 與各處生成段跟著更新）：
+4. **宣告閾值 key**：在 `rule-packs/threshold-registry.yaml` 的 `keys:` 加一筆，`arming` 寫 `default`（平台給值，讀取端內建）或 `operator`（沒有平台值，由部署或租戶自己設值）；新的 pack 也要在同檔 `packs:` 登記。然後重生（`scaffold_tenant.RULE_PACKS` 與各處生成段跟著更新）：
 
 ```bash
 python3 scripts/tools/lint/check_threshold_registry.py --regen

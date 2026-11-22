@@ -30,7 +30,7 @@ function declaredCounterexamples(): Array<[string, any]> {
   return out;
 }
 
-/** (key, counterexample) for the DEFAULTS tier, with its owning pack. */
+/** (pack, key, counterexample) of the platform values (`defaults`). */
 function defaultsCounterexamples(): Array<[string, string, any]> {
   const out: Array<[string, string, any]> = [];
   for (const [packId, pack] of Object.entries(platformData.rulePacks ?? {}) as any[]) {
@@ -132,7 +132,7 @@ describe('multi-tenant comparison — rendered output', () => {
   });
 });
 
-describe('starter YAML — both tiers carry their caveat', () => {
+describe('starter YAML — the measured keys carry their caveat', () => {
   // ⛔ No `vi.resetModules()` here. `test-setup.ts` already pins `window.__t`
   // to the English helper for every test, and these two components are the
   // most expensive transforms in the suite — resetting the module graph before
@@ -157,15 +157,13 @@ describe('starter YAML — both tiers carry their caveat', () => {
     }
   });
 
-  it('annotates the DEFAULTS tier for the pack that owns each key', async () => {
-    const { generateSampleYaml } = await import(
-      '../src/interactive/tools/_common/sim/alert-engine.js');
-    const rows = defaultsCounterexamples();
-    expect(rows.length).toBeGreaterThan(0);
-    for (const [packId, key, ce] of rows) {
-      const yaml = generateSampleYaml([packId], false);
-      expect(yaml, `${packId} / ${key}`).toContain(ce.observed);
-    }
+  it('no platform value carries a counter-example (the shipping gate)', async () => {
+    // `arming: default` refuses a value the reference library measured wrong
+    // (_registry_lib.arming_problems), and since #4195 `defaults` is exactly
+    // the platform values — so every measured key is a declared one, covered
+    // above. The live-value loop's own caveat is pinned on synthetic data in
+    // declared-keys.test.ts ("warns immediately above a live value…").
+    expect(defaultsCounterexamples()).toEqual([]);
   });
 });
 
@@ -181,10 +179,11 @@ describe('YAML validator — insert-metric hands over a live value', () => {
   it('inserts the caveat immediately above the value it inserts', async () => {
     const { insertMetricIntoYaml } = await import(
       '../src/interactive/tools/YamlValidatorTab.jsx');
-    const { RULE_PACK_DATA } = await import(
-      '../src/interactive/tools/_common/data/rule-packs.js');
-    const [packId, key, ce] = defaultsCounterexamples()[0];
-    const meta = (RULE_PACK_DATA as any)[packId].defaults[key];
+    // A declared key with a measured counter-example (#4195: every measured
+    // key is declared — see the starter YAML block above).
+    const [key, ce] = declaredCounterexamples()[0];
+    const meta = (Object.values(platformData.declaredKeys ?? {}) as any[])
+      .flat().find((r: any) => r.key === key);
 
     const out = insertMetricIntoYaml('_routing_profile: x\n',
       { key, value: meta.value, desc: meta.desc });
@@ -229,11 +228,17 @@ describe('config template gallery — what the Copy button actually gets', () =>
     // to be first is how this assertion would silently move off its subject.
     const platform = new Map<string, number>();
     const measured = new Map<string, any>();
-    for (const pack of Object.values(platformData.rulePacks ?? {}) as any[]) {
-      for (const [k, meta] of Object.entries(pack?.defaults ?? {}) as any[]) {
-        if (meta?.value != null) platform.set(k, Number(meta.value));
-        if (meta?.valueCounterexample) measured.set(k, meta.valueCounterexample);
-      }
+    // Both sets: a key's shown number is its platform value or, for a
+    // declared key (where every measured key sits since #4195), its reference.
+    const numbered = [
+      ...(Object.values(platformData.rulePacks ?? {}) as any[])
+        .flatMap((pack: any) => Object.entries(pack?.defaults ?? {})),
+      ...(Object.values(platformData.declaredKeys ?? {}) as any[])
+        .flat().map((r: any) => [r.key, r]),
+    ] as Array<[string, any]>;
+    for (const [k, meta] of numbered) {
+      if (meta?.value != null) platform.set(k, Number(meta.value));
+      if (meta?.valueCounterexample) measured.set(k, meta.valueCounterexample);
     }
     // ⛔ At the MEASURED value. `enterprise-db` ships
     // `oracle_sessions_active: "150"`, which is deliberately NOT annotated —

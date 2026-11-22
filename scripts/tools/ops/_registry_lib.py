@@ -40,9 +40,10 @@ pre-commit gate. The fix on a red gate: edit the registry, then run
 ``check_threshold_registry.py --regen`` to refresh every generated surface,
 the RULE_PACKS module included, in one shot.
 
-SCOPE (WS1a): threshold identity — ``defaults`` + ``optional_overrides`` tiers
-({pack, tier, value, unit, desc, metric_class, arming, critical
-variant}). ``state_filters`` / ``dimensional_example`` stay scaffold-owned
+SCOPE (WS1a): threshold identity — one flat key set per pack
+({pack, value, unit, desc, metric_class, arming, critical variant}; the
+``defaults`` / ``optional_overrides`` tier split left in #4195: ``arming``
+says whether a key carries a platform value). ``state_filters`` / ``dimensional_example`` stay scaffold-owned
 (they are state/config surface, not threshold identity; absorb later if a
 consumer needs them). Extraction is FULL (all packs, all keys — mechanical and
 cheap); the enforcement path this registry exists to serve first is the 18-key
@@ -163,15 +164,10 @@ BLOCKER_LABEL_ZH = {
 CANDIDATE_LABEL_ZH = "可攜，待驗證"
 CANDIDATE_NOTE_ZH = ("這個值可跨部署沿用，但還沒通過出貨驗證"
                      "（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨")
-#: The optional tier is not a candidate: `default` is defaults-tier only.
-DECLARED_ONLY_LABEL_ZH = "可攜，僅宣告"
-DECLARED_ONLY_NOTE_ZH = ("這個值可跨部署沿用，但鍵在 optional_overrides 層、平台不給值；"
-                         "要出貨得先升到 defaults 層，再通過出貨驗證")
 
-# The two threshold tiers carried by the registry. Order matters: it is the
-# extraction order, and a same-name key in both tiers of one pack would be a
-# contract bug (build_registry_doc fails loudly on it).
-TIERS = ("defaults", "optional_overrides")
+# The RULE_PACKS field carrying a pack's thresholds, in registry key order
+# (#4195: one mapping; the `defaults` / `optional_overrides` split is gone).
+THRESHOLDS = "thresholds"
 
 # ---------------------------------------------------------------------------
 # Since D-A PR-3 the registry FILE is the authored source of everything this
@@ -200,7 +196,7 @@ def __getattr__(name: str):
 
 # Canonical per-key field order for the emitted registry document.
 _FIELD_ORDER = (
-    "pack", "tier", "value", "unit", "desc", "metric_class", "arming",
+    "pack", "value", "unit", "desc", "metric_class", "arming",
     "portability", "portability_reason", "portability_reason_zh", "blocker",
     "default_exception", "validation", "critical_of", "value_counterexample",
     "dimensions",
@@ -231,7 +227,7 @@ def build_registry_doc(
 
     With ``rule_packs`` (packs shaped like scaffold's RULE_PACKS): extract.
     Per pack: {display, exporter, default_on, rule_pack_file}.
-    Per key : {pack, tier, value, unit, desc[, metric_class][, arming,
+    Per key : {pack, value, unit, desc[, metric_class][, arming,
     portability[, portability_reason, portability_reason_zh][, blocker]
     [, default_exception]][, critical_of]}. ``critical_of`` is
     derived (never authored): key ends with ``_critical`` AND its base key
@@ -247,8 +243,7 @@ def build_registry_doc(
     a fixed point of `project_rule_packs` -> extract, so every rule above
     still binds the authored file.
 
-    Fails loudly on identity collisions (same key in two tiers of one pack, or
-    in two packs) — a collision would silently shadow a contract entry — and
+    Fails loudly on identity collisions (same key in two packs) — a collision would silently shadow a contract entry — and
     on an arming entry that names an unknown key or breaks `arming_problems`
     (a typo would silently un-ship a chart key).
 
@@ -286,16 +281,7 @@ def build_registry_doc(
         if pack.get("queries"):
             # query-exporter config that serves the pack's raw metrics (#3833).
             packs[pack_name]["queries"] = pack["queries"]
-        combined: dict[str, tuple[str, dict]] = {}
-        for tier in TIERS:
-            for key, info in (pack.get(tier) or {}).items():
-                if key in combined:
-                    raise ValueError(
-                        f"threshold key {key!r} appears in BOTH tiers of pack "
-                        f"{pack_name!r} — ambiguous contract identity"
-                    )
-                combined[key] = (tier, info)
-        for key, (tier, info) in combined.items():
+        for key, info in (pack.get(THRESHOLDS) or {}).items():
             if key in keys:
                 raise ValueError(
                     f"threshold key {key!r} appears in packs "
@@ -304,7 +290,6 @@ def build_registry_doc(
                 )
             entry: dict[str, Any] = {
                 "pack": pack_name,
-                "tier": tier,
                 "value": info["value"],
                 "unit": info["unit"],
                 "desc": info["desc"],
@@ -334,7 +319,7 @@ def build_registry_doc(
                 entry[f] = v
             if key.endswith(CRITICAL_SUFFIX):
                 base = key[: -len(CRITICAL_SUFFIX)]
-                if base in combined:
+                if base in (pack.get(THRESHOLDS) or {}):
                     entry["critical_of"] = base
             keys[key] = entry
 
@@ -505,8 +490,7 @@ def arming_problems(keys: dict[str, dict], *, strict: bool) -> list[str]:
       ``portable`` (a portable key has nothing to explain);
     - ``blocker`` is ``{kind, tracking, reason, reason_zh}`` exactly, with a
       known kind and an issue number;
-    - ``default`` sits on a ``defaults``-tier key, has no blocker, and is
-      portable — unless ``default_exception: {tracking}`` records why a
+    - ``default`` has no blocker and is portable — unless ``default_exception: {tracking}`` records why a
       non-portable value ships anyway; that field appears nowhere else;
     - every reason is one non-blank line;
     - ``default`` carries ``validation`` (`validation_problems`) and no
@@ -567,11 +551,6 @@ def arming_problems(keys: dict[str, dict], *, strict: bool) -> list[str]:
                         out.append(p)
         exception = entry.get("default_exception")
         if state == ARMING_DEFAULT:
-            if entry.get("tier") != "defaults":
-                out.append(
-                    f"{key!r} is arming: default but sits in tier "
-                    f"{entry.get('tier')!r} — only defaults-tier keys are "
-                    "chart-shippable")
             if blocker is not None:
                 out.append(f"{key!r} is arming: default but has a blocker — a "
                            "blocked key cannot ship")
@@ -738,13 +717,10 @@ def _valid_blocker(entry: dict) -> Optional[dict]:
 
 
 def is_validation_candidate(entry: dict) -> bool:
-    """Portable, not shipped, not blocked, in the tier that can ship: what
-    A2 validates next. An ``optional_overrides`` key is not one — the
-    shipping gate (`arming_problems`) refuses ``default`` outside the
-    defaults tier, so listing it here promised a promotion the gate blocks."""
+    """Portable, not shipped, not blocked: what A2 validates next (#4195:
+    no tier gates a promotion any more)."""
     return (entry.get("arming") == ARMING_OFF
             and entry.get("portability") == PORTABLE
-            and entry.get("tier") == "defaults"
             and "blocker" not in entry and not entry.get("critical_of"))
 
 
@@ -777,11 +753,8 @@ def arming_notes_zh(entry: dict) -> list[str]:
                          f"#{b.get('tracking')}）：{b['reason_zh']}")
         if port_label and isinstance(port_reason, str):
             notes.append(f"未啟用（{port_label}）：{port_reason}")
-        elif port == PORTABLE and b is None:
-            if is_validation_candidate(entry):
-                notes.append(f"未啟用（{CANDIDATE_LABEL_ZH}）：{CANDIDATE_NOTE_ZH}")
-            else:
-                notes.append(f"未啟用（{DECLARED_ONLY_LABEL_ZH}）：{DECLARED_ONLY_NOTE_ZH}")
+        elif port == PORTABLE and b is None and is_validation_candidate(entry):
+            notes.append(f"未啟用（{CANDIDATE_LABEL_ZH}）：{CANDIDATE_NOTE_ZH}")
     elif state == ARMING_DEFAULT and port_label and isinstance(port_reason, str):
         exc = entry.get("default_exception")
         t = exc.get("tracking") if isinstance(exc, dict) else None
@@ -809,10 +782,10 @@ _RULE_PACKS_MODULE_HEADER = (
     '"""GENERATED from rule-packs/threshold-registry.yaml — DO NOT EDIT.\n'
     "\n"
     "The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its\n"
-    "display/exporter/default_on/rule_pack_file(/queries) and the `defaults` /\n"
-    "`optional_overrides` tiers, and BUILTIN_DEFAULT_KEYS: the keys the readers\n"
-    "build in (`arming: default`, the same derivation as builtin_defaults_gen.go,\n"
-    "#3832). Edit the registry, then run\n"
+    "display/exporter/default_on/rule_pack_file(/queries) and its `thresholds`\n"
+    "(registry key order), and BUILTIN_DEFAULT_KEYS: the keys the readers build\n"
+    "in with a platform value (`arming: default`, the same derivation as\n"
+    "builtin_defaults_gen.go, #3832). Edit the registry, then run\n"
     "  python3 scripts/tools/lint/check_threshold_registry.py --regen\n"
     "`--ci` (pre-commit, CI) fails while this file is stale.\n"
     '"""\n'
@@ -822,7 +795,7 @@ _RULE_PACKS_MODULE_HEADER = (
 def project_rule_packs(doc: dict) -> dict:
     """The threshold part of RULE_PACKS, as the registry *doc* states it.
 
-    Per pack: the `_PACK_FIELDS`, then the tiers in key order; per key the
+    Per pack: the `_PACK_FIELDS`, then `thresholds` in key order; per key the
     `_KEY_FIELDS` it carries. Derived fields (`critical_of`) and the
     registry-only arming fields are not part of RULE_PACKS."""
     packs: dict[str, dict] = {}
@@ -836,7 +809,7 @@ def project_rule_packs(doc: dict) -> dict:
             v = entry[f]
             info[f] = list(v) if isinstance(v, list) else (
                 dict(v) if isinstance(v, dict) else v)
-        packs[entry["pack"]].setdefault(entry["tier"], {})[key] = info
+        packs[entry["pack"]].setdefault(THRESHOLDS, {})[key] = info
     return packs
 
 
@@ -894,7 +867,7 @@ def packaged_registry_doc() -> dict:
     """The registry as the generated RULE_PACKS module carries it.
 
     For a reader that runs where no repo tree is (the da-tools image ships
-    the module, not the YAML): every key's pack, tier, value, unit, desc,
+    the module, not the YAML): every key's pack, value, unit, desc,
     metric_class, dimensions and derived `critical_of` — but NOT
     the arming fields or `deprecated_aliases`, which RULE_PACKS does not
     carry. In a checkout it equals the committed registry minus those two
@@ -1098,7 +1071,7 @@ UNSET_KEYS_GO_ID = "unset-threshold-keys-go"
 
 def unset_notice_keys(doc: dict) -> dict[str, str]:
     """Every key the platform does not ship a value for -> its pack: the
-    operator-supplied keys of both tiers (`arming: operator`). A `_critical`
+    operator-supplied keys (`arming: operator`). A `_critical`
     key is not one: the schema gives it no arming (it follows its base)."""
     out: dict[str, str] = {}
     for key, entry in (doc.get("keys") or {}).items():
@@ -1561,14 +1534,13 @@ def counterexample_observed(ce: dict, lang: str = "zh") -> str:
 
 
 def counterexample_for_key(key: str, rule_packs: Optional[dict] = None) -> Optional[dict]:
-    """The measured counter-example for `key`, or None. Looks across both tiers."""
+    """The measured counter-example for `key`, or None."""
     if rule_packs is None:
         rule_packs = _load_scaffold().RULE_PACKS
     for pack in (rule_packs or {}).values():
-        for tier in ("defaults", "optional_overrides"):
-            info = (pack.get(tier) or {}).get(key)
-            if isinstance(info, dict) and "value_counterexample" in info:
-                return info["value_counterexample"]
+        info = (pack.get(THRESHOLDS) or {}).get(key)
+        if isinstance(info, dict) and "value_counterexample" in info:
+            return info["value_counterexample"]
     return None
 
 
@@ -1585,7 +1557,7 @@ def _counterexample_lines(entry: dict, cont: str = "#       ") -> list[str]:
     """The ⚠ line under a key whose value has a measured counter-example.
 
     Rendered FROM the registry field, never authored per pack — the same
-    discipline as the tier warnings next door: a header must not be able to
+    discipline as the rest of the header: a header must not be able to
     claim something the registry contradicts. Absence of the field renders
     nothing at all, so "no line" means "no counter-example measured" and never
     "validated".
@@ -1604,27 +1576,20 @@ def _counterexample_lines(entry: dict, cont: str = "#       ") -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# optional_overrides — the flat/structured split (#1310, #1311)
+# Flat keys — the shape the exporter serves on its own row (#1310, #1311)
 # ---------------------------------------------------------------------------
-# Since #3924 no shipped artifact lists a registry key under
-# `optional_overrides:` (every one is built into the readers). What survives is
-# the predicate that tells a flat key from the two shapes the exporter's
-# declared path never serves: still read by the portal's `declaredKeys`
-# (generate_platform_data) and the tenant-fixture tools until #4195 retires the
-# tier field.
 
 
-def is_shipped_optional_key(key: str) -> bool:
-    """Whether an ``optional_overrides``-tier key belongs in the SHIPPED list.
+def is_flat_key(key: str) -> bool:
+    """Whether *key* is a flat threshold key: neither a ``<base>_critical``
+    nor a dimensional ``key{...}`` token.
 
-    Flat keys only. Identical predicate to the one ``scaffold_tenant`` uses for
-    the same split (``not key.endswith("_critical") and "{" not in key``), which
-    in turn mirrors the exporter's own refusals in
-    ``components/threshold-exporter/app/pkg/config/resolve.go``:
-    ``resolveDeclaredRows`` skips both the ``_critical`` suffix (that tier is
-    ``resolveCriticalRows``' business, and it needs ``defaults[base]``) and
-    dimensional ``key{...}`` tokens (already emitted by
-    ``resolveDimensionalRows``).
+    Mirrors the exporter's own split in
+    ``components/threshold-exporter/app/pkg/config/resolve.go``: a
+    ``_critical`` key is ``resolveCriticalRows``' business (it is read off its
+    base), and a dimensional token is ``resolveDimensionalRows``'. Read by the
+    portal's ``declaredKeys`` (generate_platform_data), the tenant-fixture
+    tools and ``inject_default_key``.
 
     NOTE the registry models no dimensional keys today (they are scaffold's
     ``dimensional_example`` domain, see this module's SCOPE note), so the
@@ -1655,12 +1620,11 @@ def shipped_dimensions_for_packs(
     for pack, meta in rule_packs.items():
         if pack not in selected:
             continue
-        for tier in ("defaults", "optional_overrides"):
-            for key, info in ((meta or {}).get(tier) or {}).items():
-                if (info or {}).get("dimensions"):
-                    # sorted, as build_registry_doc stores it: the generated
-                    # file must match the registry surfaces label for label.
-                    out[key] = sorted(info["dimensions"])
+        for key, info in ((meta or {}).get(THRESHOLDS) or {}).items():
+            if (info or {}).get("dimensions"):
+                # sorted, as build_registry_doc stores it: the generated
+                # file must match the registry surfaces label for label.
+                out[key] = sorted(info["dimensions"])
     return out
 
 
@@ -1760,38 +1724,6 @@ def _wrap_comment(body: str, width: int) -> list[str]:
     """
     return textwrap.wrap(body, width, break_on_hyphens=False,
                          break_long_words=False)
-
-
-# ---------------------------------------------------------------------------
-# The THIRD population — and its truth is per-GENERATOR, not per-repo (#1321)
-# ---------------------------------------------------------------------------
-# The tenant header names three groups: keys `_defaults.yaml` gives a value to,
-# keys it only DECLARES, and `<base>_critical`. The third sentence was first
-# written as a static claim ("in neither block; it fires once `<base>` has a
-# value") — measured true for what ``scaffold_tenant`` writes and FALSE for what
-# ``init_project`` writes in the very same command:
-#
-#   * ``scaffold_tenant.RULE_PACKS`` puts ZERO ``_critical`` in its ``defaults``
-#     tier, and the shipped ``helm/threshold-exporter/values.yaml``
-#     ``thresholdConfig.defaults`` carries zero as well.
-#   * ``init_project.RULE_PACK_CATALOG`` USED TO put sixteen of them straight
-#     into ``defaults`` (11 of its 15 packs — e.g. mariadb's
-#     ``mysql_connections_critical: 150``), so ``da-tools init --rule-packs
-#     mariadb`` wrote a ``_defaults.yaml`` whose ``defaults:`` armed nothing at
-#     all for that key, while the ``<tenant>.yaml`` written by the SAME run
-#     told the tenant it was already covered.
-#
-# ⛔ PAST TENSE from here down, and the tense is the point: #1218 moved those
-# sixteen into the catalog's ``critical_overrides`` tier and
-# ``check_threshold_reachability``'s defaults-tier face now fails CI on any
-# producer that reintroduces the shape, so BOTH generators are in the
-# ``_critical``-free regime today. The derivation below is kept exactly because
-# that was not always true and need not stay true: a sentence pinned to either
-# regime goes quietly false the next time a generator moves, which is the whole
-# defect #1321 fixed and #1218 found the other half of. What IS fixed here is
-# the header lying about it: the claim is DERIVED from the ``defaults:`` mapping
-# the generator is about to write, so whichever regime a generator is in, the
-# file says the true one.
 
 
 def dimension_entries(doc: dict) -> "list[tuple[str, list[str]]]":

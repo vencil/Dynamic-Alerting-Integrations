@@ -71,15 +71,16 @@ function parsePromQLExpr(expr) {
 }
 
 // Map common Prometheus metric names to Dynamic Alerting threshold keys.
-// Values MUST be shipped platform-default keys (rule-packs/threshold-registry.yaml
-// tier=defaults, mirrored in docs/assets/platform-data.json) — a tenant override
-// of any other key is silently never emitted (#1189), so an invented key here
-// generates config that looks migrated but never fires.
+// Values MUST be flat threshold keys of rule-packs/threshold-registry.yaml
+// (mirrored in docs/assets/platform-data.json `rulePacks[*].defaults` and
+// `declaredKeys`) — a key outside the registry is silently never emitted
+// (#1189), so an invented key here generates config that looks migrated but
+// never fires.
 // Drift-gated by tests/migration-simulator-metric-map.test.ts.
 // Deliberately unmapped (no live threshold key today — rules flow to Manual Review):
 //   mysql_global_status_slow_queries — no slow-query threshold key exists
-//   redis_evicted_keys_total — registry key is optional-tier/unwired today
-//     (#1196 rewires it as redis_evicted_keys_rate; remap once it ships in defaults)
+//   redis_evicted_keys_total — not remapped yet: the registry key is the rate
+//     redis_evicted_keys_rate (#1196), and this map does no counter→rate step
 const METRIC_MAP = {
   mysql_global_status_threads_connected: 'mysql_connection_usage_percent',
   mysql_slave_status_seconds_behind_master: 'mysql_replication_lag',

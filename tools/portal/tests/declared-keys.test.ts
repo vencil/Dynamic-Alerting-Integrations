@@ -392,3 +392,39 @@ describe('generateSampleYaml — the starter template must not hide the tier', (
     expect(under).toContain('misses the fault it should catch');
   });
 });
+
+describe('getPackThresholds — the demo tools see every key of a pack', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    (window as any).__PLATFORM_DATA = {
+      declaredKeys: PD_DECLARED,
+      rulePacks: platformData.rulePacks,
+      packOrder: platformData.packOrder,
+    };
+  });
+  afterEach(() => { delete (window as any).__PLATFORM_DATA; });
+
+  it('a pack with no platform value still has keys (#4195)', async () => {
+    // redis has no `arming: default` key: reading `pack.defaults` alone gave
+    // the alert preview and the heatmap nothing to draw.
+    const { getPackThresholds } = await import(RULE_PACKS_MOD);
+    expect(platformData.rulePacks.redis.defaults ?? {}).toEqual({});
+    const redis = getPackThresholds('redis');
+    expect(Object.keys(redis).sort())
+      .toEqual(PD_DECLARED.redis.map(r => r.key).sort());
+    for (const meta of Object.values(redis) as any[]) {
+      expect(meta.declared).toBe(true);
+      expect(typeof meta.value).toBe('number');
+    }
+  });
+
+  it('merges platform values and declared keys, marking only the declared', async () => {
+    const { getPackThresholds } = await import(RULE_PACKS_MOD);
+    const got = getPackThresholds(PACK);
+    const platform = Object.keys(platformData.rulePacks[PACK].defaults);
+    expect(platform.length).toBeGreaterThan(0);
+    for (const k of platform) expect(got[k].declared).toBeUndefined();
+    for (const row of PD_DECLARED[PACK]) expect(got[row.key].declared).toBe(true);
+    expect(Object.keys(got).length).toBe(platform.length + PD_DECLARED[PACK].length);
+  });
+});

@@ -64,7 +64,7 @@ from _lib_validation import (  # noqa: E402  (#3457)
 # fourth hand-copy of `not key.endswith("_critical") and "{" not in key` is how
 # the contract this gate polices drifts in the first place.
 sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "ops"))
-from _registry_lib import is_shipped_optional_key  # noqa: E402
+from _registry_lib import is_flat_key  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -373,7 +373,7 @@ def _gen_defaults_yaml(
             # failure in a customer-facing producer; #1412 is this path, which
             # copies caller-supplied names straight through and was invisible to
             # the reachability gate that exists to catch it.
-            if not is_shipped_optional_key(k):
+            if not is_flat_key(k):
                 raise ValueError(
                     f"--extra-defaults key {k!r} cannot live under `defaults:`: "
                     f"a `_critical` suffix is inert there (the resolver reads "

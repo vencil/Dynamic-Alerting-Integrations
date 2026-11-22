@@ -109,8 +109,8 @@ TOOL_FILES=(
     # read the YAML from); top-level import of scaffold_tenant.py.
     ops/_rule_packs_generated.py
     # #1310 — threshold-registry loader lib; top-level import of
-    # scaffold_tenant.py (is_shipped_optional_key decides which
-    # optional_overrides keys the interactive prompt may pre-fill). Stdlib-only
+    # scaffold_tenant.py (is_flat_key and the registry predicates the
+    # onboarding tools share). Stdlib-only
     # at import time (pyyaml / jsonschema are optional-guarded), so it is safe
     # to bundle; check_build_completeness.py enforces this pairing.
     ops/_registry_lib.py

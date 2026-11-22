@@ -491,18 +491,22 @@ def test_the_everything_face_is_still_the_only_one_excluded(faces, doc):
         "registry key — exclude them too or the reverse check means nothing")
 
 
-def test_both_tiers_are_represented(faces, ce_keys, doc):
-    """Aggregate non-vacuity with teeth: the two tiers fail differently, and a
-    face list that only ever exercised `defaults` is how the whole
-    `optional_overrides` tier stayed uncovered through two review rounds."""
-    tiers = {doc["keys"][k].get("tier") for k in ce_keys}
-    assert {"defaults", "optional_overrides"} <= tiers, (
-        f"only tiers {tiers} carry a counter-example — this gate has never "
-        "exercised the declared tier")
-    for tier in ("defaults", "optional_overrides"):
-        want = {k for k in ce_keys if doc["keys"][k].get("tier") == tier}
-        hit = {n for n, (presented, _t) in faces.items() if presented & want}
-        assert hit, f"no face presents any {tier}-tier counter-example key"
+def test_every_counterexample_key_has_no_platform_value(ce_keys, doc):
+    """The shipping gate refuses a measured value as a platform value
+    (`arming_problems`), so every counter-example key is an operator key —
+    the population a tenant fills in itself (#4195: there is no tier left to
+    split them by)."""
+    assert ce_keys, "no key carries a counter-example — every check here is vacuous"
+    armed = sorted(k for k in ce_keys if doc["keys"][k].get("arming") == "default")
+    assert armed == [], armed
+
+
+def test_some_face_presents_every_counterexample_key(faces, ce_keys):
+    """Aggregate non-vacuity: each counter-example key reaches at least one
+    face."""
+    for key in sorted(ce_keys):
+        hit = {n for n, (presented, _t) in faces.items() if key in presented}
+        assert hit, f"no face presents {key!r}"
 
 
 # ── portal-only faces: rendered in JS, asserted in Vitest ───────────────────
