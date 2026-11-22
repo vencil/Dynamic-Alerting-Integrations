@@ -11,8 +11,8 @@ import (
 // call — a function or an aggregation operator the parser Prometheus loads
 // rule files with accepts (#4099: the custom-rule lint's denied_functions).
 // A name the parser does not know (`holt_winters`, a typo), or knows but
-// has not enabled (an experimental function: the deployed Prometheus passes
-// no --enable-feature, prometheus_rules.go), is never called, so a deny of
+// has not enabled (an experimental function, unless deployedFeatures enables
+// them: prometheus_features.go), is never called, so a deny of
 // it denies nothing.
 //
 // Standard input is a JSON array of names; stdout is

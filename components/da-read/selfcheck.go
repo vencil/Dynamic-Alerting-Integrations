@@ -61,6 +61,7 @@ var selfCheckCases = []selfCheckCase{
 	{"promql-reads", []string{"promql-reads", "-"}, exitOK},
 	{"promql-names", []string{"promql-names", "-"}, exitOK},
 	{"promql-shape", []string{"promql-shape", "-"}, exitOK},
+	{"prometheus-features", []string{"prometheus-features", "-"}, exitOK},
 }
 
 // runSelfCheck is `da-read self-check`.

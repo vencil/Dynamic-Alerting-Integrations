@@ -223,7 +223,7 @@ lint 工具的內建政策**就是**下面這份檔（`.github/custom-rule-polic
 ```
 
 - **每個值在載入政策時判定**（[#4061](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4061)），不符即結束碼 `2`、點名鍵與原因：`denied_functions`／`preserved_labels`／`required_labels` 是清單（可為空），每項是非空字串（寫成單一字串會被拒，不再逐字元比對）；兩個時長是正的 Prometheus 時長，語法同 Prometheus 的 `ParseDuration`（`90m`、`1h30m`、`2w` 可；`1.5h`、不加引號的 `5` 不可）。group 的 `interval` 也照這個語法讀。
-- **`denied_functions` 的每個名字必須是規則叫得到的**（[#4099](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4099)）：Prometheus 載入 rule file 的 parser 認得、且已啟用的函式或聚合運算子（由 `da-read promql-names` 回答，部署的 Prometheus 不開 experimental 功能）。打錯字、Prometheus 3 已不存在的 `holt_winters`、未啟用的 experimental 函式（例如 `double_exponential_smoothing`；寫了的規則本來就會被 rule loader 拒收），都是開始 lint 前的結束碼 `2`——那樣的條目什麼也沒禁。
+- **`denied_functions` 的每個名字必須是規則叫得到的**（[#4099](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4099)）：Prometheus 載入 rule file 的 parser 認得、且已啟用的函式或聚合運算子（由 `da-read promql-names` 回答。部署的 Prometheus 不開任何改變 rule parser 的 `--enable-feature`；哪些選項會改變它由 `da-read prometheus-features` 回答，da-read 的 parser 與部署值不一致時測試會擋（[#4151](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4151)））。打錯字、Prometheus 3 已不存在的 `holt_winters`、未啟用的 experimental 函式（例如 `double_exponential_smoothing`；寫了的規則本來就會被 rule loader 拒收），都是開始 lint 前的結束碼 `2`——那樣的條目什麼也沒禁。
 - 這份只給 lint（`lint --policy`、`validate-config --lint-policy`）；webhook 網域白名單 `allowed_domains` 在部署端 policy（另一份檔，給 `generate-routes`／`validate-config` 的 `--policy`）。兩份各自拒收對方的鍵（[#3797](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3797)）。
 
 > **範圍與函式照 Prometheus 的讀法判定**（[#4080](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4080)）：運算式由 Prometheus 的 PromQL parser 讀，不比對文字。
