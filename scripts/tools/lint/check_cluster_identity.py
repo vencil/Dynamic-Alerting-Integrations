@@ -71,6 +71,13 @@ Not judged (say so rather than look covered)
     under it to keep `src`; a narrower regex such as
     `"(east|west)"` is not checked), a `label_replace` that writes it empty,
     and `label_join` into it.
+  * a source label lost under such a `label_replace` by anything but an
+    aggregation: a binary operator whose `on()` / `ignoring()` drops it, a
+    function that returns a series without it (`absent`, `vector(scalar())`),
+    `or` with a side that has none, an inner `label_replace` / `label_join`
+    that empties or overwrites it. The left side is then judged per cluster
+    although nothing is written (second review of #4097 PR-B). The shipped
+    rules are held by their promtool cases and the cluster replay, not here.
   * a tenant's own metric whose name starts with a platform family's prefix
     (`user_…`, `da_…`): `resolve_family` is the repo's one table of whose
     metric a name is, and it is read as is.
