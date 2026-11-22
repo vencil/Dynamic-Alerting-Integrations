@@ -722,6 +722,18 @@ def test_platform_default_comes_from_scaffold():
                 == scaffold_tenant.RULE_PACKS["kubernetes"]["thresholds"][key]["value"])
 
 
+def test_a_key_without_a_platform_value_has_no_platform_default():
+    """#4195: an `arming: operator` key carries a REFERENCE value in RULE_PACKS
+    but no platform value (built in as off, #4163), so it has no platform
+    default to compare against; an unknown key has none either."""
+    from _rule_packs_generated import BUILTIN_DEFAULT_KEYS
+    import scaffold_tenant
+    operator = next(k for k in scaffold_tenant.RULE_PACKS["redis"]["thresholds"]
+                    if k not in BUILTIN_DEFAULT_KEYS)
+    assert baseline_discovery.platform_default(operator) is None
+    assert baseline_discovery.platform_default("no_such_key") is None
+
+
 @pytest.mark.parametrize("observed", [40, 70, 92])
 def test_percent_of_limit_never_prints_a_threshold(capsys, monkeypatch, tmp_path, cli_argv,
                                                    observed):
