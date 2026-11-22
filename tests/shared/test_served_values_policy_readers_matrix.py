@@ -325,20 +325,39 @@ def _clis(tmp_path: Path) -> list[tuple[str, tuple[str, ...]]]:
             ("policy_opa_bridge.py", ("--dry-run",))]
 
 
-def test_root_and_tenant_critical_fails_closed(tmp_path, capsys):
-    """已知限制（#2115 10-03 F0，延後處理）：根 `defaults:` 與租戶同時寫 `X_critical` 時
-    served-values rc 2、整棵樹讀不到；三個讀取端都 fail-closed，不評估、不繞過。"""
+def test_root_critical_is_every_tenants_critical_default(tmp_path, capsys):
+    """#4173：根 `defaults:` 的 `X_critical` 是每個租戶的 critical 預設值，租戶可覆寫——
+    policy 讀到的是租戶實際發出的 critical 值：沒寫的租戶是根的 95，覆寫的是自己的 99。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_connections_critical: 95\n",
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections_critical: 95\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"70\"\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections_critical: \"99\"\n",
+    })
+    served = tv.load_served_values(conf_d)
+    assert served["tenant-a"].values["mysql_connections_critical"] == 95.0
+    assert served["tenant-b"].values["mysql_connections_critical"] == 99.0
+    rc, doc = _engine(conf_d, _policy(tmp_path, "policies:\n  - name: crit-lte-96\n"
+                                                "    target: mysql_connections_critical\n"
+                                                "    operator: lte\n    value: 96\n"), capsys, "--ci")
+    assert [(v["tenant"], v["rule_name"]) for v in doc["violations"]] == [("tenant-b", "crit-lte-96")], doc
+    assert rc == 1
+
+
+def test_tree_da_guard_refuses_fails_closed(tmp_path, capsys):
+    """da-guard 拒收的樹（同一個租戶宣告兩次）served-values rc 2、整棵樹讀不到；三個讀取端
+    都 fail-closed，不評估、不繞過。（#4173 前這裡用「根 `defaults:` 與租戶都寫 `X_critical`」
+    〔#2115 F0〕；#4173 後根的 `X_critical` 是每個租戶的 critical 預設值，那棵樹讀得到。）"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "tenant-a-again.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 60\n",
     })
     for script, extra in _clis(tmp_path):
         p = _cli(script, conf_d, *extra)
         assert p.returncode == 2, (script, p.returncode, p.stderr)
-        assert "owns rows with different values" in p.stderr and "Traceback" not in p.stderr, p.stderr
+        assert "duplicate tenant ID" in p.stderr and "Traceback" not in p.stderr, p.stderr
     row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
-    assert row["status"] == vc.FAIL and any("owns rows with different values" in d
-                                            for d in row["details"]), row
+    assert row["status"] == vc.FAIL and any("duplicate tenant ID" in d for d in row["details"]), row
 
 
 def test_file_the_exporter_drops_fails_closed(tmp_path):
@@ -639,11 +658,12 @@ _NESTED_TREE = {
 
 
 def test_tree_refused_by_a_working_da_guard_is_not_blamed_on_da_guard(tmp_path):
-    """F1 對照組：da-guard 正常、但拒收這棵樹（F0：根 defaults 與租戶都寫 `X_critical`）
-    ——仍是樹的問題：caller_error 為 False，提示是 TREE_UNREADABLE。"""
+    """F1 對照組：da-guard 正常、但拒收這棵樹（同一個租戶宣告兩次）——仍是樹的問題：
+    caller_error 為 False，提示是 TREE_UNREADABLE。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_connections_critical: 95\n",
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections_critical: 95\n",
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "tenant-a-again.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 60\n",
     })
     row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path, _LTE_10)))
     assert row["status"] == vc.FAIL and row["caller_error"] is False, row

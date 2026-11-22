@@ -7,6 +7,9 @@
 #   2) does NOT fire when the manager is current (gauge == 1).
 #   3) does NOT fire on a transient mid-write blip (gauge dips to 0 for < the 2m
 #      hold-down then recovers to 1) — the `for: 2m` debounce.
+#   4) FIRES on a series that is 0 from process start (a never-wired component,
+#      #1073) once the 2m hold-down elapses — timing only; wiring itself is
+#      tested in Go (TestWireConfigReloadObserver_*).
 # The {component} label must ride through to the firing alert.
 # Run: promtool test rules tests/rulepacks/platform-config-reload-stale_test.yaml
 rule_files:
@@ -35,22 +38,30 @@ tests:
               instance: 10.0.0.2:8080
             exp_annotations:
               description: |
-                The tenant-api `groups` config manager's LAST
-                reload FAILED, so it is serving the LAST-GOOD snapshot and the
-                on-disk config is NOT in effect (memory diverged from disk). Check
-                the tenant-api WARN log ("config reload failed") for the root cause,
-                which decides the remedy: a `parse ...` error means the on-disk YAML
-                is broken — fix it; a `read ...` (transient I/O) error means the
-                YAML is fine but a re-read failed — re-apply the config (re-PUT) or
-                restart the pod. Every manager (rbac / policy / tenantorg /
-                federation-policy / groups / views) retries on every WatchLoop
-                tick (--reload-interval, 30s by default) and clears on the first
-                good one; groups, views and federation-policy are read from the
+                The tenant-api `groups` config manager reports 0, which
+                has one of two causes; tell them apart with
+                tenant_api_config_reload_failures_total{component="groups"}.
+                (1) It is above 0: the LAST reload FAILED, so the manager is serving
+                the LAST-GOOD snapshot and the stored config is NOT in effect. The
+                tenant-api WARN log has the error: "config reload failed" with
+                component=groups for a periodic or post-write reload, or
+                "<component>: initial load failed" when the load at startup failed.
+                A `parse ...` error means the YAML is broken — fix it; a `read ...`
+                (transient I/O) error means the YAML is fine but a re-read failed —
+                re-apply the config (re-PUT) or restart the pod. (2) It is 0: the
+                component was NEVER WIRED to the reload observer — the gauge starts
+                at 0 ("not yet confirmed") and a wired manager's replayed startup
+                load moves it, a failed one adding 1 to that counter. This is a
+                tenant-api wiring bug, not a config problem — report it; restarting
+                will not clear it. Every wired manager (RBAC / federation-policy /
+                groups / tenantorg / views) retries on every WatchLoop tick
+                (--reload-interval, 30s by default) and clears on the first good
+                one; groups, views and federation-policy are read from the
                 tenant-api-state ConfigMap, not conf.d. Unlike
                 TenantApiConfigReloadFailing (a failure-rate alert), this fires
                 however rarely the reload is retried.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
-              summary: "tenant-api groups config is stale — last reload failed"
+              summary: "tenant-api groups config is stale or unconfirmed — last reload failed or never reported"
 
   # 2) Healthy: gauge at 1 — must NOT fire.
   - interval: 1m
@@ -88,3 +99,53 @@ tests:
       - eval_time: 20m
         alertname: TenantApiConfigReloadStale
         exp_alerts: []
+
+  # 4) A series that is 0 from process start (what a component never wired to
+  #    the reload observer exports, #1073) fires through the same expression:
+  #    pending inside the 2m hold-down, firing after it. This case pins only the
+  #    `for:` timing; that every component IS wired is checked by
+  #    TestWireConfigReloadObserver_* in components/tenant-api/cmd/server.
+  - interval: 1m
+    name: never-wired-component-fires
+    input_series:
+      - series: 'tenant_api_config_last_reload_successful{component="views", job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '0x30'   # 0 from process start, nothing ever reports
+    alert_rule_test:
+      - eval_time: 1m    # inside the 2m hold-down: pending, not firing
+        alertname: TenantApiConfigReloadStale
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: TenantApiConfigReloadStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              component: views
+              job: tenant-api
+              instance: 10.0.0.2:8080
+            exp_annotations:
+              description: |
+                The tenant-api `views` config manager reports 0, which
+                has one of two causes; tell them apart with
+                tenant_api_config_reload_failures_total{component="views"}.
+                (1) It is above 0: the LAST reload FAILED, so the manager is serving
+                the LAST-GOOD snapshot and the stored config is NOT in effect. The
+                tenant-api WARN log has the error: "config reload failed" with
+                component=views for a periodic or post-write reload, or
+                "<component>: initial load failed" when the load at startup failed.
+                A `parse ...` error means the YAML is broken — fix it; a `read ...`
+                (transient I/O) error means the YAML is fine but a re-read failed —
+                re-apply the config (re-PUT) or restart the pod. (2) It is 0: the
+                component was NEVER WIRED to the reload observer — the gauge starts
+                at 0 ("not yet confirmed") and a wired manager's replayed startup
+                load moves it, a failed one adding 1 to that counter. This is a
+                tenant-api wiring bug, not a config problem — report it; restarting
+                will not clear it. Every wired manager (RBAC / federation-policy /
+                groups / tenantorg / views) retries on every WatchLoop tick
+                (--reload-interval, 30s by default) and clears on the first good
+                one; groups, views and federation-policy are read from the
+                tenant-api-state ConfigMap, not conf.d. Unlike
+                TenantApiConfigReloadFailing (a failure-rate alert), this fires
+                however rarely the reload is retried.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
+              summary: "tenant-api views config is stale or unconfirmed — last reload failed or never reported"

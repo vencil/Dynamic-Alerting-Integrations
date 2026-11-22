@@ -764,7 +764,10 @@ jobs:
         # Scope (unchanged): rule-eval parity (MetricsQL math + for:), NOT real-TSDB
         # staleness — see the test module docstring; storage-layer staleness parity is
         # characterized on-demand by test_vm_replay_staleness.py (vmalert -replay, Phase 2).
-        run: python -m pytest tests/rulepacks/test_vm_alert_parity.py -v
+        # --durations: the slowest fixtures are printed at the end of the log, so one
+        # creeping toward the per-fixture limit (_VMALERT_TIMEOUT_S) is seen before it
+        # fails the required check (#4118).
+        run: python -m pytest tests/rulepacks/test_vm_alert_parity.py -v --durations=15 --durations-min=5.0
 
       # pint (ADR-025 deferred item): static analysis of the rule-pack SOURCE.
       # The high-ROI check is alerts/template — it mechanically catches the

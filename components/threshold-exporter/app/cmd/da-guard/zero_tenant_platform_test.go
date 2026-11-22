@@ -125,8 +125,10 @@ var zeroTenantTreeLevelCases = map[string]zeroTenantPlatformCase{
 		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\nmem: 70\n"},
 		finding: findingkind.FindingDefaultsTopLevelIgnored,
 	},
-	"_critical key in the root defaults": {
-		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\n  cpu_critical: 90\n"},
+	// #4173: a root `_critical` over a valued base is every tenant's
+	// critical default; with no base value it serves nothing.
+	"_critical key in the root defaults, its base unvalued": {
+		files:   map[string]string{"_defaults.yaml": "defaults:\n  mem: 80\n  cpu_critical: 90\n"},
 		finding: findingkind.FindingRootDefaultsCriticalKey,
 	},
 	// #3140: a non-finite root default is judged in the carrier itself.

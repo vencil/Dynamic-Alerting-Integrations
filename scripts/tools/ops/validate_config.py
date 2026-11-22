@@ -1205,8 +1205,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
 
     One da-guard run, `effective`: its `skipped` names the files with no
     tenant, so served-values (/metrics) is not needed — a tree whose /metrics
-    da-guard refuses (e.g. `X_critical` written at the root and in a tenant,
-    #2115 F2) is not this row's business. A file the load drops is named
+    da-guard refuses is not this row's business. A file the load drops is named
     with the exporter's reason from effective's own stderr (#2115: it logs
     the load as served-values does), so served-values is not run for it.
 

@@ -1083,8 +1083,10 @@ def test_the_nested_message_names_the_consequence_that_actually_happens():
     assert "SECOND, independent problem" in nested, nested
     assert "removing this key does not make the section decodable" in nested, nested
     assert 'severity="warning"' not in nested, nested
-    # …and the flat case keeps the silent-series explanation, which IS its shape
-    assert 'severity="warning"' in flat, flat
+    # …and the flat case says what the key IS since #4173: every tenant's
+    # critical default (served), which shipped producers must not choose.
+    assert "every tenant's critical default" in flat, flat
+    assert 'severity="warning"' not in flat, flat
     assert "independent problem" not in flat, flat
 
 
@@ -1140,12 +1142,10 @@ def test_the_message_never_spells_a_one_segment_metric_label():
         demand=set(), supply=set(), deferred=set(), known_unwired={},
         defaults_faces=({"probe": _flat("pg_connections_critical")}, {}),
     )["errors"][0]
-    assert "FIRST underscore" in msg, msg
-    assert "rulepack_contract_test.go" in msg, msg
-    # the Go contract this defers to must still be there under that name
-    contract = (gate.PROJECT_ROOT / "components" / "threshold-exporter" / "app"
-                / "rulepack_contract_test.go")
-    assert contract.is_file(), contract
+    # #4173: the flat key is the base's critical row, not a split-label
+    # series of its own, so the message names the base's row and no labels.
+    assert "'pg_connections''s severity=critical row" in msg, msg
+    assert "FIRST underscore" not in msg, msg
 
 
 def test_the_nested_suggestion_names_a_key_and_not_a_path():
@@ -2882,7 +2882,7 @@ def test_a_flat_key_containing_a_dot_is_not_diagnosed_as_nested():
         demand=set(), supply=set(), deferred=set(), known_unwired={},
         defaults_faces=({"probe": walked}, {}),
     )["errors"][0]
-    assert 'severity="warning"' in msg, msg
+    assert "every tenant's critical default" in msg, msg
     assert "independent problem" not in msg, msg
 
 

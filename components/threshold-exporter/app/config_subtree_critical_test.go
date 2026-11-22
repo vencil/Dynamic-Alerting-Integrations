@@ -26,7 +26,10 @@ func TestSubtreeCritical_UndeliverableUnlessTheBaseIsValued(t *testing.T) {
 		{"base only in optional_overrides", "defaults:\n  mysql_connections: 80\noptional_overrides: [redis_memory]\n", 1, 0},
 		{"base nowhere at the root", "defaults:\n  mysql_connections: 80\n", 1, 0},
 		{"base valued at the root", "defaults:\n  redis_memory: 60\n", 0, 90},
-		{"the _critical key itself valued at the root, no base", "defaults:\n  redis_memory_critical: 5\n", 0, 90},
+		// #4173: the root's `_critical` is the critical phase's default, read
+		// only over a valued base — it does not make the subtree's deliverable.
+		{"the _critical key itself valued at the root, no base", "defaults:\n  redis_memory_critical: 5\n", 1, 0},
+		{"the _critical key valued at the root over a valued base", "defaults:\n  redis_memory: 60\n  redis_memory_critical: 5\n", 0, 90},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

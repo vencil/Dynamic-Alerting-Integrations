@@ -1407,11 +1407,13 @@ func unservedOf(dst map[string]any, cfg *config.ThresholdConfig, overrides map[s
 	// #2031: a root dimensional default the tenant does not write is the
 	// tenant's labelled series; one with no row is unserved. #3045: so is
 	// a root default under a `_` key the registry does not list, which
-	// serves no row for any tenant.
+	// serves no row for any tenant. #4173: so is a root `<base>_critical`
+	// (every tenant's critical default) with no row — its base switched off
+	// (base_disabled) or unvalued.
 	for k, v := range cfg.Defaults {
 		canon, _ := config.CanonicalKeyFor(k)
 		_, own := overrides[canon]
-		perTenant := strings.Contains(k, "{") || config.IsUnregisteredUnderscoreKey(k)
+		perTenant := strings.Contains(k, "{") || config.IsUnregisteredUnderscoreKey(k) || config.CriticalRowKey(k)
 		if _, refused := rootRefused[k]; refused {
 			// In Keys instead (addRootRefused): its value is no number to show.
 			continue

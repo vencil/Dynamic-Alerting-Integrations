@@ -101,7 +101,9 @@ func (c *ThresholdConfig) UnsetThresholdsAt(now time.Time, subscribed map[string
 	// Only the generated keys: the phases read nothing else for them.
 	defaults := map[string]float64{}
 	for k, v := range canonicalizeDefaults(c.Defaults) {
-		if inTable[keyBase(k)] {
+		// unsetFamilyBase: a root `<key>_critical` (#4173, every tenant's
+		// critical default) reaches the critical phase beside its base.
+		if inTable[unsetFamilyBase(k)] {
 			defaults[k] = v
 		}
 	}
