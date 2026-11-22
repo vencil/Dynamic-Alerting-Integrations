@@ -134,6 +134,16 @@ func valueNotServedMessage(k string, ns config.NotServedKey) string {
 	}
 	switch ns.Reason {
 	case config.NotServedValueUnparsed:
+		if config.CriticalRowKey(k) {
+			// #4173: a `_critical` key's whole value is the number (no
+			// `:<severity>`); an unreadable one falls back to the root's
+			// critical default.
+			return fmt.Sprintf("value_unparsed: %s writes `%s` with a value that is not a finite number the exporter "+
+				"reads (e.g. `abc`, `90:critical`, `NaN`; a `_critical` key's whole value is the number, with no "+
+				"`:<severity>`), so /metrics serves the root `defaults:` critical value for it instead and the "+
+				"critical alert fires at that value, not at the written threshold. Write a number (e.g. `90`), or "+
+				"`disable`.", file, k)
+		}
 		return fmt.Sprintf("value_unparsed: %s writes `%s` with a value that is not a finite number the exporter reads "+
 			"(e.g. `abc`, a list, `7O:critical`, `NaN`, `-Inf`; #3140) or whose `:<severity>` is not `warning` or "+
 			"`critical` (e.g. `70:high`, `70:`; #3071), so /metrics serves the platform default for it instead and the "+
@@ -142,7 +152,7 @@ func valueNotServedMessage(k string, ns config.NotServedKey) string {
 	case config.NotServedValueUnparsedDropped:
 		return fmt.Sprintf("value_unparsed_dropped: %s writes `%s` with a value that is not a finite number the exporter "+
 			"reads (e.g. `abc`, `NaN`, `-Inf`; #3140), or whose `:<severity>` is not `warning` or `critical` (e.g. "+
-			"`60:high`, `60:`), and the key has no platform default to fall back to (a `_critical` tier, a dimensional "+
+			"`60:high`, `60:`), and the key has no platform default to fall back to (a `_critical` tier the root `defaults:` gives no value, a dimensional "+
 			"key, an `optional_overrides:` key, or a key the root `defaults:` writes as a non-finite number), so "+
 			"/metrics serves no series for it and that alert can never fire. "+
 			"Write a number (e.g. `90`), or `disable`. "+disableSuffixFix(k), file, k)

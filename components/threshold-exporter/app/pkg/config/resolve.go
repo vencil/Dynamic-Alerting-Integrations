@@ -867,6 +867,15 @@ func criticalRowBase(key string) (string, bool) {
 	return strings.TrimSuffix(key, "_critical"), true
 }
 
+// CriticalRowKey reports whether a root `defaults:` key is a critical default
+// resolveCriticalRows serves (#4173): a `<base>_critical` key (criticalRowBase)
+// with no label segment — a `<base>{…}_critical` is no tier (#2031, #3556),
+// so the root serves no row for it.
+func CriticalRowKey(key string) bool {
+	_, critical := criticalRowBase(key)
+	return critical && !strings.Contains(key, "{")
+}
+
 // resolveCriticalRows resolves a tenant's <metric>_critical tier: one
 // severity=critical row per `<base>_critical` whose base the root defaults
 // value, from the tenant's own value — or, when the tenant gives none, from
@@ -963,10 +972,10 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 	// canonical). Its base must be valued as for a tenant's key; a root value
 	// the decode refused serves nothing (root_default_refused names it).
 	for key, rv := range defaults {
-		baseKey, critical := criticalRowBase(key)
-		if !critical {
+		if !CriticalRowKey(key) {
 			continue
 		}
+		baseKey, _ := criticalRowBase(key)
 		if _, own := overrides[key]; own {
 			continue
 		}

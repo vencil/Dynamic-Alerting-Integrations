@@ -171,3 +171,37 @@ func TestUnreadableTenantCriticalFallsBackToTheRootCriticalValue(t *testing.T) {
 		})
 	}
 }
+
+// #4173 review: a root `<base>{…}_critical` is no tier (#2031, #3556): it
+// serves no row — not a critical row whose metric carries the label segment.
+func TestARootDimensionalCriticalKeyServesNoRow(t *testing.T) {
+	t.Parallel()
+	cfg := loadTree(t, map[string]string{
+		"_defaults.yaml": "dimensions:\n  pg_connections: [db]\ndefaults:\n  pg_connections: 80\n" +
+			"  'pg_connections{db=\"a\"}': 70\n  'pg_connections{db=\"a\"}_critical': 96\n",
+		"t.yaml": "tenants:\n  ta: {}\n",
+	})
+	for _, r := range cfg.ResolveAt(fixedNow) {
+		if r.Tenant == "ta" && r.Severity == "critical" {
+			t.Errorf("critical row served: %+v", r)
+		}
+	}
+}
+
+// #4173 review: a root `<key>_critical` arms the critical alert for every
+// tenant, so user_threshold_unset does not name its key.
+func TestUnsetThresholds_ARootCriticalDefaultConfiguresTheKey(t *testing.T) {
+	t.Parallel()
+	if _, ok := UnsetThresholdKeys()["jvm_memory"]; !ok {
+		t.Fatal("jvm_memory is not in the unset table: the fixture needs another key")
+	}
+	cfg := loadTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  jvm_memory_critical: 90\n",
+		"t.yaml":         "tenants:\n  ta: {}\n",
+	})
+	for _, u := range cfg.UnsetThresholdsAt(fixedNow, map[string]bool{"ta": true}) {
+		if u.Key == "jvm_memory" {
+			t.Errorf("jvm_memory listed unset: %+v", u)
+		}
+	}
+}
