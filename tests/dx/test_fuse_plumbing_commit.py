@@ -405,3 +405,56 @@ def test_a_git_fatal_error_on_commit_is_a_caller_error(tmp_path: Path) -> None:
         capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=repo, env=env,
     )
     assert proc.returncode == 2, proc.stderr
+
+
+# ── #3836: `git commit` runs every hook; its limit is its own ──────────
+
+def _in_process(repo: Path, monkeypatch, *, step: float, commit: float):
+    mod = _load_module()
+    monkeypatch.setattr(mod, "STEP_TIMEOUT_S", step)
+    monkeypatch.setattr(mod, "COMMIT_TIMEOUT_S", commit)
+    monkeypatch.chdir(repo)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    return mod.main(["--auto", "-m", "test: x", "f.txt"])
+
+
+def test_a_commit_slower_than_a_plumbing_step_still_lands(tmp_path: Path, monkeypatch, capsys) -> None:
+    """The hooks may outlast STEP_TIMEOUT_S: `git commit` is held to
+    COMMIT_TIMEOUT_S, not to it. Before #3836 every hook run past 60s
+    crashed with a traceback."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    _hook(repo, "#!/bin/sh\nsleep 3\nexit 0\n")
+    assert _in_process(repo, monkeypatch, step=1.5, commit=60) == 0, capsys.readouterr().err
+    assert _head(repo) != before
+
+
+def test_a_commit_past_its_limit_is_a_named_2_not_a_traceback(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _init_tmp_repo(tmp_path)
+    _hook(repo, "#!/bin/sh\nsleep 10\nexit 0\n")
+    assert _in_process(repo, monkeypatch, step=60, commit=1) == 2
+    err = capsys.readouterr().err
+    assert "`git commit -m test: x` did not finish within 1s and was stopped" in err
+    assert "whether the commit landed is unknown" in err and "git log -1" in err
+
+
+def test_a_plumbing_step_past_its_limit_is_a_named_2(tmp_path: Path, monkeypatch, capsys) -> None:
+    mod = _load_module()
+    repo = _init_tmp_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    real = subprocess.run
+
+    def slow_write_tree(cmd, *a, **kw):
+        if cmd[:2] == ["git", "write-tree"]:
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(mod.subprocess, "run", slow_write_tree)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    assert mod.main(["--force-plumbing", "-m", "test: x", "f.txt"]) == 2
+    assert "`git write-tree` did not finish within 60s" in capsys.readouterr().err
+
+
+def test_the_commit_limit_is_the_hooks_not_a_steps() -> None:
+    mod = _load_module()
+    assert mod.STEP_TIMEOUT_S == 60 and mod.COMMIT_TIMEOUT_S >= 600

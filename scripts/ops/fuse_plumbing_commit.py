@@ -39,7 +39,10 @@ Exit codes
       output it passes through), the pre-commit hook is not installed or
       cannot start pre-commit, not in a repo, a file or the message missing, a
       git plumbing step failed, or commit-tree succeeded but the ref write
-      failed (new SHA in stderr for recovery) — scripts/tools/_lib_exitcodes.py
+      failed (new SHA in stderr for recovery), or a git step did not finish in
+      time (#3836: `git commit` gets COMMIT_TIMEOUT_S, every other step
+      STEP_TIMEOUT_S; a `git commit` cut off leaves the commit's state unknown
+      — check with `git log -1`) — scripts/tools/_lib_exitcodes.py
 
   Never 1 (#3634, owner ruling 2026-11-13): 1 means "change the content",
   and the tool cannot prove a hook failure is a finding rather than a check
@@ -70,6 +73,14 @@ import tempfile
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
 
+#: Seconds a git plumbing step (read-tree, hash-object, commit-tree…) may take.
+STEP_TIMEOUT_S = 60
+#: #3836: seconds the normal path's `git commit` may take. It runs every
+#: pre-commit hook — over a hundred in this repository — which often takes
+#: longer than a plumbing step's limit; a hook that hangs is still stopped.
+COMMIT_TIMEOUT_S = 1800
+
+
 class CommandFailed(RuntimeError):
     """A command `_run` ran ended non-zero; *returncode* is its status."""
 
@@ -78,19 +89,32 @@ class CommandFailed(RuntimeError):
         self.returncode = returncode
 
 
-def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = True) -> str:
-    """Run cmd, return stripped stdout; raise on non-zero if check=True."""
+class CommandTimedOut(RuntimeError):
+    """A command `_run` ran did not finish within its limit (#3836); it was
+    killed. A RuntimeError, so the run ends at 2 with one named line."""
+
+
+def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = True,
+         timeout: float | None = None) -> str:
+    """Run cmd, return stripped stdout; raise on non-zero if check=True.
+    *timeout*: seconds (STEP_TIMEOUT_S when not given); past it the command
+    is killed and CommandTimedOut raised."""
     merged_env = os.environ.copy()
     if env:
         merged_env.update(env)
-    result = subprocess.run(
-        cmd,
-        env=merged_env,
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
-        check=False,
-        timeout=60,
-    )
+    limit = STEP_TIMEOUT_S if timeout is None else timeout
+    try:
+        result = subprocess.run(
+            cmd,
+            env=merged_env,
+            capture_output=True,
+            text=True, encoding="utf-8", errors="replace",
+            check=False,
+            timeout=limit,
+        )
+    except subprocess.TimeoutExpired:
+        raise CommandTimedOut(
+            f"`{' '.join(cmd)}` did not finish within {limit:g}s and was stopped") from None
     if check and result.returncode != 0:
         raise CommandFailed(
             result.returncode,
@@ -280,7 +304,11 @@ def normal_commit(
     if amend:
         cmd = ["git", "commit", "--amend", "-m", message]
     try:
-        _run(cmd)
+        _run(cmd, timeout=COMMIT_TIMEOUT_S)
+    except CommandTimedOut as exc:
+        raise RuntimeError(
+            f"{exc}: whether the commit landed is unknown (a hook may still be "
+            "running); check with `git log -1` before committing again") from exc
     except CommandFailed as exc:
         raise RuntimeError(
             f"{exc}\n`git commit` failed (rc {exc.returncode}): a hook failed — "
@@ -378,7 +406,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2  # a plumbing step or a missing file: a caller error (#3577)
 
-    branch = _run(["git", "symbolic-ref", "--short", "HEAD"], check=False) or "(detached)"
+    try:
+        branch = _run(["git", "symbolic-ref", "--short", "HEAD"], check=False) or "(detached)"
+    except CommandTimedOut:
+        branch = "(unknown)"  # the commit landed; only its label is missing
     print(f"committed: {sha}  (branch={branch})")
     return 0
 
