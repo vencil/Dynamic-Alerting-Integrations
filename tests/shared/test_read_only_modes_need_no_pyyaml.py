@@ -92,3 +92,58 @@ def test_the_harness_does_refuse_pyyaml(tmp_path):
     assert done.returncode != 0 and "refused by the test" in done.stderr, (
         done.returncode, done.stdout, done.stderr)
     assert "imported" not in done.stdout
+
+
+# ── #4223: the output entries themselves load neither PyYAML nor _lib_constants ──
+# The rows above show a tool's read-only mode avoiding `_lib_io`; this holds the
+# module those tools can reach the entries through instead. `_lib_constants`
+# is refused too: a generator that rewrites `_lib_constants.py` must be able to
+# write while that file does not parse. Every entry is CALLED, not only
+# imported — `write_repo_artifact` loads `_lib_atomic_write` on first use.
+_ENTRIES_ALONE = """
+import builtins, os, sys
+REFUSED = ("yaml", "_lib_constants", "_lib_io")
+real = builtins.__import__
+def refuse(name, *a, **k):
+    if name.split(".")[0] in REFUSED:
+        raise ModuleNotFoundError(f"No module named {name!r} (refused by the test)")
+    return real(name, *a, **k)
+builtins.__import__ = refuse
+sys.path.insert(0, sys.argv[1])
+exec(sys.argv[3])
+out = sys.argv[2]
+from _lib_output import (check_repo_artifact, ensure_dir, write_operator_output,
+                         write_repo_artifact)
+ensure_dir(os.path.join(out, "d"))
+check_repo_artifact(os.path.join(out, "d", "a.txt"))
+write_repo_artifact(os.path.join(out, "d", "a.txt"), "a\\n")
+write_operator_output(os.path.join(out, "d", "o.txt"), "o\\n", flag=None)
+loaded = sorted(m for m in sys.modules if m.split(".")[0] in REFUSED)
+print("loaded:", loaded)
+sys.exit(1 if loaded else 0)
+"""
+
+
+def _entries_alone(tmp_path: Path, before: str = "") -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-c", _ENTRIES_ALONE, str(TOOLS), str(tmp_path), before],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL, timeout=120)
+
+
+def test_the_output_entries_need_neither_pyyaml_nor_lib_constants(tmp_path):
+    done = _entries_alone(tmp_path)
+    assert done.returncode == 0, (done.stdout, done.stderr)
+    assert "loaded: []" in done.stdout, done.stdout
+    assert (tmp_path / "d" / "a.txt").read_text(encoding="utf-8") == "a\n"
+    assert (tmp_path / "d" / "o.txt").read_text(encoding="utf-8") == "o\n"
+
+
+@pytest.mark.parametrize("refused", ["yaml", "_lib_constants", "_lib_io"])
+def test_the_entries_harness_does_refuse_each_module(tmp_path, refused):
+    """The control: importing a refused module before the entries fails, so
+    the test above cannot pass because the refusal did nothing."""
+    done = _entries_alone(tmp_path, f"import {refused}")
+    assert done.returncode != 0 and "refused by the test" in done.stderr, (
+        done.returncode, done.stdout, done.stderr)
+    assert "loaded:" not in done.stdout

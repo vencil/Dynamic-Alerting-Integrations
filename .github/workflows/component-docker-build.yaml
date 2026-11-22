@@ -113,6 +113,7 @@ on:
       - "scripts/tools/_lib_atomic_write.py"
       - "scripts/tools/_lib_confd.py"
       - "scripts/tools/_lib_metric_sources.py"
+      - "scripts/tools/_lib_output.py"
       - "scripts/tools/ops/_grar_merge.py"
       - "scripts/tools/ops/_grar_parse.py"
       - "scripts/tools/ops/_grar_routes.py"

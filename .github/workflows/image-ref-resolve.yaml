@@ -104,6 +104,7 @@ on:
       - "scripts/tools/_lib_input.py"
       - "scripts/tools/_lib_io.py"
       - "scripts/tools/_lib_label.py"
+      - "scripts/tools/_lib_output.py"
       - "scripts/tools/_lib_parse_cache.py"
       - "scripts/tools/_lib_parse_tree.py"
       - "scripts/tools/_lib_paths.py"

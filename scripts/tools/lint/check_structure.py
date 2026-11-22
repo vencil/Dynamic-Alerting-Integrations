@@ -40,6 +40,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_python.py",
     "_lib_constants.py",
     "_lib_io.py",
+    "_lib_output.py",      # #4223: the output entries, no PyYAML / _lib_constants (_lib_io re-exports them)
     "_lib_validation.py",
     "_lib_prometheus.py",
     "_lib_atomic_write.py",  # #3107: the one atomic writer (was dx/_atomic_write.py)

@@ -263,7 +263,8 @@ repos:
         name: Tool map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_tool_map.py --check --lang all
         language: python
-        # #2128: the shared _atomic_write helper imports _lib_io, which needs PyYAML.
+        # #2128: the tool imports its write entry from _lib_io, which needs PyYAML
+        # (#4223: _lib_output does not; moving the import there is #3981's).
         additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: ^scripts/tools/.*\.py$
@@ -304,7 +305,8 @@ repos:
         name: Doc map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_doc_map.py --check --lang all
         language: python
-        # #2128: the shared _atomic_write helper imports _lib_io, which needs PyYAML.
+        # #2128: the tool imports its write entry from _lib_io, which needs PyYAML
+        # (#4223: _lib_output does not; moving the import there is #3981's).
         additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: ^docs/.*\.(md|jsx)$
@@ -1434,7 +1436,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_io\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+        files: (?:^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_(io|output)\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
 
       - id: runtime-canary-compile-check
         name: "#3679: runtime canary's compiled rules must match its recipe through the real compiler"
@@ -1448,7 +1450,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(tests/rulepacks/runtime-canary\.compiled\.rules\.yaml|tests/rulepacks/runtime-canary-recipe/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_io\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+        files: (?:^(tests/rulepacks/runtime-canary\.compiled\.rules\.yaml|tests/rulepacks/runtime-canary-recipe/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_(io|output)\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
 
       - id: retire-drift-check
         name: "#869: forbid removing a K8s exporter target while its conf.d _expected_exporters declaration remains (false-positive guard)"
