@@ -79,7 +79,7 @@ def build_configmap(name: str, rule_pack_data: dict, namespace: str = "monitorin
         "apiVersion": "v1",
         "kind": "ConfigMap",
         "metadata": {
-            "name": f"prometheus-rules-{name}",
+            "name": _lib_consumer_read.configmap_rules_object_name(name),
             "namespace": namespace,
             "labels": {"app": "prometheus", "rule-pack": name},
         },
