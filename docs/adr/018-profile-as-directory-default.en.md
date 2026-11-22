@@ -17,6 +17,8 @@ lang: en
 
 🟢 **Accepted** (v2.8.0, 2026-04-27) — The Profile Builder's PromRule→threshold translator and emission ship with v2.8.0.
 
+2026-11-22: the Profile Builder is wired to no CLI and the batch PR pipeline does not call it; and when a tenant deviates from the median in two clusters, the emission writes a file for that tenant in each of the two directories, so da-guard refuses the whole tree as a duplicate tenant. The bulk-import approach is being re-selected; for the current state see [`batch-pr`](../cli-reference.en.md#batch-pr). This ADR's default-vs-override boundary is unaffected.
+
 ## Context
 
 The Profile Builder clusters a customer's PromRule corpus into "structurally similar" groups. Each cluster is expected to land in the conf.d/ tree — the question is **how**:
@@ -83,7 +85,7 @@ This ADR's emission relies on ADR-017's:
 
 ### With ADR-016 (Directory Hierarchy)
 
-Emission's `<RootPrefix>/<ProposalDir>/` maps to ADR-016's directory levels. **The caller** (the batch PR pipeline is the primary user) decides whether `ProposalDirs[i]` lands at L1 / L2 / L3. **The Profile Builder does NOT infer directory placement**; that's the batch PR pipeline's job.
+Emission's `<RootPrefix>/<ProposalDir>/` maps to ADR-016's directory levels. **The caller** (by design the batch PR pipeline; there is no caller today) decides whether `ProposalDirs[i]` lands at L1 / L2 / L3. **The Profile Builder does NOT infer directory placement**; that's the batch PR pipeline's job.
 
 ### With the Dangling Defaults Guard
 

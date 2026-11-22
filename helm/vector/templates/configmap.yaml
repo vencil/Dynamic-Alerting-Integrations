@@ -19,8 +19,11 @@ data:
   #            │                   │ stream-field promotion: app / k8s_namespace
   #            │                   │
   #            │                   ├─▶ victorialogs(sink, elasticsearch _bulk)
-  #            │                   └─▶ tenant_eligible(filter: log_type == federation_audit)
-  #            │                          └─▶ tenant_project ─▶ tenant_route ─▶ vl_tenant_<id>
+  #            │                   ├─▶ tenant_eligible(filter: log_type == federation_audit)
+  #            │                   │      └─▶ tenant_project ─▶ tenant_route ─▶ vl_tenant_<id>
+  #            │                   └─▶ tenant_stamp_check ─▶ tenant_stamp_missed(log_to_metric)
+  #            │                          └─▶ prometheus(sink) — read-only; counts rows with a
+  #            │                              verified account_id that reach no tenant partition
   #            │
   #            └─▶ .evidence ─▶ federation_evidence(transform, VRL)
   #                                │ parse_json(.message) + deep merge  ⛔ load-bearing
@@ -872,6 +875,162 @@ data:
           t_{{ $p.accountId }}: '.account_id == {{ $p.accountId }}'
         {{- end }}
       {{- end }}
+      {{- if .Values.metrics.enabled }}
+      # ── Should-have-been-stamped detector (ADR-021 §日誌進入端的契約) ──────────
+      # Counts audit rows that carry a VERIFIED tenant identity, were forwarded
+      # by the gateway to the log store (a non-empty `upstream`), yet reach
+      # only the platform 0:0 copy. TenantProjectionStampMissing alerts on any
+      # of them.
+      #
+      # "Verified tenant identity" = the `account_id` field of the gateway's
+      # audit line. Envoy writes it from the jwt_authn-verified claim of a
+      # logs-capability token (helm/federation-gateway/files/envoy.yaml
+      # `account_id`), and tenant-api only signs that claim for a tenant it
+      # allocated an AccountID to. Metrics tokens carry no such claim, so their
+      # rows have it empty and never count. That is what makes this
+      # structural instead of a baseline comparison: a valid account_id
+      # says "this tenant has a partition", so a row of it missing from that
+      # partition is wrong every single time — unlike a blank or unknown
+      # tenant_id, which also covers metrics-only tenants that legitimately
+      # have no partition (TenantProjectionFanoutDiscardSpike's problem).
+      #
+      # Two reasons are counted, each as its own metric tag:
+      #   not_projected   — a federation_audit row whose tenant_id is blank or
+      #                     not in `tenantProjections`, so tenant_project
+      #                     aborts it. Rendered even when tenantProjections is
+      #                     empty: then the map is `{}` and every such row
+      #                     counts — tenants hold logs tokens but no partition
+      #                     is written.
+      #   origin_rejected — demux reclassified the row to suspicious_audit (a
+      #                     pod_owner outside audit.gatewayPodOwnerPrefix), so
+      #                     tenant_eligible drops it. Either a forged row or a
+      #                     wrong prefix that rejects the real gateway — both
+      #                     need an operator.
+      # Not counted here, covered elsewhere: a VRL runtime error in
+      # tenant_project (TenantProjectionMappingErrors), the gate omitting the
+      # tenant sinks (VectorProjectionGateMismatch / VectorRegistryUnreadableAtBoot),
+      # and a tenant sink dropping batches (VectorStoreSinkDroppingEvents,
+      # VectorBufferEventsDropped).
+      #
+      # ⛔ This transform reads the row; it never decides where the row goes.
+      # It hangs off demux as a third consumer (route/fan-out copies the event),
+      # so nothing here can reach a store. Its non-matching rows are aborted:
+      # they show up as intentional discards under
+      # component_id="tenant_stamp_check" — volume, not a signal.
+      tenant_stamp_check:
+        type: remap
+        inputs:
+          - demux
+        drop_on_abort: true
+        drop_on_error: true
+        reroute_dropped: false
+        source: |
+          # The account_id the gateway logged: a whole number in [1000, 2^32-1],
+          # as a JSON number or a plain decimal string. That is what tenant-api
+          # signs (a uint32 JSON number) and a subset of what the gateway's Lua
+          # admits (its tonumber also takes "1000.0", "0x3E8", " 1000" — forms
+          # tenant-api never emits). Anything else (empty for metrics tokens,
+          # malformed claims) is "no verified identity".
+          # ⛔ No dollar sign anywhere in this template: the vector container
+          # runs with VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION, which
+          # would read it as an env var (test_helm_chart_log_aggregation.py
+          # pins that). The end anchor is therefore `\z`.
+          acct = .account_id
+          aid = null
+          if is_string(acct) {
+            s = to_string(acct) ?? ""
+            if match(s, r'^[0-9]{1,10}\z') {
+              aid = to_int(s) ?? null
+            }
+          } else if is_integer(acct) {
+            aid = acct
+          } else if is_float(acct) {
+            f = to_float(acct) ?? 0.0
+            if floor(f) == f {
+              # to_int on a float is infallible (no `??`, which Vector rejects).
+              aid = to_int(f)
+            }
+          }
+          if !is_integer(aid) {
+            abort
+          }
+          n = int!(aid)
+          if n < 1000 || n > 4294967295 {
+            abort
+          }
+          # Only rows the gateway FORWARDED to the log store count. A request
+          # the gateway answered itself (Lua 403 for a revoked token, a 429
+          # rate limit, an endpoint outside the allowlist) has no upstream
+          # host, read no log data, and is not a stamping failure. This keeps
+          # an offboarded tenant out: removed from tenantProjections, its
+          # revoked-but-unexpired logs token still carries account_id in the
+          # audit row, but every such request is a local 403. Envoy writes
+          # %UPSTREAM_HOST% as null (or "-") when no upstream was chosen.
+          up = to_string(.upstream) ?? ""
+          if up == "" || up == "-" {
+            abort
+          }
+          reason = ""
+          if .log_type == "suspicious_audit" {
+            reason = "origin_rejected"
+          } else if .log_type == "federation_audit" {
+            # ⛔ Must be the SAME map tenant_project stamps from (a test pins
+            # that both render identically): "stamped" means exactly
+            # "tenant_project found the tenant_id".
+            account_map = {
+            {{- range $p := .Values.tenantProjections }}
+              {{ $p.tenantId | quote }}: {{ $p.accountId }},
+            {{- end }}
+            }
+            tid = to_string(.tenant_id) ?? ""
+            if (get(account_map, [tid]) ?? null) != null {
+              abort
+            }
+            reason = "not_projected"
+          } else {
+            abort
+          }
+          # Shrink the event to the one tag the counter needs. This also drops
+          # `.timestamp`, so the exporter stamps the sample with the time it
+          # counted it rather than the log line's time: a backlog replayed
+          # after a restart then lands as a fresh sample instead of an old one
+          # Prometheus may refuse.
+          . = {"reason": reason}
+      tenant_stamp_missed:
+        type: log_to_metric
+        inputs:
+          - tenant_stamp_check
+        metrics:
+          - type: counter
+            field: reason
+            # Exported as vector_tenant_projection_stamp_missed_events_total.
+            # ⚠️ The exporter keeps its default flush_period_secs (60s): this
+            # series disappears 1-2 minutes after its last increment and comes
+            # back at 1. The alert reads its presence with max_over_time, not
+            # increase/rate, for that reason.
+            # ⛔ Coupling: that expiry (or, failing it, the sample timestamp =
+            # time of the last increment, when the scraper honours timestamps)
+            # is what lets the alert clear an hour after the last miss. The
+            # expiry only happens because internal_metrics also feeds this
+            # exporter: measured on 0.61.0 with this counter as the exporter's
+            # ONLY input and flush_period_secs 5, the series was still served
+            # 30s after its last increment; with internal_metrics beside it, it
+            # vanished. So if internal_metrics is ever removed from the
+            # exporter, or it gets a huge flush_period_secs (as the gateway's
+            # audit-metrics sidecar uses), or suppress_timestamp, and the
+            # scraper sets honor_timestamps=false, the series stays at its last
+            # value until the pod restarts and the alert never clears. Change
+            # TenantProjectionStampMissing together with any of those.
+            # ⛔ The other side of the same lifetime: a scrape slower than it
+            # can miss a first miss entirely. templates/servicemonitor.yaml
+            # refuses serviceMonitor.interval above 30s for that reason (two
+            # scrapes inside the shortest 60s lifetime); a raw scrape job has
+            # to keep the same bound (k8s/03-monitoring scrapes at 15s).
+            name: tenant_projection_stamp_missed_events_total
+            namespace: vector
+            tags:
+              reason: "{{ "{{" }} reason {{ "}}" }}"
+      {{- end }}
 
     sinks:
       victorialogs:
@@ -975,6 +1134,8 @@ data:
         type: prometheus_exporter
         inputs:
           - internal_metrics
+          # Not an internal metric: the ADR-021 stamp-miss counter above.
+          - tenant_stamp_missed
         address: 0.0.0.0:{{ .Values.metrics.port }}
       {{- end }}
 

@@ -751,7 +751,7 @@ def test_a_reserved_key_in_a_subtree_defaults_blocks_validate(tmp_path):
         assert (f"team/_defaults.yaml: error: unread `{key}` (subtree_default_reserved_key)"
                 " — tenant(s) t-team") in res.stderr, res.stderr
     out = res.stdout + res.stderr
-    assert "1 inhibit rule(s)" in out and "severity_dedup disabled" not in out, out
+    assert "2 inhibit rule(s)" in out and "severity_dedup disabled" not in out, out
 
     ctl = _write(tmp_path / "ctl", {
         "_defaults.yaml": _DECL,

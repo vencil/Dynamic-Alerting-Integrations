@@ -158,7 +158,9 @@ graph TB
 
 ### 1.3 客戶導入與 GitOps 治理管線 (Day-0 / Day-1 / Day-2)
 
-客戶導入管線把「Day-0 把既有 PromRule corpus 轉進來」「Day-1 用 GitOps PR 切塊治理」「Day-2 運行期熱重載」三階段串成一條可離線、可在 air-gapped 跑、可獨立驗 supply-chain 的端到端流程：
+客戶導入管線把「Day-0 把既有 PromRule corpus 轉進來」「Day-1 用 GitOps PR 切塊治理」「Day-2 運行期熱重載」三階段串成一條可離線、可在 air-gapped 跑、可獨立驗 supply-chain 的端到端流程（下圖是設計）：
+
+> ⚠️ 其中 Profile Builder → `da-batchpr apply` 這一段目前沒有接通（experimental，見 [`batch-pr`](cli-reference.md#batch-pr)）；要導入客戶規則請用逐租戶的 [`migrate`](cli-reference.md#migrate)。
 
 ```mermaid
 graph LR
@@ -210,7 +212,7 @@ graph LR
 | **Alert Routing** | 多通道通知確保關鍵告警必達正確人員 | 6 種 receiver、Timing Guardrails、Enforced Routing | [config-driven.md](design/config-driven.md) |
 | **Tenant API** | Domain expert 可自助操作，無需 YAML 知識 | Commit-on-write + RBAC 熱更新 + PR Write-back + 套完繼承的 effective config endpoint | [config-driven.md](design/config-driven.md) |
 | **Rule Packs** | 跨團隊並行開發零 PR 衝突 | 16 個 Projected Volume + 三部分結構 + 雙語 Annotation | [rule-packs.md](design/rule-packs.md) |
-| **客戶導入管線** | 既有 PromRule corpus → `conf.d/` 全自動化；anti-vendor-lock-in；零 orphan tenant 風險 | 5-step 遷移鏈（解析 → Profile Builder → Hierarchy-Aware Batch PR → Dangling Defaults Guard）。圖示見 [§1.3](#13-客戶導入與-gitops-治理管線-day-0--day-1--day-2) | [migration-toolkit-installation.md](migration-toolkit-installation.md) |
+| **客戶導入管線** | 既有 PromRule corpus → `conf.d/`（Profile Builder → Batch PR 一段尚未接通，見 §1.3）；anti-vendor-lock-in；零 orphan tenant 風險 | 5-step 遷移鏈（解析 → Profile Builder → Hierarchy-Aware Batch PR → Dangling Defaults Guard）。圖示見 [§1.3](#13-客戶導入與-gitops-治理管線-day-0--day-1--day-2) | [migration-toolkit-installation.md](migration-toolkit-installation.md) |
 | **效能架構** | 500+ tenant 毫秒級處理，資源成本近乎不隨租戶數增長 | Pre-computed Recording Rule、O(M) 複雜度、Cardinality Guard | [benchmarks.md](benchmarks.md) |
 | **高可用性 (HA)** | SLA 99.9%+ 警報可靠度，滾動更新零中斷 | 2 副本、PDB、`max by(tenant)` 防雙倍計算 | [high-availability.md](design/high-availability.md) |
 | **未來路線** | 權限 × 可觀測性閉環 × 智慧化 | Field-level RBAC、Auto-Discovery、DaC、Anomaly-Aware Threshold | [roadmap-future.md](design/roadmap-future.md) |
@@ -257,11 +259,11 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 | nginx | nginx-prometheus-exporter | 9 | 7 |
 | operational | threshold-exporter 運營模式 | 0 | 4 |
 | oracle | query-exporter | 15 | 13 |
-| platform | threshold-exporter 自監控 | 1 | 56 |
+| platform | threshold-exporter 自監控 | 1 | 57 |
 | postgresql | postgres_exporter | 8 | 8 |
 | rabbitmq | rabbitmq_exporter | 16 | 12 |
 | redis | redis_exporter | 12 | 10 |
-| **合計** | | **175** | **204** |
+| **合計** | | **175** | **205** |
 <!-- RULE_PACK_STATS_END -->
 
 

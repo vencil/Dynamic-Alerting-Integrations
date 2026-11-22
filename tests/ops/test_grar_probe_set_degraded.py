@@ -222,7 +222,7 @@ def test_merge_exempts_generated_rules_but_not_lookalikes(degraded):
     in the base is refused before the probe set is asked (#3899)."""
     render = importlib.import_module("_grar_render")
     routes = importlib.import_module("_grar_routes")
-    generated = routes.build_dedup_inhibit_rule(["t2"])
+    generated = routes.build_dedup_inhibit_rules(["t2"])[0]
     # an earlier run's dedup rule in the base: a verdict (ValueError, rc 1),
     # never the probe set's "could not verify"
     with pytest.raises(ValueError, match="own severity dedup rule"):

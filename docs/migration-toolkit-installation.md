@@ -21,6 +21,8 @@ lang: zh
 PromRule corpus → da-parser → profile-builder cluster + translator → da-batchpr → da-guard validation → conf.d/
 ```
 
+> ⚠️ 其中 Profile Builder → `da-batchpr apply` 這一段目前沒有接通（experimental，見 [`batch-pr`](cli-reference.md#batch-pr)）；要導入客戶規則請用逐租戶的 [`migrate`](cli-reference.md#migrate)。
+
 Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gapped 環境跑、可 自動驗 binary integrity 的客戶可用工具集。
 
 **目前包含**：
@@ -29,7 +31,7 @@ Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gapped �
 |---|---|---|
 | `da-tools` | Python CLI | 既有 41+ 個運維 / 配置生成 / 政策評估子命令；新增 `guard` + `batch-pr` + `parser` 子命令 wrapping da-guard / da-batchpr / da-parser |
 | `da-guard` | Go binary | Dangling Defaults Guard CLI（schema / cardinality / redundant-override 檢查；路由與 domain policy 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起交給 `da-tools generate-routes --config-dir <conf.d> --validate --strict`，樹上有這類內容時 exit 4）|
-| `da-batchpr` | Go binary | Migration Batch PR Pipeline CLI（apply / refresh / refresh-source 子命令；plan → 開 PR → Base merge 後 rebase / data-layer hot-fix）|
+| `da-batchpr` | Go binary | Migration Batch PR Pipeline CLI（apply / refresh / refresh-source 子命令；plan → 開 PR → Base merge 後 rebase / data-layer hot-fix）。experimental：`apply` 的輸入沒有工具產生，見 [`batch-pr`](cli-reference.md#batch-pr) |
 | `da-parser` | Go binary | PromRule parser CLI（import / allowlist 子命令；strict-PromQL 相容性檢查 + dialect / VM-only 函數分類；anti-vendor-lock-in）|
 
 ## 三種交付路徑

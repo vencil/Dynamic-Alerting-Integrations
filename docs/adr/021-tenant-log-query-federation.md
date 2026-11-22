@@ -22,6 +22,7 @@ updated_at: 2026-11-22
 - 2026-10-13 修訂：AccountID 的高水位另記在 federation token store ConfigMap，運行中被蓋回的舊帳本會被擋下；`state restore` 的計數器加上安全邊際。見「單調性靠什麼守」。
 - 2026-11-07 修訂：日誌庫前方加上依消費端授權的 vmauth，gateway 以自己的帳密連線；它不做租戶路由，與「不用 vmauth 做租戶路由」的決定不衝突，見替代方案。
 - 2026-11-22 修訂：兩項 gateway 變更。其一，gateway 開始限制 `/select/logsql/query`、`field_values`、`stream_field_values` 的 `limit`：不合法、超過上限或重複出現一律拒絕（`400`），缺少時 `/query` 拒絕、另外兩個端點補上上限值，見「查詢端點白名單」。其二，ADR-020 新增的每 token 並發上限在日誌查詢模式同樣生效，「Gateway 限流」與「已知限制」改寫為限流加並發上限。
+- 2026-11-22 修訂：實作「該蓋章卻落進 `0:0`」的偵測：Vector 計數帶已驗證 AccountID 卻沒進租戶分區的 audit 列，rule pack 以 `TenantProjectionStampMissing` 告警。見「日誌進入端的契約」。
 - 2026-11-22 修訂：租戶自選的可見度子集已實作。租戶經 tenant-api 選擇自己的日誌副本保留哪些欄位，選擇存在 state store；平台把它抄進 Vector 的租戶投影設定，在寫入時套用，只能縮小平台策展的欄位。見「租戶自選的可見度子集」。
 
 **範圍**：租戶查「平台**關於它**的營運日誌」（目前是它自己的 federation 查詢稽核紀錄）已實作。租戶查**自己工作負載的應用日誌**延後，要等日誌進入端的另一份設計（見「已知限制」）。
@@ -108,6 +109,30 @@ gateway 轉送時，`Authorization` header 換成 gateway 自己連日誌庫的�
 2. **由基礎設施蓋章**：租戶身分（換算成 uint32 AccountID）由節點上的 Vector DaemonSet 依可信來源決定（認證過的連線、Kubernetes namespace、GitOps 管控的標籤），寫成 VictoriaLogs 的 `AccountID` header。這對應 ADR-020 的「proxy 不信查詢字串裡的 `tenant_id`」與「資料層必須帶 `tenant` 標籤」。
 
 gateway 在查詢路徑上強制 `AccountID=X`，若寫入端蓋錯或可被偽造，查詢端會「忠實地」把錯租戶的日誌送出去，而且沒有任何錯誤訊號。
+
+**蓋章失效的偵測。** 平台保留一個結構性的檢查：本該帶租戶身分、卻只落進平台分區 `0:0` 的日誌，發標準的 Alertmanager 告警（`warning`，通知平台維運）。它**不**自動切斷租戶的查詢（誤判會切斷合法租戶、引發 SLA 事故），也不做依內容的異常偵測或自動斷流。
+
+「本該帶租戶身分」要有一個不靠猜的判準。目前會進租戶分區的只有 gateway 的 `federation_audit` 列，而這些列有一個欄位就是判準：`account_id`。gateway 的 Envoy 把它從 logs token **已驗章**的 claim 寫進稽核 JSON；tenant-api 只為配發過 AccountID 的租戶簽這個 claim；指標 token 沒有這個 claim，那一欄是空的。所以一列帶著合法 `account_id`（1000 到 2³²−1 的整數，寫成 JSON 數字或純十進位字串；tenant-api 簽的是 uint32 的 JSON 數字。gateway 注入前的檢查還接受 `"1000.0"`、`"0x3E8"` 這類寫法，這裡不接受，所以這個判準比 gateway 嚴、但與它相容）就表示「這個租戶有分區」。再加一個條件：請求要真的被 gateway 轉給日誌庫（稽核列的 `upstream` 有值）。gateway 自己回掉的請求，例如退租租戶拿已撤銷、還沒到期的 token 打進來得到的 403，沒有讀到任何日誌，不算。符合這兩個條件、卻沒進分區的列，每一次都是錯，不必跟歷史量比較。
+
+做法是在 Vector 的寫入管線上，從分流後的同一份事件旁接一個只讀不寫的檢查，數出兩種情況，交給 rule pack：
+
+| `reason` | 條件 | 常見原因 |
+|---|---|---|
+| `not_projected` | `federation_audit` 列，`tenant_id` 空白或不在 `tenantProjections` | 租戶已拿到 logs token，`tenantProjections` 還沒加上它 |
+| `origin_rejected` | 列因來源 pod 不符 gateway 的 workload 名而被改判為 `suspicious_audit` | 偽造的列；或名稱前綴設錯，連真 gateway 也被擋，所有租戶分區都會變空 |
+
+輸入與輸出的對照（`tenantProjections` 只有 `tenant-alpha → 1000`，三列 gateway 稽核 JSON 依序送進渲染出的 Vector 設定）：
+
+```text
+{"tenant_id":"tenant-alpha","account_id":"1000","status":200,"upstream":"10.42.7.13:9428"}   → 進 AccountID 1000，不計
+{"tenant_id":"tenant-gamma","account_id":"1002","status":200,"upstream":"10.42.7.13:9428"}   → 只在 0:0，計為 not_projected
+{"tenant_id":"tenant-gamma","account_id":"","status":200,"upstream":"10.42.7.13:9428"}       → 指標 token 的列，不計
+{"tenant_id":"tenant-gamma","account_id":"1002","status":403,"upstream":null}                → gateway 自己回掉，不計
+
+vector_tenant_projection_stamp_missed_events_total{reason="not_projected"} 1
+```
+
+rule pack 的 `TenantProjectionStampMissing` 在一小時內出現任何一列就告警，一列就維持一小時，所以少查日誌的租戶不會在兩次查詢之間時響時停。處置寫在 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §8.7。它看不到的範圍列在「已知限制」。
 
 開放租戶應用日誌之前，還要先硬化節點隔離：依 namespace 蓋章的前提是 Kubernetes 的 pod 邊界可信。租戶工作負載若逃出容器（特權逃逸、掛載節點 socket），可以在節點層干擾 Vector 或偽造別的 namespace 的標籤。所以先決條件包含對租戶工作負載強制 Pod Security Standards（Kubernetes 內建的 pod 權限分級，例如禁止特權容器與掛載節點路徑）與 AppArmor／Seccomp（Linux 核心限制程序能存取哪些檔案、能呼叫哪些系統呼叫的機制）。這與既有的殘餘風險相關：Vector DaemonSet 以 root 加 `DAC_READ_SEARCH`（略過檔案讀取權限檢查的 Linux capability）讀取整個節點的 pod 日誌。
 
@@ -281,7 +306,7 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 - **資料面（誰查了哪些日誌）**：gateway 的存取日誌 JSON，與 ADR-020 同一份格式，`account_id` 欄位有值（以及 `token_id`、LogsQL 查詢、狀態碼、耗時）。聚合層是 `tenant_log_query_requests_total`。
 - **控制面（誰授權、改了什麼）**：token 的生命週期在 ConfigMap 的 token store；AccountID 配發寫 tenant-api 的 `state_write` 稽核日誌。
 - 告警 `TenantLogQueryRejectionRateAnomaly`（`warning`）：某個 AccountID 10 分鐘內被拒的比例超過 50%、且被拒速率超過約每分鐘 1 次，持續 15 分鐘。日誌查詢的稽核列只有數值 `account_id`、沒有租戶名稱，所以不像 ADR-020 的告警那樣以 `tenant_metadata_info` 限縮到仍存在的租戶，改用速率下限避免閒置租戶的單次異常觸發。
-- 投影管線的異常另有告警：`TenantProjectionMappingErrors`（淨化時發生執行錯誤而丟列）等，處置見 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §8。
+- 投影管線的異常另有告警：`TenantProjectionMappingErrors`（淨化時發生執行錯誤而丟列）、`TenantProjectionStampMissing`（帶已驗證 AccountID 的列只落進 `0:0`）等，處置見 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §8。
 
 ## 後果與已知限制
 
@@ -301,7 +326,7 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 
 **已知限制**
 
-- **已決定、尚未實作：偵測「該蓋章卻落進 `0:0`」的告警。** 本 ADR 決定在查詢端保留一個結構性的檢查：偵測本該帶租戶身分、卻掉進平台分區的日誌（進入端蓋章失效的訊號），發標準的 Alertmanager 告警（`warning`，通知平台維運），而**不**自動切斷租戶的查詢（誤判會切斷合法租戶、引發 SLA 事故），也不做依內容的異常偵測或自動斷流。rule pack 目前沒有完整涵蓋它的告警。`TenantProjectionFanoutDiscardSpike` 涵蓋一部分：`federation_audit` 列的 `tenant_id` 空白或對映不到 AccountID、因此只留在 `0:0` 的量，比自己一天的平均高出三倍時告警；量小或長期存在的落差會被併入基準而不觸發，其他日誌類別也不在範圍內。
+- **蓋章失效的偵測只看得到帶已驗證 AccountID 的列。** `TenantProjectionStampMissing`（見「日誌進入端的契約」）的判準是 logs token 寫進稽核列的 `account_id`，所以：從不查日誌的租戶沒有列可數；同一租戶用指標 token 產生的列不計；列被投影到**錯的**分區（`tenantProjections` 的號碼與 claim 不符時，Vector 照對映表蓋章）不算「落進 `0:0`」，那是啟動時投影閘門比對帳本的範圍。投影 VRL 執行錯誤、閘門把租戶 sink 拿掉、租戶 sink 丟棄 batch 也不在它的範圍，各有自己的告警。目前會進租戶分區的只有 `federation_audit`，所以它涵蓋的也只有這個類別；將來開放其他類別時，判準要跟著那個類別的可信身分來源一起設計。`account_id` 本身不影響蓋章（蓋章只看 `tenant_id` 與 `tenantProjections`），所以偽造它最多造成誤報。但能在 gateway 的命名空間起 pod、帶 gateway 標籤的人，能做的不只誤報：pod 的 owner 名稱不符 gateway 的 workload 前綴時，列被改判 `suspicious_audit`，計為 `origin_rejected`；owner 名稱符合（例如一個叫 `federation-gateway-x` 的 Deployment）時，列就是 `federation_audit`，`tenant_id` 對映不到時計為 `not_projected`，對映得到時會照常蓋進那個租戶的分區。最後這種是既有的風險，不是這個偵測造成的，也不是它能擋的（見「日誌進入端的契約」對節點與命名空間隔離的前提）。沒有已驗證身分、卻對映不到 AccountID 的列（指標 token 的流量、偽造或畸形 payload）仍只由 `TenantProjectionFanoutDiscardSpike` 以「高於自己一天平均三倍」偵測，量小或長期存在的落差會被併入基準而不觸發。
 - **`limit` 只管 `/query`、`field_values`、`stream_field_values`，其他白名單端點仍能不受上限地回傳以日誌內容為鍵的結果。** 這些端點目前只受時間範圍上限、執行時限與 VictoriaLogs 每個 pipe 的記憶體狀態預算限制：
   - `stats_query`、`stats_query_range`：列數等於 `by (…)` 分組的組數，沒有 `limit` 參數。`by (_msg)` 分組時，每一個不同的日誌本文是一列。
   - `hits`：帶 `field=_msg` 時，每一個不同的日誌本文是一條時間序列；`fields_limit` 選填，不帶或 `0` 就全部回傳。
@@ -367,4 +392,4 @@ vmauth 只看第一個 header；後兩個原封轉給 VictoriaLogs。設定方�
 - [ADR-009](./009-tenant-manager-crud-api.md)：tenant-api 的端點慣例，AccountID 配發沿用。
 - [ADR-028](028-federation-revocation-tamper-evidence.md)：撤銷紀錄被竄改的偵測，同樣用 Vector 與 VictoriaLogs。
 - [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md)：Vector／VictoriaLogs 維運；[`log-visibility-2tier-catalogue.md`](../internal/log-visibility-2tier-catalogue.md)：租戶可見的類別與欄位；[`tenant-log-query.md`](../integration/tenant-log-query.md)：租戶上手指南。
-- 實作位置：`helm/federation-gateway/`（`files/revoked_check.lua`、`files/query_limit.lua`、`files/envoy.yaml`）、`helm/vector/`（`templates/configmap.yaml` 的租戶投影與可見度選擇、`tests/projection_tests.yaml`）、`helm/victorialogs/`、`components/tenant-api/internal/federation/account/`、`components/tenant-api/internal/federation/logvis/`（可見度選擇的驗證）、`components/tenant-api/internal/handler/federation/log_visibility.go`、`components/tenant-api/cmd/server/state_cmd.go`。
+- 實作位置：`helm/federation-gateway/`（`files/revoked_check.lua`、`files/query_limit.lua`、`files/envoy.yaml`）、`helm/vector/`（`templates/configmap.yaml` 的租戶投影、可見度選擇與 `tenant_stamp_check` 計數、`tests/projection_tests.yaml`）、`rule-packs/rule-pack-platform.yaml`（`TenantProjectionStampMissing`）、`helm/victorialogs/`、`components/tenant-api/internal/federation/account/`、`components/tenant-api/internal/federation/logvis/`（可見度選擇的驗證）、`components/tenant-api/internal/handler/federation/log_visibility.go`、`components/tenant-api/cmd/server/state_cmd.go`。

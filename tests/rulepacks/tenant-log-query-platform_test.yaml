@@ -183,7 +183,8 @@ tests:
                 or `tenantProjections` behind `_account_registry.yaml`);
                 (b) a forged or malformed payload flood. This is a coarse
                 surge signal: it cannot name the account and it is NOT a
-                registry-desync detector — a small or long-standing gap is
+                registry-desync detector (rows from a tenant's logs token are
+                covered by TenantProjectionStampMissing) — a small or long-standing gap is
                 part of the baseline and does not fire, and a permanent step
                 stops firing after about a day. Query the 0:0 store for
                 recent `log_type:federation_audit` rows by `tenant_id` and
@@ -257,7 +258,8 @@ tests:
                 or `tenantProjections` behind `_account_registry.yaml`);
                 (b) a forged or malformed payload flood. This is a coarse
                 surge signal: it cannot name the account and it is NOT a
-                registry-desync detector — a small or long-standing gap is
+                registry-desync detector (rows from a tenant's logs token are
+                covered by TenantProjectionStampMissing) — a small or long-standing gap is
                 part of the baseline and does not fire, and a permanent step
                 stops firing after about a day. Query the 0:0 store for
                 recent `log_type:federation_audit` rows by `tenant_id` and

@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-03-13
-updated_at: 2026-10-10
+updated_at: 2026-11-21
 ---
 # ADR-001: 嚴重度 Dedup 採用 Inhibit 規則
 
@@ -22,6 +22,8 @@ updated_at: 2026-10-10
 ✅ **Accepted**（v1.0.0）
 
 2026-11-14 修訂：抑制規則由「每個租戶一條」改為「所有租戶共用一條、關掉去重的租戶列在排除清單」；dedup 規則不可再寫在 base 設定裡（[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)）。
+
+2026-11-21 修訂：去重改為同一個叢集內才成立——一個租戶跑在多個叢集時，一個叢集的 critical 不再抑制另一個叢集的 warning；規則由一條變兩條（[#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)）。
 
 ## 名詞
 
@@ -45,9 +47,16 @@ updated_at: 2026-10-10
 
 **採用 Alertmanager `inhibit_rules` 做嚴重度去重。** Prometheus 保留每個等級的完整告警紀錄，Alertmanager 只決定要不要通知。
 
-抑制規則不用手寫：`generate_alertmanager_routes.py` 讀 conf.d/ 的租戶設定，產生**一條**涵蓋所有租戶的規則——同一個租戶、同一個 `metric_group` 的 critical 正在觸發時，warning 不送通知。規則數不隨租戶數增加。租戶設 `_severity_dedup: "disable"` 就列進規則目標側的排除清單（`tenant!~"<清單>"`），兩個等級的通知都會收到；沒有任何租戶開著去重時不產生規則。
+抑制規則不用手寫：`generate_alertmanager_routes.py` 讀 conf.d/ 的租戶設定，產生**兩條**涵蓋所有租戶的規則——同一個租戶、同一個 `metric_group`、同一個叢集的 critical 正在觸發時，warning 不送通知。規則數不隨租戶數增加。租戶設 `_severity_dedup: "disable"` 就列進兩條規則目標側的排除清單（`tenant!~"<清單>"`），兩個等級的通知都會收到；沒有任何租戶開著去重時不產生規則。
 
-這條規則只由產生器產生。base 設定裡若有產生器自己寫出的這條規則（現在的形狀，或改版前每個租戶一條的舊形狀；比對以產生器重建的結果為準：matcher 的寫法不影響，但排除清單須是產生器的寫法——排序、去重），產生器拒絕合併（結束碼 1、不寫檔）：它會原樣進到輸出，蓋過 conf.d 的 `_severity_dedup`，`disable` 也就失效。這種 base 通常是舊版產物被當成來源傳回。運維自己在 base 寫的抑制規則屬於運維政策，這個檢查不判，即使它會蓋過 `_severity_dedup`（含 `disable`）；其他檢查照常適用，例如 Watchdog 心跳不得被抑制、平台自監控告警不得被租戶觸發的規則靜音、`equal` 列的標籤要有存在性條件。
+叢集由告警上的 `da_cluster` 標籤辨識（每個 Prometheus 在 `external_labels.da_cluster` 設定，見 [ADR-006](./006-tenant-mapping-topologies.md)）。兩條規則只差在怎麼讀這個標籤：
+
+1. **兩邊都帶 `da_cluster`**（`da_cluster=~".+"`）：`equal` 是 `tenant`、`metric_group`、`da_cluster`。一個租戶跑在多個叢集時，一個叢集的 critical 不抑制另一個叢集的 warning——那則 warning 是另一個叢集唯一的通知。
+2. **兩邊都不帶 `da_cluster`**（`da_cluster=""`，即 Prometheus 沒設這個 external label）：`equal` 是 `tenant`、`metric_group`，整個租戶配對。
+
+帶標籤的告警與不帶標籤的告警不會互相配對。一條規則直接把 `da_cluster` 加進 `equal`、不加存在性條件，配對結果其實相同（Alertmanager 把「兩邊都沒有這個標籤」視為相等）。分成兩條，是因為本專案要求 `equal` 裡的每個標籤至少在一側有存在性條件，讓兩則告警都缺的標籤不會默默被當成相等；把「都不帶」寫成自己的一條規則，這項檢查就不必開例外。
+
+這兩條規則只由產生器產生。base 設定裡若有產生器自己寫出的 dedup 規則（現在的兩條之一、不分叢集的單一規則，或每個租戶一條的規則；比對以產生器重建的結果為準：matcher 的寫法不影響，但排除清單須是產生器的寫法——排序、去重），產生器拒絕合併（結束碼 1、不寫檔）：它會原樣進到輸出，蓋過 conf.d 的 `_severity_dedup`，`disable` 也就失效。這種 base 通常是舊版產物被當成來源傳回。運維自己在 base 寫的抑制規則屬於運維政策，這個檢查不判，即使它會蓋過 `_severity_dedup`（含 `disable`）；其他檢查照常適用，例如 Watchdog 心跳不得被抑制、平台自監控告警不得被租戶觸發的規則靜音、`equal` 列的標籤要有存在性條件。
 
 ### 範例
 
@@ -78,7 +87,7 @@ tenants:
 python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --output-alertmanager --dry-run
 ```
 
-輸出（節錄）：一條規則，`batch` 在排除清單裡。
+輸出（節錄）：兩條規則，`batch` 在兩條的排除清單裡。
 
 ```
   INFO: batch: severity_dedup disabled, excluded from the severity dedup inhibit rule
@@ -88,17 +97,34 @@ inhibit_rules:
   - severity="critical"
   - metric_group=~".+"
   - tenant=~".+"
+  - da_cluster=~".+"
   target_matchers:
   - severity="warning"
   - metric_group=~".+"
   - tenant=~".+"
+  - da_cluster=~".+"
+  - tenant!~"batch"
+  equal:
+  - tenant
+  - metric_group
+  - da_cluster
+- source_matchers:
+  - severity="critical"
+  - metric_group=~".+"
+  - tenant=~".+"
+  - da_cluster=""
+  target_matchers:
+  - severity="warning"
+  - metric_group=~".+"
+  - tenant=~".+"
+  - da_cluster=""
   - tenant!~"batch"
   equal:
   - tenant
   - metric_group
 ```
 
-讀法：某個租戶（例如 `shop`）有 critical 告警正在觸發時，同一個租戶、同一個 `metric_group` 的 warning 告警不送通知；`batch` 的 warning 不是這條規則的目標。`tenant!~` 是正規表示式比對，Alertmanager 會錨定整個值，所以 `batch` 不會排除 `batch2`。告警規則這一側要讓成對的告警帶相同的 `metric_group`，例如 Rule Pack 裡的 `MariaDBHighConnections`（warning）與 `MariaDBHighConnectionsCritical`（critical）都帶 `metric_group: "mysql_connection_usage_percent"`。
+讀法：某個租戶（例如 `shop`）有 critical 告警正在觸發時，同一個租戶、同一個 `metric_group`、同一個 `da_cluster` 的 warning 告警不送通知（第一條）；告警不帶 `da_cluster` 時，同一個租戶、同一個 `metric_group` 的 warning 不送通知（第二條）。`batch` 的 warning 不是這兩條規則的目標。`tenant!~` 是正規表示式比對，Alertmanager 會錨定整個值，所以 `batch` 不會排除 `batch2`。告警規則這一側要讓成對的告警帶相同的 `metric_group`，例如 Rule Pack 裡的 `MariaDBHighConnections`（warning）與 `MariaDBHighConnectionsCritical`（critical）都帶 `metric_group: "mysql_connection_usage_percent"`。
 
 ## 後果與已知限制
 
@@ -114,8 +140,9 @@ inhibit_rules:
 - Alertmanager 的設定變多，而且要和告警規則的標籤對齊：成對的告警缺 `metric_group`，或兩邊的值不同，抑制就不成立，會收到兩則通知。CI 會檢查同名成對的告警（`X` 與 `XCritical`）帶相同的 `metric_group`（`check_metric_group_pairs.py`）；名稱不成對的告警不在這個檢查的範圍內。
 - Kubernetes Rule Pack 的 4 對容器告警（`PodContainerHighCPU`、`PodContainerHighMemory`、`PodContainerCPUThrottled`、`ContainerOOMKilled` 與各自的 `…Critical`）彙總到 `{tenant, version}`（OOM 只到 `{tenant}`），每對帶一個固定的 `metric_group`。代價：同一個租戶同時跑兩個 `version` 時，一個版本的 critical 會抑制另一個版本的 warning；把 `version` 加進 `equal` 就得同時加上 `version=~".+"` 的存在性條件（`equal` 標籤至少一側要有存在性條件的檢查），而那會讓所有不帶 `version` 的 Rule Pack 告警退出去重，所以接受這個殘餘（[#1199](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1199)）。
 - 沒有 `metric_group` 標籤的告警不參與去重：抑制規則的來源與目標都要求 `metric_group=~".+"`；沒有 `tenant` 標籤的告警同理。
+- 沒設 `external_labels.da_cluster` 的 Prometheus，它的告警維持整個租戶配對：兩個叢集都沒設時，一個叢集的 critical 仍會抑制另一個叢集的 warning。一個租戶跑在多個叢集時，每個 Prometheus 都要設這個標籤。
 - 規則寫的是「誰不參與」：告警帶 `tenant`、但那個租戶不在 conf.d 裡（例如還沒納管），也會被去重。
-- 關掉去重的租戶越多，排除清單越長；規則數仍是一條。
+- 關掉去重的租戶越多，排除清單越長；規則數仍是兩條。
 - 建議定期檢視 Alertmanager 的抑制狀態，確認符合預期。
 
 ## 考慮過的替代方案

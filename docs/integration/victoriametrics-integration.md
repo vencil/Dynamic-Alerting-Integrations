@@ -118,6 +118,8 @@ Dangling Defaults Guard 檢查（路由交 generate-routes）
 conf.d/ 樹（GitOps merge）
 ```
 
+> ⚠️ 上圖是設計。Profile Builder → `da-batchpr apply` 這兩步目前沒有接通（experimental，見 [`batch-pr`](../cli-reference.md#batch-pr)）；要導入客戶規則請用逐租戶的 [`migrate`](../cli-reference.md#migrate)。
+
 ### 5.2 MetricsQL handling 與 anti-vendor-lock-in
 
 - **dialect detection**：`da-parser import` per rule 標 `prom` / `metricsql` / `ambiguous`
@@ -190,8 +192,7 @@ conf.d/ 樹（GitOps merge）
 
 - [ ] 跑 `da-parser import` 對 customer PromRule corpus
 - [ ] 檢查 dialect 分布 + non-portable 比例
-- [ ] 以 Profile Builder library 萃取 cluster + Profile-as-Directory-Default（`da-tools profile build` 獨立 CLI 尚未出貨、規劃中） <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
-- [ ] 跑 `da-batchpr apply` 開出 Base + tenant chunk PRs
+- [ ] 逐租戶跑 [`da-tools migrate`](../cli-reference.md#migrate) 產出 conf.d 租戶檔（Profile Builder 與 `da-batchpr apply` 尚未接通，見 [`batch-pr`](../cli-reference.md#batch-pr)）
 - [ ] 跑 `da-guard` 過 schema / cardinality / redundant-override 檢查；exit 4（樹上有路由或 domain policy，[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起 da-guard 不判）時再跑 `da-tools generate-routes --config-dir <conf.d> --validate --strict`
 - [ ] 詳情 → [Migration Toolkit Installation](../migration-toolkit-installation.md)
 
