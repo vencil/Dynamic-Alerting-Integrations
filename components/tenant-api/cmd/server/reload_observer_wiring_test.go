@@ -56,6 +56,15 @@ func newWiringManagers(t *testing.T) (*rbac.Manager, *tenantorg.Manager, *fedpol
 // starting value was 0 it sat at 1 and the alert could never fire for it at all.
 // Removing any one SetReloadObserver line from wireConfigReloadObserver makes
 // this test fail.
+//
+// What it does NOT cover:
+//   - main not calling wireConfigReloadObserver at all (this test calls the
+//     function directly, not main);
+//   - a new manager that is neither passed to wireConfigReloadObserver nor
+//     listed in configReloadComponents: both sides stay equal, and RecordReload
+//     ignores an unknown component label, so its outcomes are silently dropped.
+//     handler's TestConfigReloadComponents_CoversEveryWatcherLabel guards the
+//     list against the configwatcher.New call sites instead.
 func TestWireConfigReloadObserver_CoversEveryComponent(t *testing.T) {
 	t.Parallel()
 	rbacMgr, tenantOrgMgr, fedPolicyMgr, groupMgr, viewMgr := newWiringManagers(t)
