@@ -143,7 +143,7 @@ da-tools scaffold \
 cp scaffold_output/.scaffold/conf.d/redis-prod.yaml conf.d/
 ```
 
-**Expected output**: `scaffold_output/.scaffold/conf.d/redis-prod.yaml` (`conf.d/redis-prod.yaml` once copied) contains recording rules config, threshold initial values (conservative), and routing config (initially disabled); the same draft directory also gets `_defaults.yaml` (platform defaults), and `scaffold_output/` gets `scaffold-report.txt`. The draft is in a dot-directory and is never served ([#4014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4014)). `-o/--output-dir` takes a **directory** — writing `--output conf.d/redis-prod.yaml` yields a directory named `redis-prod.yaml` with the tenant file one level inside it.
+**Expected output**: `scaffold_output/.scaffold/conf.d/redis-prod.yaml` (`conf.d/redis-prod.yaml` once copied) contains recording rules config and routing config (initially disabled), and writes no threshold (omitted = the platform's value; keys with no platform value get one in Step 1.2); the same draft directory also gets `_defaults.yaml` (a root template: `dimensions`, `state_filters`, no threshold), and `scaffold_output/` gets `scaffold-report.txt`. The draft is in a dot-directory and is never served ([#4014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4014)). `-o/--output-dir` takes a **directory** — writing `--output conf.d/redis-prod.yaml` yields a directory named `redis-prod.yaml` with the tenant file one level inside it.
 
 ### Step 1.2: Edit Threshold Configuration
 
@@ -153,19 +153,17 @@ Based on Phase 0.2 audit results, adjust threshold parameters to match existing 
 
 The chart is published as an OCI artifact ([ADR-002](../adr/002-oci-registry-over-chartmuseum.en.md)). Tenant config goes under `thresholdConfig.tenants` in the values; the chart renders it into the `threshold-config` ConfigMap, and one exporter serves every tenant.
 
-⚠️ The chart's shipped `thresholdConfig.defaults` only covers the keys the registry arms by default (Kubernetes, MariaDB and PostgreSQL, plus the Elasticsearch and Oracle capacity keys and RabbitMQ node memory); you must add the redis keys yourself. Copy the `redis_*` lines from the `scaffold_output/.scaffold/conf.d/_defaults.yaml` that scaffold produced in Step 1.1. Without them the tenant's values are not emitted, and the exporter lists `key="redis_memory_used_bytes" reason=unconsumed` in its "config keys no row of this exporter reads" line.
+⚠️ Every rule-pack threshold is built into the exporter, so the chart's `thresholdConfig.defaults` is empty by default and needs no redis key added ([#3924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3924)). No redis key has a platform value: a key is served once the tenant gives it a value, and a key it does not set is not served and its alert does not fire. Which keys have no platform value: the `platform_defaults` row of `da-tools validate-config --config-dir conf.d`.
 
 ```yaml {.helm-values}
 # values-redis.yaml
 thresholdConfig:
-  defaults:                 # not shipped by the chart; taken from scaffold's _defaults.yaml
-    redis_memory_used_bytes: 4294967296
-    redis_connected_clients: 200
-    redis_evicted_keys_rate: 100
-    redis_replication_lag: 30
   tenants:
     redis-prod:             # the level under tenants.redis-prod in conf.d/redis-prod.yaml
       redis_memory_used_bytes: "8589934592"
+      redis_connected_clients: "200"
+      redis_evicted_keys_rate: "100"
+      redis_replication_lag: "30"
 ```
 
 ```bash
@@ -187,7 +185,7 @@ kubectl port-forward -n monitoring svc/threshold-exporter 8080:8080 &
 curl -s http://localhost:8080/metrics | grep 'user_threshold{component="redis"'
 ```
 
-**Expected** (one row per redis key; `component` is the part of the key before the first `_`, `metric` is the rest):
+**Expected** (one row per redis key the tenant gives a value; `component` is the part of the key before the first `_`, `metric` is the rest):
 
 ```
 user_threshold{component="redis",metric="connected_clients",severity="warning",tenant="redis-prod"} 200
@@ -501,7 +499,7 @@ da-tools scaffold \
 cp scaffold_output/.scaffold/conf.d/mariadb-prod.yaml conf.d/
 
 # Edit thresholds
-# Add the new tenant (and any defaults the chart does not ship) to the same
+# Add the new tenant to the same
 #   values file and helm upgrade the same release (no second exporter needed)
 # Relabel, mount the Rule Pack
 # Generate routes, dual-run validation 1-2 weeks
@@ -707,7 +705,7 @@ Coming from a version without the built-in layer (for example v2.9.0), work in t
 
 1. Run the three checks above and confirm the added rows; then run `da-tools migrate-builtin-defaults --config-dir conf.d` with the new da-tools (no `--apply`, preview only): it lists the keys that the root switches off today with `null` or an `optional_overrides:` listing, which the new version starts serving at the platform's value.
 2. In **one change**, do three things: upgrade threshold-exporter, the platform rule pack and tenant-api; move CI to the new da-tools; and handle the default-armed keys you do not want — for the whole platform write `<key>: disable` in the root `_defaults.yaml`'s `defaults:` (Helm: `--set thresholdConfig.defaults.<key>=disable`), for one tenant write `disable` in its file, and change the keys step 1 listed the same way (a Helm `null` becomes `disable` too). With GitOps that is one commit changing the image tags and conf.d; with Helm, one `helm upgrade`. When one conf.d feeds several clusters, they upgrade together in that change.
-3. Only **once everything is upgraded**, with every cluster's exporter `da_config_builtin_defaults_info{digest}` equal to da-tools', remove the copies: `da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <cluster A digest> --exporter-digest <cluster B digest>`, one flag per cluster in a single command (run separately with one digest each, the gate cannot see the other clusters; see [`migrate-builtin-defaults`](../cli-reference.en.md#migrate-builtin-defaults)). A deployment whose ConfigMap the chart builds has no such step: the chart keeps writing these numbers and they move with the chart.
+3. Only **once everything is upgraded**, with every cluster's exporter `da_config_builtin_defaults_info{digest}` equal to da-tools', remove the copies: `da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <cluster A digest> --exporter-digest <cluster B digest>`, one flag per cluster in a single command (run separately with one digest each, the gate cannot see the other clusters; see [`migrate-builtin-defaults`](../cli-reference.en.md#migrate-builtin-defaults)). A deployment whose ConfigMap the chart builds has no such step: the chart's `thresholdConfig.defaults` is empty by default and the platform's values are built into the exporter, so the chart and the image are upgraded in step 2's one `helm upgrade`; a number your own values file writes under `thresholdConfig.defaults` pins it for every tenant, so delete it unless you want it pinned.
 
 Step 2 cannot be split. A released older exporter that reads a root `disable` drops the whole root `_defaults.yaml` (measured on v2.9.0) and every tenant's threshold rows go with it, so a root `disable` cannot come before the exporter upgrade; the new da-guard reports a default-armed key that the root `optional_overrides:` only lists as `root_optional_builtin` (exit 1), so a tree written that way does not pass the new CI unchanged; and upgrading the exporter first and the tree later lets the unwanted alerts fire before the tree changes. What remains is the minute or two of the rolling update, during which a pod not yet replaced may read the new ConfigMap. The platform rule pack's `BuiltinDefaultsDigestMismatch` alert fires while an exporter has not been upgraded (without the platform rule pack, compare the components' digest metrics yourself).
 

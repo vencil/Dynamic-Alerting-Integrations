@@ -10,19 +10,11 @@
 #     負責（#3618）。
 #
 # >>> GENERATED:threshold-registry:pack-clickhouse — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
+# 對應的 threshold-exporter 閾值（全部內建在讀取端，conf.d 不必列；[chart-default]=平台出貨即啟用，省略就用平台值；未標者沒有平台值，「未啟用」一行寫原因，租戶、子目錄或 profile 給值才發射）:
 #   clickhouse_queries_rate: 500   # qps — Query rate warning (5m)
 #       未啟用（依部署而定）：查詢量是工作負載而非故障，任何數字都只適用於特定部署
 #   clickhouse_active_connections: 200   # count — Active TCP connections warning
 #       未啟用（待改比值）：絕對連線數跨部署沒有意義；上限（max_connections）目前沒有匯出，分母由 #1320 決定
-#
-# optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
-# 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`
-# 清單中，租戶可直接在自己的 conf.d 填值並生效（resolveDeclaredRows 走宣告集，
-# 只在租戶給了值時發射；components/threshold-exporter/app/pkg/config/resolve.go）。
-# 平台不主張值 ⇒ 沒有平台回退：租戶不填就是靜默，那正是這一格的用意。
-# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
-# 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。
 #   clickhouse_max_part_count: 300   # count — Max part count per partition
 #       未啟用（依部署而定）：安全的 part 數依 ClickHouse 版本而定：舊版在 300 個 part 就拒絕寫入，現行版本要到
 #       3000（parts_to_throw_insert）
@@ -30,17 +22,10 @@
 #       未啟用（尚未量測，#1320）：尚無實測；#1320 在有訊號前維持宣告
 #       未啟用（依部署而定）：正常的佇列深度取決於複寫拓撲
 #
-# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
-# ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
-# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
-# 它讀的是 defaults[base]，base 沒有值就整列丟棄
-# （components/threshold-exporter/app/pkg/config/resolve.go）。
-# 而下列每個 key 的 base，出貨的 Helm values 與 repo 的 dev conf.d 範本都沒有供給：
-# 租戶在這兩種拓撲下填一個並不會發射任何 user_threshold。
-# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
-# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
-# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
-# 一格裝飾（#1311）。
+# <base>_critical（critical 層；沒有平台值）：租戶、子目錄或 profile 寫了就送一條
+# severity=critical 的列，根目錄寫的是每個租戶的 critical 預設值（#4173）；
+# base 整族關掉（`<base>: "disable"`）時不送。
+# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
 #   clickhouse_active_connections_critical: 300   # count — Active TCP connections critical
 # <<< GENERATED:threshold-registry:pack-clickhouse
 #

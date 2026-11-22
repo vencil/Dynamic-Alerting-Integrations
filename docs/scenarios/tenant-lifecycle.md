@@ -92,7 +92,7 @@ cp scaffold_output/.scaffold/conf.d/db-product-01.yaml conf.d/
 
 # 輸出（scaffold_output/）：
 # - .scaffold/conf.d/db-product-01.yaml（租戶配置框架；.scaffold/conf.d/ 是草稿，不會被服務）
-# - .scaffold/conf.d/_defaults.yaml（平台預設值範本，不要覆蓋 conf.d 裡既有的那份）
+# - .scaffold/conf.d/_defaults.yaml（根層範本：dimensions、state_filters，不寫閾值；不要覆蓋 conf.d 裡既有的那份）
 # - relabel_configs-db-product-01.txt（多 namespace 對映用的 Prometheus relabel 片段）
 # - scaffold-report.txt（規劃文件）
 ```

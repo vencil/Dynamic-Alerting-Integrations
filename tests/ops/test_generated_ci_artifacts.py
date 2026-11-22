@@ -6592,9 +6592,9 @@ def test_the_trigger_tree_pins_cover_every_deploy_method() -> None:
 # path created it, so `--deploy helm`'s first manual deploy died on `no such
 # file or directory`. `init` now writes a skeleton, and the skeleton is where
 # the interesting failure modes live rather than in its existence:
-#   * it must not carry `thresholdConfig.defaults` — the chart already ships
-#     the platform's calibrated numbers and a values-file copy deep-merges OVER
-#     them, silently reverting a later recalibration. The platform hit that
+#   * it must not carry `thresholdConfig.defaults` — the exporter builds the
+#     platform's calibrated numbers in and a values-file copy pins them,
+#     silently reverting a later recalibration. The platform hit that
 #     (mysql_cpu 80→30) and left the warning in its own
 #     `environments/local/threshold-exporter.yaml`;
 #   * its commented block is an INSTRUCTION ("delete `# ` from each line"), and
@@ -6678,8 +6678,8 @@ def test_the_helm_values_skeleton_asserts_no_platform_default(generated) -> None
     assert set(doc["thresholdConfig"]) == {"tenants"}, (
         "the values file sets "
         f"thresholdConfig.{sorted(doc['thresholdConfig'])}; only `tenants` "
-        "belongs here. `defaults:` in particular deep-merges OVER the chart's "
-        "calibrated values and silently reverts a later recalibration."
+        "belongs here. `defaults:` in particular pins today's number over the "
+        "exporter's calibrated values and silently reverts a later recalibration."
     )
     assert doc["thresholdConfig"]["tenants"] == {}, (
         "the skeleton ships a non-empty `tenants:` "

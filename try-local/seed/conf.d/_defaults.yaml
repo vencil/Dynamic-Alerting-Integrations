@@ -1,106 +1,19 @@
 # Platform default thresholds (try-local seed).
 #
-# A key listed under `defaults:` below is emitted as a `user_threshold` series
-# for EVERY tenant (resolveBaseRows iterates `defaults`), and a tenant override
-# replaces that value — so every demo threshold key that needs a platform value
-# must be listed there. Values are numbers (float64), tenant overrides are
-# strings ("70", "70:critical", "disable").
+# No threshold of the rule packs is listed here (#3924): every one is built
+# into the readers (threshold-registry; #3832, #4163). A key the platform ships
+# armed serves the platform's value to every tenant that writes none
+# (mysql_connection_usage_percent 80, mysql_replication_lag 30 for the mariadb
+# pack loaded in this demo); every other key has no platform value — only the
+# deployment can calibrate it — and is served once a tenant writes it
+# (db-demo.yaml sets mysql_threads_running, cache-demo.yaml
+# redis_connected_clients). A `<key>_critical` in a tenant file is served the
+# same way (db-demo.yaml's mysql_connection_usage_percent_critical drives the
+# headline critical alert).
 #
-# ⚠️ "absent from `defaults:` ⇒ silently ignored" was true until #1310 and is
-# what this comment used to say; it is now FALSE for the `optional_overrides:`
-# block further down (#1321). Those keys carry no platform value, but a
-# tenant CAN set them and `resolveDeclaredRows` emits the row — the third state.
-# Absent from BOTH blocks is still ignored.
-#
-# SUPPLY CONTRACT: every WARNING-tier key the packs in prometheus.yml
-# `rule_files` demand AND the platform arms must be listed below —
-# rule-pack-mariadb reads mysql_connection_usage_percent / mysql_replication_lag
-# via tenant:alert_threshold:*. mysql_threads_running is demanded too but the
-# platform ships no value for it (#3778): it is in the `optional_overrides:` list
-# below, so a tenant line alone is served (db-demo.yaml sets 40). A demanded key missing here leaves its alert
-# loaded but unable to fire even with data present (#1200's empty-set silence).
-# The `_critical` tier canNOT be supplied here: resolveCriticalRows scans
-# TENANT OVERRIDES only (app/pkg/config/resolve.go), so a `<key>_critical` line
-# in defaults falls through to the base resolver and emits a junk
-# severity="warning" series in which the `_critical` text lands inside the
-# component/metric labels instead of becoming a severity — parseMetricKey
-# splits on the first underscore, so mysql_connection_usage_percent_critical becomes
-# {component="mysql", metric="connection_usage_percent_critical"}, NOT metric="<whole key>"
-# (see app/rulepack_contract_test.go; that mismatch is #731). No recording
-# rule reads it. Critical tiers belong in a tenant file (see db-demo.yaml's
-# mysql_connection_usage_percent_critical) — which is why this pack's *Critical alerts have
-# no supply in the demo.
-# The mysql_* values mirror the platform defaults (operating SoT:
-# scripts/tools/ops/scaffold_tenant.py RULE_PACKS → the gated extract
-# rule-packs/threshold-registry.yaml; hand-maintained copies: helm values,
-# components/threshold-exporter/config/conf.d/, environments/*). No gate
-# compares THIS copy's values against those — guard-defaults-impact.yml does
-# trigger on `**/_defaults.yaml`, but it checks blast radius, not cross-copy
-# drift — so a recalibration has to land here by hand (#944 missed this file).
-defaults:
-  mysql_connection_usage_percent: 80   # % of max_connections; db-demo overrides → drives the headline critical alert
-  # mysql_threads_running has no platform value (#3778): a healthy value scales with
-  # the host's CPU count. It is declared under `optional_overrides:` below, so a tenant
-  # sets its own (db-demo.yaml); a `_critical` for it would need a base value here.
-  mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted); quiet here — the seed pushes no mysql_slave_status_* series (#1200 WS5-P0-a)
-  redis_connected_clients: 8000  # cache-demo (sentinel/dedup concept demo). DEMO-ONLY value — the platform default is 200 (threshold-registry.yaml); no redis pack is loaded here anyway
-
-# DECLARED-WITHOUT-VALUE keys (#1310). Key NAMES only — the platform recognises
-# them and asserts no number; a tenant sets one in its own file and
-# resolveDeclaredRows emits it, otherwise nothing happens. NOT a candidate list
-# for `defaults:` above: moving one up there arms a platform-chosen number for
-# every tenant, the opposite of what this section means.
-#
-# Why it is here at all: try-local is the ONE topology where threshold-exporter
-# and tenant-api share a single conf.d, so it is the cheapest place to prove the
-# declared key end-to-end (Portal Save → tenant-api write validation → exporter
-# emission) without a cluster. The packs loaded by this demo are mariadb/redis,
-# so none of these fire here — they are present so the write path can be
-# exercised, and so this file matches the shape the shipping artifacts have.
-#
-# SOURCE: rule-packs/threshold-registry.yaml, the `tier: optional_overrides`
-# keys that are NOT `<base>_critical`. This block is now GENERATED from it by
-# `check_threshold_registry.py --regen`, exactly like the two shipped copies
-# (helm/threshold-exporter/values.yaml `thresholdConfig.optional_overrides` and
-# components/threshold-exporter/config/conf.d/_defaults.yaml).
-#
-# ⛔ It used to be hand-maintained with a documented "if those diverge, THEY are
-# right and this copy needs a hand edit" step. The gate on it
-# (tests/ops/test_generate_alertmanager_routes.py::TestShippedDeclaredListIsSettable)
-# compares the PARSED list — so it never saw anything comment-shaped, and when
-# the shipped copies gained the per-key measured-counter-example caveat (#1176)
-# this seed became the one conf.d in the repo without it, with nothing turning
-# red. Generating it deletes the manual step rather than documenting it better.
-# The `defaults:` values above still have no such gate — that caveat stands.
-optional_overrides:
-  # >>> GENERATED:threshold-registry:try-local-optional — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-  # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
-  - mysql_threads_running
-    # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 30 =
-    # PMM/Nichter 'high' tier, a reference start to calibrate per host (a healthy count scales with
-    # CPU cores); renamed from mysql_cpu (2-release alias window, old spelling still resolves)
-  # ── oracle：Oracle Database (query-exporter) ──
-  - oracle_wait_time_rate   # s/s — Wait time rate (5m)
-  - oracle_hard_parse_time_percent
-    # % of DB time — Hard parse time warning: v$sys_time_model "hard parse elapsed time" as a share
-    # of "DB time" over 5m (the AWR Time Model "% of DB Time" row), per exporter, busiest per
-    # tenant; only while the database averages at least one active session (AAS >= 1)
-  - oracle_pga_usage_percent
-    # % of PGA_AGGREGATE_LIMIT — PGA usage warning: v$pgastat total PGA allocated as a share of
-    # PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant; a
-    # database with no limit set (0) has no share. Replaces the absolute-bytes key
-    # oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)
-  # ── db2：IBM DB2 (query-exporter) ──
-  - db2_deadlocks_per_5m
-    # count/5m — Deadlocks in the last 5 minutes, summed over the tenant's exporters; 5 is the
-    # threshold of the grafana ibm-db2 mixin's IBMDB2HighNumberOfDeadlocks (increase over 5m > 5,
-    # per database, for 5m). Replaces the per-second key db2_deadlock_rate (#1320: a unit change is
-    # a removal plus an addition, no alias)
-    # ⚠ 參考庫實測反例（#1176）：其中一個參考庫的正常水位約每 5 分鐘 6 次 deadlock（0.02/s），高於 5 —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-  # ── clickhouse：ClickHouse (built-in /metrics) ──
-  - clickhouse_max_part_count   # count — Max part count per partition
-  - clickhouse_replication_queue   # count — Replication queue size
-  # <<< GENERATED:threshold-registry:try-local-optional
+# Which keys there are, the platform's values, and how many tenants set each:
+#   da-tools validate-config --config-dir try-local/seed/conf.d  (platform_defaults)
+# Tenant overrides are strings ("70", "70:critical", "disable").
 
 # dimensions 為生成段（#3475，ADR-038 §11）：每個 base 的維度鍵可帶哪些 label 才會送出。
 # 出貨清單 = threshold registry 宣告、且 rule pack 依該 label 聚合的組合；自訂規則若依某個

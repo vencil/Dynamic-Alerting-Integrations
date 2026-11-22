@@ -6,16 +6,15 @@
 #
 # ✅ PR-2（rewire）後本檔已是真 SoT：原手抄面改為由本檔生成（定界符內），
 # 定界符外手寫 prose 照舊——
-#   1. rule-pack header 閾值段（defaults tier + optional_overrides 警語段，
-#      依「在出貨清單裡 / 不在但 base 已出貨 / 兩者皆無」分三小段各配一份警語）
-#   2. helm/threshold-exporter/values.yaml thresholdConfig.defaults
-#      （arming: default 的 key）
-#   3. components/threshold-exporter/config/conf.d/_defaults.yaml defaults 段
-#   4. 上述兩個 runtime 面的 optional_overrides: 宣告 key 清單（#1310；
-#      是 list 不是 map——平台認得該 key 但不主張其值）
-#   5. components/threshold-exporter/app/pkg/config/builtin_defaults_gen.go
-#      （arming: default 的 key 與值，加上這張表的摘要；#3832。讀取端編譯進去，
-#      目前還沒有任何解析路徑讀它）
+#   1. rule-pack header 閾值段（依 arming 分兩段：有平台值的鍵、沒有平台值
+#      要租戶給值的鍵；#3924）
+#   2. helm values、dev conf.d、try-local seed 的 dimensions: 段（#3475）
+#   3. rule-pack-platform.yaml 的內建層摘要
+#   4. components/threshold-exporter/app/pkg/config/builtin_defaults_gen.go
+#      （每個鍵都內建在讀取端：arming: default 帶平台值、其餘為 off；#3832）
+# #3924 起出貨的 chart values、範例根 _defaults.yaml 與產生器都**不寫**本檔的
+# 鍵（不放 defaults:、不列 optional_overrides:），由
+# check_threshold_reachability.py 的 producer policy 擋。
 # 新鮮度由 check_threshold_registry.py --ci 面強制（stale＝硬錯）。
 #
 # ✅ D-A PR-3 起本檔是手寫的唯一來源：閾值、arming、metric_class 與

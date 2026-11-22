@@ -7,9 +7,10 @@ carrier. Nothing went red, because no gate asked the exporter what it actually
 serves. This one does: it reads `da-guard served-values` (the exporter's own
 load) and allows an `unserved` key only when it is one of the stated exceptions.
 
-⛔ The roots are `_SHIPPED_CONFD_ROOTS`, not a list of our own — that table is
-pinned to `.pre-commit-config.yaml` by `test_check_threshold_reachability.py`,
-so a new shipped tree enters here without anyone remembering to add it.
+⛔ The roots are the conf.d roots of the reachability gate's shipped samples
+(`_shipped_samples`: every tracked `_defaults*` artifact outside the test
+fixtures), not a list of our own — so a new shipped tree enters here without
+anyone remembering to add it.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ _spec = importlib.util.spec_from_file_location("check_threshold_reachability", _
 _gate = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_gate)
 
-SHIPPED_ROOTS = sorted(_gate._SHIPPED_CONFD_ROOTS)
+SHIPPED_ROOTS = sorted({_gate.conf_d_root(rel) for rel in _gate._shipped_samples()} - {None})
 
 
 def _is_stated_exception(key: str, value: object, exporter_reads: bool = False) -> bool:
