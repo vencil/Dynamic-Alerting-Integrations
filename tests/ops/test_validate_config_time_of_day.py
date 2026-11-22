@@ -48,8 +48,8 @@ _FILES = {
                "    nodecl_pct:\n      default: disable\n      overrides:\n"
                "        - window: \"01:00-01:59\"\n          value: \"5\"\n"
                "        - window: \"01:10-01:20\"\n          value: \"6\"\n",
-    # 只有 page 模式 custom alert、沒有 `_routing` 的租戶（送達檢查，#1211），帶一個 db_type。
-    "tc.yaml": "tenants:\n  tc:\n    _metadata:\n      db_type: mariadb\n    _custom_alerts:\n"
+    # 只有 page 模式 custom alert、沒有 `_routing` 的租戶（送達檢查，#1211），宣告一種 exporter。
+    "tc.yaml": "tenants:\n  tc:\n    _expected_exporters: [mariadb]\n    _custom_alerts:\n"
                "      - recipe: threshold\n        name: q_high\n        metric: q_high_depth\n"
                "        op: \">\"\n        window: 5m\n        threshold: \"1000:warning\"\n",
 }

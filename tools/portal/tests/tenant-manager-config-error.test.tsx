@@ -60,7 +60,7 @@ describe('useTenantData — config_error reaches the row', () => {
 
 describe('TenantCard — config error state', () => {
   const base = {
-    environment: 'unknown', tier: '', domain: '', db_type: '', owner: '',
+    environment: 'unknown', tier: '', domain: '', expected_exporters: [], owner: '',
     operational_mode: 'unknown', routing_channel: '', metric_count: 0,
     last_config_commit: '',
   };

@@ -25,7 +25,7 @@ from _kubectl_fake import install as install_kubectl  # noqa: E402  (#3349)
 import batch_diagnose as bd
 import diagnose
 
-_MARIADB = ([{"metric": {"tenant": "t1", "db_type": "mariadb"}, "value": [0, "1"]}], None)
+_MARIADB = ([{"metric": {"tenant": "t1", "pack": "mariadb"}, "value": [0, "1"]}], None)
 
 
 def _prom_mariadb_up(_url, query):

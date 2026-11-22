@@ -95,7 +95,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
               region: meta.region || '',
               tier: meta.tier || '',
               domain: meta.domain || '',
-              db_type: meta.db_type || '',
+              expected_exporters: meta.expected_exporters || [],
               owner: meta.owner || '',
               routing_channel: meta.routing_channel || '',
               // #4109: the offline copy holds no operational mode — a state
@@ -177,7 +177,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
           region: summary.region || '',
           tier: summary.tier || '',
           domain: summary.domain || '',
-          db_type: summary.db_type || '',
+          expected_exporters: summary.expected_exporters || [],
           owner: summary.owner || '',
           routing_channel: '',
           // operational_mode is the UI's mode column. #1988: read from

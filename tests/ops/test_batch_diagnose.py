@@ -625,7 +625,7 @@ class TestMainCLI:
         """#1525 end to end through the real check(): the report's conf.d
         side, empty in batch before, is each tenant's chain."""
         import diagnose
-        monkeypatch.setattr(diagnose, "tenant_db_type", lambda *a: (None, None))
+        monkeypatch.setattr(diagnose, "tenant_expected_kind", lambda *a: (None, None))
         monkeypatch.setattr(diagnose, "query_prometheus", lambda *a: ([], None))
         cli_argv("batch_diagnose", "--tenants", "db-a,db-b",
                  "--prometheus", "http://prom:9090", "--json")
@@ -881,10 +881,10 @@ def test_all_unchecked_has_no_score():
 def test_text_report_lists_unchecked_tenants(capsys):
     report = bd.generate_report([
         {"tenant": "b", "status": "unchecked",
-         "skipped": [{"check": "pod", "reason": "db_type=postgresql"}]}], "http://p")
+         "skipped": [{"check": "pod", "reason": "expected exporters=postgresql"}]}], "http://p")
     bd.print_text_report(report)
     out = capsys.readouterr().out
-    assert "Unchecked" in out and "b" in out and "db_type=postgresql" in out
+    assert "Unchecked" in out and "b" in out and "expected exporters=postgresql" in out
 
 
 # ── #2493：結束碼反映租戶檢查結果 ────────────────────────────────
@@ -1112,7 +1112,7 @@ def test_a_forbidden_pod_read_makes_the_batch_an_environment_error(monkeypatch):
 
     def prom(_url, query):
         if query.startswith("tenant_expected_exporter"):
-            return [{"metric": {"db_type": "mariadb"}, "value": [0, "1"]}], None
+            return [{"metric": {"pack": "mariadb"}, "value": [0, "1"]}], None
         if "mysql_up{" in query:   # #3720: `min by(tenant) (mysql_up{…})`
             return [{"metric": {}, "value": [0, "1"]}], None
         return [], None

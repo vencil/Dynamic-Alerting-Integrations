@@ -227,7 +227,8 @@ curl -s http://localhost:9090/-/healthy
 
 # prefix-mapping.yaml needs no separate check: da-tools validate reads it strictly (by the YAML
 # spec) when given --mapping, and names the flag and the reason with rc 2 if it cannot be opened,
-# is not YAML, repeats a key in one mapping, or is not a mapping at the top
+# is not YAML, repeats a key in one mapping, or is not a mapping at the top; an entry in it that
+# cannot be used (an empty value, only one of old_query/new_query) is rc 2 too, named by key and reason
 
 # Restart K8s Job
 kubectl delete job shadow-monitor -n monitoring

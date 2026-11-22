@@ -51,7 +51,7 @@ not know is a failure of the shipped-tree test, not a guess.
 Not judged (say so rather than look covered)
 --------------------------------------------
   * "expected but absent" per cluster (ADR-006 contract 6): `expected unless
-    on (tenant, db_type) present` has a flat left side, so one reporting
+    on (tenant, pack) present` has a flat left side, so one reporting
     cluster hides a silent one and nothing here says so. That is closed by
     declaring the expected clusters, not by a grouping.
   * `label_replace` / `label_join` that write `da_cluster`.
@@ -70,7 +70,7 @@ Not judged (say so rather than look covered)
     this tree.
 
 A `by (...)` / `on (...)` is judged only when it names an identity label
-(tenant, instance, pod, namespace, node): `count(x)` or `sum by (db_type)`
+(tenant, instance, pod, namespace, node): `count(x)` or `sum by (pack)`
 is a deliberate fleet-wide figure and says so by naming none.
 
 A deliberate tenant-wide read

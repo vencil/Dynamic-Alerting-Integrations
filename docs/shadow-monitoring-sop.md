@@ -226,7 +226,8 @@ curl -s "http://localhost:9090/api/v1/label/__name__/values" | \
 curl -s http://localhost:9090/-/healthy
 
 # prefix-mapping.yaml 不必另外檢查：da-tools validate 以 --mapping 讀它時就照 YAML 規格嚴格讀，
-# 打不開、不是 YAML、同一層有重複的鍵、頂層不是 mapping，都會點名旗標與原因、以 rc 2 結束
+# 打不開、不是 YAML、同一層有重複的鍵、頂層不是 mapping，都會點名旗標與原因、以 rc 2 結束；
+# 其中某個項目不能用（例如值留空、old_query／new_query 只有一個）時，同樣 rc 2，並點名 key 與原因
 
 # K8s Job 重啟
 kubectl delete job shadow-monitor -n monitoring

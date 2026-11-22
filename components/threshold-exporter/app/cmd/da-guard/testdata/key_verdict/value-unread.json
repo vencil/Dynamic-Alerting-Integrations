@@ -659,7 +659,7 @@
       "tenants": [
         "ta"
       ],
-      "reason": "1 unknown field(s) (known: db_type, domain, environment, groups, owner, region, runbook_url, tags, tier)",
+      "reason": "1 unknown field(s) (known: domain, environment, groups, owner, region, runbook_url, tags, tier)",
       "hint": null,
       "base": null,
       "gate_kind": null,

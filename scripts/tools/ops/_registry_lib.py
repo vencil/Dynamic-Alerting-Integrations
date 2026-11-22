@@ -281,6 +281,12 @@ def build_registry_doc(
         if pack.get("queries"):
             # query-exporter config that serves the pack's raw metrics (#3833).
             packs[pack_name]["queries"] = pack["queries"]
+        if pack.get("presence"):
+            # The selectors whose presence means the pack's exporter answers
+            # (#4097): a pack that has them is an `_expected_exporters` kind.
+            packs[pack_name]["presence"] = list(pack["presence"])
+        if "undeclared_notice" in pack:
+            packs[pack_name]["undeclared_notice"] = pack["undeclared_notice"]
         for key, info in (pack.get(THRESHOLDS) or {}).items():
             if key in keys:
                 raise ValueError(
@@ -768,7 +774,8 @@ def arming_notes_zh(entry: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 #: Per-pack fields of scaffold's RULE_PACKS that come from the registry.
-_PACK_FIELDS = ("display", "exporter", "default_on", "rule_pack_file", "queries")
+_PACK_FIELDS = ("display", "exporter", "default_on", "rule_pack_file", "queries",
+                "presence", "undeclared_notice")
 #: Per-key fields of scaffold's RULE_PACKS that come from the registry.
 _KEY_FIELDS = ("value", "unit", "desc", "metric_class", "dimensions",
                "value_counterexample")
@@ -782,10 +789,12 @@ _RULE_PACKS_MODULE_HEADER = (
     '"""GENERATED from rule-packs/threshold-registry.yaml — DO NOT EDIT.\n'
     "\n"
     "The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its\n"
-    "display/exporter/default_on/rule_pack_file(/queries) and its `thresholds`\n"
-    "(registry key order), and BUILTIN_DEFAULT_KEYS: the keys the readers build\n"
-    "in with a platform value (`arming: default`, the same derivation as\n"
-    "builtin_defaults_gen.go, #3832). Edit the registry, then run\n"
+    "display/exporter/default_on/rule_pack_file(/queries/presence/undeclared_notice)\n"
+    "and its `thresholds` (registry key order), BUILTIN_DEFAULT_KEYS: the keys the\n"
+    "readers build in with a platform value (`arming: default`, the same derivation\n"
+    "as builtin_defaults_gen.go, #3832), and EXPECTED_EXPORTER_KINDS: the packs with\n"
+    "`presence:`, the kinds a tenant may name in `_expected_exporters` (#4097).\n"
+    "Edit the registry, then run\n"
     "  python3 scripts/tools/lint/check_threshold_registry.py --regen\n"
     "`--ci` (pre-commit, CI) fails while this file is stale.\n"
     '"""\n'
@@ -800,7 +809,8 @@ def project_rule_packs(doc: dict) -> dict:
     registry-only arming fields are not part of RULE_PACKS."""
     packs: dict[str, dict] = {}
     for name, meta in (doc.get("packs") or {}).items():
-        packs[name] = {f: meta[f] for f in _PACK_FIELDS if f in meta}
+        packs[name] = {f: (list(meta[f]) if isinstance(meta[f], list) else meta[f])
+                       for f in _PACK_FIELDS if f in meta}
     for key, entry in registry_keys(doc).items():
         info: dict[str, Any] = {}
         for f in _KEY_FIELDS:
@@ -859,8 +869,10 @@ def render_rule_packs_module(doc: dict) -> str:
     body = pprint.pformat(project_rule_packs(doc), indent=1, width=100,
                           sort_dicts=False)
     builtin = ", ".join(repr(k) for k in sorted(builtin_defaults(doc)))
+    kinds = ", ".join(repr(k) for k in expected_exporter_kinds(doc))
     return (_RULE_PACKS_MODULE_HEADER + "\nTHRESHOLD_PACKS = " + body + "\n"
-            + "\nBUILTIN_DEFAULT_KEYS = frozenset({" + builtin + "})\n")
+            + "\nBUILTIN_DEFAULT_KEYS = frozenset({" + builtin + "})\n"
+            + "\nEXPECTED_EXPORTER_KINDS = (" + kinds + (",)\n" if kinds else ")\n"))
 
 
 def packaged_registry_doc() -> dict:
@@ -1111,6 +1123,93 @@ def check_unset_keys_go(doc: dict, path: Optional[str] = None) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Exporter kinds (#4097): a pack with `presence:` is a kind a tenant may name
+# in `_expected_exporters`
+# ---------------------------------------------------------------------------
+
+def pack_presence(doc: dict) -> dict[str, tuple[str, ...]]:
+    """kind -> the selectors (no `job` matcher) whose presence under the
+    tenant-exporters job means an exporter of that kind is answering: every
+    pack of *doc* that carries `presence:`, in the registry's order."""
+    out: dict[str, tuple[str, ...]] = {}
+    for name, meta in (doc.get("packs") or {}).items():
+        if isinstance(meta, dict) and meta.get("presence"):
+            out[str(name)] = tuple(str(s) for s in meta["presence"])
+    return out
+
+
+def expected_exporter_kinds(doc: dict) -> list[str]:
+    """The kinds `_expected_exporters` may name, sorted: the packs with a
+    presence selector. The one list every other list of kinds is generated
+    from or pinned to."""
+    return sorted(pack_presence(doc))
+
+
+def undeclared_notice_kinds(doc: dict) -> list[str]:
+    """The kinds TenantExporterUndeclared names, in the registry's order:
+    every kind but those whose pack says `undeclared_notice: false` (a metric
+    many targets expose incidentally)."""
+    packs = doc.get("packs") or {}
+    return [k for k in pack_presence(doc)
+            if packs[k].get("undeclared_notice") is not False]
+
+
+def presence_problems(doc: dict) -> list[str]:
+    """What breaks the `presence:` contract beyond the schema: a selector must
+    not carry its own `job` matcher (the rules add the tenant-exporters job),
+    and `undeclared_notice` belongs to a pack that has `presence:`."""
+    problems = []
+    for name, meta in (doc.get("packs") or {}).items():
+        if not isinstance(meta, dict):
+            continue
+        for sel in meta.get("presence") or []:
+            if re.search(r"[{,]\s*job\s*(=|!)", str(sel)):
+                problems.append(
+                    f"pack {name!r}: presence selector {sel!r} carries a `job` matcher — "
+                    "the rules add job=\"tenant-exporters\" themselves")
+        if "undeclared_notice" in meta and not meta.get("presence"):
+            problems.append(
+                f"pack {name!r}: undeclared_notice without presence — only a kind "
+                "(a pack with `presence:`) can be noticed")
+    return problems
+
+
+EXPECTED_KINDS_GO_PATH = _in_repo(
+    "components", "threshold-exporter", "app", "pkg", "config",
+    "expected_exporter_kinds_gen.go")
+EXPECTED_KINDS_GO_ID = "expected-exporter-kinds-go"
+
+
+def render_expected_kinds_go(doc: dict) -> str:
+    """The exact text of the generated Go table of *doc*'s exporter kinds,
+    one a line, sorted."""
+    entries = "".join(f"\t{_go_str(k)},\n" for k in expected_exporter_kinds(doc))
+    return (
+        "// Code generated by scripts/tools/lint/check_threshold_registry.py --regen; DO NOT EDIT.\n"
+        "// Source: rule-packs/threshold-registry.yaml, the packs with `presence:` (#4097).\n"
+        "\n"
+        "package config\n"
+        "\n"
+        "// expectedExporterKinds are the kinds `_expected_exporters` may name: the\n"
+        "// rule packs that have a presence metric, sorted. Read through\n"
+        "// expected_exporters.go.\n"
+        "var expectedExporterKinds = []string{"
+        + (f"\n{entries}" if entries else "") + "}\n")
+
+
+def check_expected_kinds_go(doc: dict, path: Optional[str] = None) -> Optional[str]:
+    """None when the generated Go table is fresh, else what is wrong with it."""
+    p = path or EXPECTED_KINDS_GO_PATH
+    if p is None or not os.path.isfile(p):
+        return f"{p} (surface {EXPECTED_KINDS_GO_ID!r}) does not exist"
+    with open(p, encoding="utf-8") as fh:
+        if fh.read() != render_expected_kinds_go(doc):
+            return (f"{p} (surface {EXPECTED_KINDS_GO_ID!r}) is not what the "
+                    "registry generates")
+    return None
+
+
 PLATFORM_DIGEST_TEST_PATH = _in_repo(
     "tests", "rulepacks", "platform-builtin-defaults-digest_test.yaml")
 PLATFORM_DIGEST_TEST_ID = "platform-builtin-digest-test"
@@ -1165,7 +1264,7 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     written (the conf.d ones first, through ``da-guard write``) and the
     generated RULE_PACKS module, the retired-keys Go table (#3829) and the
     built-in defaults Go table (#3832), the unset-threshold keys Go table
-    (#1200 D-A A3) and the pack digest the promtool test of
+    (#1200 D-A A3), the exporter-kinds Go table (#4097) and the pack digest the promtool test of
     BuiltinDefaultsDigestMismatch expects (#3831) last; a refusal (ConfdWriteRefused,
     ValueError, `_lib_parse_tree.ParseTreeError`) leaves every file as it
     was; a write that stops part-way is SurfaceWriteStopped
@@ -1186,6 +1285,8 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     builtin_path = _repo_path_or_raise(BUILTIN_DEFAULTS_GO_PATH, "the built-in defaults Go table")
     unset_text = render_unset_keys_go(doc)
     unset_path = _repo_path_or_raise(UNSET_KEYS_GO_PATH, "the unset-threshold keys Go table")
+    kinds_text = render_expected_kinds_go(doc)
+    kinds_path = _repo_path_or_raise(EXPECTED_KINDS_GO_PATH, "the exporter-kinds Go table")
     digest_test_path = _repo_path_or_raise(
         PLATFORM_DIGEST_TEST_PATH, "the promtool test of BuiltinDefaultsDigestMismatch")
     with open(digest_test_path, encoding="utf-8") as fh:
@@ -1203,6 +1304,9 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     if check_unset_keys_go(doc, unset_path) is not None:
         _write_or_stop(unset_path, unset_text, touched, write_repo_artifact)
         touched.append(unset_path)
+    if check_expected_kinds_go(doc, kinds_path) is not None:
+        _write_or_stop(kinds_path, kinds_text, touched, write_repo_artifact)
+        touched.append(kinds_path)
     if check_platform_digest_test(doc, digest_test_path) is not None:
         _write_or_stop(digest_test_path, digest_test_text, touched, write_repo_artifact)
         touched.append(digest_test_path)
@@ -2148,6 +2252,8 @@ STRUCTURAL_PROSE_TOKENS: frozenset[str] = frozenset({
     "repeat_interval",
     "rule_pack_file",
     "default_on",
+    # registry pack field (#4097): the liveness pack header names it
+    "undeclared_notice",
     "metric_class",
     "portability_reason",
     "portability_reason_zh",

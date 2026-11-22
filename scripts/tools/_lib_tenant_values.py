@@ -362,18 +362,22 @@ __all__ = [
 
 SUBCOMMAND = "served-values"
 # The `schema` value load_served_tree reads; any other is refused (ADR-037).
-SERVED_VALUES_SCHEMA = "da-guard.served-values/v5"
+SERVED_VALUES_SCHEMA = "da-guard.served-values/v6"
 #: Earlier versions of the document: a da-guard writing one is older than
 #: this tool (v1: `key_checks` as sentences that quoted the key — #3703;
 #: v2: no `ungathered` beside the schedules — #3991; v3: no
 #: `unserved_thresholds` beside a --schedules-only tenant's schedules — #4073;
-#: v4: no `routing` among a --config-facts tenant's fields — #4109).
+#: v4: no `routing` among a --config-facts tenant's fields — #4109; v5: the
+#: declared exporter kinds as `_metadata.db_type`, no `_expected_exporters` —
+#: #4097).
 SERVED_VALUES_OLDER_SCHEMAS = ("da-guard.served-values/v1", "da-guard.served-values/v2",
-                               "da-guard.served-values/v3", "da-guard.served-values/v4")
+                               "da-guard.served-values/v3", "da-guard.served-values/v4",
+                               "da-guard.served-values/v5")
 #: The fields of every --config-facts tenant (#3918), and those it may lack:
 #: `custom_alerts_error` only beside a block that does not decode, `routing`
 #: when the resolver accepts no `_routing` (#4109).
-_FACTS_FIELDS = frozenset({"custom_alerts", "custom_alerts_finding", "metadata"})
+_FACTS_FIELDS = frozenset({"custom_alerts", "custom_alerts_finding", "metadata",
+                           "expected_exporters"})
 _FACTS_OPTIONAL = frozenset({"custom_alerts_error", "routing"})
 EFFECTIVE_SUBCOMMAND = "effective"
 # The `schema` value load_effective reads; any other is refused.
@@ -1680,12 +1684,17 @@ class TenantFacts(NamedTuple):
     gathered); `metadata` is `_metadata` as the exporter's resolver reads it,
     as `TenantValues.values["_metadata"]`; `routing` (#4109) the tenant's
     `_routing` as the exporter module's routing resolver reads it, as
-    `TenantValues.routing` (None when it accepts none)."""
+    `TenantValues.routing` (None when it accepts none);
+    `expected_exporters` (#4097) the exporter kinds the tenant declares in
+    `_expected_exporters`, as `TenantValues.values["_expected_exporters"]` —
+    the kinds `tenant_expected_exporter{tenant, pack}` is served for, `()`
+    when it declares none or the exporter does not read the value."""
     custom_alerts: "tuple[CustomAlertEntry, ...]"
     custom_alerts_error: str | None
     custom_alerts_finding: str | None
     metadata: dict[str, Any]
     routing: "dict[str, Any] | None" = None
+    expected_exporters: "tuple[str, ...]" = ()
 
 
 class ServedFacts(NamedTuple):
@@ -1736,7 +1745,10 @@ def load_served_facts(
             routing = tv.get("routing")
             if "routing" in tv and not isinstance(routing, dict):
                 raise _ShapeError(f"routing is a {type(routing).__name__}")
-            out[tenant_id] = TenantFacts(custom_alerts, error, finding, metadata, routing)
+            kinds = tv["expected_exporters"]
+            if not (isinstance(kinds, list) and all(isinstance(k, str) for k in kinds)):
+                raise _ShapeError("expected_exporters is not a list of strings")
+            out[tenant_id] = TenantFacts(custom_alerts, error, finding, metadata, routing, tuple(kinds))
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries config facts that are not of their shape ({error_text(e)})",

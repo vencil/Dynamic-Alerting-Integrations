@@ -22,4 +22,4 @@ tenants:
       runbook_url: "https://runbooks.demo.local/redis-clients"
       environment: "staging"
       domain: "cache"
-      db_type: "redis"
+    _expected_exporters: [redis]

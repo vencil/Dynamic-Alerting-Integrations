@@ -37,9 +37,9 @@ const VIEWPORT = { width: 1280, height: 720 };
 
 const TWO_TENANT_FIXTURE = {
   items: [
-    { id: 'prod-mariadb-01', environment: 'production', tier: 'tier-1', domain: 'finance', db_type: 'mariadb', owner: 'team-a', tags: [], groups: [],
+    { id: 'prod-mariadb-01', environment: 'production', tier: 'tier-1', domain: 'finance', expected_exporters: ['mariadb'], owner: 'team-a', tags: [], groups: [],
       config_derived: { silent_targets: [], maintenance_active: false } },
-    { id: 'staging-pg-01',   environment: 'staging',    tier: 'tier-2', domain: 'analytics', db_type: 'postgresql', owner: 'team-b', tags: [], groups: [],
+    { id: 'staging-pg-01',   environment: 'staging',    tier: 'tier-2', domain: 'analytics', expected_exporters: ['postgresql'], owner: 'team-b', tags: [], groups: [],
       config_derived: { silent_targets: [], maintenance_active: false } },
   ],
   total_matched: 2,

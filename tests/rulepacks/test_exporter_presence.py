@@ -1,15 +1,22 @@
-"""The db_type → exporter-presence table is the one source (#3771).
+"""The exporter kinds and their presence metrics have one source: the registry (#3771, #4097).
 
-* Its keys equal the ``_metadata.db_type`` enum of the tenant schema, in both
-  directions — a db_type a tenant can declare with no presence metric would page
-  forever, and a table row the schema refuses is a dead row.
+* A KIND is a pack of rule-packs/threshold-registry.yaml with ``presence:``.
+  Every other list of kinds is that set, held in both directions: the
+  ``_expected_exporters`` enum of the tenant schema (a kind a tenant can
+  declare with no presence metric would page forever; a kind the schema
+  refuses is a dead row), and the exporter's own allowed-kind table (generated;
+  a kind the exporter refuses would be the key verdict's error on a value the
+  schema accepts). ``_lib_constants.JOB_DB_MAP`` names only kinds.
 * The three alerts that need presence — TenantExporterAbsent and
   TenantExporterUndeclared (liveness pack), MassExporterOutage (platform pack) —
-  carry the expression the table renders, inline (parsed, not grepped); no
+  carry the expression the registry renders, inline (parsed, not grepped); no
   recording rule stands between them and the raw tenant-labelled series, so a
   pack loaded alone or the federation split's central half still works.
-* TenantExporterAbsent and MassExporterOutage join on ``(tenant, db_type)``;
+* TenantExporterAbsent and MassExporterOutage join on ``(tenant, pack)``;
   a regression to ``on(tenant)`` lets one kind's exporter mask another's outage.
+* TenantExporterAbsent covers every kind (jvm and nginx included);
+  TenantExporterUndeclared every kind but those marked
+  ``undeclared_notice: false``.
 """
 from __future__ import annotations
 
@@ -25,19 +32,37 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "tools"))
+sys.path.insert(0, str(ROOT / "scripts" / "tools" / "ops"))
 
 import _lib_exporter_presence as presence  # noqa: E402
 from _lib_consumer_read import RULE_PACKS  # noqa: E402
+import _lib_constants  # noqa: E402
 import _lib_metric_sources as ms  # noqa: E402
+import _registry_lib  # noqa: E402
 
 SCHEMA = ROOT / "docs" / "schemas" / "tenant-config.schema.json"
 LIVENESS = ROOT / presence.LIVENESS_PACK
 PLATFORM = ROOT / "rule-packs" / "rule-pack-platform.yaml"
+GO_KINDS = (ROOT / "components" / "threshold-exporter" / "app" / "pkg" / "config"
+            / "expected_exporter_kinds_gen.go")
+
+
+def _schema() -> dict:
+    return json.loads(SCHEMA.read_text(encoding="utf-8"))
 
 
 def _schema_enum() -> list[str]:
-    doc = json.loads(SCHEMA.read_text(encoding="utf-8"))
-    return doc["definitions"]["dbTypeValue"]["enum"]
+    return _schema()["definitions"]["exporterKind"]["enum"]
+
+
+def _registry_packs() -> dict:
+    return yaml.safe_load((ROOT / "rule-packs" / "threshold-registry.yaml").read_text(
+        encoding="utf-8"))["packs"]
+
+
+def _registry_kinds() -> set[str]:
+    """The kinds, read off the registry file itself (not through the lib)."""
+    return {name for name, meta in _registry_packs().items() if meta.get("presence")}
 
 
 def _rules(path: Path) -> list[dict]:
@@ -45,32 +70,97 @@ def _rules(path: Path) -> list[dict]:
     return [r for g in doc["groups"] for r in g.get("rules", [])]
 
 
-def test_table_keys_equal_schema_enum():
+def test_the_kinds_are_the_registry_packs_with_presence():
+    kinds = _registry_kinds()
+    assert set(presence.presence_table()) == kinds
+    # The hole `_metadata.db_type` left: a tenant running only nginx or a JVM
+    # could declare nothing. kubernetes has no exporter of the tenant's.
+    assert {"nginx", "jvm", "mariadb"} <= kinds
+    assert "kubernetes" not in kinds
+    assert _registry_lib.expected_exporter_kinds(_registry_lib.load_registry()) == sorted(kinds)
+
+
+def test_schema_enum_equals_the_registry_kinds():
     enum = _schema_enum()
-    table = list(presence.EXPORTER_PRESENCE)
     assert len(enum) == len(set(enum))
-    missing = sorted(set(enum) - set(table))
-    extra = sorted(set(table) - set(enum))
-    assert not missing, f"db_type the schema accepts with no presence metric: {missing}"
-    assert not extra, f"presence rows for a db_type the schema refuses: {extra}"
+    kinds = _registry_kinds()
+    missing = sorted(kinds - set(enum))
+    extra = sorted(set(enum) - kinds)
+    assert not missing, f"registry kinds the schema refuses: {missing}"
+    assert not extra, f"kinds the schema accepts with no presence metric: {extra}"
 
 
-def test_schema_db_type_takes_string_or_list_of_the_enum():
-    doc = json.loads(SCHEMA.read_text(encoding="utf-8"))
-    prop = doc["definitions"]["metadata"]["properties"]["db_type"]
-    ref = {"$ref": "#/definitions/dbTypeValue"}
-    assert prop["oneOf"][0] == ref
-    arr = prop["oneOf"][1]
-    assert arr["type"] == "array" and arr["items"] == ref
-    assert arr["minItems"] == 1 and arr["uniqueItems"] is True
+def test_exporter_allowed_kinds_equal_the_registry_kinds():
+    """The Go table the exporter judges `_expected_exporters` with, parsed
+    from the generated file — and that file is what the registry renders."""
+    text = GO_KINDS.read_text(encoding="utf-8")
+    body = text[text.index("var expectedExporterKinds = []string{"):]
+    table = re.findall(r'^\t"([^"]+)",$', body, flags=re.M)
+    assert table == sorted(_registry_kinds())
+    doc = _registry_lib.load_registry()
+    assert _registry_lib.check_expected_kinds_go(doc) is None
+    assert text == _registry_lib.render_expected_kinds_go(doc)
 
 
-def test_every_db_type_has_a_presence_metric():
-    for db_type, metrics in presence.EXPORTER_PRESENCE.items():
-        assert metrics, db_type
+def test_job_db_map_names_only_kinds():
+    """`_lib_constants.JOB_DB_MAP` (job name -> kind, blind-spot-discovery's
+    inference) may name fewer kinds than the registry — not every kind can be
+    told from a job name — never one the registry does not have."""
+    values = set(_lib_constants.JOB_DB_MAP.values())
+    assert values, "JOB_DB_MAP is empty: the subset check would pass on nothing"
+    assert values <= _registry_kinds(), sorted(values - _registry_kinds())
+    assert set(_lib_constants.METRIC_PREFIX_DB_MAP.values()) <= _registry_kinds()
+
+
+def test_schema_expected_exporters_is_a_list_of_the_enum():
+    doc = _schema()
+    prop = doc["definitions"]["tenantConfig"]["properties"]["_expected_exporters"]
+    assert prop["type"] == ["array", "null"]
+    assert prop["items"] == {"$ref": "#/definitions/exporterKind"}
+    assert prop["uniqueItems"] is True
+
+
+def test_schema_metadata_has_no_db_type():
+    """`_metadata.db_type` is removed, no alias (#4097): the schema refuses it
+    (additionalProperties: false) and no definition of its values is left."""
+    doc = _schema()
+    meta = doc["definitions"]["metadata"]
+    assert "db_type" not in meta["properties"]
+    assert meta["additionalProperties"] is False
+    assert "dbTypeValue" not in doc["definitions"]
+
+
+def test_every_kind_has_a_presence_selector_without_a_job_matcher():
+    table = presence.presence_table()
+    assert table
+    for kind, metrics in table.items():
+        assert metrics, kind
         for m in metrics:
             assert re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*(\{[a-z_]+="[a-z0-9_]+"\})?', m), (
-                db_type, m)
+                kind, m)
+            assert "job" not in m, (kind, m)
+    assert _registry_lib.presence_problems(_registry_lib.load_registry()) == []
+
+
+def test_a_presence_selector_with_a_job_matcher_is_refused():
+    doc = {"packs": {"x": {"presence": ['x_up{job="other"}']},
+                     "y": {"undeclared_notice": False}}}
+    problems = _registry_lib.presence_problems(doc)
+    assert any("'x'" in p and "job" in p for p in problems), problems
+    assert any("'y'" in p and "undeclared_notice without presence" in p for p in problems), problems
+
+
+def test_undeclared_notice_skips_exactly_the_packs_marked_false():
+    packs = _registry_packs()
+    marked = {name for name, meta in packs.items() if meta.get("undeclared_notice") is False}
+    assert marked == {"jvm"}, marked
+    assert set(presence.undeclared_kinds()) == _registry_kinds() - marked
+    absent = next(r for r in _rules(LIVENESS) if r.get("alert") == "TenantExporterAbsent")
+    undeclared = next(r for r in _rules(LIVENESS) if r.get("alert") == "TenantExporterUndeclared")
+    for kind in _registry_kinds():
+        term = f'"pack", "{kind}", "", ""'
+        assert term in absent["expr"], f"TenantExporterAbsent does not cover {kind}"
+        assert (term in undeclared["expr"]) == (kind not in marked), kind
 
 
 def test_alert_exprs_are_fresh():
@@ -83,14 +173,15 @@ def test_alert_exprs_are_fresh():
 
 
 def test_presence_reads_every_table_metric_on_the_tenant_exporters_job():
-    for db_type, metrics in presence.EXPORTER_PRESENCE.items():
+    undeclared = set(presence.undeclared_kinds())
+    for kind, metrics in presence.presence_table().items():
         expr = presence.presence_expr()
-        assert f'"db_type", "{db_type}", "", ""' in expr, db_type
+        assert f'"pack", "{kind}", "", ""' in expr, kind
         for metric in metrics:
             assert presence.selector(metric) in expr
             assert 'job="tenant-exporters"' in presence.selector(metric)
-            assert f'max_over_time({presence.selector(metric)}[1h])' in (
-                presence.presence_over_time_expr())
+            assert (f'max_over_time({presence.selector(metric)}[1h])' in
+                    presence.presence_over_time_expr()) == (kind in undeclared)
 
 
 def test_no_rule_reads_a_record_another_rule_must_load_first():
@@ -129,12 +220,12 @@ def test_cli_check_mode_reports_stale(tmp_path):
     (LIVENESS, "TenantExporterAbsent"),
     (PLATFORM, "MassExporterOutage"),
 ])
-def test_absence_joins_on_tenant_and_db_type(path, alert):
+def test_absence_joins_on_tenant_and_pack(path, alert):
     rule = next(r for r in _rules(path) if r.get("alert") == alert)
     joins = re.findall(r"unless\s+on\s*\(([^)]*)\)\s*\(\s*label_replace", rule["expr"])
     assert joins, f"{alert} does not anti-join the presence expression"
     for j in joins:
-        assert sorted(x.strip() for x in j.split(",")) == ["db_type", "tenant"], (alert, j)
+        assert sorted(x.strip() for x in j.split(",")) == ["pack", "tenant"], (alert, j)
 
 
 def test_mass_exporter_outage_is_portable_to_operator_mode():
@@ -153,19 +244,19 @@ tests:
     # What the central Prometheus has: only series that carry a tenant label
     # (federation match[] {{tenant!=""}}; docs/integration/federation-integration.md).
     input_series:
-      - series: 'tenant_expected_exporter{{tenant="t-a", db_type="mariadb", cluster="edge-1"}}'
+      - series: 'tenant_expected_exporter{{tenant="t-a", pack="mariadb", cluster="edge-1"}}'
         values: '1x20'
-      - series: 'tenant_expected_exporter{{tenant="t-a", db_type="redis", cluster="edge-1"}}'
+      - series: 'tenant_expected_exporter{{tenant="t-a", pack="redis", cluster="edge-1"}}'
         values: '1x20'
       - series: 'redis_up{{job="tenant-exporters", tenant="t-a", instance="10.7.0.2:9121", cluster="edge-1"}}'
         values: '1x20'
       - series: 'up{{job="tenant-exporters", tenant="t-a", instance="10.7.0.2:9121", cluster="edge-1"}}'
         values: '1x20'
     promql_expr_test:
-      - expr: count by(alertname, db_type) (ALERTS{{alertstate="firing", alertname="TenantExporterAbsent"}})
+      - expr: count by(alertname, pack) (ALERTS{{alertstate="firing", alertname="TenantExporterAbsent"}})
         eval_time: 10m
         exp_samples:
-          - labels: '{{alertname="TenantExporterAbsent", db_type="mariadb"}}'
+          - labels: '{{alertname="TenantExporterAbsent", pack="mariadb"}}'
             value: 1
 """
 
@@ -231,14 +322,8 @@ def test_every_unset_notice_pack_has_a_presence_metric():
         assert presence.pack_presence(pack), pack
 
 
-def test_app_presence_is_not_a_db_type():
-    """APP_PRESENCE holds the packs whose kind a tenant cannot declare as
-    db_type; a row there that is also a db_type would have two sources."""
-    assert set(presence.APP_PRESENCE).isdisjoint(_schema_enum())
-
-
 def test_a_pack_with_unset_keys_and_no_presence_metric_is_refused(monkeypatch):
-    monkeypatch.setattr(presence, "APP_PRESENCE", {})
+    monkeypatch.setattr(presence, "presence_table", lambda: {})
     with pytest.raises(ValueError, match="no presence metric"):
         presence.unset_notice_expr("jvm")
 

@@ -7,6 +7,7 @@ package config
 // own config (tenant file, root platform `tenants:` entry, profile).
 var validReservedKeys = keySet(
 	"_custom_alerts",
+	"_expected_exporters",
 	"_metadata",
 	"_namespaces",
 	"_profile",
@@ -56,6 +57,9 @@ var reservedKeyReaders = map[string]map[string][]string{
 		"exporter":              {"tenant", "platform_tenants", "profile"},
 		"custom_alert_compiler": {"tenant", "platform_tenants", "profile"},
 	},
+	"_expected_exporters": {
+		"exporter": {"tenant", "platform_tenants", "profile"},
+	},
 	"_metadata": {
 		"exporter": {"tenant", "platform_tenants", "profile"},
 	},
@@ -99,25 +103,27 @@ var reservedPrefixReaders = []prefixReaders{
 // reservedValueShapes is each key's value shape as its readers parse
 // it (`value.shape`): scalar, mapping, list or scalar_or_mapping.
 var reservedValueShapes = map[string]string{
-	"_custom_alerts":    "list",
-	"_metadata":         "mapping",
-	"_namespaces":       "list",
-	"_policies":         "list",
-	"_profile":          "scalar",
-	"_routing":          "scalar_or_mapping",
-	"_routing_defaults": "mapping",
-	"_routing_enforced": "mapping",
-	"_routing_profile":  "scalar",
-	"_severity_dedup":   "scalar",
-	"_silent_mode":      "scalar_or_mapping",
+	"_custom_alerts":      "list",
+	"_expected_exporters": "list",
+	"_metadata":           "mapping",
+	"_namespaces":         "list",
+	"_policies":           "list",
+	"_profile":            "scalar",
+	"_routing":            "scalar_or_mapping",
+	"_routing_defaults":   "mapping",
+	"_routing_enforced":   "mapping",
+	"_routing_profile":    "scalar",
+	"_severity_dedup":     "scalar",
+	"_silent_mode":        "scalar_or_mapping",
 }
 
 // reservedValueChecks names, per key, the exporter-side function that
 // judges its value (`value.check`; bound in valueChecks).
 var reservedValueChecks = map[string]string{
-	"_metadata":       "metadata",
-	"_severity_dedup": "severity_dedup",
-	"_silent_mode":    "silent_mode",
+	"_expected_exporters": "expected_exporters",
+	"_metadata":           "metadata",
+	"_severity_dedup":     "severity_dedup",
+	"_silent_mode":        "silent_mode",
 }
 
 // reservedPrefixValueChecks names, per prefix, the function that judges

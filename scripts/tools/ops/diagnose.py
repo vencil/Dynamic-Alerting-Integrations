@@ -195,17 +195,18 @@ def mariadb_logs(tenant: str) -> str:
 # The Pod and exporter checks below are written for MariaDB (`app=mariadb`,
 # `mysql_up`). Every other tenant used to get `Pod not found`, so
 # batch-diagnose reported all of them as errors (issue 1513, 本輪決策 N2).
-MARIADB_DB_TYPE = "mariadb"
+MARIADB_KIND = "mariadb"
 PROMETHEUS_FAILURE = "Prometheus query failed"
 
 
-def tenant_db_type(tenant: str, prom_url: str) -> tuple[str | None, str | None]:
-    """Return (db_type, error) from `tenant_expected_exporter{tenant=...}`.
+def tenant_expected_kind(tenant: str, prom_url: str) -> tuple[str | None, str | None]:
+    """Return (kind, error) from `tenant_expected_exporter{tenant=...}`'s
+    `pack` label.
 
     Read from Prometheus rather than conf.d: batch-diagnose calls check()
     without a config dir. The exporter emits the series only for a tenant that
-    declares `_metadata.db_type` (#869), so an empty result means "not
-    declared", which is distinct from a failed query.
+    declares `_expected_exporters` (#869, #4097), so an empty result means
+    "not declared", which is distinct from a failed query.
 
     #3771: a tenant may declare several kinds (one series each). The checks
     below are MariaDB's, so a tenant declaring mariadb among others reads as
@@ -214,11 +215,11 @@ def tenant_db_type(tenant: str, prom_url: str) -> tuple[str | None, str | None]:
     results, err = query_prometheus(prom_url, f'tenant_expected_exporter{{tenant="{tenant}"}}')
     if err:
         return None, err
-    kinds = sorted({item.get("metric", {}).get("db_type") for item in results or []} - {None, ""})
+    kinds = sorted({item.get("metric", {}).get("pack") for item in results or []} - {None, ""})
     if not kinds:
         return None, None
-    if MARIADB_DB_TYPE in kinds:
-        return MARIADB_DB_TYPE, None
+    if MARIADB_KIND in kinds:
+        return MARIADB_KIND, None
     return ",".join(kinds), None
 
 
@@ -588,17 +589,17 @@ def _check(tenant: str, prom_url: str, *, base: Path | None, chain: dict | None)
     skipped = []
 
     # 0. 資料庫類型：Pod 與 exporter 兩項只為 MariaDB 寫（本輪決策 N2）
-    db_type, db_type_err = tenant_db_type(tenant, prom_url)
-    if db_type_err:
+    kind, kind_err = tenant_expected_kind(tenant, prom_url)
+    if kind_err:
         errors.append(f"{PROMETHEUS_FAILURE} ({prom_url})")
-        reason = "db_type unknown: the Prometheus query for tenant_expected_exporter failed"
-    elif db_type is None:
-        reason = ("db_type not declared (no tenant_expected_exporter series for this "
-                  "tenant); the Pod and exporter checks are written for MariaDB")
+        reason = "expected exporters unknown: the Prometheus query for tenant_expected_exporter failed"
+    elif kind is None:
+        reason = ("no exporter declared in _expected_exporters (no tenant_expected_exporter "
+                  "series for this tenant); the Pod and exporter checks are written for MariaDB")
     else:
-        reason = (f"db_type={db_type}; the Pod and exporter checks are written for "
+        reason = (f"expected exporters={kind}; the Pod and exporter checks are written for "
                   "MariaDB (app=mariadb, mysql_up)")
-    is_mariadb = db_type == MARIADB_DB_TYPE and not db_type_err
+    is_mariadb = kind == MARIADB_KIND and not kind_err
     if not is_mariadb:
         skipped = [{"check": "pod", "reason": reason},
                    {"check": "exporter", "reason": reason}]

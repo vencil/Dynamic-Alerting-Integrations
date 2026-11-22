@@ -1209,7 +1209,7 @@ func TestServedValues_NonUTF8_ExitsThreeNamingTheFile(t *testing.T) {
 		// Values, not keys: the reserved readings would carry them out.
 		"_metadata value": {map[string]string{
 			"_defaults.yaml": defaultsOnly + sf,
-			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _metadata:\n      runbook_url: !!binary /w==\n      db_type: !!binary /w==\n",
+			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _metadata:\n      runbook_url: !!binary /w==\n      owner: !!binary /w==\n",
 		}, "tenant-a.yaml"},
 		// A map KEY, not a value.
 		"_routing receiver key": {map[string]string{
@@ -1361,8 +1361,8 @@ func TestServedValues_SchemaIsNamed(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{"t.yaml": "tenants:\n  t:\n    x: 1\n"}, "")
 	mustOK(t, code, stderr)
-	if doc.Schema != servedValuesSchema || servedValuesSchema != "da-guard.served-values/v5" {
-		t.Fatalf("schema = %q, want %q", doc.Schema, "da-guard.served-values/v5")
+	if doc.Schema != servedValuesSchema || servedValuesSchema != "da-guard.served-values/v6" {
+		t.Fatalf("schema = %q, want %q", doc.Schema, "da-guard.served-values/v6")
 	}
 }
 

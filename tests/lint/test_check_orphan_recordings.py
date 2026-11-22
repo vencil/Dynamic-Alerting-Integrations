@@ -14,7 +14,10 @@ contract:
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = REPO_ROOT / "scripts" / "tools" / "lint" / "check_orphan_recordings.py"
@@ -71,18 +74,19 @@ def test_sanity_anchor_db2_lock_wait_time_is_not_orphan():
 
 # ── token identity: the substring / colon-adjacency trap ──────────────────
 
-def test_metric_tokens_keep_colons_inside_one_token():
-    """`tenant:alert_threshold:db2_lock_wait_time` is ONE token — a consumer
+def _names(expr: str) -> set:
+    """The names Prometheus' parse tree says *expr* reads (#4150)."""
+    (names,) = gate._lib_consumer_read.promql_metric_names([expr])
+    return set(names)
+
+
+def test_a_record_name_is_one_name():
+    """`tenant:alert_threshold:db2_lock_wait_time` is ONE name — a consumer
     of the threshold must not accidentally 'consume' the rate5m record whose
     name embeds the same substring."""
-    toks = gate.metric_tokens(
-        "tenant:db2_lock_wait_time:rate5m > on(tenant) group_left "
-        "tenant:alert_threshold:db2_lock_wait_time")
-    assert "tenant:db2_lock_wait_time:rate5m" in toks
-    assert "tenant:alert_threshold:db2_lock_wait_time" in toks
-    # the bare prefix is NOT a token of this expr
-    assert "tenant:db2_lock_wait_time" not in toks
-    assert "db2_lock_wait_time" not in toks
+    names = _names("tenant:db2_lock_wait_time:rate5m > on(tenant) group_left "
+                   "tenant:alert_threshold:db2_lock_wait_time")
+    assert names == {"tenant:db2_lock_wait_time:rate5m", "tenant:alert_threshold:db2_lock_wait_time"}
 
 
 def test_prefix_token_does_not_count_as_consumption():
@@ -90,7 +94,7 @@ def test_prefix_token_does_not_count_as_consumption():
     longer record orphaned (substring matching would hide this drift)."""
     result = gate.run_check(
         record_names={"tenant:db2_lock_wait_time:rate5m"},
-        consumed=gate.metric_tokens("tenant:alert_threshold:db2_lock_wait_time > 5"),
+        consumed=_names("tenant:alert_threshold:db2_lock_wait_time > 5"),
         known_orphans={},
         exempt={},
     )
@@ -98,12 +102,114 @@ def test_prefix_token_does_not_count_as_consumption():
                for e in result["errors"]), result
 
 
-def test_stop_tokens_are_not_consumers():
-    """PromQL keywords/functions never count as consumed series names.
-    (Label names like `tenant` do surface as tokens — harmless over-approx on
-    the consumer side, since record names are colon-namespaced.)"""
-    toks = gate.metric_tokens("rate(vector(1)[5m]) or absent(x) and sum(foo_metric)")
-    assert toks == {"x", "foo_metric"}
+@pytest.mark.parametrize("expr, want", [
+    # functions, aggregations, keywords, label names and values are no names —
+    # read off the parse, so no list of them to keep (#4150: holt_winters)
+    ("rate(x[5m]) or absent(y) and sum by (tenant) (foo_metric) + vector(1)", {"x", "y", "foo_metric"}),
+    ('label_replace(kube_pod_info, "tenant", `some_fake_metric`, "ns", `(.+)`)', {"kube_pod_info"}),
+    ('{__name__="tenant:x:sum", tenant="db-a"} > 0', {"tenant:x:sum"}),
+    ('x unless on(tenant) ClickHouseMetrics_TCPConnection', {"x", "ClickHouseMetrics_TCPConnection"}),
+    ('{__name__=~"tenant:.*"} > 0', set()),
+])
+def test_the_names_an_expression_reads_are_its_parse_trees(expr, want):
+    assert _names(expr) == want
+
+
+@pytest.mark.parametrize("query, want", [
+    # Grafana's interpolation, so the query parses (no name comes from a value)
+    ("rate(x[$__rate_interval])", "rate(x[5m])"),
+    ("x / $__interval_ms", "x / 300"),
+    ("rate(x[${__interval}])", "rate(x[5m])"),
+    ('sum(rate(x{tenant=~"$tenant"}[$window])) offset $off', 'sum(rate(x{tenant=~"x"}[5m])) offset 5m'),
+    ("max_over_time(x[$range:$step])", "max_over_time(x[5m:5m])"),
+    ("$metric{a=\"1\"}", "x{a=\"1\"}"),
+    ("[[metric]] > 0", "x > 0"),
+    ("label_values(user_threshold{metric=\"$metric\"}, severity)", "user_threshold{metric=\"x\"}"),
+    ("query_result(topk(5, y))", "topk(5, y)"),
+    ("label_values(tenant)", None),
+    ("label_names()", None),
+    ("metrics(tenant_.*)", None),
+    # #4150 review: a subquery step, a literal range with a variable step, the
+    # deprecated [[var]] in a range, a variable label, a negative offset
+    ("max_over_time(x[$__range:$step])", "max_over_time(x[5m:5m])"),
+    ("max_over_time(x[1h:$step])", "max_over_time(x[1h:5m])"),
+    ("rate(foo[[[iv]]])", "rate(foo[5m])"),
+    ("label_values(foo, $lbl)", "foo"),
+    ("foo offset -$off", "foo offset -5m"),
+])
+def test_grafana_queries_are_interpolated_as_grafana_does(query, want):
+    assert gate.grafana_promql(query) == want
+
+
+def _dashboards(tmp_path, panels):
+    """A repo root holding one dashboard of *panels* and nothing else."""
+    d = tmp_path / gate.DASHBOARD_DIRS[0]
+    d.mkdir(parents=True)
+    (d / "d.json").write_text(json.dumps({"panels": panels}), encoding="utf-8")
+    return tmp_path
+
+
+def test_a_dashboard_of_another_datasource_is_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr(gate, "GRAFANA_CM_GLOB", ("nowhere", "*.yaml"))
+    monkeypatch.setattr(gate, "EXTRA_DASHBOARDS", ())
+    monkeypatch.setattr(gate, "iter_rules", lambda root: iter(()))
+    monkeypatch.setattr(gate, "_walk_observed_series", lambda doc: iter(()))
+    monkeypatch.setattr(gate, "_load_yaml", lambda path: {})
+    root = _dashboards(tmp_path, [
+        {"datasource": {"type": "loki", "uid": "l"}, "targets": [{"expr": '{app="x"} |= "error"'}]},
+        {"datasource": {"type": "prometheus", "uid": "p"}, "targets": [{"expr": "rate(tenant:a:sum[5m])"}]},
+        {"targets": [{"datasource": "${DS}", "expr": "tenant:b:max > 0"}]},
+    ])
+    assert gate.collect_consumed_tokens(root) == {"tenant:a:sum", "tenant:b:max"}
+
+
+def _queries(doc) -> list:
+    return list(gate._walk_json_strings(doc))
+
+
+def test_only_query_variables_are_read():
+    """A custom / interval / datasource variable's `query` is a value list or
+    a datasource type, never PromQL (#4150 review: `prometheus` read as a
+    metric, `1m,5m` refused)."""
+    doc = {"templating": {"list": [
+        {"type": "custom", "query": "warning,critical"},
+        {"type": "interval", "query": "1m,5m,10m"},
+        {"type": "datasource", "query": "prometheus"},
+        {"type": "query", "query": "label_values(tenant:a:sum, tenant)"},
+        {"type": "query", "query": {"query": "label_values(tenant:b:max, x)", "refId": "A"}},
+    ]}}
+    assert [q for q, _ in _queries(doc)] == ["label_values(tenant:a:sum, tenant)",
+                                             "label_values(tenant:b:max, x)"]
+
+
+def test_datasources_as_grafana_resolves_them():
+    """A Mixed panel's target without its own datasource reads the default;
+    a row's datasource does not reach the panels it holds (#4150 review)."""
+    doc = {"panels": [
+        {"datasource": {"type": "datasource", "uid": "-- Mixed --"},
+         "targets": [{"expr": "a"}, {"datasource": {"type": "loki"}, "expr": "{x=\"1\"}"}]},
+        {"type": "row", "datasource": {"type": "loki"}, "panels": [{"targets": [{"expr": "b"}]}]},
+    ]}
+    assert _queries(doc) == [("a", None), ('{x="1"}', "loki"), ("b", None)]
+
+
+def test_main_names_a_refused_dashboard_query_rc2(monkeypatch, capsys):
+    def boom():
+        raise gate.DashboardQueryRefused("d.json: Prometheus' parser refuses the query 'sum('")
+    monkeypatch.setattr(gate, "run_check", boom)
+    assert gate.main(["--ci"]) == gate.EXIT_CALLER_ERROR
+    err = capsys.readouterr().err
+    assert "d.json" in err and "crashed" not in err
+
+
+def test_a_dashboard_query_the_parser_refuses_is_a_caller_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(gate, "GRAFANA_CM_GLOB", ("nowhere", "*.yaml"))
+    monkeypatch.setattr(gate, "EXTRA_DASHBOARDS", ())
+    monkeypatch.setattr(gate, "iter_rules", lambda root: iter(()))
+    root = _dashboards(tmp_path, [{"targets": [{"expr": "sum(rate(x[5m])"}]}])
+    with pytest.raises(gate.DashboardQueryRefused) as exc:
+        gate.collect_consumed_tokens(root)
+    assert "d.json" in str(exc.value) and "sum(rate(x[5m])" in str(exc.value)
 
 
 # ── new drift is caught / consumed records are clean ──────────────────────
@@ -204,11 +310,3 @@ def test_main_ci_passes_when_clean(monkeypatch):
     monkeypatch.setattr(gate, "run_check",
                         lambda: {"errors": [], "infos": ["12 known-orphan"]})
     assert gate.main(["--ci"]) == gate.EXIT_OK
-
-
-def test_strip_strings_removes_backtick_raw_strings():
-    """PromQL backtick raw strings must not leak tokens (Gemini review of #1214)."""
-    from check_orphan_recordings import metric_tokens
-    toks = metric_tokens('label_replace(kube_pod_info, "tenant", `some_fake_metric`, "ns", `(.+)`)')
-    assert "some_fake_metric" not in toks
-    assert "kube_pod_info" in toks
