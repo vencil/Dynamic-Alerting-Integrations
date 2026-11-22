@@ -122,9 +122,10 @@ type Watcher[T any] struct {
 	// unconditionally (even before an observer is installed). SetReloadObserver
 	// replays it so a startup parse failure — which happens while reloadObs is
 	// still nil — is reflected on the gauge the moment the observer is wired,
-	// instead of the gauge sitting at its assumed-current default until the
-	// next load (a WatchLoop tick, or forever for a watcher nobody runs a
-	// WatchLoop for). Defaults true (no-file / pre-load are healthy).
+	// instead of the gauge sitting at the observer's starting value (0, "not
+	// yet confirmed") until the next load (a WatchLoop tick, or forever for a
+	// watcher nobody runs a WatchLoop for). Defaults true (no-file / pre-load
+	// are healthy).
 	//
 	// Concurrency: both the WRITE (loadLocked's defer) and the READ
 	// (SetReloadObserver's replay) hold loadMu, so lastOK is fully serialised with
@@ -281,11 +282,13 @@ func (w *Watcher[T]) reloadAsync() {
 // Promoted through the embed so every domain Manager exposes it.
 //
 // On install it REPLAYS the initial-load outcome (w.lastOK): the initial load in
-// New() ran while reloadObs was nil, so without this replay a file that was
-// already broken at startup would leave the gauge at its assumed-current default
-// until the next load — a WatchLoop tick later, or never for a watcher nobody
-// runs a WatchLoop for (tests, tools). Healthy and no-file managers replay ok=true
-// (gauge stays 1), so there is no false positive. The replay goes through
+// New() ran while reloadObs was nil, so without this replay the gauge would keep
+// the observer's starting value until the next load — a WatchLoop tick later, or
+// never for a watcher nobody runs a WatchLoop for (tests, tools). The observer
+// starts every gauge at 0 ("not yet confirmed", #1073), so this replay is also
+// what moves a wired manager to its real state before the server serves: healthy
+// and no-file managers replay ok=true (gauge 1, no false positive), a file broken
+// at startup replays ok=false (gauge 0), and a manager never wired stays at 0. The replay goes through
 // RecordReload, so a replayed startup FAILURE also increments the failure counter
 // once — a real load failure counted once; it stays below the
 // TenantApiConfigReloadFailing rate threshold, and the == 0 gauge is what fires.

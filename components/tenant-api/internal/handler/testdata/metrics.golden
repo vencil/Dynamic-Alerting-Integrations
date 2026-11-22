@@ -40,13 +40,13 @@ tenant_api_config_reload_failures_total{component="federation-policy"} 0
 tenant_api_config_reload_failures_total{component="groups"} 0
 tenant_api_config_reload_failures_total{component="tenantorg"} 0
 tenant_api_config_reload_failures_total{component="views"} 0
-# HELP tenant_api_config_last_reload_successful Whether each config manager's LAST reload succeeded (1) or failed and is serving stale last-good config (0). Unlike the failure counter, whose growth depends on the retry cadence, it is 0 from the first failure and stays 0 until a load succeeds — alert on == 0.
+# HELP tenant_api_config_last_reload_successful Whether each config manager's LAST reload succeeded (1), or failed and is serving stale last-good config — or was never reported because the manager is not wired to the observer (0). Unlike the failure counter, whose growth depends on the retry cadence, it is 0 from the first failure and stays 0 until a load succeeds — alert on == 0.
 # TYPE tenant_api_config_last_reload_successful gauge
-tenant_api_config_last_reload_successful{component="RBAC"} 1
-tenant_api_config_last_reload_successful{component="federation-policy"} 1
-tenant_api_config_last_reload_successful{component="groups"} 1
-tenant_api_config_last_reload_successful{component="tenantorg"} 1
-tenant_api_config_last_reload_successful{component="views"} 1
+tenant_api_config_last_reload_successful{component="RBAC"} 0
+tenant_api_config_last_reload_successful{component="federation-policy"} 0
+tenant_api_config_last_reload_successful{component="groups"} 0
+tenant_api_config_last_reload_successful{component="tenantorg"} 0
+tenant_api_config_last_reload_successful{component="views"} 0
 # HELP tenant_api_policy_available Whether the generator container can judge writes (1): its status endpoint reports the deployment policy file usable, da-read and da-guard present and the generator not older than the policy requires, nor than the key verdict tenant-api refuses on. 0 when it cannot, or when its status cannot be read: every content-changing write then answers 503 (POLICY_UNAVAILABLE / VALIDATOR_UNAVAILABLE). Alert on == 0.
 # TYPE tenant_api_policy_available gauge
 tenant_api_policy_available 0
