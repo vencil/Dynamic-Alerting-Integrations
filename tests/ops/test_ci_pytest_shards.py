@@ -37,7 +37,7 @@ _BASH = shutil.which("bash")
 # Every ci.yml job that runs pytest with --shard. A job that starts passing
 # --shard without being listed here is caught by
 # test_every_sharded_job_is_pinned below.
-SHARDED_JOBS = ("python-tests-run", "python-coverage")
+SHARDED_JOBS = ("python-tests-run",)
 
 _SHARD_ARG_RE = re.compile(r"--shard=\$\{\{\s*matrix\.shard\s*\}\}/(\d+)")
 
@@ -165,7 +165,7 @@ def test_every_required_shard_runs_this_contract_unsharded():
 
 
 def _combine_script() -> str:
-    job = _ci_jobs()["python-coverage-combine"]
+    job = _ci_jobs()["python-tests"]
     runs = [s["run"] for s in job["steps"]
             if s.get("name", "").startswith("Combine shards")]
     assert len(runs) == 1, "the combine step moved or was renamed"
@@ -174,16 +174,45 @@ def _combine_script() -> str:
 
 @pytest.mark.skipif(_BASH is None, reason="needs bash on PATH")
 @pytest.mark.parametrize("present", [0, 2])
-def test_the_combine_step_warns_instead_of_failing_on_missing_shards(tmp_path, present):
-    """A superseded run is cancelled by the concurrency group; its cancelled
-    shards upload nothing. With zero files the unmatched glob used to reach
-    `cp` literally ("cannot stat") and `set -e` failed the step before the
-    warning branch — a red on a run nobody reads. Run the real step script."""
+def test_the_combine_step_fails_on_missing_shards(tmp_path, present):
+    """The combine runs in the python-tests gate AFTER its verdict step, so it
+    only ever runs once every shard succeeded — and each shard uploads with
+    `if-no-files-found: error`. A missing file there is a broken pipeline,
+    and a report over fewer shards would under-report coverage (a smaller
+    denominator) on a REQUIRED check. Run the real step script: zero files
+    must not reach `cp` as a literal glob, and any count but 3 fails."""
     for k in range(1, present + 1):
         d = tmp_path / "coverage-shards" / f"coverage-data-shard{k}"
         d.mkdir(parents=True)
         (d / ".coverage").write_bytes(b"")
     proc = subprocess.run([_BASH, "-c", _combine_script()], cwd=tmp_path,
                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.returncode != 0, proc.stdout + proc.stderr
     assert f"found {present}" in proc.stdout, proc.stdout
+    assert "cannot stat" not in proc.stderr, proc.stderr
+
+
+def test_the_combine_runs_only_after_the_verdict():
+    """The coverage steps carry no `if:` and sit after the verdict step: a
+    failed shard stops the job before the combine, so the floor is never
+    judged on partial data. Reordering them, or giving them an `if:`, would
+    combine a run whose shards did not all finish."""
+    steps = _ci_jobs()["python-tests"]["steps"]
+    verdict = [i for i, s in enumerate(steps)
+               if "needs.python-tests-run.result" in str(s.get("env", {}))]
+    combine = [i for i, s in enumerate(steps)
+               if s.get("name", "").startswith("Combine shards")]
+    assert verdict == [0], f"the verdict must be the first step, found {verdict}"
+    assert combine and combine[0] > verdict[0]
+    assert "if" not in steps[combine[0]], "the combine step must not carry an if:"
+
+
+def test_every_shard_measures_through_sysmon():
+    """COVERAGE_CORE=sysmon is what made folding coverage into the required
+    leg affordable (#4224); without it the C tracer adds ~+46% (tests/lint,
+    measured locally) to the required leg's critical path."""
+    steps = _ci_jobs()["python-tests-run"]["steps"]
+    cov = [s for s in steps
+           if "pytest tests/" in str(s.get("run", "")) and "--cov" in str(s.get("run"))]
+    assert len(cov) == 1, "exactly one sharded pytest step runs with --cov"
+    assert (cov[0].get("env") or {}).get("COVERAGE_CORE") == "sysmon"

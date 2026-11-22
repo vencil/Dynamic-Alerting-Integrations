@@ -123,10 +123,6 @@ advisory:
     reason: >-
       會下載 amtool／promtool／yq，網路失敗就紅；沒有 aggregate gate 擁有它的名稱，
       紅了不擋 merge。#3756 起每支 PR 都跑（原本只在文件路徑變動時跑）。
-  - name: Python Coverage
-    reason: >-
-      owner 決定（2026-09-19，PR #1910）：覆蓋率腿只回報與上傳，不擋 merge；放進必要
-      檢查會讓 tracer 的成本壓在必要腿的關鍵路徑上。
   - name: Bench + Compare (single-runner interleaved + canary)
     reason: >-
       Phase 2 起只提供資訊：退化會留言並貼 `perf-regression` label，job 除了基礎

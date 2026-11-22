@@ -60,9 +60,13 @@ UNTESTED_GO_MODULES = {
 }
 
 
-def go_test_legs(workflow: dict) -> dict[str, str]:
-    """job id -> working-directory of each job with a step running `go test`."""
-    legs: dict[str, str] = {}
+def go_test_legs(workflow: dict) -> dict[str, frozenset[str]]:
+    """job id -> working-directories of the job's steps running `go test`.
+
+    A job may test several modules (#4224 folded the seconds-long modules
+    into one job, each in its own step); what is counted below is modules,
+    so a job maps to the set of directories its steps run `go test` in."""
+    legs: dict[str, set[str]] = {}
     for job_id, job in (workflow.get("jobs") or {}).items():
         for step in job.get("steps") or []:
             if "go test" in str(step.get("run", "")):
@@ -71,10 +75,8 @@ def go_test_legs(workflow: dict) -> dict[str, str]:
                     raise AssertionError(
                         f"{job_id} runs `go test` without a working-directory; "
                         "model which module that tests before relying on this")
-                if legs.get(job_id, wd) != wd:
-                    raise AssertionError(f"{job_id} runs `go test` in two directories")
-                legs[job_id] = wd
-    return legs
+                legs.setdefault(job_id, set()).add(wd)
+    return {job: frozenset(wds) for job, wds in legs.items()}
 
 
 def module_of(directory: str, modules: frozenset[str]) -> str | None:
@@ -87,18 +89,19 @@ def module_of(directory: str, modules: frozenset[str]) -> str | None:
         d = posixpath.dirname(d)
 
 
-def module_leg_problems(legs: dict[str, str], tracked: frozenset[str],
+def module_leg_problems(legs: dict[str, frozenset[str]], tracked: frozenset[str],
                         untested: set[str]) -> list[str]:
     modules = frozenset(posixpath.dirname(f) for f in tracked
                         if posixpath.basename(f) == "go.mod")
     problems: list[str] = []
     tested: set[str] = set()
-    for job, wd in sorted(legs.items()):
-        mod = module_of(wd, modules)
-        if mod is None:
-            problems.append(f"{job} tests {wd}, which is in no tracked Go module")
-            continue
-        tested.add(mod)
+    for job, wds in sorted(legs.items()):
+        for wd in sorted(wds):
+            mod = module_of(wd, modules)
+            if mod is None:
+                problems.append(f"{job} tests {wd}, which is in no tracked Go module")
+                continue
+            tested.add(mod)
     if tested | untested != modules:
         problems.append(
             f"tracked Go modules {sorted(modules)} != modules a leg tests "
@@ -123,7 +126,7 @@ def test_every_tracked_go_module_has_a_test_leg_or_a_reason() -> None:
         + "\n  ".join(problems))
 
 
-def unweighed_go_legs(legs: dict[str, str], awaited: set[str]) -> list[str]:
+def unweighed_go_legs(legs: dict[str, frozenset[str]], awaited: set[str]) -> list[str]:
     """Go test legs no aggregate gate waits for. PURE."""
     return sorted(job for job in legs if job not in awaited)
 
@@ -155,7 +158,7 @@ def test_every_go_test_leg_is_weighed_by_an_aggregate_gate() -> None:
 
 
 def test_the_unweighed_leg_finder_can_fail() -> None:
-    legs = {"zq-a": "zmod", "zq-b": "zlib"}
+    legs = {"zq-a": frozenset({"zmod"}), "zq-b": frozenset({"zlib"})}
     assert unweighed_go_legs(legs, {"zq-a", "zq-b", "zq-other"}) == []
     assert unweighed_go_legs(legs, {"zq-a"}) == ["zq-b"]
     assert unweighed_go_legs(legs, set()) == ["zq-a", "zq-b"]
@@ -168,7 +171,7 @@ def test_the_problem_finder_reports_degenerate_inputs(case: str) -> None:
     tracked = frozenset({"zmod/go.mod", "zmod/a.go", "zmod/sub/b.go",
                          "zmod/nested/go.mod", "zmod/nested/c.go",
                          "zlib/go.mod", "zlib/l.go"})
-    legs = {"leg": "zmod/sub"}
+    legs = {"leg": frozenset({"zmod/sub"})}
     untested = {"zmod/nested", "zlib"}
     assert module_leg_problems(legs, tracked, untested) == []
     if case == "no-legs":
@@ -176,5 +179,5 @@ def test_the_problem_finder_reports_degenerate_inputs(case: str) -> None:
     elif case == "orphan-module":
         untested = {"zmod/nested"}
     else:
-        legs = {"leg": "zmod/sub", "stray": "znowhere"}
+        legs = {"leg": frozenset({"zmod/sub"}), "stray": frozenset({"znowhere"})}
     assert module_leg_problems(legs, tracked, untested)

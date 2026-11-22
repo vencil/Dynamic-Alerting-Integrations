@@ -21,7 +21,7 @@ from factories import write_yaml, make_tenant_yaml, make_receiver
 #   同測試單跑即綠。
 # - xdist worker：並行 worker 互搶 CPU，本機 8 worker 實測 632ms／500ms（#3010）。
 #   CI 的 Python Tests 也跑 `-n auto`，所以 CI 一律走 ×4。
-# - coverage 啟動中：instrumentation 拖慢解析，CI Python Coverage 實測
+# - coverage 啟動中：instrumentation 拖慢解析，CI 的 coverage 分片（C tracer）實測
 #   744ms／500ms（#3010）。用 `Coverage.current()` 判斷，不用 `sys.gettrace()`：
 #   coverage 在 3.12+ 可改走 sys.monitoring，那時 gettrace() 是 None。
 def _wall_clock_scale():

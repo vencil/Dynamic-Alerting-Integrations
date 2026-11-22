@@ -55,10 +55,9 @@ def _one(pattern: str, text: str, what: str) -> str:
 def _same(pattern: str, text: str, what: str) -> str:
     """Every match identical, at least one — the ci.yml-side twin of `_one`.
 
-    Since #1910 ci.yml installs this toolchain in TWO jobs (the required
-    `python-tests-run` and the advisory `python-coverage`), the install steps
-    copied verbatim so every guard that reads ci.yml keeps seeing them. The
-    pin is still one value: two copies that agree are one pin spelled twice,
+    ci.yml installed this toolchain in two jobs from #1910 until #4224 folded
+    the advisory coverage copy into `python-tests-run`; any later copy must
+    agree with the first. Two copies that agree are one pin spelled twice,
     and a copy that disagrees is exactly the drift this reports.
     """
     matches = re.findall(pattern, text, re.MULTILINE)

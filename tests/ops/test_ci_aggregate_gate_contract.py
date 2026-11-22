@@ -38,8 +38,8 @@ And two things that keep those rules from being satisfied by looking away:
     Dropping a leg out of its gate (`needs:`, the env binding and the loop
     together) leaves a job anchored to nothing. And the advisory half is not
     a way out for a leg: a job only an advisory check waits for must carry
-    that check's name as the start of its own (a shard, `Python Coverage
-    (1/3)` under `Python Coverage`);
+    that check's name as the start of its own (a shard, `Foo (1/3)` under
+    an advisory `Foo`);
   * no job in a decision path is a reusable-workflow call (job-level
     `uses:`). Its steps live in another file, so every rule here that reads
     steps and conditions would pass over it having read nothing.
@@ -73,10 +73,8 @@ its gate, hung on an advisory job's `needs:` AND renamed to start with that
 check's name; and a `kind: gate` entry moved to `advisory:` together with its
 gate. "Every test leg is under a REQUIRED name" would close the first two and
 was measured not to be decidable from the workflow: of the jobs in scope, the
-portal and smoke legs run `npm` scripts, `federation-e2e` runs a shell runner
-that starts pytest, and `python-coverage` runs pytest under an advisory name
-by owner decision — a runner-name match misses the first three and refuses
-the fourth. The one family where the leg IS recognisable keeps its own
+portal and smoke legs run `npm` scripts and `federation-e2e` runs a shell
+runner that starts pytest — a runner-name match misses all three. The one family where the leg IS recognisable keeps its own
 stricter rule: a job running `go test` must be in a gate's decision path
 (tests/ops/test_go_modules_have_a_test_leg.py).
 
@@ -648,8 +646,8 @@ def _advisory_stowaway_problems(path: Path, required_names: frozenset[str],
     advisory job is one line, and it would anchor ANY job — a test leg pulled
     out of its gate and hung there satisfies the anchoring rule with its red
     blocking nothing. What an advisory job legitimately waits for today is
-    its own shards, and a shard says so in its name (`Python Coverage (1/3)`
-    for `Python Coverage`), so that is the admission rule. A job in a
+    its own shards, and a shard says so in its name (`Foo (1/3)` for `Foo`),
+    so that is the admission rule. A job in a
     required closure as well is not this rule's business: its verdict already
     blocks.
     """

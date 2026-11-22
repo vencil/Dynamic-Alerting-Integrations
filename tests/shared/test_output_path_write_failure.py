@@ -1650,7 +1650,7 @@ def _coverage_data_file() -> str | None:
 
 def _is_coverage_data(event: dict, path: str) -> bool:
     """A data file the coverage tracer leaves when THIS pytest run measures
-    subprocesses (`pytest --cov`, CI's advisory coverage job): every child
+    subprocesses (`pytest --cov`, CI's Python Tests shards): every child
     writes ``<data file>.<host>.pid<n>.<random>`` beside the parent's — in
     the repository, from inside the tool's process, with no ``scripts/``
     frame on the stack. All three must hold: measurement is on, the path is
