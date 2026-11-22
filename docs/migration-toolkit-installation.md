@@ -96,7 +96,7 @@ docker run --rm \
 | Windows | amd64 | `da-parser-windows-amd64.zip` |
 | Windows | arm64 | `da-parser-windows-arm64.zip` |
 
-每份 archive 內含**一個** binary（或 `<name>.exe`），再加一份**單一** `SHA256SUMS` 檔案 list 全部 12 個 archive 的 hash。客戶可以只下載自己需要的（純驗 conf.d/ 拿 `da-guard` 就好；要做 PromRule 解析+portability check 再加 `da-parser`）。
+每份 archive 內含**一個** binary（或 `<name>.exe`），再加一份**單一** `SHA256SUMS` 檔案列出全部 archive 與 raw binary 的 hash。客戶可以只下載自己需要的（純驗 conf.d/ 拿 `da-guard` 就好；要做 PromRule 解析+portability check 再加 `da-parser`）。
 
 ### 安裝範例（Linux/macOS）
 
@@ -190,7 +190,7 @@ docker push internal-registry.corp/da-tools:v2.9.0
 
 | Asset | 內容 |
 |---|---|
-| `SHA256SUMS` | 12 個 binary archive 的 hash（da-guard × 6 + da-parser × 6 OS/ARCH 組合，路徑 B / C 都會用到）|
+| `SHA256SUMS` | 全部 archive 與 raw binary 的 hash（da-guard × 6 + da-parser × 6 OS/ARCH 組合，路徑 B / C 都會用到）|
 | `da-tools-image-v<X.Y.Z>.tar.gz.sha256` | air-gapped image tar 的 hash（路徑 C 用）|
 
 ## Signature Verification

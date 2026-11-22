@@ -23,7 +23,7 @@ The Profile Builder (translator and emission) and the batch PR tool that was mea
 
 The decision and its discussion are in [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211).
 
-Bulk import of customer rules moves to `da-tools migrate` (migrate-rule), which produces `_custom_alerts` recipes; progress on that path is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226).
+Bulk import of customer rules is planned to move to `da-tools migrate` (migrate-rule), producing `_custom_alerts` recipes; that part has not shipped yet, and its progress is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226).
 
 This ADR's default-vs-override boundary still holds: it applies to conf.d trees arranged by hand or produced by other tools, and da-guard's redundant-override check judges by it. The sections below that describe the Profile Builder, and the files listed under "Implementation locations", record the design before retirement; those files no longer exist.
 

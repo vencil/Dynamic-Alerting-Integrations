@@ -96,7 +96,7 @@ Each Release ships two sets of 6 cross-compiled binaries (12 archives total; `da
 | Windows | amd64 | `da-parser-windows-amd64.zip` |
 | Windows | arm64 | `da-parser-windows-arm64.zip` |
 
-Each archive contains **one** binary (or `<name>.exe`), plus a single `SHA256SUMS` file listing hashes for all 12 archives. Customers download only what they need (just `da-guard` for conf.d/ validation; add `da-parser` for PromRule import + portability checks).
+Each archive contains **one** binary (or `<name>.exe`), plus a single `SHA256SUMS` file listing the hashes of every archive and raw binary. Customers download only what they need (just `da-guard` for conf.d/ validation; add `da-parser` for PromRule import + portability checks).
 
 ### Install (Linux/macOS)
 
@@ -191,7 +191,7 @@ Each Release ships:
 
 | Asset | Contents |
 |---|---|
-| `SHA256SUMS` | Hashes for all 12 binary archives (da-guard / da-parser × 6 OS/ARCH combos; used by Paths B / C) |
+| `SHA256SUMS` | Hashes of every archive and raw binary (da-guard / da-parser × 6 OS/ARCH combos; used by Paths B / C) |
 | `da-tools-image-v<X.Y.Z>.tar.gz.sha256` | Hash of the air-gapped image tar (used by Path C) |
 
 ## Signature Verification

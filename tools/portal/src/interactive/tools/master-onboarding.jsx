@@ -66,12 +66,12 @@ const IMPORT_STEPS = [
     id: 'place',
     title: () => t('4. 放進客戶 repo 的 conf.d 樹', '4. Place into the customer repo conf.d tree'),
     desc: () => t(
-      '把 .migration/conf.d/ 底下的租戶檔放進客戶 repo 的 conf.d 目錄，走客戶自己的 Git PR 流程。多個租戶共用的值收進該目錄的 _defaults.yaml，個別偏離才留在租戶檔（目錄即 default 的規則見 ADR-018）。',
-      'Move the tenant files under .migration/conf.d/ into the customer repo conf.d directory and open a PR through the customer Git flow. Values several tenants share go into that directory _defaults.yaml; only per-tenant deviations stay in the tenant file (the directory-as-default rule is ADR-018).'
+      '把 .migration/conf.d/ 底下的租戶檔放進客戶 repo 的 conf.d 目錄，並把同目錄 _defaults.yaml 的 defaults: 區塊合併進 conf.d 根的 _defaults.yaml（合併，不要整份覆蓋；沒宣告的 key，exporter 不會發射閾值），再走客戶自己的 Git PR 流程。目錄即 default 的規則見 ADR-018。',
+      'Move the tenant files under .migration/conf.d/ into the customer repo conf.d directory, merge the defaults: block of the _defaults.yaml beside them into the _defaults.yaml at the conf.d root (merge, do not overwrite; the exporter emits no threshold for a key that is not declared there), then open a PR through the customer Git flow. The directory-as-default rule is ADR-018.'
     ),
     cta: () => t('ADR-018', 'ADR-018'),
     href: docUrl('docs/adr/018-profile-as-directory-default.md'),
-    cmd: 'cp migration_output/.migration/conf.d/tenant-a.yaml \\\n  customer-repo/conf.d/db/tenant-a.yaml\n# then open a PR in the customer repo',
+    cmd: 'cp migration_output/.migration/conf.d/tenant-a.yaml \\\n  customer-repo/conf.d/db/tenant-a.yaml\n# merge the defaults: block of .migration/conf.d/_defaults.yaml\n# into customer-repo/conf.d/_defaults.yaml (merge, do not overwrite)\n# then open a PR in the customer repo',
   },
   {
     id: 'guard',

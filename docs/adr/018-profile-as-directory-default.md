@@ -28,7 +28,7 @@ Profile Builder（translator 與 emission）與原本要呼叫它的批次 PR �
 
 退役的決定與討論見 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211)。
 
-客戶規則的批次導入改走 `da-tools migrate`（migrate-rule），由它產出 `_custom_alerts` recipe；這條路的進度見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
+客戶規則的批次導入預計改走 `da-tools migrate`（migrate-rule），由它產出 `_custom_alerts` recipe；這部分尚未出貨，進度見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
 
 本 ADR 的 default-vs-override 邊界仍然有效：手動整理或其他工具產出的 conf.d 樹照樣適用，da-guard 的 redundant-override 檢查也照它判。下文描述 Profile Builder 的段落與「實作位置」所列的檔案，記錄的是退役前的設計，那些檔案已不存在。
 
