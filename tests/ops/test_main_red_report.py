@@ -960,11 +960,34 @@ def agg():
                  ROOT / "tests/ops/test_ci_aggregate_gate_contract.py")
 
 
-def watch_list_problems(listed: list[str], derived: dict[str, str]) -> list[str]:
+# Watched although it reports no required check, and why. Exact both ways: a
+# name here that leaves the watch list, or starts reporting a required check,
+# must leave this table.
+_ALSO_WATCHED = {
+    "Path filter drift":
+        "#3756 (owner ruling 2026-11-21): the same check as Python Tests' "
+        "test_the_real_workflows_are_in_sync, on every push to main and outside "
+        "ci.yml's queue. Two PRs that are each in sync can leave main out of "
+        "sync together; through the CI queue the tracking issue opened 83 "
+        "minutes after main broke.",
+}
+
+
+def watch_list_problems(listed: list[str], derived: dict[str, str],
+                        also: dict[str, str] | None = None) -> list[str]:
     """PURE. `derived`: workflow `name:` → file, for every workflow that
-    reports a required check."""
+    reports a required check. `also`: the names watched for another reason."""
+    also = also or {}
     problems = [f"{name!r} is listed twice" for name in sorted(set(listed))
                 if listed.count(name) > 1]
+    problems += [f"{name!r} is in _ALSO_WATCHED and reports a required check — "
+                 "it is watched for that already; take it out of the table"
+                 for name in sorted(set(also) & set(derived))]
+    problems += [f"{name!r} is in _ALSO_WATCHED and is not watched — add it to "
+                 "`on.workflow_run.workflows`, or take it out of the table"
+                 for name in sorted(set(also) - set(listed))]
+    # A name wrongly in the table still counts as watched for its real reason.
+    listed = [name for name in listed if name not in also or name in derived]
     problems += [f"{derived[name]} ({name!r}) reports a required check and is not "
                  "watched — its failures on main would open no issue"
                  for name in sorted(set(derived) - set(listed))]
@@ -980,10 +1003,18 @@ def test_the_watched_workflows_are_the_ones_that_report_a_required_check(agg) ->
     derived = {agg._load(p)["name"]: p.name for p in paths}
     assert len(derived) == len(paths), "two required-check workflows share a `name:`"
     listed = _on(_detector())["workflow_run"]["workflows"]
-    problems = watch_list_problems(listed, derived)
+    problems = watch_list_problems(listed, derived, _ALSO_WATCHED)
     assert not problems, "\n  ".join(["main-red-detector.yml `on.workflow_run.workflows`:"] + problems)
     # And the script resolves the same list to the same files.
-    assert {w.name: w.file for w in mrr.watched_workflows()} == derived
+    resolved = {w.name: w.file for w in mrr.watched_workflows()}
+    assert {n: f for n, f in resolved.items() if n not in _ALSO_WATCHED} == derived
+    assert set(resolved) - set(derived) == set(_ALSO_WATCHED)
+    # Each of those is a real workflow that every push to main runs, with no
+    # path gate: a verdict it does not give on some push is one the detector
+    # reads as "nothing new".
+    for name in _ALSO_WATCHED:
+        doc = yaml.safe_load((WORKFLOW_DIR / resolved[name]).read_text(encoding="utf-8"))
+        assert _on(doc) == {"push": {"branches": ["main"]}}, (name, _on(doc))
 
 
 @pytest.mark.parametrize("listed, expected", [
@@ -991,6 +1022,18 @@ def test_the_watched_workflows_are_the_ones_that_report_a_required_check(agg) ->
 ], ids=["equal", "one-missing", "one-extra", "duplicate", "empty"])
 def test_the_watch_list_rule_can_fail(listed, expected) -> None:
     assert len(watch_list_problems(listed, {"A": "a.yml", "B": "b.yml"})) == expected
+
+
+@pytest.mark.parametrize("listed, also, expected", [
+    (["A", "B", "Z"], {"Z": "why"}, 0),      # named, with its reason
+    (["A", "B", "Z"], {}, 1),                # watched and not accounted for
+    (["A", "B"], {"Z": "why"}, 1),           # in the table, not watched
+    (["A", "B"], {"A": "why"}, 1),           # in the table, reports a required check
+    (["A", "B", "Z", "Y"], {"Z": "why"}, 1),  # one named does not excuse another
+], ids=["named", "unnamed-extra", "named-not-watched", "named-is-required", "one-of-two"])
+def test_the_also_watched_table_is_exact_both_ways(listed, also, expected) -> None:
+    got = watch_list_problems(listed, {"A": "a.yml", "B": "b.yml"}, also)
+    assert len(got) == expected, got
 
 
 # Watched workflows that have no `push` trigger for main, and why that is
