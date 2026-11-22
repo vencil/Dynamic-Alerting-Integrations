@@ -65,9 +65,11 @@ Not judged (say so rather than look covered)
     declaring the expected clusters (`kind@cluster` in `_expected_exporters`,
     TenantExporterAbsent's per-cluster branch), not by a grouping; a tenant
     that declares the kind alone asked for exactly that reading.
-  * whether a `label_replace` that writes `da_cluster` matches every series
-    (one that does not leaves the series as it was), a `label_replace` that
-    writes it empty, and `label_join` into it.
+  * whether the regex of a `label_replace` that writes `da_cluster` matches
+    every series beyond "the source label is not empty" (`_writes_cluster`
+    requires `src!=""` on every selector under it; a narrower regex such as
+    `"(east|west)"` is not checked), a `label_replace` that writes it empty,
+    and `label_join` into it.
   * a tenant's own metric whose name starts with a platform family's prefix
     (`user_…`, `da_…`): `resolve_family` is the repo's one table of whose
     metric a name is, and it is read as is.
@@ -225,10 +227,35 @@ def selector_scope(node: dict, records: "dict[str, str]") -> str:
 
 
 def _writes_cluster(args: list) -> bool:
-    """`label_replace(v, "da_cluster", "<non-empty>", src, regex)`: the series
-    that come out carry the cluster label."""
-    return (len(args) == 5 and all(a["kind"] == "string" for a in args[1:3])
-            and args[1]["value"] == CLUSTER_LABEL and args[2]["value"] != "")
+    """`label_replace(v, "da_cluster", "<non-empty>", src, regex)` whose every
+    input series gets the label. A replacement copied off a source label
+    (`"$1"` … `"(.+)"`) writes nothing on a series where that label is empty
+    — the series comes out as it went in, without a cluster — so it counts
+    only when every selector under *v* requires the source label
+    (`src!=""`). Dropping that matcher from TenantExporterAbsent's
+    per-cluster branch lets the rows that declare no cluster into a
+    per-cluster match that nothing satisfies (review of #4097 PR-B)."""
+    if not (len(args) == 5 and all(a["kind"] == "string" for a in args[1:])
+            and args[1]["value"] == CLUSTER_LABEL and args[2]["value"] != ""):
+        return False
+    if "$" not in args[2]["value"]:
+        return True   # a constant: written whenever the regex matches
+    src = args[3]["value"]
+    selectors = _selectors_under(args[0])
+    return bool(src) and bool(selectors) and all(
+        any(m["name"] == src and m["type"] == "!=" and m["value"] == "" for m in sel["matchers"])
+        for sel in selectors)
+
+
+def _selectors_under(node) -> "list[dict]":
+    out: "list[dict]" = []
+    if isinstance(node, dict):
+        if node.get("kind") == "selector":
+            out.append(node)
+        for v in node.values():
+            for child in (v if isinstance(v, list) else [v]):
+                out += _selectors_under(child)
+    return out
 
 
 def judge(node: dict, records: "dict[str, str]", found: "list[tuple[str, str]]") -> "str | None":
