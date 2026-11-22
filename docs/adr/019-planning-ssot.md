@@ -28,7 +28,7 @@ updated_at: 2026-11-22
 |:--|:--|:--|
 | 2026-09 | 新條目的編號改為追蹤 issue 的號碼，手工看表配號停用（[#2106](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2106)） | 決策 › 編號政策 |
 | 2026-11-21 | 改寫表達，對照現行工具行為更新描述；決策不變 | 全文 |
-| 2026-11-22 | 撤回原列為「尚未實作」的六項強化：同步檢查定案為只警告（不升級擋 merge、不留言、不進 pre-push），索引不在 commit 時自動重產，不做定期掃描，CLAUDE.md 只在路由表指向 | 決策 › 第二層、第三層、AI agent 從哪裡找到索引；替代方案 |
+| 2026-11-22 | 撤回原列為「尚未實作」的六項強化：同步檢查定案為只警告（不升級擋 merge、不留言、不進 pre-push），索引不在 commit 時自動重產，不做定期掃描，CLAUDE.md 只在路由表指向 | 決策 › 第二層、第三層、AI agent 從哪裡找到索引；已知限制；替代方案 |
 
 ## 名詞
 
@@ -211,7 +211,7 @@ status: wip
 
 `.github/workflows/planning-status-sync.yaml` 在 PR 開立、推新 commit、重新開啟、編輯時執行，傳入 base 分支與 PR 號碼，**不帶 `--strict`**：有問題時印到 stderr，並在 GitHub Actions 的 PR 檢查頁面加上 warning 註記，但結束碼是 0，不擋 merge。帶 `--strict`（或同義的 `--ci`）時有問題就以結束碼 1 失敗。
 
-**只警告是這一層的定案，不是過渡期。** 這一層不升級成擋 merge（不論同一項目連續幾支 PR 沒同步），檢查不通過時不在 PR 留言（只有 warning 註記），本機 pre-push 也不跑它。原因是它檢查的那幾個 trailer 在實務上幾乎沒人寫：commit 指向票號用的是 `Refs:`，跨多個項目的 commit 依 [`dev-rules.md`](../internal/dev-rules.md) 在內文列編號。追蹤項目的狀態已經由編號本身承擔：`TRK-<issue 號>` 就是那張 GitHub issue，開或關看 issue 即可。把一道幾乎不會被觸發的檢查升級成擋 merge，換不到偵測力，只會在少數寫了 trailer 的 PR 上製造阻擋。`--strict` 保留給想在本機嚴格檢查的人。
+**只警告是這一層的定案，不是過渡期。** 這一層不升級成擋 merge（不論同一項目連續幾支 PR 沒同步），檢查不通過時不在 PR 留言（只有 warning 註記），本機 pre-push 也不跑它。原因是追蹤狀態的權威不在這道檢查：新式 `TRK-<issue 號>` 條目就是那張 GitHub issue，做完與否以 issue 的開關為準，frontmatter 只是它的副本。trailer 怎麼寫仍由 [`dev-rules.md`](../internal/dev-rules.md) §P1 規範；這一層只在 commit 寫了 trailer 時提醒 frontmatter 跟著改。為了讓副本與 issue 一致而擋下 PR，代價不值。`--strict` 保留給想在本機嚴格檢查的人。
 
 本機可以直接跑 `python3 scripts/tools/lint/check_planning_status_sync.py`（base 預設 `origin/main`）。拿上面範例的條目、假設當前 PR 是 2202，兩個 trailer `Resolves: TRK-2150` 與 `Fixes: TRK-2160` 的回報是：
 
@@ -221,7 +221,7 @@ Found 2 planning-status sync issue(s) across 2 trailer reference(s):
   [pr-ref-mismatch] TRK-2150: trailer `Resolves TRK-2150` (commit abc1234) but entry in docs/internal/example-spec.md has pr_ref `2201` ≠ current PR `2202`. Fill the entry's `pr_ref:` field.
   [missing-entry] TRK-2160: trailer `Fixes TRK-2160` (commit abc1234) but no matching planning entry found in repo. Add frontmatter (`id:` + `tracking_kind:` + `status:`) to the backlog file so the entry is discoverable.
 
-Default behaviour is **soft-warn** (exit 0). Run with `--strict` to fail CI on these issues.
+Default behaviour is **soft-warn** (exit 0). Run with `--strict` to exit 1 (for local strict checks).
 ```
 
 `TRK-2160` 明明有自己的檔案，回報卻是 `missing-entry`：因為它的 `status` 不合列舉、沒被收錄。
@@ -271,6 +271,7 @@ Default behaviour is **soft-warn** (exit 0). Run with `--strict` to fail CI on t
 **已知限制**：
 
 - CI 同步檢查只警告、不擋 merge（見第三層）。「PR 解決了某項目、frontmatter 沒改成 `done`」合得進去，只會留下 warning 註記；frontmatter 的狀態可能落後於對應 issue 的開關狀態。
+- 舊編號（三位數 TRK，含從 TD／HA／REG 換過來的）條目不是以 issue 號編號，無法從編號直接找到 issue 來對照狀態；它們的狀態過期時沒有任何機制會發現：第三層只在有 commit 寫了 trailer 時才檢查，也不做定期掃描。
 - `pr_ref` 只能填一個號碼。填成清單時會被串成 `"375, 380"` 這樣的字串，與 PR 號碼比對一定不符，同步檢查回報 `pr-ref-mismatch`。
 - 欄位值不在列舉內、或 YAML 解析失敗的條目會被靜默略過，不報錯。它不會出現在索引裡；有 commit 宣告解決它時，CI 回報的是 `missing-entry`，而不是指出欄位寫錯。
 - 只認 commit trailer。寫在 PR 標題或 PR 說明裡的「Resolves …」不會被檢查。
@@ -299,10 +300,12 @@ Default behaviour is **soft-warn** (exit 0). Run with `--strict` to fail CI on t
 
 ### 定期掃描找過期條目（不採用）
 
-做法是排程定期（例如每月）掃描，找出「標成完成卻沒有 PR 編號」「標成進行中卻很久沒動」的條目，列給 maintainer 季度回顧。不採用的原因：
+做法是排程定期（例如每月）掃描，找出「標成完成卻沒有 PR 編號」「標成進行中卻很久沒動」的條目，列給 maintainer 季度回顧。不採用，接受 frontmatter 的狀態漂移：
 
-- 它是被動的，漂移已經發生才會發現。PR 宣告解決某項目的那一刻是成本最低的提醒點，第三層已經在那裡留下 warning 註記。
-- 新的追蹤項目本身就是一張 GitHub issue，「還開著、很久沒動」在 issue 清單上就篩得出來，不需要另一支排程再掃一次 frontmatter。
+- 成本不值。排程要有人維護、報告要有人讀、讀完還要回頭改 frontmatter，換到的只是索引裡的狀態與實際一致。
+- 狀態的權威以 issue 為準。新式 `TRK-<issue 號>` 條目做完沒有，看 issue 的開關；frontmatter 落後是接受的漂移。
+
+代價是舊編號（三位數）條目的過期狀態不會被偵測，見「已知限制」。
 
 ### 在產生器裡寫死來源檔清單（不採用）
 

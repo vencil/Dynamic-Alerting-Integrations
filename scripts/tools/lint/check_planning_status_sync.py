@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check_planning_status_sync.py — CI-time PR-trailer ↔ frontmatter sync gate.
+"""check_planning_status_sync.py — CI-time PR-trailer ↔ frontmatter sync check (warn-only).
 
 Implements [ADR-019](docs/adr/019-planning-ssot.md) Layer 3 (Active CI Sync Check)
 + [#379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2b
@@ -268,7 +268,7 @@ def _format_human(hits: List[TrailerHit], issues: List[ValidationIssue]) -> str:
     lines.append("")
     lines.append(
         "Default behaviour is **soft-warn** (exit 0). "
-        "Run with `--strict` to fail CI on these issues."
+        "Run with `--strict` to exit 1 (for local strict checks)."
     )
     return "\n".join(lines) + "\n"
 

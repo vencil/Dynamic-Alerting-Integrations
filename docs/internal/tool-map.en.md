@@ -212,7 +212,7 @@ lang: en
 | `check_percent_render_pinned.py` | check_percent_render_pinned — a percent-rendered annotation must be pinned by a firing test. |
 | `check_pint.py` | Prometheus rule linting (pint engine + thin Vibe wrapper). |
 | `check_pipestatus_errexit.py` | PIPESTATUS read where errexit and pipefail are on and never relaxed (TRK-382 / #1845). |
-| `check_planning_status_sync.py` | CI-time PR-trailer ↔ frontmatter sync gate. |
+| `check_planning_status_sync.py` | CI-time PR-trailer ↔ frontmatter sync check (warn-only). |
 | `check_playbook_freshness.py` | Playbook 知識退火檢查工具。 |
 | `check_playwright_rtl_drift.py` | Detect React Testing Library API names in Playwright specs (S#96, mechanical safety net for testing-playbook §LL §10). |
 | `check_portal_asset_shipping.py` | runtime-loaded portal assets must ship in the da-portal image. |
