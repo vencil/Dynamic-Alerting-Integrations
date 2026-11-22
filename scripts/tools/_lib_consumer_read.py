@@ -826,7 +826,8 @@ def _is_label_flow(entry) -> bool:
 
 
 def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[dict]] | None" = None,
-                      binary: str | None = None) -> "list[dict]":
+                      binary: str | None = None, *, metrics: "dict[str, str]",
+                      jobs: "Iterable[str]") -> "list[dict]":
     """Per expression of *exprs*, whether the series it yields keep *label*,
     and every ``and`` / ``unless`` that matches ``on(… label …)`` with whether
     its left side keeps it — read on Prometheus' parse tree (``da-read
@@ -838,11 +839,17 @@ def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[d
     ``LABEL_ALIASES``'. Each entry is ``{"result": V, "set_matches": [{"op":
     "and"|"unless", "start": int, "end": int, "lhs": V}, …]}``, V one of
     ``"kept"`` / ``"dropped"`` / ``"unknown"`` (byte offsets into the UTF-8
-    encoding). ⛔ The series a raw metric's selector reads are TAKEN to carry
-    *label*: whether the metric has it is the scrape's business."""
+    encoding). *metrics* ({raw metric name: "without"|"by-job"|"unknown"})
+    and *jobs* (the scrape jobs every target of which carries *label*) are
+    what the scrape says about it (#4137); a raw metric not in *metrics* is
+    TAKEN to carry *label*. Both are required: ⛔ a caller that leaves them
+    out takes every raw metric to carry it — the fail-open #4137 closed —
+    so the one place that knows them, ``_lib_metric_sources.label_flow``,
+    is the caller for a label the scrape writes."""
     resolved = da_read_binary(binary)
     data = json.dumps({"expressions": list(exprs), "records": dict(records or {}),
-                       "aliases": list(LABEL_ALIASES.get(label, ()))}).encode("utf-8")
+                       "aliases": list(LABEL_ALIASES.get(label, ())),
+                       "metrics": dict(metrics), "jobs": list(jobs)}).encode("utf-8")
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                ["promql-label-flow", label, "-"], data)
     docs = out["documents"]
@@ -888,6 +895,10 @@ def _is_reads(entry) -> bool:
                     and all(isinstance(s.get(k), str) for k in ("selector", "range", "window"))
                     and isinstance(s.get("subqueries_ms"), list)
                     and isinstance(s.get("subqueries"), list)
+                    and isinstance(s.get("matchers"), list)
+                    and all(isinstance(m, dict) and m.get("op") in ("=", "!=", "=~", "!~")
+                            and all(isinstance(m.get(k), str) for k in ("name", "value"))
+                            for m in s["matchers"])
                     for s in entry["selectors"])
             and all(isinstance(c, dict) and isinstance(c.get("name"), str)
                     for c in entry["calls"]))
@@ -906,7 +917,9 @@ def promql_reads(exprs: "list[str]", binary: str | None = None) -> "list[dict]":
       such as ``[(30d)]`` at its value, ``offset`` and the lookback delta
       not counted), ``"range_ms"`` and ``"subqueries_ms"`` (its parts);
       ``"window"``, ``"range"`` and ``"subqueries"`` are the same as
-      Prometheus spells a duration;
+      Prometheus spells a duration; ``"matchers"`` (``[{"name", "op":
+      "="|"!="|"=~"|"!~", "value"}]``, the metric name as ``__name__``) the
+      label matchers as the parser holds them (#4137);
     * ``calls``: every function and aggregation, ``{"name", "kind":
       "function"|"aggregation", "start", "end"}`` — read off the parse, so a
       name in a label value is none and ``topk by (a) (…)`` is ``topk``;
@@ -2123,6 +2136,23 @@ class RuleSource(NamedTuple):
         """``files_in`` of this source's ``directory`` under *repo_root*."""
         return _declared_in(pathlib.Path(repo_root, self.directory), self)
 
+    def names_in(self, directory: "str | os.PathLike[str]") -> "list[str]":
+        """The names of the top-level entries of *directory* that are a rule
+        file name of this source, sorted — the NAME only: what the entry is
+        (a file, a directory, a dangling link) is not judged. For a caller
+        that asks what a glob of this naming would match (an output
+        directory about to be written to); ``named_in`` is the one for
+        files to read. A directory that is not there holds none (``[]``);
+        one that cannot be listed raises :class:`SourcesUnlisted`."""
+        root = pathlib.Path(directory)
+        try:
+            names = _list(root)
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        except OSError as e:
+            raise SourcesUnlisted([(str(root), f"cannot list this directory: {e.strerror}")]) from e
+        return sorted(n for n in names if self.member(n) is not None)
+
     def named_in(self, directory: "str | os.PathLike[str]") -> "list[pathlib.Path]":
         """The top-level entries of *directory* whose name is a rule file
         name of this source, sorted — nothing else there is judged. For a
@@ -2134,13 +2164,7 @@ class RuleSource(NamedTuple):
         and a matching entry that is no regular file (a dangling symlink),
         raise :class:`SourcesUnlisted`."""
         root = pathlib.Path(directory)
-        try:
-            entries = [root / n for n in _list(root)]
-        except (FileNotFoundError, NotADirectoryError):
-            return []
-        except OSError as e:
-            raise SourcesUnlisted([(str(root), f"cannot list this directory: {e.strerror}")]) from e
-        named = [f for f in entries if self.member(f.name) is not None]
+        named = [root / n for n in self.names_in(root)]
         problems = [(str(f), _not_regular(str(f))) for f in named if not f.is_file()]
         problems += _same_member(named, self)
         if problems:
@@ -2204,6 +2228,31 @@ def tenant_rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathli
 #: by ``tests/ops/test_operator_generate_rule_copies.py``.
 OPERATOR_RULES = RuleSource(
     "", ("da-rule-pack-*.yaml", "da-rule-pack-*.yml"), ())
+#: The OBJECT name of a rule pack's generated rules ConfigMap
+#: (``prometheus-rules-<pack>``; the FILE is ``CONFIGMAP_RULES``'). ⛔ Declared
+#: here (#4041) for the two tools that must agree on it: the generator that
+#: writes the ConfigMaps and ``migrate-to-operator``, which turns one back into
+#: the PrometheusRule ``operator-generate`` would have written for the pack —
+#: a ``str.replace`` of another prefix there gave ``da-rule-pack-prometheus-
+#: rules-<pack>``, a second object beside operator-generate's.
+CONFIGMAP_RULES_OBJECT_PREFIX = "prometheus-rules-"
+
+
+def configmap_rules_object_name(pack: str) -> str:
+    """The object name of the rules ConfigMap generated for *pack*."""
+    return CONFIGMAP_RULES_OBJECT_PREFIX + pack
+
+
+def configmap_rules_pack(object_name: "str | None") -> "str | None":
+    """The pack a rules ConfigMap named *object_name* carries, or None when
+    the name is not of that shape. Anchored at the start, and something must
+    follow the prefix."""
+    if (isinstance(object_name, str) and object_name.startswith(CONFIGMAP_RULES_OBJECT_PREFIX)
+            and len(object_name) > len(CONFIGMAP_RULES_OBJECT_PREFIX)):
+        return object_name[len(CONFIGMAP_RULES_OBJECT_PREFIX):]
+    return None
+
+
 #: The labels a Prometheus Operator's ``ruleSelector`` selects a
 #: PrometheusRule by (#2075; installs differ on which one, so both:
 #: docs/integration/operator-prometheus-integration.md § ruleSelector). ⛔ The

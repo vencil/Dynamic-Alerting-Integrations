@@ -89,7 +89,7 @@ Optional trailers go on separate lines after a blank line below the body. Use th
 
 ### Planning ID trailer (`Resolves TRK-NNN`) — v2.8.1+ namespace policy
 
-When a commit resolves a registered tracking item, include a trailer naming the ID:
+When a commit resolves a registered tracking item with a **legacy three-digit ID** (`TRK-NNN`, including IDs migrated from TD / HA / REG) or a `Trap #N`, include a trailer naming the ID (required — [`dev-rules.md` §P1](dev-rules.md)). For new-style `TRK-<issue number>` items the trailer is optional: `Refs: #<issue number>` already links the commit to the same issue, and the issue's open/closed state is authoritative.
 
 ```
 Resolves: TRK-228

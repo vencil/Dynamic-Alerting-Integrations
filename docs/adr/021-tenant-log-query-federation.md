@@ -22,6 +22,7 @@ updated_at: 2026-11-22
 - 2026-10-13 修訂：AccountID 的高水位另記在 federation token store ConfigMap，運行中被蓋回的舊帳本會被擋下；`state restore` 的計數器加上安全邊際。見「單調性靠什麼守」。
 - 2026-11-07 修訂：日誌庫前方加上依消費端授權的 vmauth，gateway 以自己的帳密連線；它不做租戶路由，與「不用 vmauth 做租戶路由」的決定不衝突，見替代方案。
 - 2026-11-22 修訂：實作「該蓋章卻落進 `0:0`」的偵測：Vector 計數帶已驗證 AccountID 卻沒進租戶分區的 audit 列，rule pack 以 `TenantProjectionStampMissing` 告警。見「日誌進入端的契約」。
+- 2026-11-22 修訂：gateway 新增的每 token 並發上限（ADR-020）在日誌查詢模式同樣生效，「Gateway 限流」與「已知限制」改寫為限流加並發上限。
 
 **範圍**：租戶查「平台**關於它**的營運日誌」（目前是它自己的 federation 查詢稽核紀錄）已實作。租戶查**自己工作負載的應用日誌**延後，要等日誌進入端的另一份設計（見「已知限制」）。
 
@@ -241,9 +242,9 @@ ok  	github.com/vencil/tenant-api/internal/federation/account	0.019s
 
 #### Gateway 限流
 
-完全沿用 ADR-020 的每 IP、每 token、每租戶限流。gateway 的 audit-metrics sidecar 另產生 `tenant_log_query_requests_total{account_id,project_id,status}`，與 ADR-020 的 `tenant_federation_requests_total` 對稱。
+完全沿用 ADR-020 的每 IP、每 token、每租戶限流，以及每個 token 同時進行的查詢數上限（chart 預設每個 gateway 實例 4 個；超過回 429，記成 `rate_limited`）。並發上限在日誌查詢模式特別有用：VictoriaLogs 的查詢邊掃邊回傳結果，名額要到回應傳完才釋放，一個 token 同時掛著的長查詢因此有上限。gateway 的 audit-metrics sidecar 另產生 `tenant_log_query_requests_total{account_id,project_id,status}`，與 ADR-020 的 `tenant_federation_requests_total` 對稱。
 
-限流是每個 Envoy 實例各算各的：gateway 自動擴展到 2–8 個副本時，單一 token 實際放行的量約是設定值乘上副本數，惡意租戶平行傾倒歷史日誌時可能放大。後盾是儲存後端的 `-search.maxConcurrentRequests`：不論 gateway 有幾個副本，實際同時執行的查詢數都有上限。這是緩解，不是根治。
+限流與並發上限都是每個 Envoy 實例各算各的：gateway 自動擴展到 2–8 個副本時，單一 token 實際放行的量約是設定值乘上副本數（並發上限的細節，包括每個 worker 各自計數，見 ADR-020「Gateway 驗章、撤銷與限流」），惡意租戶平行傾倒歷史日誌時可能放大。叢集層級的後盾是儲存後端的 `-search.maxConcurrentRequests`：不論 gateway 有幾個副本，實際同時執行的查詢數都有上限。這是緩解，不是根治。
 
 #### 查詢端點白名單
 
@@ -290,7 +291,7 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 - **安全邊際是估計。** 兩份 ConfigMap 一起從同一份備份還原時，只有在備份之後配發的 id 數不超過邊際時才安全。
 - **直接編輯 ConfigMap 看不出來。** 能直接改 `tenant-api-state` 或 token store ConfigMap 的人，可以把計數器或高水位改小，上述檢查都察覺不到。chart 的 Role 以 `resourceNames` 只給 tenant-api 的 ServiceAccount 對這兩個物件的 get／update；其他能改 ConfigMap 的人由叢集自己的 RBAC 決定。
 - **跳號後的租戶可能換 id。** 帳本剛好倒退一次寫入時，被倒退掉的租戶下次要 token 會拿到新的 id，舊 id 保留不重發。這是身分漂移（同一個租戶前後兩個 AccountID，舊分區的日誌不再查得到），不是外洩。
-- **限流在多副本下會放大**，只靠儲存後端的並發上限兜底（見「Gateway 限流」）。持續觸發時再評估以 Redis 為後端的全域限流。
+- **限流與每 token 並發上限在多副本下都會放大**：gateway 的兩者都是每實例計算，叢集層級只有儲存後端的並發上限兜底（見「Gateway 限流」）。持續觸發時再評估以 Redis 為後端的全域計數。
 - 每個 AccountID 一組的查詢指標基數會隨租戶數成長；需要時以 recording rule 降維。
 
 ## 考慮過的替代方案

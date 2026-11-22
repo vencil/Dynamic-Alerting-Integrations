@@ -151,6 +151,48 @@ def test_a_record_that_dropped_tenant_cannot_hide_it(tmp_path):
                        records={"tenant:x:sum": "sum by (tenant) (x)"}) == []
 
 
+@pytest.mark.parametrize("expr", [
+    # #4137: series the scrape writes without tenant — kube-state-metrics'
+    # (namespace only), Prometheus' and Alertmanager's own, and the
+    # per-target series of a job other than the tenant exporters'
+    'kube_pod_status_phase{phase="Failed"} > 0', "prometheus_config_last_reload_successful == 0",
+    "rate(alertmanager_notifications_failed_total[5m]) > 0", 'up{job="threshold-exporter"} == 0',
+    "up == 0", "process_resident_memory_bytes > 1e9", 'go_goroutines{job="vector"} > 1000',
+    '{__name__="kube_pod_info"} > 0', "kube_pod_info offset 5m > 0", "max_over_time(kube_pod_info[1h:5m]) > 0",
+    'mysql_up == 0 or kube_pod_info > 0',
+])
+def test_a_metric_scraped_without_tenant_drops_it(tmp_path, expr):
+    assert any(DROPS in m for m in _lint_alert(tmp_path, expr)), expr
+
+
+@pytest.mark.parametrize("expr", [
+    # copied from the namespace kube-state-metrics writes (the kubernetes
+    # pack's own shape), the tenant exporters' job, a tenant exporter's
+    # family, and a selector whose own tenant matcher needs the label
+    'label_replace(kube_pod_status_phase{phase="Failed"}, "tenant", "$1", "namespace", "(.+)") > 0',
+    'up{job="tenant-exporters"} == 0', 'process_open_fds{job="tenant-exporters"} > 1000',
+    "mysql_up == 0", 'up{tenant!=""} == 0', 'kube_pod_info{tenant=~".+"} > 0',
+])
+def test_a_metric_whose_series_carry_tenant_keeps_it(tmp_path, expr):
+    assert _lint_alert(tmp_path, expr) == [], expr
+
+
+@pytest.mark.parametrize("expr", [
+    "ALERTS > 0", 'ALERTS_FOR_STATE{alertname="X"} > 0', 'up{job=~"tenant-.*"} == 0',
+    'scrape_samples_scraped{job!="vector"} > 0',
+])
+def test_a_metric_the_scrape_cannot_vouch_for_is_unproven(tmp_path, expr):
+    assert any(UNPROVEN in m for m in _lint_alert(tmp_path, expr)), expr
+
+
+def test_a_record_cannot_hide_a_metric_scraped_without_tenant(tmp_path):
+    # #4137 review: the record's own reads are judged too, not only the alert's
+    assert any(DROPS in m for m in _lint_alert(
+        tmp_path, "custom:pods:max > 0", records={"custom:pods:max": "max by (pod) (kube_pod_info)"}))
+    assert any(DROPS in m for m in _lint_alert(
+        tmp_path, "custom:ksm:raw > 0", records={"custom:ksm:raw": "kube_pod_info"}))
+
+
 @pytest.mark.parametrize("tenant, finding", [
     (None, DROPS),                              # no label: the series' own value
     ("{{ $labels.tenant }}", DROPS),
@@ -1186,7 +1228,7 @@ def test_a_function_name_that_is_no_call_is_no_finding(expr):
 
 _FULL_SELECTOR = {"selector": "x[5m]", "start": 5, "end": 10, "range_ms": 300000,
                   "range": "5m", "subqueries_ms": [], "subqueries": [], "window_ms": 300000,
-                  "window": "5m"}
+                  "window": "5m", "matchers": [{"name": "__name__", "op": "=", "value": "x"}]}
 
 
 @pytest.mark.parametrize("entry", [
@@ -1195,7 +1237,13 @@ _FULL_SELECTOR = {"selector": "x[5m]", "start": 5, "end": 10, "range_ms": 300000
     {"selectors": [{k: v for k, v in _FULL_SELECTOR.items() if k != "window_ms"}],
      "calls": [], "problem": None},
     {"selectors": [], "calls": [{"kind": "function"}], "problem": None},
-], ids=["no-problem", "problem-not-text", "selector-no-window", "call-no-name"])
+    # #4137: the matchers label flow is told the scrape facts by
+    {"selectors": [{k: v for k, v in _FULL_SELECTOR.items() if k != "matchers"}],
+     "calls": [], "problem": None},
+    {"selectors": [{**_FULL_SELECTOR, "matchers": [{"name": "__name__", "op": "==", "value": "x"}]}],
+     "calls": [], "problem": None},
+], ids=["no-problem", "problem-not-text", "selector-no-window", "call-no-name",
+        "selector-no-matchers", "matcher-op-unknown"])
 def test_a_reading_not_of_the_promql_reads_shape_is_a_reader_fault(tmp_path, entry):
     """An incomplete answer (an older or broken da-read) is a ConsumerReadError
     before lint reads a field of it — never a KeyError in lint_expr."""

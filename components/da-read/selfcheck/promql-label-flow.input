@@ -1,1 +1,1 @@
-{"expressions": ["a and on(tenant) b", "sum by (job) (c) unless on(tenant) d"], "records": {}, "aliases": []}
+{"expressions": ["a and on(tenant) b", "sum by (job) (c) unless on(tenant) d", "kube_pod_info", "up{job=\"t\"}", "up", "kube_pod_info{tenant!=\"\"}"], "records": {}, "aliases": [], "metrics": {"kube_pod_info": "without", "up": "by-job"}, "jobs": ["t"]}

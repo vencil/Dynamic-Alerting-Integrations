@@ -63,7 +63,7 @@ REFUSALS = [
      lambda t: cr.promql_selectors('user_state_filter{filter="maintenance"}', [f"{MARKER} +"])),
     ("read-promql-label-flow", cr.DA_READ_ENV, cr.DA_READ_BINARY_NAME,
      ["promql-label-flow", "tenant", "-"], json.dumps({"expressions": [f"{MARKER} +"]}),
-     lambda t: cr.promql_label_flow("tenant", [f"{MARKER} +"])),
+     lambda t: cr.promql_label_flow("tenant", [f"{MARKER} +"], metrics={}, jobs=())),
     ("read-promql-reads", cr.DA_READ_ENV, cr.DA_READ_BINARY_NAME,
      ["promql-reads", "-"], json.dumps([f"{MARKER} +"]),
      lambda t: cr.promql_reads([f"{MARKER} +"])),
