@@ -17,6 +17,7 @@ const docUrl = (relative) => `${REPO_BASE}/${relative}`;
  * Two onboarding entry points per planning §C-3:
  *   - Import Journey (existing assets): Migration Toolkit → C-8 parser →
  *     C-9 profile builder → C-10 batch PR → C-12 dangling-defaults guard
+ *     (C-9 and C-10 are not wired today: batch-pr is experimental, issue 4211)
  *   - Wizard Journey (greenfield): CI/CD Setup Wizard → Deployment Wizard
  *     → [alert-builder, routing-trace TBD v2.8.x]
  *
@@ -55,23 +56,23 @@ const IMPORT_STEPS = [
     id: 'profile',
     title: () => t('3. 聚類建議 Profile', '3. Cluster proposals into Profile'),
     desc: () => t(
-      'C-9 Profile Builder 把 parser 輸出聚類成 _defaults.yaml 候選、輸出 conf.d/ 目錄結構（Profile-as-Directory-Default, ADR-018）。目前以 library 形式（BuildProposals / EmitProposals）由 batch-pr 管線消費，尚未提供獨立的 da-tools profile build CLI（規劃中）。',
-      'C-9 Profile Builder clusters parser output into _defaults.yaml proposals and emits the conf.d/ directory shape (Profile-as-Directory-Default, ADR-018). It ships as a library (BuildProposals / EmitProposals) consumed by the batch-pr pipeline; the standalone da-tools profile build CLI is not yet shipped (planned).'
+      'C-9 Profile Builder 把 parser 輸出聚類成 _defaults.yaml 候選、輸出 conf.d/ 目錄結構（Profile-as-Directory-Default, ADR-018）。目前只是 library（BuildProposals / EmitProposals），沒有接到任何 CLI，也沒有其他程式使用；它的輸出也還不能被 conf.d 載入（issue 4211 重新選型）。要導入客戶規則請改用逐租戶的 da-tools migrate。',
+      'C-9 Profile Builder clusters parser output into _defaults.yaml proposals and emits the conf.d/ directory shape (Profile-as-Directory-Default, ADR-018). It is only a library (BuildProposals / EmitProposals), wired to no CLI and used by nothing else; its output cannot yet be loaded as conf.d either (re-selection in issue 4211). To import customer rules, use the per-tenant da-tools migrate instead.'
     ),
     cta: () => t('ADR-018', 'ADR-018'),
     href: docUrl('docs/adr/018-profile-as-directory-default.md'),
-    cmd: '# Profile Builder ships as a LIBRARY (BuildProposals / EmitProposals),\n# consumed by the da-batchpr pipeline. A standalone "da-tools profile build"\n# CLI is NOT yet shipped (planned) -- see ADR-018 for the emission shape.',
+    cmd: '# Profile Builder is a LIBRARY only (BuildProposals / EmitProposals),\n# wired to no CLI. Import customer rules per tenant instead:\nda-tools migrate legacy-rules.yml --tenant tenant-a',
   },
   {
     id: 'batchpr',
     title: () => t('4. 開 Batch PR 進客戶 repo', '4. Open Batch PRs into customer repo'),
     desc: () => t(
-      'C-10 Batch PR Pipeline：先 [Base Infrastructure PR] 帶所有 _defaults.yaml；個別 tenant PR 標 Blocked by: #base。--chunk-by domain / region / count=N。--dry-run 出 plan。',
-      'C-10 Batch PR Pipeline: [Base Infrastructure PR] first carries all _defaults.yaml; tenant PRs tagged Blocked by: #base. --chunk-by domain / region / count=N. --dry-run outputs plan.'
+      'C-10 Batch PR Pipeline：先 [Base Infrastructure PR] 帶所有 _defaults.yaml；個別 tenant PR 標 Blocked by: #base。experimental：apply 必填的 --plan（Plan JSON）與 --emit-dir 目前沒有工具產生，需自備（見 CLI Reference 的 batch-pr 節）。',
+      'C-10 Batch PR Pipeline: [Base Infrastructure PR] first carries all _defaults.yaml; tenant PRs tagged Blocked by: #base. Experimental: the --plan (Plan JSON) and --emit-dir that apply requires are produced by no tool today and must be prepared by hand (see the batch-pr section of the CLI Reference).'
     ),
     cta: () => t('Migration Playbook', 'Migration Playbook'),
     href: docUrl('docs/scenarios/incremental-migration-playbook.md'),
-    cmd: 'da-tools batch-pr apply \\\n  --profile profile.yaml \\\n  --targets tenants.yaml \\\n  --chunk-by domain \\\n  --dry-run',
+    cmd: 'da-tools batch-pr apply \\\n  --plan plan.json --emit-dir ./emit/ \\\n  --repo vencil/customer --workdir ./customer-repo \\\n  --dry-run',
   },
   {
     id: 'guard',
@@ -242,7 +243,7 @@ export default function MasterOnboarding() {
             )}
             bullets={[
               t('安裝 Migration Toolkit (binary / Docker / air-gapped tar)', 'Install Migration Toolkit (binary / Docker / air-gapped tar)'),
-              t('Parser → Profile → Batch PR → Guard 五步管線', 'Parser → Profile → Batch PR → Guard 5-step pipeline'),
+              t('Parser → Profile → Batch PR → Guard 五步管線（Profile、Batch PR 兩步尚未接通，目前逐租戶用 migrate）', 'Parser → Profile → Batch PR → Guard 5-step pipeline (the Profile and Batch PR steps are not wired yet; use migrate per tenant for now)'),
               t('適合：巨型客戶、有既有資產、conf.d/ 大批次', 'For: large customers with existing assets, big-batch conf.d/'),
             ]}
             ctaLabel={t('開始 Import 路徑', 'Start Import Path')}

@@ -169,7 +169,7 @@ docker run --rm \
 |------|------|----------|
 | `generate-routes` | tenant YAML → AM route + receiver + inhibit，合併進你的 Alertmanager 設定（只換掉產生器擁有的部分），輸出 alertmanager.yml 或 ConfigMap、或直接 apply | `--config-dir <dir>` + 一個模式旗標（`--validate`／`--output-alertmanager`／`--output-configmap`／`--apply`） |
 | `generator-service` | 產生器容器的服務：經 Unix socket 判定寫入後的 conf.d 能否通過 `generate-routes --validate --strict`（ADR-036 §3） | `--socket <path> --repo <dir> --config-subdir <path> --work-dir <dir>` |
-| `batch-pr` ✨v2.8.0 | Hierarchy-aware Batch PR（子命令：`apply` / `refresh` / `refresh-source`） | `apply --plan <p> --emit-dir <d> --repo <r> --workdir <w>` |
+| `batch-pr` ✨v2.8.0 | Hierarchy-aware Batch PR（子命令：`apply` / `refresh` / `refresh-source`）。⚠️ experimental：`apply` 的兩個必填輸入沒有工具產生 | `apply --plan <p> --emit-dir <d> --repo <r> --workdir <w>` |
 | `config-history` | 配置快照與歷史追蹤（子命令：`snapshot` / `log` / `diff` / `show`） | `--config-dir <dir> snapshot` |
 | `gitops-check` | conf.d 本機結構檢查 | `local --dir <dir>` |
 | `tenant-verify` ✨v2.8.0 | 印 tenant effective config + merged_hash；`--expect-merged-hash` 比對快照（rollback 驗證） | `<tenant> --conf-d <dir>` |
@@ -287,7 +287,9 @@ docker run --rm \
 
 ### 5.5 Hierarchy-aware Batch PR（v2.8.0）
 
-把 1000 租戶導入從「手動切 chunk + 手動開 PR」變成一行命令：
+> ⚠️ **experimental**：下面的 `plan.json` 與 `emit/` 目前沒有任何出貨的工具產生，要自備；細節與替代做法（逐租戶的 `migrate`）見 [`batch-pr`](../../docs/cli-reference.md#batch-pr)。
+
+設計目標是把大量租戶的導入從「手動切 chunk + 手動開 PR」變成一行命令：
 
 ```bash
 docker run --rm \

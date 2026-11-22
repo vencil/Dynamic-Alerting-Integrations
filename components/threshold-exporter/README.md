@@ -325,7 +325,7 @@ JSON-in / JSON-out + Markdown report；上游由 Python `da-tools` 包裝呼叫�
 | `refresh` | Base PR merge 後，把租戶分支 rebase 到新的 main HEAD |
 | `refresh-source` | 把 data-layer hot-fix 重新 apply 到既有租戶分支 |
 
-> **Python 包裝**：`da-tools guard defaults-impact` / `da-tools batchpr *` 會 shell-out 到對應 Go binary。Binary 解析序：`--<bin>-binary` 旗標 → `$DA_<BIN>_BINARY` 環境變數 → `$PATH`。
+> **Python 包裝**：`da-tools guard defaults-impact` / `da-tools batch-pr *` 會 shell-out 到對應 Go binary。Binary 解析序：`--<bin>-binary` 旗標 → `$DA_<BIN>_BINARY` 環境變數 → `$PATH`。
 
 ---
 
