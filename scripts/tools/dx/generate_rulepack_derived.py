@@ -95,8 +95,7 @@ from check_leftouterjoin_enrichment import METADATA_ANNOTATIONS  # noqa: E402
 assert not any('"' in v or "\\" in v for v in METADATA_ANNOTATIONS.values())
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
-    OutputWriteError, check_repo_artifact, exit_on_output_write_error, is_special_file,
-    write_repo_artifact)
+    check_repo_artifact, exit_on_output_write_error, write_repo_artifact)
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
 try:
@@ -726,9 +725,6 @@ def main(argv: list[str] | None = None) -> int:
     for p in packs:
         if _pack(p) == CUSTOM_ALERTS_PACK:
             continue  # the compiler's output: checked below, never written
-        if is_special_file(p):  # a FIFO would block the read (#3981)
-            raise OutputWriteError(p, OSError(None, "not a regular file"), flag=flag,
-                                   action="read")
         text = p.read_text(encoding="utf-8")
         try:
             new, probs = sync_text(text, str(p))

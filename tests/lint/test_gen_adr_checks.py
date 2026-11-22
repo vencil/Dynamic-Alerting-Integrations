@@ -138,8 +138,12 @@ def test_write_then_check_is_clean(tmp_path) -> None:
 
 def test_check_reports_drift(tmp_path) -> None:
     root = _adr_tree(tmp_path, {"t_test.go": "// adr-check: ADR-042/9.1a\nfunc TestRoutes() {}\n"})
+    files = sorted((root / "docs/adr").glob("*.md"))
+    before = [f.read_bytes() for f in files]
     assert sorted(gen.run(root, ["t_test.go"], write=False)) == [
         "docs/adr/042-example.en.md", "docs/adr/042-example.md"]
+    # #3981 (independent review): --check reports, it never writes.
+    assert [f.read_bytes() for f in files] == before
 
 
 @pytest.mark.parametrize("marker, needle", [
@@ -285,3 +289,29 @@ def test_a_violation_found_later_leaves_every_adr_unwritten(tmp_path) -> None:
     with pytest.raises(gen.AdrChecksError, match="section 10"):
         gen.run(root, ["t_test.go"], write=True)
     assert [f.read_bytes() for f in files] == before
+
+
+def test_a_stdin_target_leaves_the_other_language_alone(tmp_path, monkeypatch, capsys) -> None:
+    """#3981 (independent review): the second ADR file is this process's
+    stdin — read without harm, refused before it is replaced. The first
+    target is not written either: every target is judged before the first
+    write. (The FIFO case above stops at the read and never gets here.)"""
+    import os
+    root = _adr_tree(tmp_path, {"t_test.go": "// adr-check: ADR-042/9.1a\nfunc TestRoutes() {}\n"})
+    en, zh = root / "docs/adr/042-example.en.md", root / "docs/adr/042-example.md"
+    before = en.read_bytes(), zh.read_bytes()
+    monkeypatch.setattr(gen, "REPO_ROOT", root)
+    monkeypatch.setattr(gen, "_tracked", lambda r: ["t_test.go"])
+    saved = os.dup(0)
+    try:
+        with open(zh, "rb") as fh:
+            os.dup2(fh.fileno(), 0)
+        with pytest.raises(SystemExit) as exc:
+            gen.main(["--write"])
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2 and str(zh) in err and "standard stream" in err, err
+    assert len(err.strip().splitlines()) == 1, err
+    assert (en.read_bytes(), zh.read_bytes()) == before

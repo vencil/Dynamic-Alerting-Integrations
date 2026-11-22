@@ -2898,9 +2898,10 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
     # #3981, fifth batch: two generators of committed files they name.
     "dx/gen_adr_checks.py":
         "`--write` rewrites the generated block of the ADRs under docs/adr/; "
-        "it takes no path. A refused target is held by "
+        "it takes no path. A target refused before the first write is held by "
         "tests/lint/test_gen_adr_checks.py "
-        "(test_a_refused_adr_leaves_the_other_language_alone).",
+        "(test_a_stdin_target_leaves_the_other_language_alone; a FIFO, refused "
+        "at the read: test_a_refused_adr_leaves_the_other_language_alone).",
     "dx/generate_rulepack_configmaps.py":
         "the default mode rewrites the rule-pack ConfigMaps under "
         "k8s/03-monitoring/; it takes no path. A refused target is held by "
