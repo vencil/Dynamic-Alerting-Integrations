@@ -56,6 +56,11 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+# #3981 / #4223: the output entries from `_lib_output`, which loads neither
+# PyYAML (`--check` is an isolated pre-commit hook) nor `_lib_constants` (a
+# target this tool repairs: a broken generated block must not stop --update).
+from _lib_output import (  # noqa: E402
+    OutputWriteError, check_repo_artifact, ensure_dir, is_special_file, write_repo_artifact)
 
 REGISTRY_REL = "components/threshold-exporter/app/pkg/config/reserved_keys.json"
 PY_REL = "scripts/tools/_lib_constants.py"
@@ -625,22 +630,60 @@ def targets(root, d):
     ]
 
 
+def read_target(path, rel, whole_file, error=None):
+    """The current text of generated target *path* ("" for a whole-file
+    target that is absent). A target that is there and no regular file is
+    refused BEFORE it is read (#3981): a FIFO would block the read, in
+    `--check` as in `--update`. Reading a target that is also this
+    process's stdin / stdout is harmless, so it is not refused here; only
+    one `write_targets` replaces is. *error* is the exception class raised
+    (the caller's own; `RegistryError` by default)."""
+    error = error or RegistryError
+    if is_special_file(path):
+        raise error(f"{rel}: cannot read: not a regular file")
+    try:
+        return path.read_text(encoding="utf-8") if path.exists() or not whole_file else ""
+    except (OSError, UnicodeDecodeError) as e:
+        raise error(f"{rel}: cannot read: {e}") from e
+
+
+def write_targets(changed, error=None, make_parents=False):
+    """Write each ``(path, text)`` of *changed* (the stale targets) through
+    the artifact entry (atomic replace, LF, the mode git would give it).
+    Every one of them passes `check_repo_artifact` before the first is
+    written — not this process's stdin / stdout / stderr — so a refused
+    target leaves the others untouched; a write that fails later (a full
+    disk) still leaves the ones before it rewritten. *make_parents*:
+    create a missing parent directory first (`ensure_dir`)."""
+    error = error or RegistryError
+    for path, _text in changed:
+        try:
+            check_repo_artifact(path)
+        except OutputWriteError as e:
+            raise error(str(e)) from e
+    for path, text in changed:
+        try:
+            if make_parents:
+                ensure_dir(path.parent)
+            write_repo_artifact(path, text)
+        except OutputWriteError as e:
+            raise error(str(e)) from e
+
+
 def run(root, registry, update):
-    """``(stale relpaths, errors)``; writes the stale files when *update*."""
+    """Stale relpaths; writes the stale files when *update*."""
     reg = load_registry(registry)
     d = derive(reg)
-    stale = []
+    stale, changed = [], []
     for rel, render in targets(root, d):
         path = Path(root) / rel
-        try:
-            current = path.read_text(encoding="utf-8") if path.exists() or rel not in WHOLE_FILE_TARGETS else ""
-        except (OSError, UnicodeDecodeError) as e:
-            raise RegistryError(f"{rel}: cannot read: {e}") from e
+        current = read_target(path, rel, rel in WHOLE_FILE_TARGETS)
         wanted = render(current)
         if wanted != current:
             stale.append(rel)
-            if update:
-                path.write_text(wanted, encoding="utf-8", newline="\n")
+            changed.append((path, wanted))
+    if update:
+        write_targets(changed)
     return stale
 
 

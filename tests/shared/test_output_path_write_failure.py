@@ -2878,8 +2878,15 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "it takes no path. A write that fails is held by "
         "tests/dx/test_shared_atomic_write_callers.py "
         "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    # #3981, fourth batch: its `write_targets` is gen_recipe_contract's too.
+    "dx/sync_schema.py":
+        "`--update` rewrites the generated targets the tool names (and, "
+        "through its `write_targets`, gen_recipe_contract's); it takes no "
+        "path but `--root`. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 15
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 16
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
