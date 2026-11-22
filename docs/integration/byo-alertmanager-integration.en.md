@@ -448,20 +448,65 @@ _routing:
     type: "slack"
     api_url: {secret: {key: slack-url}}
     channel: "#db-alerts"
-    title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
-    text: >-
-      *Tenant*: {{ .CommonLabels.tenant }}
-      *Severity*: {{ .CommonLabels.severity }}
-      {{ range .Alerts }}
-        - {{ .Annotations.summary }}
+    title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.tenant }})'
+    text: |-
+      {{ range .Alerts -}}
+      {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Labels.severity | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+      {{ or .Annotations.description_zh .Annotations.description }}
       {{ end }}
 ```
 
+When the same alert fires in two clusters, `east` and `west`, the template above sends:
+
+```text
+FIRING: MariaDBHighConnections (t1)
+[east] WARNING: MariaDB high connections on t1
+91% of max_connections
+[west] WARNING: MariaDB high connections on t1
+82% of max_connections
+```
+
+The body lists the alerts with `{{ range .Alerts }}` because one notification can hold several alerts (several instances, or several clusters), and `.CommonAnnotations` / `.CommonLabels` hold only the values that are identical in all of them: when the alerts' `description` differs, `{{ .CommonAnnotations.description }}` prints nothing. `{{ with .Labels.da_cluster }}` keeps an alert without the label from printing empty brackets; `or .Annotations.summary_zh .Annotations.summary` uses the Chinese annotation when there is one and the English one otherwise.
+
 Email and Teams use the same Go template syntax, only field names differ:
-- Email: `html` field (HTML format)
+- Email: `text` field (plain text) or `html` field (HTML format)
 - Teams: `text` field (Markdown format)
 
-**Available variables:** `.CommonLabels.alertname`, `.CommonLabels.tenant`, `.CommonLabels.severity`, `.CommonAnnotations.summary`, `.CommonAnnotations.description`, `.Status`, `.Alerts` (supports `{{ range }}` loop). See [Alertmanager official docs](https://prometheus.io/docs/alerting/latest/notifications/)
+**Available variables:** `.Status`, `.Alerts` (supports a `{{ range }}` loop; each alert has `.Labels` and `.Annotations`); the values common to the whole group are in `.CommonLabels` (such as `.CommonLabels.alertname`, `.CommonLabels.tenant`) and `.CommonAnnotations`; `.GroupLabels` holds only the labels listed in `group_by`. See [Alertmanager official docs](https://prometheus.io/docs/alerting/latest/notifications/)
+
+### Notifications when a tenant runs in several clusters
+
+One tenant may run in several clusters ("One tenant in several clusters" in [ADR-006](../adr/006-tenant-mapping-topologies.en.md)), and every alert that reaches Alertmanager carries `da_cluster`.
+
+**Default behaviour.** Grouping (`group_by`) does not include the cluster: the same alert firing in two clusters at once is **one** notification holding two alerts. The platform ships no notification template, so a receiver without `title` / `text` uses Alertmanager's built-in templates:
+
+- The email body, the PagerDuty details and the webhook payload list each alert with its labels (including `da_cluster`) and annotations.
+- The one-line title / subject is `[FIRING:2] <alert name> <tenant> (…)`, without the cluster. When a single cluster fires, the title does show the cluster, because it is then a label common to the whole group.
+- The built-in Slack template has a title and no body, so with two clusters firing it does not show which two. Give a Slack receiver a template that lists the alerts, like the one in the previous section.
+- In PagerDuty one group is one incident; it resolves once the alert has resolved in every cluster.
+
+**To get one notification per cluster.** Add `da_cluster` to `group_by`. For the whole deployment, in `_defaults.yaml`:
+
+```yaml
+_routing_defaults:
+  group_by: ["alertname", "tenant", "da_cluster"]
+```
+
+For one tenant, in its `_routing` (a `group_by` the tenant writes itself takes precedence):
+
+```yaml
+tenants:
+  db-a:
+    _routing:
+      group_by: ["alertname", "da_cluster"]
+```
+
+Tenant self-service alerts (the `Custom_*` alerts generated from `_custom_alerts`) go through a separate route whose grouping is always tenant plus alert name; this setting does not affect them.
+
+**Two costs.**
+
+1. An alert about the whole tenant (computed only from threshold-exporter series, for example "tenant has not configured a threshold") carries the cluster of the Prometheus that evaluated it. With several Prometheus evaluating the same rules, such an alert becomes one notification per Prometheus.
+2. Changing a route's `group_by` on a running Alertmanager makes every currently firing group of that route notify once more (the group key changes); receivers keyed on the group (PagerDuty) open new incidents.
 
 ---
 

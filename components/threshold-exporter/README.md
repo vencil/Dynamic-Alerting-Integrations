@@ -94,7 +94,7 @@
 | `user_threshold` | Gauge | resolved 閾值（labels: tenant / component / metric / severity + 維度 labels；自訂告警為 `component="custom"`） |
 | `user_state_filter` | Gauge | 狀態型告警 filter 旗標（label: tenant / filter / severity） |
 | `user_silent_mode` | Gauge | silent mode 生效中（告警仍進 TSDB，只抑制通知；label: tenant / target_severity） |
-| `user_severity_dedup` | Gauge | 租戶開著 severity dedup（critical 觸發時抑制同租戶、同 `metric_group` 的 warning 通知）；只送 `mode="enable"`，設 `disable` 的租戶沒有序列（label: tenant / mode）。抑制本身是 route generator 產生的一條 inhibit rule，不讀這個指標 |
+| `user_severity_dedup` | Gauge | 租戶開著 severity dedup（critical 觸發時抑制同租戶、同 `metric_group`、同叢集的 warning 通知）；只送 `mode="enable"`，設 `disable` 的租戶沒有序列（label: tenant / mode）。抑制本身是 route generator 產生的兩條 inhibit rule（告警帶 `da_cluster` 與不帶各一條），不讀這個指標 |
 | `user_slo_objective` | Gauge | 租戶在 `slo_burn_rate` 自訂告警宣告的 SLO 目標百分比；`objective: "disable"` 不發（labels: tenant / recipe_id；ADR-031） |
 | `tenant_metadata_info` | Gauge | 租戶 `_metadata` 的資訊指標，值恆 1（labels: tenant / runbook_url / owner / tier）；Rule Pack 不 join 它，告警的 annotation 以固定的查詢樣板讀出（#3483） |
 | `tenant_expected_exporter` | Gauge | per-tenant exporter liveness 期望，值恆 1（labels: tenant / db_type；**僅對宣告 `_metadata.db_type` 的租戶 emit**）。`TenantExporterAbsent` anti-join 的左手邊（#869） |

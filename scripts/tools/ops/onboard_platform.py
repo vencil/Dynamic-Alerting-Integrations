@@ -556,9 +556,11 @@ def analyze_alertmanager(am_config, tenant_label=DEFAULT_TENANT_LABEL):
                 # before — nothing in the config says it was turned off.
                 dedup_info[tenant] = "enable"
             elif tenant_label in equal:
-                # #3899: ONE rule for every tenant (`equal` carries the tenant
-                # label, no tenant pinned); the tenants it leaves out are in
-                # its target's `<label>!~"a|b"` list — those set `disable`.
+                # #3899: the same rules for every tenant (`equal` carries the
+                # tenant label, no tenant pinned) — one before #4097, two
+                # since (with / without the cluster label), each read here;
+                # the tenants a rule leaves out are in its target's
+                # `<label>!~"a|b"` list — those set `disable`.
                 excluded = _excluded_tenants(target, tenant_label)
                 if excluded is not None:
                     global_dedup_excluded = excluded

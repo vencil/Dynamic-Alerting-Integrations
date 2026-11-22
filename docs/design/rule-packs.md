@@ -130,12 +130,16 @@ Rule Pack 支援 **`*_zh` 後綴 annotation** 實現多語言通知：
 **Alertmanager Fallback 邏輯**：模板使用 Go 的 `or` 函式，優先使用中文 annotation，自動 fallback 至英文：
 
 ```go
-{{ $summary := or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
-{{ $description := or .CommonAnnotations.description_zh .CommonAnnotations.description }}
-{{ $platformSummary := or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
+{{ range .Alerts -}}
+{{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ or .Annotations.summary_zh .Annotations.summary }}
+{{ or .Annotations.description_zh .Annotations.description }}
+{{ or .Annotations.platform_summary_zh .Annotations.platform_summary }}
+{{ end }}
 ```
 
-此模式套用於所有 receiver type（email, webhook, Slack, Teams, PagerDuty），透過 Alertmanager 全域模板實現（見 `k8s/03-monitoring/configmap-alertmanager.yaml`）。
+範例用 `{{ range .Alerts }}` 逐條讀 `.Annotations`，不讀 `.CommonAnnotations`：一則通知可以裝好幾條告警（好幾個 instance，或同一個租戶的好幾個叢集），`.CommonAnnotations` 只有每一條都相同的 annotation，內容不同的那一個會印成空的。`da_cluster` 是告警所在的叢集（見 [ADR-006](../adr/006-tenant-mapping-topologies.md)）。
+
+此模式適用於所有可寫模板的 receiver type（email、Slack、Teams、PagerDuty），寫在 receiver 的 `title`／`text` 等欄位；各型別的範例見 `k8s/03-monitoring/configmap-alertmanager.yaml`。
 
 **向後相容**：未加 `*_zh` annotation 的 Rule Pack 自動 fallback 至英文，現有規則不必改。`rule-packs/` 裡的告警寫了英文 annotation（如 `summary`）就要有對應的 `*_zh`，缺了會被 pre-commit 的 `bilingual-annotations-check` 擋下；完全沒有 annotation 的告警不檢查。範例見 `rule-packs/` 目錄。
 

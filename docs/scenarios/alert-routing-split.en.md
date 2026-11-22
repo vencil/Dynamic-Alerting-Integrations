@@ -49,7 +49,7 @@ Dual-Perspective Annotation puts both wordings in the Prometheus rule's annotati
 
 ### Step 1: Verify Rule Packs include platform_summary
 
-The Rule Packs' built-in threshold alerts all carry `platform_summary`. ⚠️ The `Custom_*` alerts compiled from `_custom_alerts` into `rule-pack-custom-alerts.yaml` do not (they also carry the runbook_url / owner / tier annotations, so those do not tell them apart); the examples below therefore use `{{ or .Annotations.platform_summary .Annotations.summary }}` inside `range .Alerts`, and keep the title independent of it. Verify with:
+The Rule Packs' built-in threshold alerts all carry `platform_summary`. ⚠️ The `Custom_*` alerts compiled from `_custom_alerts` into `rule-pack-custom-alerts.yaml` do not (they also carry the runbook_url / owner / tier annotations, so those do not tell them apart); the examples below therefore use `{{ or .Annotations.platform_summary_zh .Annotations.platform_summary .Annotations.summary_zh .Annotations.summary }}` (the first one that has a value) inside `range .Alerts`, and keep the title independent of it. Verify with:
 
 ```bash
 grep -c platform_summary rule-packs/*.yaml
@@ -69,16 +69,16 @@ _routing_enforced:
     channel: "#noc-alerts"
     # Platform perspective: reference platform_summary
     title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
-    text: >-
-      *Alert*: {{ .CommonLabels.alertname }}
-      *Severity*: {{ .CommonLabels.severity }}
-      *Owner*: {{ .CommonAnnotations.owner }}
-      {{ range .Alerts }}
-        - {{ or .Annotations.platform_summary .Annotations.summary }}
+    text: |-
+      {{ range .Alerts -}}
+      {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Labels.severity | toUpper }}: {{ or .Annotations.platform_summary_zh .Annotations.platform_summary .Annotations.summary_zh .Annotations.summary }}
+      {{ with .Annotations.owner }}Owner: {{ . }}{{ end }}
       {{ end }}
   match:
     - 'severity=~"warning|critical"'
 ```
+
+The body lists the alerts (`{{ range .Alerts }}`) and reads each one's own `.Annotations`: one notification can hold several alerts (several instances, or several clusters of one tenant), `.CommonAnnotations` holds only the annotations that are identical in all of them, and one whose content differs prints as empty. `da_cluster` is the cluster the alert is in.
 
 ### Step 3: Tenant receivers continue using summary
 
@@ -94,10 +94,10 @@ tenants:
         api_url: {secret: {key: slack-api-url}}
         channel: "#db-a-alerts"
         title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
-        text: >-
-          {{ range .Alerts }}
-            {{ .Annotations.summary }}
-            {{ .Annotations.description }}
+        text: |-
+          {{ range .Alerts -}}
+          {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ or .Annotations.summary_zh .Annotations.summary }}
+          {{ or .Annotations.description_zh .Annotations.description }}
           {{ end }}
 ```
 

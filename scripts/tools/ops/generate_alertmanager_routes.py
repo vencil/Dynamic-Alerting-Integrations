@@ -23,10 +23,11 @@ Severity Dedup (#3899: the same inhibit rules for every tenant; #4097: per clust
 
 v2.0.0 Bilingual Templates (i18n):
   Rule Packs can include Chinese annotations: summary_zh, description_zh, platform_summary_zh
-  Alertmanager templates use fallback logic to prefer Chinese if available:
-    Example: {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
-  Receiver templates (email, webhook, slack, teams, pagerduty) use this pattern automatically.
-  No changes to route generator needed — the fallback pattern is in Alertmanager's global templates.
+  A notification template can prefer the Chinese one where it is set, per alert
+  (a group can hold several alerts — several instances, several clusters):
+    Example: {{ range .Alerts }}{{ or .Annotations.summary_zh .Annotations.summary }}{{ end }}
+  The generator renders no template: receivers use Alertmanager's built-in ones unless
+  the deployment's base config brings its own (docs/integration/byo-alertmanager-integration.md).
 
 Usage:
   python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --output-configmap -o am-configmap.yaml
@@ -2090,7 +2091,7 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
         enforced_routing=enforced_routing, tenants=dedup_configs,
         secrets=policy.secret_binding(mount_root))
 
-    # Generate the severity dedup inhibit rule (#3899: one, or none)
+    # Generate the severity dedup inhibit rules (#3899, #4097: two, or none)
     inhibit_rules, dedup_warnings = generate_inhibit_rules(dedup_configs)
 
     # Collect all warnings

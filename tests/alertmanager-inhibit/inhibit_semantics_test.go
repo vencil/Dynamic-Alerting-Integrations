@@ -140,6 +140,23 @@ func TestTryLocalInhibitSemantics(t *testing.T) {
 			src:  tlSilentCritSentinel, tgt: tlCriticalConnections, want: true,
 			why: "Silent Mode (critical) must suppress that tenant's criticals",
 		},
+		{
+			// ADR-006: Silent Mode is the tenant's, not a cluster's — the
+			// same property the k8s base pins below (the sentinel's
+			// da_cluster is the evaluating Prometheus', the silenced alert's
+			// is where its series came from). Adding da_cluster to either
+			// Silent rule's equal: turns the matching case red.
+			name: "silent_warning_reaches_the_tenants_alerts_in_another_cluster",
+			src:  withCluster(tlSilentWarnSentinel, "central"),
+			tgt:  withCluster(tlWarningConnections, "east"), want: true,
+			why: "Silent Mode is tenant-wide: equal stays [tenant], whatever da_cluster each side carries",
+		},
+		{
+			name: "silent_critical_reaches_the_tenants_alerts_in_another_cluster",
+			src:  withCluster(tlSilentCritSentinel, "central"),
+			tgt:  withCluster(tlCriticalConnections, "east"), want: true,
+			why: "Silent Mode is tenant-wide: equal stays [tenant], whatever da_cluster each side carries",
+		},
 	})
 }
 
@@ -364,6 +381,14 @@ func TestK8sTenantAgnosticInhibitSemantics(t *testing.T) {
 		"alertname": "TenantSilentWarning",
 		"severity":  "none", "component": "sentinel", "tenant": tenantX,
 	}
+	platformCriticalX := lset{
+		"alertname": "MariaDBHighConnectionsCritical",
+		"severity":  "critical", "tenant": tenantX, "metric_group": "mysql_connections",
+	}
+	silentCritSentinelX := lset{
+		"alertname": "TenantSilentCritical",
+		"severity":  "none", "component": "sentinel", "tenant": tenantX,
+	}
 
 	run(t, rules, []check{
 		{
@@ -407,6 +432,12 @@ func TestK8sTenantAgnosticInhibitSemantics(t *testing.T) {
 			name: "silent_warning_reaches_the_tenants_alerts_in_another_cluster",
 			src:  withCluster(silentWarnSentinelX, "central"),
 			tgt:  withCluster(platformWarningX, "east"), want: true,
+			why: "Silent Mode is tenant-wide: equal stays [tenant], whatever da_cluster each side carries",
+		},
+		{
+			name: "silent_critical_reaches_the_tenants_alerts_in_another_cluster",
+			src:  withCluster(silentCritSentinelX, "central"),
+			tgt:  withCluster(platformCriticalX, "east"), want: true,
 			why: "Silent Mode is tenant-wide: equal stays [tenant], whatever da_cluster each side carries",
 		},
 		{

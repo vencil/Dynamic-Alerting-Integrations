@@ -54,7 +54,7 @@ updated_at: 2026-11-21
 1. **兩邊都帶 `da_cluster`**（`da_cluster=~".+"`）：`equal` 是 `tenant`、`metric_group`、`da_cluster`。一個租戶跑在多個叢集時，一個叢集的 critical 不抑制另一個叢集的 warning——那則 warning 是另一個叢集唯一的通知。
 2. **兩邊都不帶 `da_cluster`**（`da_cluster=""`，即 Prometheus 沒設這個 external label）：`equal` 是 `tenant`、`metric_group`，整個租戶配對。
 
-帶標籤的告警與不帶標籤的告警不會互相配對。分成兩條、而不是一條規則直接把 `da_cluster` 加進 `equal`，是因為 Alertmanager 把「兩邊都沒有這個標籤」視為相等：`equal` 裡的每個標籤都要有存在性條件，否則不帶 `da_cluster` 的告警會被當成同一個叢集。
+帶標籤的告警與不帶標籤的告警不會互相配對。一條規則直接把 `da_cluster` 加進 `equal`、不加存在性條件，配對結果其實相同（Alertmanager 把「兩邊都沒有這個標籤」視為相等）。分成兩條，是因為本專案要求 `equal` 裡的每個標籤至少在一側有存在性條件，讓兩則告警都缺的標籤不會默默被當成相等；把「都不帶」寫成自己的一條規則，這項檢查就不必開例外。
 
 這兩條規則只由產生器產生。base 設定裡若有產生器自己寫出的 dedup 規則（現在的兩條之一、不分叢集的單一規則，或每個租戶一條的規則；比對以產生器重建的結果為準：matcher 的寫法不影響，但排除清單須是產生器的寫法——排序、去重），產生器拒絕合併（結束碼 1、不寫檔）：它會原樣進到輸出，蓋過 conf.d 的 `_severity_dedup`，`disable` 也就失效。這種 base 通常是舊版產物被當成來源傳回。運維自己在 base 寫的抑制規則屬於運維政策，這個檢查不判，即使它會蓋過 `_severity_dedup`（含 `disable`）；其他檢查照常適用，例如 Watchdog 心跳不得被抑制、平台自監控告警不得被租戶觸發的規則靜音、`equal` 列的標籤要有存在性條件。
 
