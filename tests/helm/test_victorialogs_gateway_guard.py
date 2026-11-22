@@ -153,6 +153,75 @@ def test_victorialogs_wrong_audience_aborts(repo_root: Path):
     assert "tenant-federation-logs" in res.stderr, f"guard message unexpected: {res.stderr}"
 
 
+# ── /select/logsql/query limit cap (ADR-021 §查詢端點白名單) ───────────────
+# The behaviour (400/415 per case) is exercised against real Envoy in
+# tests/federation-e2e/test_victorialogs_e2e.py VL11. These pin the wiring
+# that behaviour depends on: the filter exists only in victorialogs mode, sits
+# after the body buffer (or it cannot see a POST form body) and before the
+# router, its file ships in the ConfigMap, and the max is a validated number.
+_VL = {"mode": "victorialogs", "jwt.audience": "tenant-federation-logs"}
+_QUERY_LIMIT_FILTER = "envoy.filters.http.lua.query_limit"
+
+
+def _rendered_cm_data(stdout: str) -> dict:
+    for doc in yaml.safe_load_all(stdout):
+        if isinstance(doc, dict) and doc.get("kind") == "ConfigMap":
+            data = doc.get("data") or {}
+            if "envoy.yaml" in data:
+                return data
+    raise AssertionError("no ConfigMap carrying envoy.yaml in render output")
+
+
+def _http_filter_names(cfg: dict) -> list[str]:
+    hcm = cfg["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]
+    return [f["name"] for f in hcm["typed_config"]["http_filters"]]
+
+
+@_needs_helm
+def test_victorialogs_query_limit_filter_wired_after_buffer(repo_root: Path):
+    res = _render(repo_root, _VL)
+    assert res.returncode == 0, res.stderr
+    data = _rendered_cm_data(res.stdout)
+    names = _http_filter_names(yaml.safe_load(data["envoy.yaml"]))
+    assert _QUERY_LIMIT_FILTER in names, f"query-limit filter missing: {names}"
+    i = names.index(_QUERY_LIMIT_FILTER)
+    assert names.index("envoy.filters.http.buffer") < i, (
+        f"query-limit filter must run after the buffer to read POST form bodies: {names}")
+    assert i == len(names) - 2 and names[-1] == "envoy.filters.http.router", (
+        f"query-limit filter must be the last filter before the router: {names}")
+    lua = data.get("query_limit.lua", "")
+    assert "local MAX_LIMIT = 1000\n" in lua, "chart default maxQueryLimit not templated into the Lua"
+    assert 'QUERY_PATH_RE = "^/select/logsql/query/?$"' in lua
+
+
+@_needs_helm
+def test_victorialogs_query_limit_value_is_templated(repo_root: Path):
+    res = _render(repo_root, {**_VL, "victorialogs.maxQueryLimit": "250"})
+    assert res.returncode == 0, res.stderr
+    assert "local MAX_LIMIT = 250\n" in _rendered_cm_data(res.stdout)["query_limit.lua"]
+
+
+@_needs_helm
+@pytest.mark.parametrize("bad", ["0", "-1", "1.5", "abc", "1000000001"])
+def test_victorialogs_query_limit_bad_value_aborts(repo_root: Path, bad):
+    res = _render(repo_root, {**_VL, "victorialogs.maxQueryLimit": bad})
+    assert res.returncode != 0, f"maxQueryLimit={bad} must abort the render"
+    assert "victorialogs.maxQueryLimit" in res.stderr, res.stderr
+
+
+@_needs_helm
+@pytest.mark.parametrize(
+    "mode_set, label",
+    [({}, "prom-label-proxy (default)"), ({"mode": "vm-cluster"}, "vm-cluster")],
+)
+def test_other_modes_have_no_query_limit_filter(repo_root: Path, mode_set, label):
+    res = _render(repo_root, mode_set)
+    assert res.returncode == 0, f"{label} must render: {res.stderr}"
+    data = _rendered_cm_data(res.stdout)
+    assert "query_limit.lua" not in data, f"query_limit.lua leaked into {label} mode"
+    assert _QUERY_LIMIT_FILTER not in _http_filter_names(yaml.safe_load(data["envoy.yaml"]))
+
+
 @_needs_helm
 @pytest.mark.parametrize(
     "mode_set, label",

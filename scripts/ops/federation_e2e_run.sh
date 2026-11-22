@@ -163,10 +163,10 @@ import yaml
 
 rendered = sys.argv[1]
 cm = yaml.safe_load(open("/tmp/fed-e2e-cm-envoy-vl.yaml"))
-for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua"):
+for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua", "query_limit.lua"):
     with open(f"{rendered}/{key}", "w", newline="\n") as fh:
         fh.write(cm["data"][key])
-print("[fed-e2e] rendered victorialogs envoy.yaml + revoked_check.lua + audit_extract.lua")
+print("[fed-e2e] rendered victorialogs envoy.yaml + revoked_check.lua + audit_extract.lua + query_limit.lua")
 PYEOF
 : > "$RENDERED/victorialogs/revoked.txt"
 

@@ -46,6 +46,13 @@ victorialogs mode, jwt.audience MUST be `tenant-federation-logs`.
 {{- if ne .Values.jwt.audience "tenant-federation-logs" }}
 {{- fail (printf "federation-gateway: victorialogs mode requires jwt.audience=\"tenant-federation-logs\" (a metrics-pull token must not query the log store), got %q" .Values.jwt.audience) }}
 {{- end }}
+{{- /* Templated into query_limit.lua as a number literal. */}}
+{{- $m := .Values.victorialogs.maxQueryLimit }}
+{{- if not (or (kindIs "float64" $m) (kindIs "int64" $m) (kindIs "int" $m)) }}
+{{- fail (printf "federation-gateway: victorialogs.maxQueryLimit must be a whole number between 1 and 1000000000, got %v (%s)" $m (kindOf $m)) }}
+{{- else if or (ne (float64 (int64 $m)) (float64 $m)) (lt (int64 $m) 1) (gt (int64 $m) 1000000000) }}
+{{- fail (printf "federation-gateway: victorialogs.maxQueryLimit must be a whole number between 1 and 1000000000, got %v" $m) }}
+{{- end }}
 {{- end }}
 {{- with include "federation-gateway.vlAuthSecret" . }}
 {{- if ne $.Values.mode "victorialogs" }}

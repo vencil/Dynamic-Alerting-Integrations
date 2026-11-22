@@ -67,7 +67,8 @@ type: application
 # 0.8.0 — #1295: the NetworkPolicy also restricts egress, to DNS and TCP upstream.port in the upstream's namespace (`networkPolicy.upstreamNamespace`, else read from upstream.host `<svc>.<ns>.svc`). Before, the gateway had no egress at all in a namespace that defaults to deny, as k8s/03-monitoring does. ⚠️ BREAKING: an upstream.host that is not a Service name (external FQDN, IP) fails the render until upstreamNamespace is set or `networkPolicy.restrictEgress: false`; the rule matches the destination POD port: where the upstream Service maps ports, set `networkPolicy.upstreamPort`
 # 0.8.1 — #2789: comments and descriptions only (they ship in the package): ADR-028 section references renamed after the ADR rewrite. No template or value change.
 # 0.8.2 — #2789: comments and descriptions only (they ship in the package): ADR-020/021 section references renamed after the ADR rewrite (NOTES.txt wording included). No template logic or value change.
-version: 0.8.2
+# 0.8.3 — #2789: victorialogs mode requires a bounded `limit` on /select/logsql/query (ADR-021). New value `victorialogs.maxQueryLimit` (default 1000) and a third Lua filter, files/query_limit.lua, after the buffer: exactly one `limit`, 1..max, across the query string and a form-urlencoded POST body, else 400; a POST body that is not form-urlencoded or carries a Content-Encoding gets 415. ⚠️ TENANT-VISIBLE: a log query without `limit`, with `limit=0`, or above the max was forwarded before and is now rejected. In the other modes envoy.yaml and the Lua files render unchanged (only the chart label, and so the pod checksums, move).
+version: 0.8.3
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle

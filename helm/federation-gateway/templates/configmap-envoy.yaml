@@ -13,3 +13,7 @@ data:
     {{- tpl (.Files.Get "files/revoked_check.lua") . | nindent 4 }}
   audit_extract.lua: |
     {{- tpl (.Files.Get "files/audit_extract.lua") . | nindent 4 }}
+  {{- if eq .Values.mode "victorialogs" }}
+  query_limit.lua: |
+    {{- tpl (.Files.Get "files/query_limit.lua") . | nindent 4 }}
+  {{- end }}

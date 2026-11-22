@@ -142,6 +142,15 @@ victorialogs:
     - /select/logsql/stream_field_values
     - /select/logsql/field_names
     - /select/logsql/field_values
+  # Upper bound on `limit` for /select/logsql/query (ADR-021
+  # §查詢端點白名單). That endpoint streams every matching row unless the
+  # request carries a limit, and VictoriaLogs reads a missing / empty / 0 limit
+  # as "no limit". files/query_limit.lua therefore requires exactly one `limit`
+  # (query string or form-urlencoded POST body), 1..maxQueryLimit, and answers
+  # 400 otherwise — it never fills in or clamps a value, so a tenant is never
+  # handed a silently truncated result. Whole number, 1..1000000000 (checked at
+  # render). The other allowlisted endpoints are NOT capped by this value.
+  maxQueryLimit: 1000
 
 # ── Revoked set (ADR-020 §Token) ──────────────────────────────────
 # tenant-api writes revoked.txt into the tenant-federation-store ConfigMap
