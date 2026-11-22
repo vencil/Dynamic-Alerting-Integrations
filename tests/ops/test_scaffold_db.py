@@ -21,7 +21,6 @@ import yaml
 import scaffold_tenant  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832: read from the Go table)
 
 CONFD_DIR = scaffold_tenant.CONFD_DIR  # the draft conf.d (#4014)
 
@@ -158,15 +157,15 @@ class TestNonInteractiveGeneration:
     @pytest.mark.parametrize("tenant,dbs,metrics,report_kw", SCAFFOLD_CASES,
                              ids=[c[0] for c in SCAFFOLD_CASES])
     def test_defaults_contain_expected_metrics(self, monkeypatch, tenant, dbs, metrics, report_kw):
-        """_defaults.yaml 的 `defaults:` 有預期的 key，沒有任何內建鍵（#3832 決策 7）。"""
+        """_defaults.yaml 不寫任何閾值鍵：沒有 `defaults:`、沒有
+        `optional_overrides:`（#3924：登錄表的鍵都內建在讀取端）。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_scaffold(monkeypatch, tmpdir, tenant, dbs)
             path = os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml")
             with open(path, encoding="utf-8") as f:
-                written = (yaml.safe_load(f) or {}).get("defaults") or {}
-            for m in metrics:
-                assert m in written, f"{dbs} defaults missing {m}"
-            assert not set(written) & set(BUILTIN_DEFAULTS), written
+                doc = yaml.safe_load(f) or {}
+            assert "defaults" not in doc and "optional_overrides" not in doc, doc
+            assert not set(metrics) & set(doc.get("dimensions") or {}), doc
 
     @pytest.mark.parametrize("tenant,dbs,metrics,report_kw", SCAFFOLD_CASES,
                              ids=[c[0] for c in SCAFFOLD_CASES])
@@ -187,13 +186,16 @@ class TestNonInteractiveGeneration:
             assert os.path.isfile(os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml"))
 
     def test_combined_oracle_db2(self, monkeypatch):
-        """Combined oracle+db2 scaffold 包含兩組 metric。"""
+        """Combined oracle+db2 scaffold：兩組都進報告，_defaults.yaml 一個閾值都不寫（#3924）。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_scaffold(monkeypatch, tmpdir, "test-combo", "oracle,db2")
             with open(os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml"), encoding="utf-8") as f:
                 content = f.read()
-            assert "oracle_sessions_active" in content
-            assert "db2_connections_active" in content
+            assert "oracle_sessions_active" not in content
+            assert "db2_connections_active" not in content
+            with open(os.path.join(tmpdir, "scaffold-report.txt"), encoding="utf-8") as f:
+                report = f.read().lower()
+            assert "oracle" in report and "db2" in report
 
 
 # ── N:1 Tenant Mapping ──────────────────────────────────────────────

@@ -213,16 +213,18 @@ def _changed(before: dict, after: dict) -> list[str]:
 
 def _fixture_names(cfg: Path) -> dict[str, str]:
     """A tenant and a metric key read from the fixture, never typed here."""
+    # #3924: the fixture's root `defaults:` writes no threshold (every
+    # registry key is built in), so the metric is a tenant's own threshold.
     tenant = metric = None
     for f in sorted(cfg.rglob("*.yaml")):
         doc = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
-        if f.name == "_defaults.yaml":
-            for key in (doc.get("defaults") or {}):
+        if f.name.startswith("_") or not doc.get("tenants"):
+            continue
+        for tid, body in doc["tenants"].items():
+            for key in (body or {}):
                 if metric is None and not str(key).startswith("_"):
-                    metric = str(key)
-        elif tenant is None and doc.get("tenants"):
-            tenant = str(next(iter(doc["tenants"])))
-    assert tenant and metric, f"fixture {FIXTURE_REL} lost its tenant or defaults"
+                    tenant, metric = str(tid), str(key)
+    assert tenant and metric, f"fixture {FIXTURE_REL} lost its tenants' thresholds"
     return {"tenant": tenant, "metric": metric}
 
 

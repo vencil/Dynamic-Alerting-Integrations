@@ -25,10 +25,10 @@ parent: architecture-and-design.md
 | 狀態 | 配置方式 | Prometheus 輸出 | 說明 |
 |------|---------|-----------------|------|
 | **Custom Value** | `metric_key: 42` | ✓ 輸出自訂閾值 | 租戶覆蓋預設值 |
-| **Omitted (Default)** | 未在 YAML 中指定 | ✓ 輸出平台預設值 | 使用 `_defaults.yaml` 的 `defaults:` 值 |
+| **Omitted (Default)** | 未在 YAML 中指定 | ✓ 輸出平台預設值 | 使用上層 `_defaults.yaml` 的 `defaults:` 值，沒寫則用讀取端內建的平台值 |
 | **Disable** | `metric_key: "disable"` | ✗ 不輸出這一族 | 連同同族的 `<key>_critical` 與維度鍵 `<key>{…}`（含根目錄 `defaults:` 給的維度預設值）一起關掉，不論同族鍵寫在哪一層；排程式 `disable` 只在那段時間生效。根目錄 `defaults:` 給的 `<key>_critical`（每個租戶的 critical 預設值）也一起關掉。只要 critical 那一級時寫 `metric_key: "90:critical"`，並刪掉 `<key>_critical`（兩者並存會送出同一條 series，整份 `/metrics` 失敗）；只停 critical 那一級寫 `<key>_critical: disable`（[#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)） |
 
-> ⚠️ **適用條件**：上表只對「在 `_defaults.yaml` 的 `defaults:` 有值」的 key 成立。列在 `optional_overrides:` 的**宣告 key**（平台只認得 key 名、不主張值）沒有預設可繼承——**省略＝沒有值＝不輸出 series**，不是「用預設」；那一格實際只有「填值」與「不填（靜默）」兩態。
+> ⚠️ **適用條件**：上表只對有平台值、或在 `_defaults.yaml` 的 `defaults:` 有值的 key 成立。**沒有平台值的 key**（讀取端內建、值為 off，根層不必宣告；有哪些見 `da-tools validate-config` 的 `platform_defaults` 列）沒有預設可繼承——**省略＝沒有值＝不輸出 series**，不是「用預設」；那一格實際只有「填值」與「不填（靜默）」兩態。
 
 > ⚠️ **閾值的數字只有一種寫法**（[#3457](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3457)）：十進位，可帶正負號、一個小數點與 `e`／`E` 指數（`70`、`-1.5`、`.5`、`1e3`），尾數（指數以外的部分，小數點前後的數字合計）最多 20 位（前導零與尾端的零都算；指數的位數不計）。`1_000`、`0x1F`、`0x1p4`、`0o17`、尾數超過 20 位的寫法都不是數字，比照 `abc` 處理。這份文法寫在 exporter 的 recipe contract（`patterns.thresholdNumber`），exporter、da-guard、tenant-api、portal 的 RecipeBuilder、Python 工具與 JSON schema 的 `thresholdScalar` 讀的是同一份。
 >

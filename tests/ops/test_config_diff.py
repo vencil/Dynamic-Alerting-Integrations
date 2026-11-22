@@ -834,9 +834,9 @@ class TestAcceptance:
 
     def test_adr_example_container_memory(self, tmp_path):
         old, new = _sample_pair(tmp_path)
-        # #3832: the root no longer copies container_memory (the readers
-        # build 85 in), so raising it is adding it.
-        _edit(new, "\ndefaults:\n", "\ndefaults:\n  container_memory: 999\n")
+        # #3832/#3924: the root carries no `defaults:` block (the readers
+        # build container_memory 85 in), so raising it is adding it.
+        _edit(new, "\ndimensions:\n", "\ndefaults:\n  container_memory: 999\n\ndimensions:\n")
         doc = _json(_run_cli(old, new, "--format", "json"))
         assert doc["threshold_changes"] == [{
             "key": "container_memory", "old": 85, "new": 999, "change": "looser",

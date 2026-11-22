@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-11-21
+updated_at: 2026-11-22
 ---
 # ADR-017: _defaults.yaml 多層繼承與雙雜湊熱重載
 
@@ -38,6 +38,7 @@ updated_at: 2026-11-21
 | 2026-11-16 | 根目錄 `defaults:` 可以對內建層給值的鍵寫 `"disable"`，整棵樹關掉那一族；只收這個字 | 決策 4、11 |
 | 2026-11-21 | 平台不給值的鍵也進內建層，值是 off：根目錄不必再宣告，租戶的值、`<鍵>_critical` 與 profile 的值都送出 | 決策 11 |
 | 2026-11-21 | 根目錄 `defaults:` 的 `<鍵>_critical` 是每個租戶的 critical 預設值，租戶可覆寫；基底沒有值時不送，基底關掉時跟著關 | 決策 3、11 |
+| 2026-11-22 | Helm chart 的 `thresholdConfig.defaults` 預設為空，不寫登錄表的鍵；init 也不再寫 `optional_overrides:` 清單 | 決策 11、替代方案 E |
 
 ## 名詞
 
@@ -337,7 +338,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 | 不存在，或 `defaults:` 是空的 | 給值。這是合法的樹 |
 | 讀不了：語法錯，或檔案存在卻讀不到（例如 symlink 指向不存在的檔） | 不給值，整棵樹不送任何預設列（da-guard 結束碼 3）。根目錄讀不了時，寫在裡面的覆寫與退出也讀不到；這時送出平台值，等於替客戶打開他關掉的告警 |
 
-內建層對每個租戶都給值，不看部署裡有沒有裝對應的規則包：多一列不等於多一條告警，告警要響還需要規則包已部署、指標存在。Helm chart 的 `thresholdConfig.defaults` 照舊渲染這些值，它們在 ConfigMap 裡算根目錄寫的數字。
+內建層對每個租戶都給值，不看部署裡有沒有裝對應的規則包：多一列不等於多一條告警，告警要響還需要規則包已部署、指標存在。Helm chart 的 `thresholdConfig.defaults` 預設是空的，不渲染任何登錄表的鍵，所以 chart 與 exporter 映像要一起升級；部署方在那裡寫的數字，在 ConfigMap 裡算根目錄寫的數字。
 
 **平台不給值的鍵：內建層給 off。** 登錄表標 `operator` 的鍵在內建層的值是 off：它算「根目錄 `defaults:` 有值」，所以上面那條規則照樣適用——租戶、profile、子目錄給的值都送出，租戶寫的 `<鍵>_critical` 也送 critical 列，即使租戶沒給基底值；但 off 本身不送基底列，也不關掉整族。客戶的根目錄因此不必再把這些鍵寫進 `defaults:` 或列在 `optional_overrides:`，租戶才寫得動它們。根目錄給數字照舊蓋過 off，寫 `null` 等於沒寫（仍是 off，租戶的值照送），寫 `"disable"` 照下方「根目錄的 `"disable"`」整族關閉。根目錄 `optional_overrides:` 還列著這些鍵也無妨：列名對內建層裡的鍵是多餘的，不擋 profile 給值。兩點與有數字的鍵不同：這些鍵的 `expires:` 不生效（過期等於退回 off，告警會悄悄消失，所以值過了 `expires:` 照送；tenant-api 寫入時擋下，已在磁碟上的由 exporter 每次載入設定時記一行 WARN）；`validate-config` 的 `platform_defaults` 列把它們按規則包分行列出，附設定了門檻或 `disable` 的租戶數（`0/N` 表示這個鍵的告警對所有租戶都不會響）。
 
@@ -439,7 +440,7 @@ tenants:
 - **讓 init 重跑來更新**：`init --force` 會重寫它產生的每一個檔，丟掉所有手改。
 - **登錄表隨規則包出貨、exporter 在執行期讀檔**：值與讀它的規則永遠同版，落差消失；但 CI 裡的 da-guard 與 tenant-api 手上沒有那個檔，三個讀取端的答案會不同，違反「同一棵樹只有一個答案」（ADR-036）。
 - **只在組裝 ConfigMap 時注入預設值**：走既有 ConfigMap 的部署與 tenant-api 的 Git 工作目錄拿不到，讀取端之間不一致。
-- **用 `optional_overrides:` 列名當退出**：退出之後的鍵照那個欄位的規則走（租戶把基底開回來時 `_critical` 不送、profile 給的值不套用）；而且 init 把這份清單複製進客戶的樹，日後平台把清單上的鍵升為預設啟用時，既有的樹會把它讀成已退出，也沒有錯誤。
+- **用 `optional_overrides:` 列名當退出**：退出之後的鍵照那個欄位的規則走（租戶把基底開回來時 `_critical` 不送、profile 給的值不套用）；而且這份清單一旦寫在客戶的樹裡，日後平台把清單上的鍵升為預設啟用時，既有的樹會把它讀成已退出，也沒有錯誤。
 - **讓根目錄的 `null` 代表退出**：理由同決策 4，留白的鍵不該靜靜關掉告警。
 - **只對部署了對應規則包的租戶給值**：exporter 不知道部署了哪些規則包，只能從樹的內容推論，推論有已知的誤判。
 - **升級時自動刪掉客戶檔裡與平台相同的數字**：那個數字可能是刻意釘住的，刪掉之後它會跟著平台變動，這該由客戶決定。

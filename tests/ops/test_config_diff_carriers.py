@@ -71,8 +71,8 @@ def _optional_override_in_use(d: Path) -> None:
     # holds; the list's own effect is on a key outside the registry.
     _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
          '    mysql_connection_usage_percent: "70"\n    x_opt_root_2962: "100"\n')
-    _sub(d / "_defaults.yaml", "  - oracle_pga_usage_percent",
-         "  - oracle_pga_usage_percent\n  - x_opt_root_2962")
+    _sub(d / "_defaults.yaml", "\ndimensions:\n",
+         "\noptional_overrides:\n  - x_opt_root_2962\n\ndimensions:\n")
 
 
 FINANCE = "examples/_routing_profiles.yaml"
@@ -80,7 +80,7 @@ FINANCE = "examples/_routing_profiles.yaml"
 # (case id, carrier, views it must change, setup on both sides, edit on the PR side)
 CASES = [
     ("defaults", "defaults", {SERVED}, None,
-     lambda d: _sub(d / "_defaults.yaml", "\ndefaults:\n", "\ndefaults:\n  container_memory: 86\n")),
+     lambda d: _sub(d / "_defaults.yaml", "\ndimensions:\n", "\ndefaults:\n  container_memory: 86\n\ndimensions:\n")),
     ("optional_overrides", "optional_overrides", {SERVED}, _optional_override_in_use,
      lambda d: _sub(d / "_defaults.yaml", "  - x_opt_root_2962", "  - x_opt_root_2962x")),
     ("dimensions", "dimensions", {SERVED},
