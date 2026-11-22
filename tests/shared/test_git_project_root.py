@@ -42,6 +42,8 @@ from pathlib import Path
 
 import pytest
 
+from _platform_fs import symlink_or_skip  # noqa: E402
+
 REPO = Path(__file__).resolve().parents[2]
 TOOLS = REPO / "scripts" / "tools"
 
@@ -269,7 +271,7 @@ def test_dot_dot_after_a_symlink_is_resolved_as_git_opens_it(tmp_path):
     the OUTER index. The check must resolve the path on disk, as git does."""
     root, outer = _own_clone_inside_outer(tmp_path, PIPE)
     (outer / "sub").mkdir()
-    (root / "lnk").symlink_to(outer / "sub")
+    symlink_or_skip(outer / "sub", root / "lnk")
     value = f"{root}/lnk/../.git/index"
     proc = _run(root, PIPE, "--json", GIT_INDEX_FILE=value)
     _assert_named_refusal(proc, root, f"inherited GIT_INDEX_FILE={value}")
