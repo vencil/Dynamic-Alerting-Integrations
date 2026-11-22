@@ -15,7 +15,7 @@
 
 - **Input** — Prometheus HTTP API（可攜式工具）、`conf.d/` YAML（檔案系統工具）、CSV/JSON spec（規則 / mapping 等）；透過 `docker run -v` 掛載
 - **Output** — stdout 表格 / Markdown 報告 / JSON（`--json` 結構化）；部分工具寫檔（合併後的 alertmanager.yml、ConfigMap、scaffold 結果）
-- **Why container-bundled** — 1) 客戶現場常無 Python ≥3.12，**避開 dependency hell**；2) 整合 Go binary（`da-guard` / `da-batchpr` / `da-parser`），air-gapped 環境一顆 image 就夠；3) `tools/v*` tag 與平台版號脫鉤，工具迭代不影響 helm chart
+- **Why container-bundled** — 1) 客戶現場常無 Python ≥3.12，**避開 dependency hell**；2) 整合 Go binary（`da-guard` / `da-parser`），air-gapped 環境一顆 image 就夠；3) `tools/v*` tag 與平台版號脫鉤，工具迭代不影響 helm chart
 - **Why one CLI, not a pile of binaries** — 客戶旅程是連續的（discover → onboard → validate → cutover → operate → tune → migrate），分散成幾十個獨立 binary 反而難記；統一 `da-tools <cmd>` 入口配 `--help` 自我描述
 - **不做的事** — 不執行 PromQL 查詢以外的 alerting reconcile（交給 `threshold-exporter`）；不 hot-reload（短命 CLI，每次 fresh state）；不持久化（除非 `-o` 明確指定輸出檔）；不 silent fail（CI 模式預設 exit 1 on any issue）
 
@@ -43,8 +43,8 @@
 
 | 路徑 | 內容 | 適用 |
 |---|---|---|
-| **Docker image**（`ghcr.io/vencil/da-tools:v*`） | **全部 50 個 Python 子命令 + 3 顆 bundled Go binary**（da-guard / da-batchpr / da-parser） | self-hosted production、air-gapped（一顆 image 就夠）— **首選** |
-| **Static binary 下載**（`tools/v*` release assets） | **僅** 3 顆 Go CLI（da-guard / da-batchpr / da-parser）；**不含** Python 子命令 | 只需 guard / parser / batch-pr，且不想跑 container 的 CI |
+| **Docker image**（`ghcr.io/vencil/da-tools:v*`） | **全部 50 個 Python 子命令 + bundled Go binary**（da-guard / da-parser） | self-hosted production、air-gapped（一顆 image 就夠）— **首選** |
+| **Static binary 下載**（`tools/v*` release assets） | **僅** 2 顆 Go CLI（da-guard / da-parser）；**不含** Python 子命令 | 只需 guard / parser，且不想跑 container 的 CI |
 | **本機 repo checkout**（`python3 components/da-tools/app/entrypoint.py <cmd>`） | 全部 Python 子命令（依當前 source） | 開發 / 貢獻者 dev path |
 
 > 一句話決策：要完整工具集 → **Docker image**；只要那 3 顆 Go gate 工具 → **static binary**；改 code 跑測試 → **本機 checkout**。Python 子命令**沒有** standalone binary，只能走 Docker 或本機 checkout。
@@ -96,7 +96,7 @@ docker run --rm \
 | **Cutover** | Platform | Shadow Monitoring → 正式切換 | `validate`、`shadow-verify`、`backtest`、`cutover` |
 | **Operate** | Platform（自己租戶含 Tenant） | 日常健康檢查、噪音治理、容量預測 | `diagnose`、`batch-diagnose`、`check-alert`、`alert-quality`、`alert-correlate`、`cardinality-forecast` |
 | **Tune** | Domain（含 Tenant） | 觀測 baseline、推薦閾值、改 ConfigMap | `baseline`、`threshold-recommend`、`patch-config`、`explain-route`、`explain-keys` |
-| **GitOps** | Platform | 產生合併後的 Alertmanager 設定、批次 PR、快照比對 | `generate-routes`、`generator-service`、`batch-pr`、`config-history`、`gitops-check`、`tenant-verify`、`state-reconcile` |
+| **GitOps** | Platform | 產生合併後的 Alertmanager 設定、快照比對 | `generate-routes`、`generator-service`、`config-history`、`gitops-check`、`tenant-verify`、`state-reconcile` |
 | **Migrate** | Platform | ConfigMap → Operator CRD、edge/central 拆分 | `migrate-to-operator`、`operator-generate`、`operator-check`、`runtime-audit`、`rule-pack-split`、`rule-pack-diff`、`silencer-drift-check` |
 | **Decommission** | Platform | 下架 tenant、棄用 metric | `offboard`、`deprecate` |
 | **Bridge** | Platform | 整合外掛 AM / Federation / 通知 | `byo-check`、`test-notification`、`federation-check`、`fed-key` |
@@ -169,7 +169,6 @@ docker run --rm \
 |------|------|----------|
 | `generate-routes` | tenant YAML → AM route + receiver + inhibit，合併進你的 Alertmanager 設定（只換掉產生器擁有的部分），輸出 alertmanager.yml 或 ConfigMap、或直接 apply | `--config-dir <dir>` + 一個模式旗標（`--validate`／`--output-alertmanager`／`--output-configmap`／`--apply`） |
 | `generator-service` | 產生器容器的服務：經 Unix socket 判定寫入後的 conf.d 能否通過 `generate-routes --validate --strict`（ADR-036 §3） | `--socket <path> --repo <dir> --config-subdir <path> --work-dir <dir>` |
-| `batch-pr` ✨v2.8.0 | Hierarchy-aware Batch PR（子命令：`apply` / `refresh` / `refresh-source`）。⚠️ experimental：`apply` 的兩個必填輸入沒有工具產生 | `apply --plan <p> --emit-dir <d> --repo <r> --workdir <w>` |
 | `config-history` | 配置快照與歷史追蹤（子命令：`snapshot` / `log` / `diff` / `show`） | `--config-dir <dir> snapshot` |
 | `gitops-check` | conf.d 本機結構檢查 | `local --dir <dir>` |
 | `tenant-verify` ✨v2.8.0 | 印 tenant effective config + merged_hash；`--expect-merged-hash` 比對快照（rollback 驗證） | `<tenant> --conf-d <dir>` |
@@ -285,28 +284,9 @@ docker run --rm \
 #      (run `da-tools generate-routes --config-dir conf.d/ --validate --strict` too)
 ```
 
-### 5.5 Hierarchy-aware Batch PR（v2.8.0）
+### 5.5 導入客戶既有規則
 
-> ⚠️ **experimental**：下面的 `plan.json` 與 `emit/` 目前沒有任何出貨的工具產生，要自備；細節與替代做法（逐租戶的 `migrate`）見 [`batch-pr`](../../docs/cli-reference.md#batch-pr)。
-
-設計目標是把大量租戶的導入從「手動切 chunk + 手動開 PR」變成一行命令：
-
-```bash
-docker run --rm \
-  --user $(id -u):$(id -g) \
-  -v $(pwd)/plan.json:/data/plan.json \
-  -v $(pwd)/emit:/data/emit \
-  -v $(pwd)/customer-repo:/data/repo \
-  -e GH_TOKEN=$GH_TOKEN \
-  ghcr.io/vencil/da-tools \
-  batch-pr apply \
-    --plan /data/plan.json \
-    --emit-dir /data/emit \
-    --repo vencil/customer \
-    --workdir /data/repo
-```
-
-Refresh / refresh-source 兩個子命令處理 Base PR merge 後的 rebase 與 hot-fix 重 apply：見 `da-tools batch-pr --help`。
+逐租戶用 [`migrate`](../../docs/cli-reference.md#migrate) 把既有規則轉成 conf.d 租戶檔，放進客戶 repo 後走客戶自己的 PR 流程。產出 `_custom_alerts` recipe 的批次導入見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
 
 ### 5.6 Rollback 驗證（v2.8.0）
 
@@ -338,7 +318,6 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d:ro ghcr.io/vencil/da-tools \
 | `PROMETHEUS_URL` | Prometheus 端點（`--prometheus` fallback） | `http://localhost:9090` |
 | `DA_LANG` | CLI 語言（`zh` / `en`，優先於 `LC_ALL` / `LANG`） | 從 `LANG` / `LC_ALL` 偵測，預設 `en` |
 | `DA_GUARD_BINARY` | `da-guard` 路徑 override（image 內預設 `/usr/local/bin/da-guard`） | — |
-| `DA_BATCHPR_BINARY` | `da-batchpr` 路徑 override | — |
 | `DA_PARSER_BINARY` | `da-parser` 路徑 override | — |
 
 > **容器內 `localhost` 是容器自己**：
@@ -353,7 +332,6 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d:ro ghcr.io/vencil/da-tools \
 | Binary | Wrap by | 來源 | 子命令 |
 |--------|---------|------|--------|
 | `/usr/local/bin/da-guard` | `da-tools guard` | [`components/threshold-exporter/app/cmd/da-guard/`](../../components/threshold-exporter/app/cmd/da-guard/) | `defaults-impact` |
-| `/usr/local/bin/da-batchpr` | `da-tools batch-pr` | [`components/threshold-exporter/app/cmd/da-batchpr/`](../../components/threshold-exporter/app/cmd/da-batchpr/) | `apply` / `refresh` / `refresh-source` |
 | `/usr/local/bin/da-parser` | `da-tools parser` | [`components/threshold-exporter/app/cmd/da-parser/`](../../components/threshold-exporter/app/cmd/da-parser/) | `import` / `allowlist` |
 
 > Binary 解析順序（每個 dispatcher 都遵循）：`--<name>-binary <path>` → `$<NAME>_BINARY` env → `$PATH`。Image 內第三層永遠命中 `/usr/local/bin/`。
@@ -394,7 +372,7 @@ DA_LANG=en docker run --rm ghcr.io/vencil/da-tools migrate --help
 | 元件 | 版號 | Git Tag | 內容 |
 |------|------|---------|------|
 | 平台文件 | v2.9.0 | `v2.9.0` | 整體釋出版本 |
-| threshold-exporter | v2.9.0 | `exporter/v2.9.0` | Go binary（含 da-guard / da-batchpr / da-parser） |
+| threshold-exporter | v2.9.0 | `exporter/v2.9.0` | Go binary（含 da-guard / da-parser） |
 | **da-tools** | **v2.9.0** | **`tools/v2.9.0`** | 本 image（50 個 Python CLI + 3 個 bundled Go binary） |
 | da-portal | v2.9.0 | `portal/v2.9.0` | Interactive Tools Hub image |
 | tenant-api | v2.9.25 | `tenant-api/v2.9.25` | Go HTTP API |
@@ -427,7 +405,7 @@ kind load docker-image da-tools:dev --name dynamic-alerting-cluster
 
 `build.sh` 的工作流程：
 1. 從 [`scripts/tools/`](../../scripts/tools/) 複製 [TOOL_FILES](app/build.sh) 列表內的 Python 工具進 build context（原樣複製、攤平成單層目錄，不改寫原始碼——repo 佈局用的 parent-dir `sys.path.insert` 在映像裡指向 `/opt`，無害，見 [#2313](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2313)）
-2. 從 [`components/threshold-exporter/app/cmd/`](../../components/threshold-exporter/app/cmd/) 編 `da-guard` / `da-batchpr` / `da-parser` 三顆 linux/amd64 binary
+2. 從 [`components/threshold-exporter/app/cmd/`](../../components/threshold-exporter/app/cmd/) 編 `da-guard` / `da-parser` / `da-crdecode` 的 linux/amd64 與 arm64 binary
 3. `docker build` → 清理臨時檔
 
 **前置需求**：本地需有 Go 1.26+ 才能編 Go binary。CI 已有 `actions/setup-go`。

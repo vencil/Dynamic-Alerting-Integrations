@@ -556,6 +556,24 @@ class TestMainRouting:
         assert "nonexistent-xyz" in err
         assert "Unknown command" in err or "未知命令" in err
 
+    @pytest.mark.parametrize("argv", [("batch-pr",), ("batch-pr", "apply")])
+    def test_retired_batch_pr_is_an_unknown_command(self, capsys, cli_argv, argv):
+        """`batch-pr` 已退役（#4228，決策 #4211）：是未知命令，rc 2。
+
+        真的走 main()，不只看 COMMAND_MAP：有人把子命令加回來（不論加回
+        COMMAND_MAP 或在 main() 另開分支），這條就紅。批次導入改走
+        `da-tools migrate`（#4226）。
+        """
+        assert "batch-pr" not in entrypoint.COMMAND_MAP
+        cli_argv("da-tools", *argv)
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint.main()
+        assert exc_info.value.code == entrypoint.EXIT_CALLER_ERROR == 2
+        out, err = capsys.readouterr()
+        assert out == ""
+        assert "batch-pr" in err
+        assert "Unknown command" in err or "未知命令" in err
+
     def test_help_exits_zero(self, monkeypatch, cli_argv):
         """--help 應 sys.exit(0)。"""
         cli_argv("da-tools", "--help")

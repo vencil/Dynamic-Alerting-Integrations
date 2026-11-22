@@ -23,7 +23,7 @@ New here? Pick based on your needs:
 - **Thousand-tenant Scale / Config management**: [010 Multi-Tenant Grouping](./010-multi-tenant-grouping.en.md) + [016 conf.d/ directory hierarchy](./016-conf-d-directory-hierarchy-mixed-mode.en.md) + [017 inheritance engine + dual-hash](./017-defaults-yaml-inheritance-dual-hash.en.md) — thousand-tenant config organization and hot-reload
 - **Frontend quality governance**: [013 Component health + Token Density](./013-component-health-token-density-metric.en.md) + [014 Wizard token migration](./014-wizard-arbitrary-value-token-migration.en.md) + [015 data-theme single-track dark mode](./015-data-theme-single-track-dark-mode.en.md)
 - **Accessibility patches**: [012 threshold-heatmap colorblind patch](./012-colorblind-hotfix-structured-severity-return.en.md)
-- **Customer-migration pipeline**: [018 Profile-as-Directory-Default](./018-profile-as-directory-default.en.md) — Profile Builder's default-vs-override rule when emitting into conf.d/
+- **Customer-migration pipeline**: [018 Profile-as-Directory-Default](./018-profile-as-directory-default.en.md) — the default-vs-override rule for conf.d/ (written for the Profile Builder, a library since retired)
 
 ## ADR Index
 

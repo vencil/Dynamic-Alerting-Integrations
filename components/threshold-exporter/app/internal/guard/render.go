@@ -2,8 +2,8 @@ package guard
 
 // Markdown renderer for posting GuardReports as PR comments.
 //
-// Same flavour as batchpr.Plan.Markdown — GitHub-Flavored Markdown
-// so the GitHub Actions wrapper (PR-5) can post the output verbatim
+// GitHub-Flavored Markdown so the GitHub Actions wrapper (PR-5) can
+// post the output verbatim
 // and reviewers see properly-rendered tables.
 //
 // Layout (designed for the "scroll-once and decide" reviewer

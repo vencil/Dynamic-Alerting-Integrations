@@ -20,12 +20,12 @@ reasons:
 Subcommands (mirrors `da-parser <subcommand> [flags]` directly):
 
   import       Parse PrometheusRule YAML(s) into a JSON ParseResult
-               for downstream C-9 Profile Builder consumption.
+               for corpus triage or a downstream script.
   allowlist    Print the embedded VM-only function allowlist (text
                or json format). Useful for customer audits and for
                building local allowlist diff alarms.
 
-Like `batchpr_dispatch.py` (and unlike `guard_dispatch.py`), the
+Unlike `guard_dispatch.py`, the
 subcommand IS preserved in the forwarded args — `da-parser` itself
 takes subcommands at the binary boundary.
 

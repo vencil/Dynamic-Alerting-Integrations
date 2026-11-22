@@ -17,7 +17,15 @@ lang: en
 
 🟢 **Accepted** (v2.8.0, 2026-04-27) — The Profile Builder's PromRule→threshold translator and emission ship with v2.8.0.
 
-2026-11-22: the Profile Builder is wired to no CLI and the batch PR pipeline does not call it; and when a tenant deviates from the median in two clusters, the emission writes a file for that tenant in each of the two directories, so da-guard refuses the whole tree as a duplicate tenant. The bulk-import approach is being re-selected; for the current state see [`batch-pr`](../cli-reference.en.md#batch-pr). This ADR's default-vs-override boundary is unaffected.
+### Revision (2026-11-22): the Profile Builder is retired
+
+The Profile Builder (translator and emission) and the batch PR tool that was meant to call it were deleted from the code on 2026-11-22, with no transition period ([#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228)). Why it was retired: it was never wired to a CLI and had no caller; and when a tenant deviated from the median in two clusters, the emission wrote a file for that tenant in each of the two directories, so da-guard refused the whole tree as a duplicate tenant.
+
+The decision and its discussion are in [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211).
+
+Bulk import of customer rules moves to `da-tools migrate` (migrate-rule), which produces `_custom_alerts` recipes; progress on that path is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226).
+
+This ADR's default-vs-override boundary still holds: it applies to conf.d trees arranged by hand or produced by other tools, and da-guard's redundant-override check judges by it. The sections below that describe the Profile Builder, and the files listed under "Implementation locations", record the design before retirement; those files no longer exist.
 
 ## Context
 
@@ -105,7 +113,7 @@ Once emission ships, customer PRs automatically run the guard's GH Actions wrapp
 | `internal/profile/emit.go` | `EmissionInput.Translate` flag + dispatch into `emitTranslatedProposal`; conf.d-shape template implementation |
 | `internal/profile/translate_test.go` | Table tests covering translator + cluster aggregation (`-race -count=2` stable) |
 
-(These files live under `components/threshold-exporter/app/`, outside the MkDocs site — open from GitHub.)
+(These files lived under `components/threshold-exporter/app/` and were deleted when the Profile Builder was retired; see "Revision" above.)
 
 ## Changelog
 

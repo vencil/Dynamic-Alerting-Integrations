@@ -22,17 +22,15 @@ DX 工具改善追蹤見 [dx-tooling-backlog.md](../internal/dx-tooling-backlog.
 
 v2.7.0 奠定的 Scale Foundation I（`conf.d/` 階層 + `_defaults.yaml` 繼承 + dual-hash + `/effective`）+ 元件健壯化（Design Token 9 支 JSX + Component Health + dark mode ADR-015）+ 測試基礎設施（1000-tenant fixture + Blast Radius CI bot），在 v2.8.0 進化為**客戶導入 pipeline（部分出貨，見下）+ Scale 生產驗證 + 自動化收斂**。
 
-### 客戶導入管線 — 5-step chain ⚠️ 部分出貨
+### 客戶導入管線 ⚠️ 部分出貨
 
-把客戶既有的 PromRule corpus 導入到本平台 conf.d/ 架構的端到端流程，`da-parser` / `da-batchpr` / `da-guard` codify 為可離線執行的 Go binary。⚠️ Profile Builder 只是 library，沒有接到任何 CLI（`da-tools profile build` 尚未出貨），所以 `da-batchpr apply` 的兩個必填輸入沒有工具產生，目前是 experimental（見 [`batch-pr`](../cli-reference.md#batch-pr)；大量導入在 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211) 重新選型）。下圖是設計中的流程： <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
+把客戶既有的 PromRule corpus 導入到本平台 conf.d/ 架構，`da-parser` / `da-guard` codify 為可離線執行的 Go binary，逐租戶轉換走 `da-tools migrate`。v2.8.0 一併出貨的 Profile Builder library 與 Batch PR（`da-batchpr`）從未接通：前者沒有 CLI，後者的兩個必填輸入沒有工具產生。兩者已於 2026-11-22 退役（[#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228)，決策見 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211)）；批次導入改由 migrate-rule 產出 `_custom_alerts` recipe（[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)）。
 
 ```
-PromRule corpus → da-parser → Profile Builder（library）→ da-batchpr apply → da-guard → conf.d/
+PromRule corpus → da-parser（分診）→ da-tools migrate（逐租戶）→ da-guard → conf.d/
 ```
 
 - **`da-parser`**：dialect 偵測（prom / metricsql / ambiguous）+ VM-only 函數 allowlist（`vm_only_functions.yaml` 走 `go:embed`，CI freshness gate 偵測新版 metricsql 上游函數）+ `StrictPromQLValidator` + provenance header（`generated_by` / `source_rule_id` / `parsed_at` / `source_checksum`）。`prom_portable: bool` 旗標讓客戶遷入 VM 後仍能識別「可回 Prom」的子集 — anti-vendor-lock-in 具體承諾
-- **Profile Builder（library-only；`da-tools profile build` CLI 尚未出貨、規劃中）**：cluster 相似 rules → median 演算法決定 cluster 共通閾值 → 寫 `_defaults.yaml`、偏離 tenant 寫 `<id>.yaml` 只含 override；fuzzy matching opt-in 套 duration-equivalence canonicalisation（`[5m]` ≡ `[300s]` ≡ `[300000ms]`）；以 `BuildProposals` / `EmitProposals` library 形式存在、尚無消費者，遵循 [ADR-018](../adr/018-profile-as-directory-default.md) Profile-as-Directory-Default <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
-- **`da-batchpr apply`**：Hierarchy-Aware 分塊 — `_defaults.yaml` 變更打 Base Infrastructure PR、tenant PRs 標 `Blocked by:`；`refresh` 在 Base merge 後自動 rebase 下游；`refresh-source`（+ `--patches-dir`）對 parser bug fix 重寫受影響 tenant 檔案、重生 patch PR
 - **`da-guard`**：Schema / Routing / Cardinality / Redundant-override 四層檢查（Routing 層自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起移交 route generator，da-guard 改報未判定、exit 4）；`.github/workflows/guard-defaults-impact.yml` 自動跑 + sticky PR comment（marker-based update vs create）+ artifact 14d retention
 
 ### Scale Foundation III + Tenant API hardening ✅
@@ -45,7 +43,7 @@ PromRule corpus → da-parser → Profile Builder（library）→ da-batchpr app
 
 - **Server-side Search API** `GET /api/v1/tenants/search`：page_size cap 500 + closed-field free-text + RBAC-before-pagination + 30s TTL `tenantSnapshotCache`，p99 < 200ms @ 1000T
 - **Tenant Manager JSX**：API-first 三層 priority chain（API → platform-data.json → DEMO）+ 429 retry-with-backoff + server-side `q` filter（debounced 300ms）+ URL state（`useURLState` + `useDebouncedValue`）+ self-written `useVirtualGrid`（`filtered.length > 50` 才 virtualize；客戶 500+ tenant DOM-freeze 在 server-cap 層解掉）
-- **Master Onboarding Dual Entry**：Import Journey 5 步（parser / batch-pr / guard inline CLI + Profile Builder library 步驟——`da-tools profile build` CLI 尚未出貨、規劃中）vs Wizard Journey 5 步（cicd-setup → deployment → alert-builder → routing-trace → tenant-manager 全 5/5 真 wizards） <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
+- **Master Onboarding Dual Entry**：Import Journey 5 步（install / parser / migrate / 放進 conf.d / guard）vs Wizard Journey 5 步（cicd-setup → deployment → alert-builder → routing-trace → tenant-manager 全 5/5 真 wizards）
 - **Tenant Manager × Wizard 整合**：TenantCard footer 三鈕（Alert / Route / Preview）deep link + `?tenant_id=` URL 參數預填 + 獨立 `simulate-preview.jsx` widget（4-state machine + 500ms debounce + AbortController）
 - **Smart Views**：`useSavedViews` + `SavedViewsPanel` 接 v2.5.0 backend `/api/v1/views` CRUD；RBAC-aware（Save/Delete hidden when `canWrite=false`）
 

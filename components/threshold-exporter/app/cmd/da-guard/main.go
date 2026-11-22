@@ -25,8 +25,7 @@
 //	Speculative simulation — "would this change break things?"
 //	without writing the change first — is a richer feature and
 //	already partially served by C-7b /simulate for one tenant
-//	at a time. Out of PR-4 scope; revisit in C-9 PR-3 if the
-//	batch translator path needs it.
+//	at a time. Out of PR-4 scope.
 //
 // Exit codes (stable contract for CI YAML / hook scripts):
 //

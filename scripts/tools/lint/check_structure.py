@@ -52,7 +52,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_yaml_strict.py",  # #4064: the one strict YAML loader, PyYAML only (_lib_io re-exports it)
     "_lib_prompt.py",      # #3822: the one read of an interactive answer (unreadable stdin is rc 2)
     "_lib_shadow_report.py",  # #3662: the one definition of validation-report.csv, stdlib only
-    "_lib_godispatch.py",  # v2.8.0 PR-2: shared dispatcher for guard / batchpr / parser
+    "_lib_godispatch.py",  # v2.8.0 PR-2: shared dispatcher for guard / parser
     "_lib_compat.py",      # v2.8.0 PR #432: cross-platform compat helpers (try_utf8_stdout)
     "_lib_exitcodes.py",   # #452 Track A: canonical 0/1/2 exit-code contract (SSOT)
     "_lib_versions.py",    # platform / da-tools version SSOT readers for doc generators

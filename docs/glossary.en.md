@@ -125,7 +125,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 :   The persona responsible for deploying and operating the platform infrastructure and routing. One of the three primary user roles alongside Domain Expert and Tenant; see the role guides.
 
 **Profile Builder**
-:   A Go library of the customer import pipeline (`internal/profile`: `BuildProposals` / `EmitProposals`) that clusters similar alert rules and proposes `_defaults.yaml` and tenant-override candidates ([ADR-018](adr/018-profile-as-directory-default.en.md)). It is wired to no CLI today; see [`batch-pr`](cli-reference.en.md#batch-pr).
+:   A retired customer-import Go library (2026-11-22, [#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228)) that clustered similar alert rules and proposed `_defaults.yaml` and tenant-override candidates ([ADR-018](adr/018-profile-as-directory-default.en.md)). It was never wired to a CLI. To import customer rules, use the per-tenant [`migrate`](cli-reference.en.md#migrate).
 
 **Projected Volume**
 :   A Kubernetes Volume type that mounts multiple ConfigMaps into a single directory. This platform uses it to mount every Rule Pack ConfigMap into Prometheus's rules directory, each set to `optional: true`.

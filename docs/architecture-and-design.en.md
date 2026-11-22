@@ -156,23 +156,18 @@ graph TB
 
 ### 1.3 Customer Migration & GitOps Governance Pipeline (Day-0 / Day-1 / Day-2)
 
-The customer migration pipeline strings together three lifecycle phases — "Day-0 import existing PromRule corpus", "Day-1 GitOps PR splitting & governance", "Day-2 runtime hot-reload" — into an end-to-end flow that runs offline, in air-gapped environments, and with independently-verifiable supply-chain provenance (the diagram is the design):
-
-> ⚠️ The Profile Builder → `da-batchpr apply` step is not wired today (experimental, see [`batch-pr`](cli-reference.en.md#batch-pr)); to import customer rules, use the per-tenant [`migrate`](cli-reference.en.md#migrate).
+The customer migration pipeline strings together three lifecycle phases — "Day-0 import existing PromRule corpus", "Day-1 GitOps PR governance", "Day-2 runtime hot-reload" — into an end-to-end flow that runs offline, in air-gapped environments, and with independently-verifiable supply-chain provenance. Bulk import producing `_custom_alerts` recipes is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226) and not shipped yet:
 
 ```mermaid
 graph LR
     subgraph Day0["Day-0: Customer Migration"]
         PR["PromRule corpus<br/>(CRD / YAML)"] -->|da-parser| JSON["Canonical JSON<br/>+ prom_portable flag"]
-        JSON -->|Profile Builder library| PB["Profile Builder<br/>(library-only, cluster + median, ADR-018)<br/>CLI not yet shipped (planned)"]
+        PR -->|per-tenant migrate| MIG["conf.d tenant file<br/>(.migration/conf.d/&lt;id&gt;.yaml)"]
     end
 
-    subgraph Day1["Day-1: GitOps Hierarchy-Aware Governance"]
-        PB -->|da-batchpr apply| PR1["Base Infrastructure PR<br/>(_defaults.yaml)"]
-        PB -->|da-batchpr apply| PR2["Tenant Override PRs<br/>(&lt;id&gt;.yaml — Blocked by Base)"]
-        PR1 -.->|refresh --base-merged| PR2
-        PR1 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Cardinality / Redundant-override<br/>+ route generator: Routing)"]
-        PR2 -->|da-guard CI gate| LINT
+    subgraph Day1["Day-1: GitOps Governance"]
+        MIG -->|customer's own PR| PR2["conf.d PR<br/>(_defaults.yaml + &lt;id&gt;.yaml)"]
+        PR2 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Cardinality / Redundant-override<br/>+ route generator: Routing)"]
     end
 
     subgraph Day2["Day-2: Runtime"]
@@ -188,7 +183,6 @@ graph LR
 
 **Full-lifecycle governance features:**
 - **Zero vendor lock-in**: the migration tooling keeps a "still-portable-to-Prom" marker per rule, so customers retain visibility into the subset that can return to Prometheus even after migrating to VictoriaMetrics.
-- **GitOps PR ordering is enforced**: the Base PR merges first → tenant override PRs auto-rebase; a parser fix can granularly regenerate patch PRs for specific rules without re-running the whole batch.
 - **CI gates report cleanly**: da-guard's Schema / Cardinality / redundant-override checks, plus Routing judged by the route generator in the same workflow (da-guard no longer judges routing since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)), post as a sticky PR comment (the same comment updates in place — no spam) + retained artifacts.
 - **Three delivery paths**: Docker image / multi-arch static binary / air-gapped tar — every path is cosign-keyless-signed + SBOM (SPDX / CycloneDX); customers verify supply-chain in one command via `make verify-release`.
 
@@ -210,7 +204,7 @@ The table below indexes the **core design concepts** (timeless capabilities, not
 | **Alert Routing** | Multi-channel delivery ensures critical alerts reach the right people | 6 receiver types, Timing Guardrails, Enforced Routing | [config-driven.en.md](design/config-driven.en.md) |
 | **Tenant API** | Domain experts self-serve without YAML knowledge | Commit-on-write + RBAC hot-reload + PR write-back + effective-config endpoint (inheritance applied) | [config-driven.en.md](design/config-driven.en.md) |
 | **Rule Packs** | Zero PR conflicts for cross-team parallel development | 16 Projected Volumes + three-part structure + bilingual annotations | [rule-packs.en.md](design/rule-packs.en.md) |
-| **Customer Migration Pipeline** | Existing PromRule corpus → `conf.d/` (the Profile Builder → Batch PR step is not wired yet, see §1.3); anti-vendor-lock-in; zero orphan-tenant risk | 5-step migration chain (parse → Profile Builder → Hierarchy-Aware Batch PR → Dangling Defaults Guard). Diagram in [§1.3](#13-customer-migration--gitops-governance-pipeline-day-0--day-1--day-2) | [migration-toolkit-installation.en.md](migration-toolkit-installation.en.md) |
+| **Customer Migration Pipeline** | Existing PromRule corpus → `conf.d/`; anti-vendor-lock-in; zero orphan-tenant risk | Migration chain (parse → per-tenant `migrate` → conf.d PR → Dangling Defaults Guard). Diagram in [§1.3](#13-customer-migration--gitops-governance-pipeline-day-0--day-1--day-2) | [migration-toolkit-installation.en.md](migration-toolkit-installation.en.md) |
 | **Performance Architecture** | 500+ tenant millisecond processing; resource cost barely grows with tenant count | Pre-computed Recording Rules, O(M) complexity, Cardinality Guard | [benchmarks.en.md](benchmarks.en.md) |
 | **High Availability (HA)** | SLA 99.9%+ alert reliability, zero-downtime rolling updates | 2 replicas, PDB, `max by(tenant)` prevents double-counting | [high-availability.en.md](design/high-availability.en.md) |
 | **Future Roadmap** | Permissions × observability loop × intelligence | Field-level RBAC, Auto-Discovery, DaC, Anomaly-Aware Threshold | [roadmap-future.en.md](design/roadmap-future.en.md) |

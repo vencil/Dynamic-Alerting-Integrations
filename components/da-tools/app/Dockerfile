@@ -69,8 +69,8 @@ COPY VERSION .
 # Tool scripts + metric-dictionary.yaml (assembled by build.sh from scripts/tools/)
 COPY tools/ ./
 
-# ── Bundle da-guard / da-batchpr / da-parser binaries ─────────────
-# `da-tools guard|batch-pr|parser <subcommand>` shells out to these Go
+# ── Bundle da-guard / da-parser binaries ──────────────────────────
+# `da-tools guard|parser <subcommand>` shells out to these Go
 # binaries (see the *_dispatch.py shims). Bundling them at
 # /usr/local/bin lets the image work air-gapped (no $PATH lookup
 # outside the container, no extra install step).
@@ -82,9 +82,6 @@ COPY tools/ ./
 ARG TARGETARCH
 COPY da-guard.${TARGETARCH} /usr/local/bin/da-guard
 RUN chmod +x /usr/local/bin/da-guard
-
-COPY da-batchpr.${TARGETARCH} /usr/local/bin/da-batchpr
-RUN chmod +x /usr/local/bin/da-batchpr
 
 COPY da-parser.${TARGETARCH} /usr/local/bin/da-parser
 RUN chmod +x /usr/local/bin/da-parser

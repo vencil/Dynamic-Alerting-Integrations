@@ -1868,8 +1868,8 @@ class TestRealRepo:
         options now has an option table."""
         assert result["stats"]["v7_suppressed_options"] == 14, result["stats"]
         assert result["stats"]["v7_sections_without_option_table"] == 0
-        # guard / batch-pr / parser: Go wrappers, no argparse parser to compare
-        assert result["stats"]["v7_sections_without_parser"] == 3, result["stats"]
+        # guard / parser: Go wrappers, no argparse parser to compare
+        assert result["stats"]["v7_sections_without_parser"] == 2, result["stats"]
 
     @_needs_node
     def test_the_portal_carrier_judged_the_real_playground(self, result):
@@ -1944,7 +1944,7 @@ class TestRealRepo:
         captured, unscoreable, blind, faults = mod.introspect_parsers()
         assert cmap and not faults and not blind, (faults, blind)
         assert len(captured) + len(unscoreable) + len(blind) == len(cmap)
-        assert {u.split()[0] for u in unscoreable} == {"guard", "parser", "batch-pr"}
+        assert {u.split()[0] for u in unscoreable} == {"guard", "parser"}
 
     def test_every_carrier_is_exercised_on_the_real_tree(self, result):
         s = result["stats"]

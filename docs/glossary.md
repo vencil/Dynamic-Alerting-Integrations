@@ -125,7 +125,7 @@ lang: zh
 :   負責部署、維運平台基礎設施與路由的角色 persona。與 Domain Expert、Tenant 並列三大使用者角色，見角色指南。
 
 **Profile Builder**
-:   客戶導入管線中的 Go library（`internal/profile`：`BuildProposals`／`EmitProposals`），把相似的告警規則聚類，提出 `_defaults.yaml` 與租戶 override 的候選（[ADR-018](adr/018-profile-as-directory-default.md)）。目前沒有接到任何 CLI，見 [`batch-pr`](cli-reference.md#batch-pr)。
+:   已退役的客戶導入 Go library（2026-11-22，[#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228)）：曾把相似的告警規則聚類，提出 `_defaults.yaml` 與租戶 override 的候選（[ADR-018](adr/018-profile-as-directory-default.md)）。從未接到任何 CLI。導入客戶規則請用逐租戶的 [`migrate`](cli-reference.md#migrate)。
 
 **Projected Volume**
 :   Kubernetes Volume 類型，可將多個 ConfigMap 掛載至同一目錄。本平台用於將所有 Rule Pack ConfigMap 掛載至 Prometheus 的 rules 目錄，每個設定 `optional: true`。

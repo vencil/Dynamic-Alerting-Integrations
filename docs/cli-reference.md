@@ -106,7 +106,7 @@ da-tools <command> --help
 | 已宣告的輸入在判定之後才變動（目錄或檔案被刪、目錄下被選中的檔消失，例如 GitOps 換掉掛載的 `..data`） | `2` | stderr 一行 `ERROR:` 點名旗標與路徑（da-guard 之後的讀取看到的，附 da-guard 自己的那一行）；不會用比呼叫端給的更少的輸入作答，也不會降級成提示、某列「未檢查」或怪到 da-guard 頭上。⚠️ 先前依命令而異：`generate-routes` 與 `explain-route` 印出沒有租戶的結果、rc 0；`config-diff` 少掉 inhibit 變更；`lint --rule-pack-dir` 記成一條 ERROR、rc 0；`drift-detect` 與 `migrate-credentials` crash 或交出降級的計畫；`deprecate` 略過讀不到的載體；`grafana-import --dashboard-dir` 以點錯旗標（`--dashboard`）的部分答案結束、前面的 dashboard 已 apply；`state-reconcile` 列為無法解決的 drift、rc 1（[#3724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3724)）。已宣告的 conf.d 樹（[#3965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3965)）：判定時記下 da-guard 這次 walk 的身分（`config_hash`，[cli-reference §guard](#guard)），之後 da-guard 每份走過這棵樹的文件都拿來比對，讀到的是另一棵樹（少一個檔、多一個檔、改名、改內容）就以這一行拒絕，不論 da-guard 的結束碼；工具自己的寫入以判定的身分為前置條件（`da-guard write` 在寫任何東西之前拒絕另一棵樹），寫完改以寫後的身分為準；da-guard 一次執行內各次 walk 讀到不同的樹時也以 `2` 拒絕。故障注入閘門在每個已宣告輸入判定後的每次讀取處（含啟動子行程之前）讓它消失，已宣告的 conf.d 樹另在判定當下與每個子行程啟動前逐一移除樹中的每個檔；⚠️ 涵蓋不到：conf.d 以外的輸入由 Go 讀者在自己行程內的讀取，以及旗標指向的 symlink 在判定後被換成另一棵可讀的樹（那是內容被換，不是消失） |
 | 已宣告的 YAML／JSON 輸入裡，同一個 mapping 的鍵（JSON 物件的名稱）寫了兩次 | `2` | stderr 一行點名旗標、路徑與那個鍵，YAML 另附兩次出現的行號（例如 `ERROR: --policy p.yaml: not valid YAML: the key 'denied_functions' at line 2 is given again (first at line 1); a mapping takes a key once`）。鍵的比對照 yaml.v3（節點種類＋原文）；`<<` merge 帶進來的鍵不算，顯式鍵可以覆蓋它，但同一個 mapping 只能有一個 `<<`。鍵若以 alias 寫成（`*a : 1`），訊息改點名該 mapping 的行，因為 alias 的位置就是錨點的位置。讀同一類檔案的其他路徑判法相同：`migrate`／`onboard` 與 metric dictionary lint 讀的 metric dictionary（rc 2，點名檔案）、`grafana-import --dashboard-dir` 與 ConfigMap 檢查讀的 dashboard（該檔一列 fail，點名檔名），以及 `state-reconcile --state-dir` 讀的 state 檔。⚠️ 先前一律靜默取後寫的值：lint 政策 `denied_functions: [x]` 後接 `denied_functions: []` 就不再禁止 x，部署端 policy 後接 `allowed_domains: ['*']` 就放行任何網域（[#4064](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4064)，⚠️ Breaking） |
 
-各命令章節的結束碼表列的是主要觸發條件，**不是窮舉**：輸入壞到讓工具拋出未捕捉例外時，Python 工具一律是上面那列的 `2`（`tenant-verify` 也是，[#3393](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3393) 前是 `1`），Go 工具（`guard`、`batch-pr`、`parser`）的 panic 也是 `2`，表上不逐一列出。不經 `da-tools`、直接執行 `scripts/tools/` 下的腳本時也一樣：只要該腳本載入了 `_lib_exitcodes`（多數工具經 `_lib_io`／`_lib_python` 間接載入），之後發生的 crash 就是 `2`；在那之前的 import 期錯誤（例如缺 PyYAML）仍是 `1`。互動模式（`python -i`）不受影響。
+各命令章節的結束碼表列的是主要觸發條件，**不是窮舉**：輸入壞到讓工具拋出未捕捉例外時，Python 工具一律是上面那列的 `2`（`tenant-verify` 也是，[#3393](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3393) 前是 `1`），Go 工具（`guard`、`parser`）的 panic 也是 `2`，表上不逐一列出。不經 `da-tools`、直接執行 `scripts/tools/` 下的腳本時也一樣：只要該腳本載入了 `_lib_exitcodes`（多數工具經 `_lib_io`／`_lib_python` 間接載入），之後發生的 crash 就是 `2`；在那之前的 import 期錯誤（例如缺 PyYAML）仍是 `1`。互動模式（`python -i`）不受影響。
 
 > ⚠️ 前兩列曾回 `1`，與各子命令「有發現」的 `1` 撞碼——`docker run … da-tools:<移動的 tag> <子命令>` 在子命令改名、或映像尚未收錄該子命令時，在 CI 看起來與「工具正常跑完並找到東西」完全同形（且 stdout 是一份空報告）。這兩列的 `2` 是「工具沒跑」；其他 `2` 不一定，見上面寫 stdout 失敗那一列。消費端不要把 `2` 與 `1` 合併判定。
 
@@ -201,7 +201,6 @@ da-tools <command> --help
 | `evaluate-policy` | Policy-as-Code DSL 評估引擎 | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | `--config-dir <dir>` |
 | `guard` | Dangling Defaults Guard 包裝（v2.8.0），shell-out 至 `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
-| `batch-pr` | Migration Batch PR Pipeline 包裝（v2.8.0），shell-out 至 `da-batchpr` Go binary | `apply\|refresh\|refresh-source [flags]` |
 | `parser` | PromRule parser 包裝（v2.8.0），shell-out 至 `da-parser` Go binary；strict-PromQL 相容性檢查 + dialect 分類 | `import\|allowlist [flags]` |
 | `tenant-verify` | 印 tenant effective config + merged_hash（v2.8.0；incremental migration playbook rollback checklist） | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` 或 `--all --json` |
 | `test-notification` | 多通道通知連通性測試（驗證 receiver 可達性） | `--config-dir <dir>` |
@@ -3197,90 +3196,6 @@ da-tools guard effective --config-dir conf.d/
 
 ---
 
-#### batch-pr
-
-Migration Batch PR Pipeline（v2.8.0）。Python 包裝 shell-out 到 `da-batchpr` Go binary，設計目標是把 customer 的 PromRule corpus 走完「emit → 開 PR → review → Base merge → tenant rebase → 必要時 data-layer hot-fix」整套流程。
-
-> ⚠️ **experimental：目前沒有任何出貨的工具產生 `apply` 的兩個必填輸入。** `--plan` 的 Plan JSON 與 `--emit-dir` 的 emit 輸出原本應由 Profile Builder（`BuildProposals`／`EmitProposals`）與 `BuildPlan` 產生，但這兩者都沒有接到任何 CLI；而且 Profile Builder 輸出的目錄是「一個規則群組（cluster）一個目錄」，同一個租戶在兩個群組都偏離中位數時，兩個目錄會各有一份該租戶的檔，那棵樹會被 da-guard 以重複租戶拒收；在每個群組都等於中位數的租戶則一份檔都沒有，從樹上消失。要導入客戶規則，請用逐租戶的 [`migrate`](#migrate)。大量導入的技術選型在 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211) 重做，可能整組退役（breaking）。
-
-**用法**
-
-```bash
-da-tools batch-pr <subcommand> [flags]
-```
-
-**子命令**
-
-| 子命令 | 說明 |
-|---|---|
-| `apply` | 從 Plan + emit 目錄開出（或更新）tenant chunk PR，照 Plan 的 items 依序處理（Base Infrastructure PR 先、tenant chunk 後）；怎麼分組由 Plan 決定，`apply` 自己不分。兩個輸入目前都要自備，見上方 experimental 說明 |
-| `refresh` | Base PR merge 後對 `Blocked by` tenant branches 跑 `git rebase --onto <merged-sha>`，conflict 落地到 `refresh-report.md` |
-| `refresh-source` | 已知一組 source rule 因 parser 修 bug 導致 emission 變化時，把對應 tenant PR 的受影響檔案重寫 + 推上去（data-layer hot-fix）|
-
-**Binary 解析順序**
-
-1. `--da-batchpr-binary <path>`（顯式覆寫）
-2. `$DA_BATCHPR_BINARY` 環境變數
-3. `$PATH` 上的 `da-batchpr`
-
-找不到時印出安裝指引（從 `tools/v*` release 下載 / `sh scripts/ops/go_build.sh components/threshold-exporter/app ./cmd/da-batchpr /usr/local/bin/da-batchpr`）。
-
-**`apply` 主要 flags**
-
-| Flag | 預設 | 說明 |
-|---|---|---|
-| `--plan <path>` | （必填）| Plan JSON，形狀是 `batchpr.Plan`；沒有 CLI 產生它，需自備 |
-| `--emit-dir <dir>` | （必填）| 要推進 PR 的檔案目錄（原設計為 Profile Builder 的 emit 輸出，沒有 CLI 產生）；CLI walk + AllocateFiles bucketing |
-| `--repo <owner/name>` | （必填）| GitHub repo |
-| `--workdir <dir>` | （必填）| 本地 clone（git ops 的 CWD） |
-| `--base-branch <name>` | `main` | 新 PR 的 base |
-| `--branch-prefix <p>` | batchpr 預設 | 自訂 branch 前綴 |
-| `--commit-author "Name <email>"` | git config | commit author |
-| `--dry-run` | false | 跑 orchestration 但不執行 git/GitHub API |
-| `--inter-call-delay-ms <n>` | 0 | per-item delay（軟化 GitHub secondary rate limit） |
-| `--report <path>` | `-`（stdout） | Markdown 報表 |
-| `--result-json <path>` | 空（不寫） | JSON ApplyResult；`-` = stdout，空 = skip（避免與 `--report` 同 stdout 黏在一起） |
-
-**`refresh` / `refresh-source` 主要 flags**
-
-| Flag | 預設 | 說明 |
-|---|---|---|
-| `--input <path>` | `-`（stdin） | RefreshInput / RefreshSourceInput JSON |
-| `--workdir <dir>` | （必填）| 本地 clone |
-| `--patches-dir <dir>` | （必填，僅 refresh-source）| `<dir>/<pr-number>/<file-paths>` 結構，CLI 載入到每個 target 的 Files map |
-| `--report <path>` | `-` | Markdown 報表 |
-| `--result-json <path>` | 空（不寫） | 同 apply |
-
-**Exit codes**
-
-| Code | 意義 |
-|---|---|
-| 0 | clean — 全部 target 成功或合理 skipped（closed/merged PR / no-change / dry-run） |
-| 1 | per-target failures 或 refresh 出現 conflicts（CI hook 不該把 conflicts 當 green）|
-| 2 | caller error（flag 錯、JSON parse 失敗、路徑找不到、binary 找不到）|
-
-**範例**
-
-```bash
-# 開 PR：把自備的 emit 目錄依 Plan 分批 push 進 customer repo
-da-tools batch-pr apply \
-    --plan plan.json --emit-dir ./emit/ \
-    --repo vencil/customer --workdir ./customer-repo
-
-# Base PR merge 後：rebase tenant branches 到新 main HEAD
-da-tools batch-pr refresh \
-    --input refresh.json --workdir ./customer-repo
-
-# Parser bug fix：把 200 條 source rule 重新 emit 進現有 tenant PR
-da-tools batch-pr refresh-source \
-    --input refresh-source.json --patches-dir ./patches/ \
-    --workdir ./customer-repo
-```
-
-**Honest scope（v2.8.0 v1）**：JSON-input-first 是 v1 contract（machine-friendly + automation-friendly）；convenience flags（`--base-merged-sha N`、`--source-rule-ids id1,id2,id3`）defer 後續 polish。Python 包裝走 shell-out 同 `guard` pattern，binary 由 `tools/v*` Release / da-tools docker image bundle 提供。
-
----
-
 #### parser
 
 MetricsQL-as-Superset PromRule parser（v2.8.0）。Python 包裝 shell-out 到 `da-parser` Go binary，把 customer 的 `PrometheusRule` CRD YAML 解析為標準 `ParsedRule` JSON，per rule 標註 dialect（`prom` / `metricsql` / `ambiguous`）+ VM-only function 列表 + `prom_compatible: bool`（用 `prometheus/promql/parser` 跑 strict 相容性檢查）。
@@ -3357,7 +3272,7 @@ da-tools parser allowlist --format json
 | `vm_only_functions` | []string | 該 rule 用到的 VM-only 函數，sorted |
 | `analyze_error` | string | metricsql parse 失敗訊息（dialect=ambiguous 時填）|
 | `strict_prom_error` | string | `prometheus/promql/parser` 失敗訊息（PromCompatible=false 時填）|
-| `source_rule_id` | string | `<source-file>#groups[i].rules[j]` — `da-batchpr refresh --source-rule-ids` 的反向查詢 key |
+| `source_rule_id` | string | `<source-file>#groups[i].rules[j]` — 指回這條 rule 在來源檔的位置 |
 | `provenance` | object | `generated_by` / `source_file` / `parsed_at` / `source_checksum`（rule batch 共用）|
 
 **Anti-vendor-lock-in 承諾**：customer 用 `--fail-on-non-portable` 跑完一個 corpus 全綠時，這批 rule 在 vanilla Prometheus 上**也**能 evaluate。前提是 `vm_only_functions.yaml` 的版本 pin 與 go.mod 中的 metricsql 版本一致——**freshness CI gate** (`vm_only_functions_freshness_test.go`) 確保 metricsql 升版時不會 silently 漏掉新函數。

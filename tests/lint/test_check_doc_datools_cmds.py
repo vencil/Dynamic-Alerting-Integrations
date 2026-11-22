@@ -3,7 +3,7 @@
 Pins the L4 doc-staleness defense added after #141 Track A / F3: the try-local
 README showed `da-tools ... guard /conf.d`, but the shipped CLI takes
 `guard defaults-impact`. Scoped to the binary-wrapper subcommands (guard /
-parser / batch-pr) — a broad command-tree check was rejected as too FP-heavy
+parser) — a broad command-tree check was rejected as too FP-heavy
 (scenario docs use illustrative pseudo-commands even in code blocks).
 """
 from __future__ import annotations
@@ -57,9 +57,6 @@ class TestDatoolsSubcommands:
     def test_flags_bogus_parser_subcommand(self, tmp_path):
         assert len(_scan(tmp_path, _FENCE.format("da-tools parser frobnicate"))) == 1
 
-    def test_passes_batchpr_refresh_source(self, tmp_path):
-        assert _scan(tmp_path, _FENCE.format("da-tools batch-pr refresh-source")) == []
-
     def test_ignores_prose_outside_code_block(self, tmp_path):
         # bare prose mention (no fence) must not be scanned
         assert _scan(tmp_path, "Use `da-tools guard /conf.d` in your pipeline.\n") == []
@@ -75,8 +72,7 @@ class TestDatoolsSubcommands:
 class TestSubcommandMapDrift:
     """WRAPPER_SUBCOMMANDS must stay in sync with the dispatchers (the SOT)."""
 
-    _FILES = {"guard": "guard_dispatch.py", "parser": "parser_dispatch.py",
-              "batch-pr": "batchpr_dispatch.py"}
+    _FILES = {"guard": "guard_dispatch.py", "parser": "parser_dispatch.py"}
 
     @staticmethod
     def _declared_subcommands(path: Path) -> set:

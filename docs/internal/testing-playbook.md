@@ -187,7 +187,7 @@ CLI `--help` **不再使用全文快照**（任何 wording / 空白 / 排版微�
 
 ### Exit-code 合約（0/1/2，#452 Track A）
 
-da-tools Python 工具與 Go binary（da-guard / da-parser / da-batchpr）共用同一 exit-code SSOT [`scripts/tools/_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py)：
+da-tools Python 工具與 Go binary（da-guard / da-parser）共用同一 exit-code SSOT [`scripts/tools/_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py)：
 
 | Code | 常數 | 語意 |
 |---|---|---|
