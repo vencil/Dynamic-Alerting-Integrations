@@ -9,191 +9,129 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-10-16
+updated_at: 2026-11-22
 ---
 # ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略
 
 > **Language / 語言：** **中文 (Current)** | [English](./016-conf-d-directory-hierarchy-mixed-mode.en.md)
 
-> v2.7.0 Scale Foundation 第一塊。與 [ADR-017](017-defaults-yaml-inheritance-dual-hash.md)（繼承語意）為一組。
-
 ## 狀態
 
-✅ **Accepted**（v2.7.0, 2026-04-19）— Directory Scanner 混合模式 + `migrate-conf-d` CLI 已隨 v2.7.0 出貨。
+✅ **Accepted**（v2.7.0，2026-04-19）。與 [ADR-017](017-defaults-yaml-inheritance-dual-hash.md)（`_defaults.yaml` 的繼承語意）為一組。
 
-2026-10-16 修訂：路由面只剩路由生成器一個讀者，da-guard 不再有自己的路由層；表格與路由面段落改寫為現況。
+2026-09-28 修訂：路由面改跟閾值面走同一套目錄階層，不再只讀根目錄。
 
-## 背景
+2026-10-16 修訂：路由面只剩路由生成器一個讀者，da-guard 不再有自己的路由層。
 
-v2.6.x 的 Directory Scanner 只認識 **flat** 結構：所有 tenant YAML 放在同一個 `conf.d/` 資料夾。
-當 tenant 數量來到 200+ 以上，flat 結構產生以下痛點：
-
-1. **人類可讀性差**：200 個 YAML 檔案排在一起，查找特定 domain/region 的 tenant 需要依賴 grep
-2. **PR 審查困難**：修改 defaults 影響多少 tenant 無法從目錄結構直觀看出
-3. **CI blast radius 不明**：`_defaults.yaml` 變動時無法快速判斷影響範圍
-4. **metadata 重複**：每個 tenant 都要手動填寫 `_metadata.domain/region/environment`，與目錄結構語意重複
-
-v2.7.0 規劃期 `generate_tenant_fixture.py` 已支援 `--hierarchical` 模式（`domain/region/env` 三層），
-驗證了千租戶分層結構的可行性。本 ADR 正式定義 Directory Scanner 如何支援此結構。
+2026-11-22 修訂：改寫為現行行為；標明「由目錄路徑推斷 `_metadata` 預設值」尚未實作（見「後果與已知限制」）。
 
 ## 決策
 
-### 採用混合模式（Mixed Mode）
-
-Directory Scanner 同時支援 flat 和分層結構，**不強制遷移**。
+**`conf.d/` 同時接受平面與分層兩種布局，不強制遷移。** 租戶設定可以全部放在根目錄（平面），也可以放進任意深度的子目錄；兩種可以混在同一棵樹裡。
 
 ```
 conf.d/
-├── legacy-tenant-a.yaml          ← flat（向下相容）
-├── legacy-tenant-b.yaml
-├── _defaults.yaml                ← 全局 defaults（可選）
+├── legacy-tenant-a.yaml          ← 平面（向下相容）
+├── _defaults.yaml                ← 全域 defaults（可選）
 ├── finance/                      ← domain 層
-│   ├── _defaults.yaml            ← domain-level defaults
-│   ├── us-east/                  ← region 層
-│   │   ├── prod/                 ← environment 層
-│   │   │   ├── _defaults.yaml   ← env-level defaults
-│   │   │   ├── fin-db-001.yaml
-│   │   │   └── fin-db-002.yaml
-│   │   └── staging/
-│   │       └── fin-db-003.yaml
-│   └── eu-central/
-│       └── prod/
-│           └── fin-db-004.yaml
+│   ├── _defaults.yaml            ← domain 層 defaults
+│   └── us-east/                  ← region 層
+│       └── prod/                 ← environment 層
+│           ├── _defaults.yaml
+│           └── fin-db-001.yaml
 └── logistics/
     └── ap-northeast/
         └── prod/
             └── log-db-001.yaml
 ```
 
-### 目錄層次：domain → region → env（建議，非強制）
+1. **深度不限，命名是建議。** 建議用 `{domain}/{region}/{env}/` 三層，與 `_metadata` 的欄位對齊；但任何深度都會被掃描。`_defaults.yaml` 的繼承也沒有深度上限：從根目錄到租戶所在目錄，每一層的 `_defaults.yaml` 都進繼承鏈（語意見 ADR-017）。
+2. **哪些檔案算數。** 掃描遞迴走訪整棵樹，略過隱藏目錄。檔名轉成小寫後以 `.yaml`／`.yml` 結尾才讀；以 `_` 開頭的是平台檔（`_defaults.yaml` 等），不是租戶設定、不產生 metric。
+3. **閾值面與路由面走同一套階層。** threshold-exporter 吐出的 metric、`/effective`，與路由生成器產生的 Alertmanager 路由，讀的是同一棵樹。路由設定沿目錄鏈逐層繼承，語意記在 [ADR-017 決策 9](017-defaults-yaml-inheritance-dual-hash.md#9-路由設定沿目錄逐層繼承)。整棵樹都讀之後，子目錄有設定檔本身不是錯誤；會擋下的是：子目錄檔案裡出現 `_routing_enforced`（rc 2，它只認根目錄）、同一個租戶 id 在多個檔案宣告（rc 1），以及 ADR-017 決策 9 列出的其餘錯誤。
+4. **遷移是可選的。** `migrate-conf-d` 依每個租戶的 `_metadata.domain/region/environment` 規劃搬移，預設只列出計畫（`--dry-run`），`--apply` 才搬。缺 `_metadata` 的檔案不動，列出來讓人決定。
 
-- 層次深度 **0-3 層皆合法**（flat = 0 層）
-- 建議命名：`{domain}/{region}/{env}/` — 與 `_metadata` 欄位對齊
-- Scanner 不校驗目錄名 vs `_metadata` 對應（僅產生 warning 級 log）
-- 超過 3 層的子目錄也會被掃描，`_defaults.yaml` 繼承同樣**沒有深度上限**：從根目錄到租戶所在目錄，每一層的載體都會進繼承鏈（`pkg/config/inheritance_graph.go` 的 `CollectDefaultsChain` 一路往上走到根目錄，不限層數）。⚠️ 2026-09-28 更正（#2326）：這一行原本寫「繼承只認 domain/region/env 三層」，程式碼從來沒有這個限制；三層是命名建議，不是上限
+### 範例：規劃一次遷移
 
-### 目錄路徑產生 metadata 預設值
+輸入是一棵平面的 `conf.d/`，一個租戶有 `_metadata`、一個沒有：
 
-- 若 tenant YAML 缺少 `_metadata.domain`，Scanner 從父目錄路徑推斷（第 1 層 = domain, 第 2 層 = region, 第 3 層 = env）
-- `_metadata` 欄位明確設定時 **優先於路徑推斷**（explicit override）
-- 路徑推斷值 ≠ `_metadata` 值時產生 **warning log**（不阻擋啟動）
+```yaml
+# fin-db-001.yaml
+tenants:
+  fin-db-001:
+    _metadata:
+      domain: finance
+      region: us-east
+      environment: prod
+    mysql_connection_usage_percent: "70"
+```
 
-### 遷移策略
+```yaml
+# legacy-db.yaml
+tenants:
+  legacy-db:
+    mysql_connection_usage_percent: "75"
+```
 
-1. **零中斷升級**：v2.7.0 Scanner 直接相容 v2.6.x flat 結構，不需任何改動
-2. **`migrate-conf-d` 工具為可選**：提供 `--dry-run` 和 `--apply` 模式
-3. **使用 `git mv` 保留歷史**：遷移工具生成 git mv 指令，不直接 mv
-4. **`--infer-from metadata`**：根據 `_metadata.domain/region/environment` 推斷目標目錄
-5. **不處理 `_metadata` 缺失的檔案**：skip 並提示人類決定
+`python3 scripts/tools/dx/migrate_conf_d.py --conf-d conf.d --dry-run` 的輸出（結束碼 0，不搬任何檔；第一行的路徑省略）：
 
-### 掃描行為
+```text
+   Migratable:        1
+   Skip (no metadata): 1
+   Skip (nested):      0
+   Skip (system):      0
+   Skip (unplaceable): 0
 
-- Scanner 啟動時遞迴掃描 `conf.d/` 及所有子目錄
-- `_defaults.yaml` 不視為 tenant 設定（不產生 metric）
-- 以 `.yaml` / `.yml` 結尾且不以 `_` 開頭的檔案視為 tenant config
-- 以 `_` 開頭的檔案為系統檔（`_defaults.yaml`, `_metadata.yaml` 等）
+📋 Dry-run — `da-guard write --dry-run` accepts these moves:
 
-## 考量的替代方案
+  fin-db-001.yaml -> finance/us-east/prod/fin-db-001.yaml
 
-### A: 強制遷移至分層結構
+Run with --apply to move them. (1 files will be moved)
 
-❌ 破壞向下相容，強迫所有既有用戶在升級 v2.7.0 時一次性重整 conf.d/。
-對於只有 10-20 tenant 的小型部署是不必要的負擔。
+⚠️  1 file(s) skipped (missing _metadata). Decide manually:
+    legacy-db.yaml
+```
 
-### B: 僅支援 flat（現狀）
+`--apply` 把整份計畫當成一批交給 da-guard 判定：任何一筆搬不成（目的地沒有讀者會讀、已存在、搬完會讓整棵樹變差），一個檔都不搬、結束碼 2。樹在 git 工作目錄裡時，每個來源都要是 git 追蹤的檔案，搬完後 index 的效果與 `git mv` 相同。
 
-❌ 無法解決 200+ tenant 的可讀性和 blast radius 問題。
-v2.7.0 規劃期 benchmark 已證明分層結構在效能上沒有退化。
+## 背景
 
-### C: 使用外部索引（DB/JSON）代替目錄結構
+平面布局把所有租戶 YAML 放在同一個 `conf.d/`。租戶到兩百個以上時：
 
-❌ 偏離 "config-as-code" 原則，增加部署複雜度。
-Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
+1. **難找**：查某個 domain／region 的租戶只能靠 grep。
+2. **影響範圍看不出來**：改一份 defaults 會影響多少租戶，從目錄結構看不出來，PR 審查與 CI 都難判斷。
+3. **metadata 重複**：每個租戶都要手填 `_metadata.domain/region/environment`，與目錄結構表達的是同一件事。
 
-## 影響
+分層布局解決前兩點：目錄就是範圍，一份 `_defaults.yaml` 只影響它底下的租戶。第三點見「後果與已知限制」。
 
-- **Directory Scanner**：升級為遞迴掃描 + 混合模式識別
-- **generate_tenant_fixture.py**：支援 `--hierarchical` 千租戶 fixture 產生
-- **Prometheus metrics**：目錄深度不影響 metric label（tenant-id 仍為唯一 label key）
-- **CI/CD**：`migrate-conf-d --dry-run` 可納入 PR check
-- **文件**：新增 `docs/scenarios/multi-domain-conf-layout.md`
+## 後果與已知限制
 
-### ⛔ 支援面邊界：階層布局只有 threshold-exporter 完整實作（PR #1343，2026-08-04 補記；conf.d 家族票 #1911）
+- **由目錄路徑推斷 `_metadata` 預設值，尚未實作。** 原決策是：租戶缺 `_metadata.domain` 等欄位時，由所在目錄補上（第 1 層是 domain、第 2 層 region、第 3 層 environment），明確寫出的 `_metadata` 優先。現行行為是 threshold-exporter 的 effective metadata 只讀 `_metadata`，目錄路徑不參與；`check_path_metadata_consistency.py` 只在目錄的第一段與 `domain`、或某一段是已知環境名而與 `environment` 不一致時警告，不擋 commit。所以分層之後，`_metadata` 仍要手填。
+- **metric 不帶路徑。** 目錄深度不影響 metric label，`tenant` 仍是唯一的租戶鍵；搬目錄不會改變任何 series。
+- **子目錄 `_defaults.yaml` 裡的路由鍵不被讀。** 子目錄 `_defaults.yaml` 的 `defaults:` 區塊裡寫 `_routing*`，沒有任何元件消費；路由生成器會點名它（`routing_in_unread_location`），`--validate` 時擋下。
 
-本 ADR 的「遞迴掃描」只落在 **threshold-exporter**（`pkg/config/hierarchy.go` 的
-`filepath.WalkDir`）。**Python 工具鏈當年沒有跟上**：以 AST 量測，**11 支工具平面
-列舉租戶設定目錄、6 支遞迴**——同一個階層目錄，`describe_tenant.py` 看得到租戶，
-`validate_config.py` 卻回報 `Result: PASS` / exit 0 而掃到 **0 個租戶**。那不是擋下來，
-是**對一個從未讀過的目錄發綠燈**。
+### 支援面邊界：不是每個讀者都遞迴
 
-現況（PR #1343 修正後）：
-
-| 面 | 階層 `conf.d/` |
+| 讀者 | 分層 `conf.d/` |
 |:--|:--|
-| threshold-exporter **函式庫**（`pkg/config` 的 `ResolveEffective`；`/effective`、`describe_tenant.py` 走這裡） | ✅ 完整遞迴繼承 |
-| threshold-exporter **實際吐出的 metric** | ✅ 完整遞迴繼承（#1521 修復；在那之前是平面，見下方補記） |
-| `validate_config.py` | ✅ 已改為遞迴 |
-| 路由面：路由生成器（`generate_alertmanager_routes.py`） | ✅ **階層**（#2326，見下方「Amendment 2026-09-28」）：生成器讀整棵樹的租戶與路由層。da-guard 不判路由：樹上有路由內容時列為未判定（exit 4），交給生成器（[ADR-036](036-single-parser-effective-config.md) §9）。tenant-api 只服務根目錄的租戶檔，不自己讀路由層：寫入由產生器對整棵樹判（[ADR-036](036-single-parser-effective-config.md) §4） |
-| 其餘平面工具 | ⚠️ **仍是平面**，但會列出被跳過的檔案並指回本節 |
+| threshold-exporter（吐出的 metric 與 `/effective`） | ✅ 遞迴，完整繼承 |
+| `validate_config.py` | ✅ 遞迴 |
+| 路由生成器（`generate_alertmanager_routes.py`） | ✅ 讀整棵樹的租戶與路由層 |
+| da-guard | 不判路由：樹上有路由內容時列為未判定（結束碼 4），交給路由生成器（[ADR-036](036-single-parser-effective-config.md) §9） |
+| tenant-api | 只服務根目錄的租戶檔，不自己讀路由層；寫入由產生器對整棵樹判定（[ADR-036](036-single-parser-effective-config.md) §4） |
+| 其餘 Python 工具 | 平面，但會列出被略過的檔案並指回本節 |
 
-> ⚠️ **補記（2026-08-22 發現 → 2026-08-24 關閉，#1521）**：本表原本只有一列
-> `threshold-exporter（閾值）｜✅ 完整遞迴繼承`，那對**函式庫**成立、對 **exporter
-> 真正吐出去的 metric 一度不成立**。紀錄保留在這裡，因為它是本 ADR 自己曾經
-> 過度宣稱的證據——刪掉等於把「文件保護缺陷」這件事也一併抹掉。
->
-> 當時的形狀：遞迴掃描器（`scanDirHierarchical`）是 **opt-in**，而餵給
-> `GetConfig()` 的兩條路（`IncrementalLoad`——該入口已於 #1577 移除——／
-> `fullDirLoad`）用的都是平面的
-> `scanDirFileHashes`。同一份設定、兩個 reader、母體不相等：
->
-> ```text
-> GetConfig().Tenants  = [top-tenant]          ← 子目錄裡的租戶不在
-> Resolve("nested")    = ok=true               ← /effective 查得到
-> ```
->
-> ⇒ 租戶配了閾值，`/metrics` 沒有對應 series，**告警永遠不會觸發**，而且零訊號。
-> 這與 [#1469](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1469)
-> 是同一類缺陷（一個 reader 遞迴、另一個平面），只是那張票談 Python 側。
->
-> **#1521 的修法**：`scanDirFileHashes` 改遞迴、map key 改為 root-relative 路徑
-> （裸檔名會讓 `a/x.yaml` 與 `x.yaml` 互撞）、副檔名比對改大小寫不敏感（實測
-> `UPPER.YAML` **放在頂層**就會重現同一個症狀），並把每個租戶的 L1..Ln 繼承值
-> 在 commit 前物化進它自己的覆寫 map——否則只修好 presence，`/effective` 與
-> series 會對同一個租戶報不同的數。⚠️ 子目錄的 `_defaults.yaml` **不進**全域
-> `Defaults`：那個 map 沒有子樹 scope，混進去會重新定價全樹每一個沒有自己覆寫
-> 的租戶。
+「平面就要出聲」由 `tests/shared/test_confd_enumeration_contract.py` 強制：一支新工具平面讀取設定目錄、又不列出略過的檔案，就會被擋下。成員是從工具實際的呼叫推導出來的，不是名單。共用的列舉層在 `scripts/tools/_lib_confd.py`。
 
-⇒ **路由面支援階層布局**（#2326，下方修訂）：任何深度的租戶都有路由，`_routing_defaults`
-沿目錄鏈逐層淺合併；子目錄 `_defaults.yaml` 的 `defaults:` 區塊裡的 `_routing*` 仍不會被
-任何元件消費（路由生成器以 `routing_in_unread_location` 點名，`--validate` 時擋下）。
+## 考慮過的替代方案
 
-這個「平面但出聲」的契約由 `tests/shared/test_confd_enumeration_contract.py` 強制：
-新工具若平面讀取又不出聲會被擋下來，**選擇必須是刻意的**。共用列舉層在
-`scripts/tools/_lib_confd.py`。路由生成器（`_grar_parse`）與 `check_routing_profiles`
-自 #2326 起改用 `list_config_tree` 走整棵樹，已不在「平面但出聲」的那一批（契約是由呼叫
-推導的，不是名單，所以不需要改條目）。
-
-### Amendment 2026-09-28 (#2326)：路由面改為階層（已實作）
-
-owner 裁決（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)
-的選項 **P2**）：路由面改跟閾值面走同一套目錄階層，不再只讀根目錄。本修訂先定語意，
-實作在後續 PR 落地：路由生成器（`_grar_parse` / `_grar_merge`）、`explain-route`、
-`check_routing_profiles`、`validate-config` 的 schema / routes / policy 列同一支 PR 改，
-parity 矩陣的 `hier-*` 樹釘住結果。tenant-api 只列根目錄的租戶檔，見上方的表。
-
-- **走訪器**：與閾值面共用——Python `_lib_confd.list_config_tree()`、Go
-  `config.ScanDirTree` + `CollectDefaultsChain`（剪掉隱藏目錄、回報目錄 symlink、只有 README
-  的目錄不貢獻任何東西）。tenant-api 只服務根目錄的租戶檔，見上方的表。
-- **分層鏈**：租戶繼承鏈上的 `_routing_defaults` → routing profile → 租戶本體的
-  `_routing`。完整語意（頂層逐鍵淺合併、`_routing_enforced` 只認根目錄、profile 與 domain
-  policy 以子樹為範圍、租戶 id 重複）記在負責繼承語意的
-  [ADR-017 決策 9](017-defaults-yaml-inheritance-dual-hash.md#9-路由設定沿目錄逐層繼承)，這裡不重複。
-- **阻擋條件**（取代 #2326 第 1 步止血的「子目錄有設定檔就 rc 2」；整棵樹都讀之後，子目錄
-  有檔本身不再是錯誤）：子目錄檔案裡出現 `_routing_enforced` → rc 2；同一個租戶 id 在多個
-  檔案宣告 → rc 1（#2315；見 [ADR-017 決策 9](017-defaults-yaml-inheritance-dual-hash.md#9-路由設定沿目錄逐層繼承)）；以及該段列出的 `receiver` 寫成 `null`、profile 名稱與 domain policy 錯誤。
+- **強制遷移到分層**：破壞向下相容，所有既有使用者升級時都得一次重整 `conf.d/`；對十幾個租戶的小部署是不必要的負擔。
+- **只支援平面**：解決不了兩百個租戶以上的可讀性與影響範圍問題。
+- **用外部索引（資料庫／JSON）取代目錄結構**：偏離 config-as-code，增加部署元件；本平台的原則是檔案系統就是設定的唯一來源。
 
 ## 相關
 
-- [ADR-017: _defaults.yaml 繼承語意 + dual-hash hot-reload](017-defaults-yaml-inheritance-dual-hash.md)
-- [Benchmark Playbook §Synthetic Fixture Generation](../internal/benchmark-playbook.md#synthetic-fixture-generation-速率對照) — flat vs hierarchical 效能對照
+- [ADR-017: `_defaults.yaml` 繼承語意 + dual-hash hot-reload](017-defaults-yaml-inheritance-dual-hash.md)
 - [ADR-006: Tenant Mapping Topologies](006-tenant-mapping-topologies.md)
+- [ADR-036](036-single-parser-effective-config.md) — 單一解析器與 effective config
+- [多 domain 的 conf.d 布局](../scenarios/multi-domain-conf-layout.md)
+- [Benchmark Playbook §Synthetic Fixture Generation](../internal/benchmark-playbook.md#synthetic-fixture-generation-速率對照) — 平面與分層的效能對照
