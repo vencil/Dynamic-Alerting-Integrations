@@ -44,8 +44,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _tree import REPO_ROOT as _REPO, repo_files  # noqa: E402
 
 _DEPLOYMENT = "k8s/03-monitoring/deployment-prometheus.yaml"
-_IMAGE = re.compile(r"(?:^|[/\s\"'])(?:prom|prometheus)/prometheus(?:[:@\s\"']|$)", re.M)
-_OPERATOR_KIND = re.compile(r"^kind:\s*Prometheus\s*$", re.M)
+_IMAGE = re.compile(r"(?<![\w.-])(?:[\w.-]+(?::\d+)?/)*(?:prom|prometheus)/prometheus(?![\w./-])")
+# any indentation (a List item, a Helm-rendered stack), quoted or not, with or
+# without a trailing comment: the prefilter only chooses which files are read
+# as YAML, so it errs wide — the structured walk decides what is a Prometheus
+_OPERATOR_KIND = re.compile(r"""^[ \t-]*kind:[ \t]*["']?Prometheus["']?[ \t]*(?:#.*)?$""", re.M)
 
 
 def _argv(value) -> list[str]:
@@ -95,16 +98,16 @@ def enable_feature_values(argv: list[str]) -> list[str]:
     return values
 
 
-def deployed_prometheus_features() -> dict[str, list[list[str]]]:
+def deployed_prometheus_features(paths=None, root: Path = _REPO) -> dict[str, list[list[str]]]:
     """Per file that runs a Prometheus, the --enable-feature values of each
-    Prometheus in it."""
+    Prometheus in it (paths: the repository's YAML files unless given)."""
     found: dict[str, list[list[str]]] = {}
     unreadable = []
-    for path in repo_files(".yaml", ".yml"):
+    for path in (repo_files(".yaml", ".yml") if paths is None else paths):
         text = path.read_text(encoding="utf-8", errors="replace")
         if not (_IMAGE.search(text) or _OPERATOR_KIND.search(text)):
             continue
-        rel = path.relative_to(_REPO).as_posix()
+        rel = path.relative_to(root).as_posix()
         try:
             docs = list(yaml.safe_load_all(text))
         except yaml.YAMLError as exc:
@@ -128,6 +131,8 @@ def test_enable_feature_spellings():
 @pytest.mark.parametrize("doc,servers", [
     ({"image": "docker.io/prom/prometheus:v3.16.0", "args": ["--enable-feature=a"]}, [["a"]]),
     ({"image": "quay.io/prometheus/prometheus:v3.16.0"}, [[]]),
+    ({"image": "registry.local:5000/mirror/prom/prometheus@sha256:" + "0" * 64}, [[]]),
+    ({"image": "prom/prometheus-exporter:v1"}, []),
     ({"image": {"repository": "prom/prometheus", "tag": "v3.16.0"}, "command": "--enable-feature b"}, [["b"]]),
     ({"apiVersion": "monitoring.coreos.com/v1", "kind": "Prometheus",
       "spec": {"enableFeatures": ["c"]}}, [["c"]]),
@@ -136,6 +141,29 @@ def test_enable_feature_spellings():
 ])
 def test_server_spellings(doc, servers):
     assert list(_prometheus_servers(doc)) == servers
+
+
+def test_discovery_reads_every_spelling_from_files(tmp_path):
+    """The file prefilter lets each spelling through to the structured walk."""
+    files = {
+        "nested-operator.yaml": (
+            "apiVersion: v1\nkind: List\nitems:\n"
+            "  - apiVersion: monitoring.coreos.com/v1\n"
+            "    kind: Prometheus   # the operator's CR\n"
+            "    spec: {enableFeatures: [a]}\n"),
+        "quoted-operator.yml": (
+            'apiVersion: monitoring.coreos.com/v1\nkind: "Prometheus"\n'
+            "spec: {enableFeatures: [b]}\n"),
+        "helm-values.yaml": (
+            "prometheus:\n  image: {repository: quay.io/prometheus/prometheus, tag: v3.16.0}\n"
+            "  args: [--enable-feature=c]\n"),
+        "unrelated.yaml": "image: prom/alertmanager:v0.34.2\n",
+    }
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    found = deployed_prometheus_features(sorted(tmp_path.iterdir()), root=tmp_path)
+    assert found == {"nested-operator.yaml": [["a"]], "quoted-operator.yml": [["b"]],
+                     "helm-values.yaml": [["c"]]}
 
 
 def test_discovery_finds_the_deployment():
