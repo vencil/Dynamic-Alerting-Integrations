@@ -15,6 +15,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // decodeTenantMetadata is the exporter's one decode of a `_metadata` value:
@@ -94,14 +96,16 @@ func metadataProblem(_ string, sv ScheduledValue) string {
 	if sv.deleted || sv.Default == "" {
 		return ""
 	}
+	// Before the decode: a mapping that does not decode for another reason
+	// still gets the migration instruction for the field it must drop.
+	if p := retiredMetadataFieldProblem(sv); p != "" {
+		return p
+	}
 	if _, err := decodeTenantMetadata(sv); err != nil {
 		if errors.Is(err, errMetadataString) {
 			return metadataUndecodedProblem + ": " + errMetadataString.Error()
 		}
 		return metadataUndecodedProblem
-	}
-	if p := retiredMetadataFieldProblem(sv); p != "" {
-		return p
 	}
 	if unknown := unknownMetadataFields(sv); len(unknown) > 0 {
 		return fmt.Sprintf("%d unknown field(s) (known: %s)",
@@ -143,12 +147,30 @@ const retiredDBTypeField = "db_type"
 // clean while the declaration it used to make — and the absence alerts it
 // switched on — is gone.
 func metadataWritesRetiredField(sv ScheduledValue) bool {
-	m, ok := decodeMetadataValue(sv).(map[string]any)
-	if !ok {
-		return false
-	}
-	_, writes := m[retiredDBTypeField]
+	_, writes := retiredDBTypeValue(sv)
 	return writes
+}
+
+// retiredDBTypeValue is what a `_metadata` mapping writes under `db_type`,
+// read off the YAML node rather than off the decoded map: a mapping that
+// also holds a non-string key, or a field of the wrong shape, does not
+// decode into the map the other checks read, and the retired field would
+// then pass unreported.
+func retiredDBTypeValue(sv ScheduledValue) (raw any, writes bool) {
+	node, structured, err := structureOf(sv)
+	if !structured || err != nil || node == nil || node.Kind != yaml.MappingNode {
+		return nil, false
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value != retiredDBTypeField {
+			continue
+		}
+		if node.Content[i+1].Decode(&raw) != nil {
+			return "", true // undecodable: not a kind, counted as such
+		}
+		return raw, true
+	}
+	return nil, false
 }
 
 // retiredMetadataFieldProblem is the migration instruction for a `_metadata`
@@ -157,11 +179,7 @@ func metadataWritesRetiredField(sv ScheduledValue) bool {
 // built from the kind table, not from the value (#3703); otherwise the
 // sentence carries a count and the allowed kinds.
 func retiredMetadataFieldProblem(sv ScheduledValue) string {
-	m, ok := decodeMetadataValue(sv).(map[string]any)
-	if !ok {
-		return ""
-	}
-	raw, writes := m[retiredDBTypeField]
+	raw, writes := retiredDBTypeValue(sv)
 	if !writes {
 		return ""
 	}

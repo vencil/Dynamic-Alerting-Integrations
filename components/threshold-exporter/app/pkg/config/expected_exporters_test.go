@@ -285,6 +285,12 @@ func TestMetadataCheck_RemovedDBTypeIsTheMigrationInstruction(t *testing.T) {
 			[]string{"It declares nothing here: delete `db_type`"}, []string{"allowed kinds"}},
 		{"empty list declares nothing", "{db_type: []}",
 			[]string{"It declares nothing here: delete `db_type`"}, nil},
+		// The field is read off the mapping as written: a mapping the
+		// reader's map does not hold still gets the instruction.
+		{"beside a non-string key", "{db_type: [mariadb], 1: x}",
+			[]string{"`_expected_exporters: [mariadb]`"}, nil},
+		{"beside a field of the wrong shape", "{db_type: [mariadb], tags: {a: b}}",
+			[]string{"`_expected_exporters: [mariadb]`"}, []string{"does not decode"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
