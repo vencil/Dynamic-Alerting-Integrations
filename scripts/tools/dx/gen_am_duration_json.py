@@ -109,12 +109,19 @@ def main() -> int:
               f"{SCHEMA_REL} definitions.duration.")
         return 0
 
-    for rel, path in targets:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # newline="\n": force LF on every platform (CRLF would taint the portal
-        # bundle's sourcemap; see gen_recipe_contract.py).
-        path.write_text(generated, encoding="utf-8", newline="\n")
-        print(f"WROTE: {rel}")
+    # Imported here, not at the top: `_lib_io` imports PyYAML, and `--check`
+    # runs as a pre-commit hook in an environment that has none (#3981).
+    from _lib_io import OutputWriteError, ensure_dir, write_repo_artifact  # noqa: E402, PLC0415
+    try:
+        for rel, path in targets:
+            ensure_dir(path.parent)
+            # The artifact entry writes LF on every platform (CRLF would
+            # taint the portal bundle's sourcemap; see gen_recipe_contract.py).
+            write_repo_artifact(path, generated)
+            print(f"WROTE: {rel}")
+    except OutputWriteError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     return 0
 
 
