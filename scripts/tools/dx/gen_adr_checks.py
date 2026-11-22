@@ -44,6 +44,10 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+# #3981: the artifact entry, from the module that loads no PyYAML.
+from _lib_output import (  # noqa: E402
+    OutputWriteError, check_repo_artifact, exit_on_output_write_error, is_special_file,
+    write_repo_artifact)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ADR_DIR = "docs/adr"
@@ -227,10 +231,13 @@ def run(root: Path, paths: list[str], write: bool) -> list[str]:
         marked[(m.adr, m.section)].append(m)
 
     changed: list[str] = []
+    pending: list[tuple[Path, str]] = []
     seen_blocks: set[tuple[str, str]] = set()
     declared: dict[tuple[str, str], tuple[str, list[str]]] = {}
     for adr, files in adrs.items():
         for path in files:
+            if is_special_file(path):  # a FIFO would block the read (#3981)
+                raise OutputWriteError(path, OSError(None, "not a regular file"), action="read")
             text = path.read_text(encoding="utf-8")
             lang = "en" if path.name.endswith(".en.md") else "zh"
             rel = path.relative_to(root).as_posix()
@@ -261,8 +268,7 @@ def run(root: Path, paths: list[str], write: bool) -> list[str]:
                 seen_blocks.add((rel, section))
             if new != text:
                 changed.append(rel)
-                if write:
-                    path.write_text(new, encoding="utf-8", newline="\n")
+                pending.append((path, new))
 
     for (adr, section), ms in marked.items():
         for path in adrs[adr]:
@@ -271,6 +277,14 @@ def run(root: Path, paths: list[str], write: bool) -> list[str]:
                 raise AdrChecksError(
                     f"{rel}: markers name ADR-{adr} section {section} "
                     f"(e.g. {ms[0].path}) but the file has no `{begin_marker(section)}` block")
+    if write:
+        # #3981: written only once every block and marker checked out, and
+        # every target was judged — a violation found later, or a target no
+        # regular file, leaves all of them as they were.
+        for path, _new in pending:
+            check_repo_artifact(path)
+        for path, new in pending:
+            write_repo_artifact(path, new)
     return changed
 
 
@@ -279,6 +293,7 @@ def _tracked(root: Path) -> list[str]:
     return [p for p in out.stdout.decode("utf-8").split("\0") if p]
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = ap.add_mutually_exclusive_group(required=True)

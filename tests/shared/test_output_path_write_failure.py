@@ -2723,6 +2723,16 @@ def test_a_flag_expression_that_resolves_to_nothing_is_unresolved_not_absent():
 # test_output_write_sites_stay_guarded for a raw sink) — which sees the shape
 # of the code, never the rc an operator gets.
 NO_ROW: dict[Key, str] = {
+    ("dx/generate_rulepack_derived.py", "--rule-packs-dir"):
+        "#3981, fifth batch. The flag names the INPUT directory, whose packs "
+        "the tool rewrites in place: a row's bad-path shapes (a missing "
+        "parent, a parent that is a file) fail when the packs are listed and "
+        "read, before any write — the pair would measure the reader. What "
+        "speaks for the write: tests/dx/test_generate_rulepack_derived.py "
+        "`test_a_refused_pack_leaves_the_earlier_stale_one_alone`, through "
+        "da-read, in process: a stale pack that is the process's stdin is "
+        "refused before it is replaced, rc 2, one line naming the file and "
+        "the flag, and the earlier stale pack keeps its bytes.",
     ("dx/inject_waveform.py", "--out"):
         "Its `--out` write is the LAST step of an injection run: the tool "
         "pushes a waveform into an isolated vmsingle over HTTP and then "
@@ -2750,7 +2760,7 @@ NO_ROW: dict[Key, str] = {
         "still_unreachable` holds that premise: the day a migration is "
         "registered it goes red, and this entry gives way to a row.",
 }
-_NO_ROW_CEILING = 2
+_NO_ROW_CEILING = 3
 
 
 def test_every_flag_named_at_a_writer_has_a_row():
@@ -2885,8 +2895,19 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "path but `--root`. A write that fails is held by "
         "tests/dx/test_shared_atomic_write_callers.py "
         "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    # #3981, fifth batch: two generators of committed files they name.
+    "dx/gen_adr_checks.py":
+        "`--write` rewrites the generated block of the ADRs under docs/adr/; "
+        "it takes no path. A refused target is held by "
+        "tests/lint/test_gen_adr_checks.py "
+        "(test_a_refused_adr_leaves_the_other_language_alone).",
+    "dx/generate_rulepack_configmaps.py":
+        "the default mode rewrites the rule-pack ConfigMaps under "
+        "k8s/03-monitoring/; it takes no path. A refused target is held by "
+        "tests/dx/test_generate_rulepack_configmaps.py "
+        "(test_a_refused_configmap_leaves_the_others_unwritten).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 16
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 18
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
