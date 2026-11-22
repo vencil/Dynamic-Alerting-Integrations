@@ -889,12 +889,14 @@ def test_the_keys_waiting_for_a_ratio_form_are_these():
     renders 「待改比值」 on every generated surface. Nothing can check that
     claim against the rule packs, so the set is pinned: a key leaves it when
     its ratio form ships or is ruled out (then it is `site_specific`, with the
-    reason — oracle_sessions_active: the share of SESSIONS is
-    OracleHighSessionUtilization; clickhouse_active_connections and
-    db2_connections_active: no ceiling is exported to take a share of), and
-    a key joins it only with #1320 told about it."""
+    reason — oracle_sessions_active and mongodb_connections_current: the
+    share is its own alert, OracleHighSessionUtilization /
+    MongoDBConnectionSaturation; clickhouse_active_connections: /metrics
+    exports no ceiling; db2_connections_active: MAXAPPLS defaults to
+    AUTOMATIC, which is no ceiling), and a key joins it only with #1320 told
+    about it. For the three left, no rule in their pack reads a ceiling yet."""
     doc = lib.load_registry()
     pending = sorted(k for k, e in doc["keys"].items()
                      if e.get("portability") == "ratio_pending")
-    assert pending == ["mongodb_connections_current", "rabbitmq_connections",
-                       "redis_connected_clients", "redis_memory_used_bytes"], pending
+    assert pending == ["rabbitmq_connections", "redis_connected_clients",
+                       "redis_memory_used_bytes"], pending
