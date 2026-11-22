@@ -179,10 +179,20 @@ func writeHierarchicalBenchFixtureContent(root string, numTenants int) error {
 			// reports noOp ("quiet defaults edit" — see config_debounce.go
 			// L313-318). `region_alert_schedule` is not present in tenant
 			// files below, so region-level changes DO reach merged_hash.
+			//
+			// ⛔ The value is a NUMBER on purpose (#3467). It used to be the
+			// string "<region>-<n>", which is not threshold-shaped: every
+			// region defaults file then carried a rejected chain value
+			// (FlatBuild.RejectedChainValues), every tenant became a
+			// value_rejected candidate, and each load ran a full effective
+			// resolve per tenant (RejectedShownCache.Shown) — so the
+			// hierarchical benches measured the "whole tree has rejected
+			// values" path and NOTHING measured the healthy one. That path
+			// keeps its own bench: BenchmarkFullDirLoad_Hierarchical_1000_RejectedValues.
 			if err := writeYAMLFile(filepath.Join(rDir, "_defaults.yaml"), fmt.Sprintf(`defaults:
   container_memory: %d
-  region_alert_schedule: "%s-%d"
-`, 80+len(region)%10, region, len(region))); err != nil {
+  region_alert_schedule: %d
+`, 80+len(region)%10, len(region))); err != nil {
 				return fmt.Errorf("L2 %s/%s defaults: %w", domain, region, err)
 			}
 
@@ -364,6 +374,37 @@ func BenchmarkScanDirTree_Hierarchical_1000_Cold(b *testing.B) {
 
 func BenchmarkFullDirLoad_Hierarchical_1000(b *testing.B) {
 	benchFullDirLoadHierarchicalAtSize(b, 1000)
+}
+
+// BenchmarkFullDirLoad_Hierarchical_1000_RejectedValues is the cold load of
+// the same tree with every region defaults file carrying a value that is
+// not threshold-shaped (a string), so every tenant is a value_rejected
+// candidate and the load pays one effective resolve per tenant
+// (RejectedShownCache.Shown). Until #3467 this was what
+// BenchmarkFullDirLoad_Hierarchical_1000 measured by accident; it is kept
+// as its own bench so that path stays watched.
+func BenchmarkFullDirLoad_Hierarchical_1000_RejectedValues(b *testing.B) {
+	dir := buildDirConfigHierarchicalFresh(b, 1000)
+	for _, domain := range benchDomains {
+		for _, region := range benchRegions {
+			p := filepath.Join(dir, domain, region, "_defaults.yaml")
+			content := fmt.Sprintf("defaults:\n  container_memory: %d\n  region_alert_schedule: \"%s-%d\"\n",
+				80+len(region)%10, region, len(region))
+			if err := writeYAMLFile(p, content); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	silenceLogs(b)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mgr := NewConfigManager(dir)
+		if err := mgr.fullDirLoad(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	reportResourceMetrics(b)
 }
 
 func BenchmarkDiffAndReload_Hierarchical_1000_NoChange(b *testing.B) {
@@ -610,11 +651,14 @@ func benchBlastRadiusDefaultsChangeAtSize(b *testing.B, n int) {
 		// changes the file hash. container_memory is included as a stable
 		// second key (same value across iterations) to keep the defaults
 		// file a reasonable shape.
-		schedule := "off-hours"
+		// Numbers, not strings (#3467): a string here is a rejected chain
+		// value, and the bench would time the value_rejected resolve
+		// instead of the propagation it is named for.
+		schedule := 8
 		if i%2 == 0 {
-			schedule = "business-hours"
+			schedule = 22
 		}
-		content := fmt.Sprintf("defaults:\n  container_memory: 87\n  region_alert_schedule: \"%s\"\n", schedule)
+		content := fmt.Sprintf("defaults:\n  container_memory: 87\n  region_alert_schedule: %d\n", schedule)
 		if err := os.WriteFile(targetFile, []byte(content), 0o600); err != nil {
 			b.Fatal(err)
 		}
