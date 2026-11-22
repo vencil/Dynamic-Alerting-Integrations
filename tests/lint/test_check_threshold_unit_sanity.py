@@ -867,7 +867,7 @@ def test_a_registry_value_that_is_no_number_is_reported(tmp_path, written, shown
     too — is reported. (PyYAML reads `1_000` as the int 1000; the registry's
     loader is PyYAML, so that one is judged as 1000.)"""
     _write(tmp_path, _REGISTRY_FILE,
-           f'version: 1\npacks:\n  t:\n    pct: {{value: {written}, unit: "%", tier: defaults}}\n')
+           f'version: 1\npacks:\n  t:\n    pct: {{value: {written}, unit: "%"}}\n')
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
     if written == "1_000":
         assert len(errs) == 1 and errs[0].startswith(f"OUT-OF-DOMAIN: {_REGISTRY_FILE}: pct = 1000"), errs
@@ -877,10 +877,10 @@ def test_a_registry_value_that_is_no_number_is_reported(tmp_path, written, shown
 
 
 def test_a_registry_value_that_is_a_number_is_judged(tmp_path):
-    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 300, unit: "%", tier: defaults}\n')
+    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 300, unit: "%"}\n')
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
     assert len(errs) == 1 and errs[0].startswith(f"OUT-OF-DOMAIN: {_REGISTRY_FILE}: pct = 300"), errs
-    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 80, unit: "%", tier: defaults}\n')
+    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 80, unit: "%"}\n')
     assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
 
 

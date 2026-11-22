@@ -429,7 +429,7 @@ def _walk_literals(node, key_of_interest: str | None = None, _path: tuple = (),
             yield key_of_interest, node, at_value
 
 
-#: Where the registry writes a key's threshold: `<key>: {value: …, tier: …}`.
+#: Where the registry writes a key's threshold: `<key>: {value: …, unit: …}`.
 _REGISTRY_VALUE_PATHS = (("value",),)
 
 

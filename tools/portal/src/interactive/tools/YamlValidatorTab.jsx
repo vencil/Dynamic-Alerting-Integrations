@@ -66,6 +66,8 @@ function YamlValidatorTab() {
   }, []);
 
   const allMetrics = useMemo(() => getAllMetricKeys(selectedPacks), [selectedPacks]);
+  const insertableMetrics = useMemo(
+    () => [...allMetrics, ...getDeclaredKeys(selectedPacks)], [allMetrics, selectedPacks]);
 
   // Saturation `_critical` educational hint (display-only, never blocks
   // validation): scan the textarea for `<base>_critical:` keys whose base
@@ -137,7 +139,9 @@ function YamlValidatorTab() {
         <div className="text-sm font-medium text-gray-700 mb-1">
           {t('插入 Metric Key', 'Insert Metric Key')}
         </div>
-        <MetricAutocomplete allMetrics={allMetrics} onInsert={handleInsertMetric} />
+        {/* platform values and declared keys alike (#4195); an inserted
+            declared key carries its reference value and any measured caveat */}
+        <MetricAutocomplete allMetrics={insertableMetrics} onInsert={handleInsertMetric} />
       </div>
 
       {/* Quick actions */}

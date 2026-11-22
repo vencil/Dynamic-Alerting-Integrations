@@ -156,6 +156,25 @@ function getDeclaredKeys(selectedPacks) {
 }
 
 /**
+ * Every threshold key of one pack as {key: meta}: its platform values
+ * (`pack.defaults`) and then its declared keys, each declared row marked
+ * `declared: true` with its REFERENCE `value`. For the demo / simulation tools
+ * (alert preview, heatmap, pack counts) that need a number per key to draw;
+ * since #4195 most packs' keys have no platform value, and reading
+ * `pack.defaults` alone left redis, mongodb, kafka … with nothing to show.
+ * ⛔ Not for anything that hands a value over as the platform's own — that is
+ * getAllMetricKeys.
+ */
+function getPackThresholds(packId) {
+  const out = { ...(RULE_PACK_DATA[packId]?.defaults || {}) };
+  for (const row of DECLARED_KEYS[packId] || []) {
+    const { key, ...meta } = row;
+    if (!(key in out)) out[key] = { ...meta, declared: true };
+  }
+  return out;
+}
+
+/**
  * Labels of the packs that have at least one declared-without-value key — the
  * thresholds a tenant must set themselves, silent until they do (#4012, from
  * #1175's onboarding advice). Derived from DECLARED_KEYS, so the onboarding
@@ -346,7 +365,7 @@ function sameNumber(rawScalar, value) {
 
 export {
   RULE_PACK_DATA, CATEGORY_LABELS, getAllMetricKeys, PACK_ORDER, TENANT_ALERT_COUNT,
-  DECLARED_KEYS, getDeclaredKeys, silentByDefaultPacks, getValueCounterexample,
+  DECLARED_KEYS, getDeclaredKeys, getPackThresholds, silentByDefaultPacks, getValueCounterexample,
   counterexampleVerdict, counterexampleComment, counterexampleLabel,
   counterexampleObserved, annotateCounterexamples,
 };
