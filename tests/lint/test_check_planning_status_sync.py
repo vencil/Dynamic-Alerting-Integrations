@@ -319,6 +319,82 @@ class TestMainCli:
 # ---------------------------------------------------------------------------
 # ID regex contract — ensure the allowlist matches the spec
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# #3216: --json answers on stdout, with one document, issue or no issue
+# ---------------------------------------------------------------------------
+_DRIVER = """
+import sys
+sys.path[:0] = [{lint!r}, {dx!r}, {tools!r}]
+import _lib_exitcodes
+import check_planning_status_sync as m
+kind = sys.argv.pop(1)
+hits = [m.TrailerHit(verb="Resolves", id="TRK-999999", commit_sha="deadbeef")] if kind == "issue" else []
+m.extract_trailers = lambda base: hits
+m.discover_all = lambda: []
+_lib_exitcodes.run(m.main)
+"""
+
+
+def _sync(kind, *argv, gha=False):
+    """The tool as a process (its real exit path, `_lib_exitcodes.run`), with
+    the two readers of the repository replaced: *kind* ``issue`` is one
+    trailer no planning entry answers, ``none`` is no trailer at all."""
+    env = {k: v for k, v in os.environ.items() if k != "GITHUB_ACTIONS"}
+    if gha:
+        env["GITHUB_ACTIONS"] = "true"
+    driver = _DRIVER.format(lint=str(LINT_DIR), dx=str(DX_DIR), tools=str(LINT_DIR.parent))
+    return subprocess.run([sys.executable, "-c", driver, kind, *argv], env=env,
+                          capture_output=True, text=True, encoding="utf-8",
+                          stdin=subprocess.DEVNULL, timeout=120)
+
+
+class TestJsonGoesToStdout:
+    """`--json` wrote its document to STDERR whenever there was an issue
+    (the human report's rule, applied to the machine one): `--json | jq` got
+    nothing exactly when there was something to read, rc 0. Now the document
+    goes back to `run` as a Report — stdout, one document, either way."""
+
+    @pytest.mark.parametrize("flags, rc", [((), 0), (("--strict",), 1), (("--ci",), 1)])
+    def test_an_issue_is_in_the_document_on_stdout(self, flags, rc):
+        import json
+        done = _sync("issue", "--json", *flags)
+        assert done.returncode == rc, done.stderr
+        doc = json.loads(done.stdout)  # the whole of stdout is the document
+        assert [i["id"] for i in doc["issues"]] == ["TRK-999999"]
+        assert doc["trailers"] == [{"verb": "Resolves", "id": "TRK-999999",
+                                    "commit": "deadbeef"}]
+        assert done.stderr == ""
+
+    def test_no_issue_is_the_same_shape(self):
+        import json
+        done = _sync("none", "--json")
+        assert done.returncode == 0, done.stderr
+        assert json.loads(done.stdout) == {"trailers": [], "issues": []}
+        assert done.stderr == ""
+
+    def test_under_actions_the_annotations_do_not_join_the_document(self):
+        """`::warning` lines went to stdout; with the document there too,
+        stdout was annotations followed by JSON — not a document. Under
+        --json they go to stderr (owner 2026-11-22)."""
+        import json
+        done = _sync("issue", "--json", gha=True)
+        assert done.returncode == 0, done.stderr
+        assert [i["id"] for i in json.loads(done.stdout)["issues"]] == ["TRK-999999"]
+        assert done.stderr.startswith("::warning title=planning-sync (missing-entry)::TRK-999999")
+        assert "::warning" not in done.stdout
+
+    def test_the_human_report_is_where_it_was(self):
+        """Not this change's: an issue's prose on stderr (ADR-019), its
+        annotations on stdout, a clean run's line on stdout."""
+        clean = _sync("none")
+        assert clean.returncode == 0 and clean.stdout and clean.stderr == ""
+        issue = _sync("issue", gha=True)
+        assert issue.returncode == 0
+        assert "TRK-999999" in issue.stderr and "::warning" not in issue.stderr
+        assert issue.stdout.startswith("::warning title=planning-sync (missing-entry)")
+        assert _sync("issue", "--strict").returncode == 1
+
+
 class TestIdRegex:
     @pytest.mark.parametrize(
         "candidate",

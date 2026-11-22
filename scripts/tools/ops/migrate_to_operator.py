@@ -55,7 +55,7 @@ from _lib_python import detect_cli_lang, i18n_text, output_dir_type  # noqa: E40
 from _lib_io import OutputWriteError, ensure_dir, write_operator_output  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, die_caller_error, encode_json)
+    EXIT_CALLER_ERROR, EXIT_OK, Report, die_caller_error, encode_json)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
@@ -984,6 +984,60 @@ def generate_migration(
     return result
 
 
+def stdout_json_document(
+    *,
+    checklist_only: bool,
+    dry_run: bool,
+    result: dict,
+    checklist: str,
+    namespace: str,
+    source_dir: Path,
+) -> dict:
+    """The ONE document a ``--json`` run answers with, whatever the mode.
+
+    #3216: `main` hands it back as a ``Report`` — `_lib_exitcodes.run`
+    encodes and writes it — so the tool no longer prints its own document
+    (it was the last tool of the --json population that did). `plan_stdout`
+    spells the same document as text, for the matrix it pins.
+
+    * ``--dry-run`` (and not ``--checklist-only``): the CRD preview.
+    * otherwise the summary; under ``--checklist-only`` it carries the
+      checklist (#1112: one document, never Markdown beside JSON).
+    """
+    if dry_run and not checklist_only:
+        return {
+            "metadata": {
+                "timestamp": result.get("timestamp"),
+                "namespace": namespace,
+                "source_dir": str(source_dir),
+                "configmap_files": result.get("configmap_files", 0),
+                "rule_groups": result.get("rule_group_count", 0),
+            },
+            "prometheus_rules": [item["crd"] for item in result.get("prometheus_rules", [])],
+            # #3426: PrometheusRules of --source-dir, named, not converted
+            "already_crd": list(result.get("already_crd", [])),
+            "errors": result.get("errors", []),
+        }
+    summary = {
+        "configmap_files": result.get("configmap_files", 0),
+        "rule_groups": result.get("rule_group_count", 0),
+        "prometheus_rules": len(result["prometheus_rules"]),
+        "total_crds": len(result["prometheus_rules"]),
+        # #3426: PrometheusRules of --source-dir, named, not converted
+        "already_crd": list(result.get("already_crd", [])),
+    }
+    if checklist_only:
+        # #1112: stdout must be exactly ONE JSON document. The checklist
+        # is the whole point of --checklist-only, so it is carried INSIDE
+        # the summary document (as a string) rather than dumped as raw
+        # Markdown next to it — no information is lost from stdout, and
+        # the summary keys stay exactly where a consumer already expects
+        # them.
+        summary["status"] = "checklist_only"
+        summary["checklist"] = checklist
+    return summary
+
+
 def plan_stdout(
     *,
     checklist_only: bool,
@@ -996,9 +1050,11 @@ def plan_stdout(
 ) -> List[str]:
     """Pure decision table for the (checklist_only × dry_run × json) matrix.
 
-    Returns the exact sequence of text chunks main() must emit to stdout, in
-    order; each chunk carries its own newlines, so the caller's only job is
-    ``print(chunk, end="")``.  Zero I/O happens here — the whole 8-combo
+    Returns the exact sequence of text chunks that make up stdout, in order;
+    each chunk carries its own newlines. In text mode main() prints them
+    (``print(chunk, end="")``); in JSON mode (#3216) main() hands the one
+    document — `stdout_json_document`, which this function encodes — back to
+    `run` as a Report instead.  Zero I/O happens here — the whole 8-combo
     output matrix is decided in this one function, so any future regression
     in mode precedence shows up at the unit level instead of only in
     subprocess gates.
@@ -1018,7 +1074,8 @@ def plan_stdout(
       to be suppressed by the "dry-run + json already printed its one
       document" rule, leaving stdout EMPTY while ``--json`` was asked for.
       The checklist envelope IS that run's one document, so the suppression
-      only applies to the pure dry-run preview (see the summary condition).
+      only applies to the pure dry-run preview (`stdout_json_document`'s
+      first branch).
 
     Args:
         checklist_only: ``--checklist-only`` flag
@@ -1034,78 +1091,38 @@ def plan_stdout(
         List of text chunks to write to stdout, in order.
     """
     docs: List[str] = []
+    if json_mode:
+        # One document in every mode (bug 1 and bug 2 above are both the
+        # choice `stdout_json_document` makes).
+        return [encode_json(stdout_json_document(
+            checklist_only=checklist_only, dry_run=dry_run, result=result,
+            checklist=checklist, namespace=namespace, source_dir=source_dir)) + "\n"]
 
     # ── Mode payload ────────────────────────────────────────────────────
     # bug 1 (#1112, CodeRabbit): `--checklist-only` outranks `--dry-run` —
     # this `if/elif` ORDER is the fix. Do not reorder.
     if checklist_only:
-        if not json_mode:
-            docs.append(checklist + "\n")
-        # JSON mode: the checklist rides INSIDE the summary envelope below —
-        # stdout must stay exactly ONE JSON document.
+        docs.append(checklist + "\n")
     elif dry_run:
-        if json_mode:
-            output_obj = {
-                "metadata": {
-                    "timestamp": result.get("timestamp"),
-                    "namespace": namespace,
-                    "source_dir": str(source_dir),
-                    "configmap_files": result.get("configmap_files", 0),
-                    "rule_groups": result.get("rule_group_count", 0),
-                },
-                "prometheus_rules": [item["crd"] for item in result.get("prometheus_rules", [])],
-                # #3426: PrometheusRules of --source-dir, named, not converted
-                "already_crd": list(result.get("already_crd", [])),
-                "errors": result.get("errors", []),
-            }
-            docs.append(encode_json(output_obj) + "\n")
-        else:
-            docs.append("# MIGRATION CHECKLIST\n")
-            docs.append(checklist + "\n")
-            docs.append("\n# CRD PREVIEW\n\n")
-            all_crds = [item["crd"] for item in result["prometheus_rules"]]
-            if yaml:
-                for i, crd in enumerate(all_crds):
-                    if i > 0:
-                        docs.append("---\n")
-                    docs.append(yaml.dump(crd, default_flow_style=False, allow_unicode=True))
-            else:
-                for crd in all_crds:
-                    docs.append(_dict_to_yaml(crd) + "\n")
+        docs.append("# MIGRATION CHECKLIST\n")
+        docs.append(checklist + "\n")
+        docs.append("\n# CRD PREVIEW\n\n")
+        all_crds = [item["crd"] for item in result["prometheus_rules"]]
+        if yaml:
+            for i, crd in enumerate(all_crds):
+                if i > 0:
                     docs.append("---\n")
+                docs.append(yaml.dump(crd, default_flow_style=False, allow_unicode=True))
+        else:
+            for crd in all_crds:
+                docs.append(_dict_to_yaml(crd) + "\n")
+                docs.append("---\n")
     # else: write mode — CRDs + checklist go to files and progress lines go
     # to stderr (both are main()'s job); stdout carries only the JSON summary
     # below (text mode: nothing).
 
-    # ── Summary document ────────────────────────────────────────────────
-    # The human-readable "✓ ..." summary goes to stderr and stays in main();
-    # only the JSON summary is a stdout document.
-    #
-    # bug 2 (#1112, CodeRabbit): in dry-run JSON the CRD-preview above is
-    # already the ONE document stdout may carry — EXCEPT when checklist_only
-    # also holds: then no preview was emitted and the checklist envelope IS
-    # this run's one document, so suppressing it would leave stdout empty
-    # while `--json` was asked for. Hence `or checklist_only`.
-    if json_mode and (not dry_run or checklist_only):
-        summary = {
-            "configmap_files": result.get("configmap_files", 0),
-            "rule_groups": result.get("rule_group_count", 0),
-            "prometheus_rules": len(result["prometheus_rules"]),
-            "total_crds": len(result["prometheus_rules"]),
-            # #3426: PrometheusRules of --source-dir, named, not converted
-            "already_crd": list(result.get("already_crd", [])),
-        }
-        if checklist_only:
-            # #1112: stdout must be exactly ONE JSON document. The checklist
-            # is the whole point of --checklist-only, so it is carried INSIDE
-            # the summary document (as a string) rather than dumped as raw
-            # Markdown next to it — no information is lost from stdout, and
-            # the summary keys stay exactly where a consumer already expects
-            # them.
-            summary["status"] = "checklist_only"
-            summary["checklist"] = checklist
-        docs.append(encode_json(summary) + "\n")
-
+    # Text mode has no summary document: the human-readable "✓ ..." line
+    # goes to stderr and stays in main().
     return docs
 
 
@@ -1312,14 +1329,22 @@ def main():
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
-    # stdout: the whole 8-combo (checklist_only × dry_run × json) matrix is
-    # decided in plan_stdout() — main() only prints. See plan_stdout() for the
-    # two historical matrix bugs (#1112) whose fixes live there as explicit
-    # branches.
+    # stdout: the (checklist_only × dry_run × json) matrix is decided in
+    # `stdout_json_document` (JSON: one document, handed back) and
+    # `plan_stdout` (text: chunks, printed here). See plan_stdout() for the
+    # two historical matrix bugs (#1112) whose fixes live there.
+    # ⛔ `dry_run=no_write` in BOTH calls: no --output-dir is a dry run for
+    # what stdout carries (#1582), in JSON as in text.
+    if args.json:
+        # #3216: the document goes back to `run`, which encodes and writes
+        # it. Everything this run writes to disk is written by now.
+        return Report(stdout_json_document(
+            checklist_only=args.checklist_only, dry_run=no_write, result=result,
+            checklist=checklist, namespace=args.namespace, source_dir=source_dir), EXIT_OK)
     for doc in plan_stdout(
         checklist_only=args.checklist_only,
         dry_run=no_write,
-        json_mode=args.json,
+        json_mode=False,
         result=result,
         checklist=checklist,
         namespace=args.namespace,
@@ -1327,21 +1352,19 @@ def main():
     ):
         print(doc, end="")
 
-    # Human-readable summary → stderr, in every non-JSON mode (the JSON
-    # summary, when one is due, is a stdout document owned by plan_stdout()).
-    if not args.json:
-        pr_count = len(result["prometheus_rules"])
-        print(
-            i18n_text(
-                f"\n✓ 遷移分析完成: {result.get('configmap_files', 0)} 個 ConfigMap → "
-                f"{pr_count} 個 PrometheusRule CRD（Alertmanager 路由見 checklist："
-                f"generate-routes + configSecret）",
-                f"\n✓ Migration analysis complete: {result.get('configmap_files', 0)} ConfigMaps → "
-                f"{pr_count} PrometheusRule CRDs (Alertmanager routing: see the checklist — "
-                f"generate-routes + configSecret)",
-            ),
-            file=sys.stderr,
-        )
+    # Human-readable summary → stderr (text mode; --json returned above).
+    pr_count = len(result["prometheus_rules"])
+    print(
+        i18n_text(
+            f"\n✓ 遷移分析完成: {result.get('configmap_files', 0)} 個 ConfigMap → "
+            f"{pr_count} 個 PrometheusRule CRD（Alertmanager 路由見 checklist："
+            f"generate-routes + configSecret）",
+            f"\n✓ Migration analysis complete: {result.get('configmap_files', 0)} ConfigMaps → "
+            f"{pr_count} PrometheusRule CRDs (Alertmanager routing: see the checklist — "
+            f"generate-routes + configSecret)",
+        ),
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":
