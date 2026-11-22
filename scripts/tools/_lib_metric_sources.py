@@ -273,8 +273,8 @@ def tenant_presence(metric: str) -> "str | None":
 def label_flow(label: str, exprs: "list[str]", records: "dict[str, list[dict]] | None" = None):
     """``_lib_consumer_read.promql_label_flow`` with what the scrape says
     about *label* (#4137): for ``tenant``, every raw metric the expressions
-    and *records* read (their ``__name__`` matchers, read off the parse by
-    ``promql_shape``) judged by ``tenant_presence``, and the tenant
+    and *records* read (``_lib_consumer_read.promql_metric_names``) judged
+    by ``tenant_presence``, and the tenant
     exporters' job as the one whose every target carries it. Any other label
     is told nothing: every raw metric is taken to carry it."""
     metrics: dict[str, str] = {}
@@ -282,13 +282,14 @@ def label_flow(label: str, exprs: "list[str]", records: "dict[str, list[dict]] |
     if label == TENANT_LABEL:
         jobs = (TENANT_EXPORTER_JOB,)
         read = list(exprs) + [d.get("expr", "") for defs in (records or {}).values() for d in defs]
-        for tree in _lib_consumer_read.promql_shape(read) if read else []:
-            for sel in _lib_consumer_read.shape_nodes(tree):
-                for m in sel.get("matchers") or []:
-                    if m["name"] == "__name__" and m["type"] == "=" and m["value"] not in (records or {}):
-                        presence = tenant_presence(m["value"])
-                        if presence is not None:
-                            metrics[m["value"]] = presence
+        for names in _lib_consumer_read.promql_metric_names(read):
+            if isinstance(names, _lib_consumer_read.InputRefused):
+                raise names
+            for name in names:
+                if name not in (records or {}):
+                    presence = tenant_presence(name)
+                    if presence is not None:
+                        metrics[name] = presence
     return _lib_consumer_read.promql_label_flow(label, exprs, records, metrics=metrics, jobs=jobs)
 
 
