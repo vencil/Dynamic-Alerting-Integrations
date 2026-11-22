@@ -99,7 +99,10 @@ def test_the_harness_does_refuse_pyyaml(tmp_path):
 # module those tools can reach the entries through instead. `_lib_constants`
 # is refused too: a generator that rewrites `_lib_constants.py` must be able to
 # write while that file does not parse. Every entry is CALLED, not only
-# imported — `write_repo_artifact` loads `_lib_atomic_write` on first use.
+# imported — `write_repo_artifact` loads `_lib_atomic_write` on first use —
+# and so is every failure exit (`_or_die`, `output_write`, the decorator, a
+# second stdout claimant): a lazy import there would turn rc 2 into a
+# ModuleNotFoundError where PyYAML is missing (independent review).
 _ENTRIES_ALONE = """
 import builtins, os, sys
 REFUSED = ("yaml", "_lib_constants", "_lib_io")
@@ -112,12 +115,28 @@ builtins.__import__ = refuse
 sys.path.insert(0, sys.argv[1])
 exec(sys.argv[3])
 out = sys.argv[2]
-from _lib_output import (check_repo_artifact, ensure_dir, write_operator_output,
-                         write_repo_artifact)
-ensure_dir(os.path.join(out, "d"))
-check_repo_artifact(os.path.join(out, "d", "a.txt"))
-write_repo_artifact(os.path.join(out, "d", "a.txt"), "a\\n")
-write_operator_output(os.path.join(out, "d", "o.txt"), "o\\n", flag=None)
+import _lib_output as o
+o.ensure_dir(os.path.join(out, "d"))
+o.check_repo_artifact(os.path.join(out, "d", "a.txt"))
+o.write_repo_artifact(os.path.join(out, "d", "a.txt"), "a\\n")
+o.write_operator_output(os.path.join(out, "d", "o.txt"), "o\\n", flag=None)
+with o.open_operator_output("-", flag="--first") as fh:
+    fh.write("")
+blocked = os.path.join(out, "d", "a.txt", "under-a-file")
+def exits_2(call):
+    try:
+        call()
+    except SystemExit as e:
+        assert e.code == 2, e.code
+    else:
+        raise AssertionError("did not exit")
+exits_2(lambda: o.write_operator_output_or_die(blocked, "x", flag="-o"))
+exits_2(lambda: o.ensure_dir_or_die(blocked, flag="-o"))
+exits_2(lambda: o.exit_on_output_write_error(lambda: o.claim_stdout("--second"))())
+def wrapped():
+    with o.output_write(blocked, flag="-o"):
+        open(blocked, "w").close()
+exits_2(o.exit_on_output_write_error(wrapped))
 loaded = sorted(m for m in sys.modules if m.split(".")[0] in REFUSED)
 print("loaded:", loaded)
 sys.exit(1 if loaded else 0)

@@ -286,3 +286,4 @@ def test_helper_module_has_no_import_cycle_with_exitcodes():
     assert "_lib_output" not in src
     import _lib_exitcodes
     assert _lib_output.die_caller_error is _lib_exitcodes.die_caller_error
+    assert _lib_io.EXIT_CALLER_ERROR == 2

@@ -20,7 +20,8 @@ import _lib_input  # noqa: E402  (#3445: the one decoding of an input file)
 # No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
 import _lib_exitcodes  # noqa: E402
 from _lib_label import safe_label  # noqa: E402,F401  (re-export, #3276)
-from _lib_exitcodes import die_caller_error
+# EXIT_CALLER_ERROR: kept as a module attribute (it was one before #4223).
+from _lib_exitcodes import EXIT_CALLER_ERROR, die_caller_error  # noqa: F401
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
