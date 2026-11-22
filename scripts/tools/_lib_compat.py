@@ -316,7 +316,10 @@ def require_git_project_root(start) -> "Path":
     Paths are compared with ``os.path.samefile`` (the same file on disk), not
     as realpath strings, which differ on case-folding filesystems and 8.3
     names while naming one directory. A relative inherited path is read
-    against the cwd, as git reads it.
+    against the root, where the tools' own git resolves it (``-C <root>`` /
+    ``cwd=<root>``); a path is never normalized first, so ``..`` after a
+    symlink resolves on disk as git opens it; a gitfile ``GIT_DIR`` (a
+    linked worktree's ``.git``) is compared by the directory it points at.
 
     Any refusal — another root, a foreign inherited variable, git missing or
     failing or not listing its variables — prints one line naming the
@@ -383,7 +386,16 @@ def require_git_project_root(start) -> "Path":
         value = os.environ.get(var)
         if not value:
             continue
-        path = os.path.abspath(value)  # relative: against the cwd, as git does
+        # A relative value is taken against the root: the tools run their
+        # git with `-C <root>` / `cwd=<root>`, where git resolves it. Never
+        # normalized: `..` after a symlink must resolve on disk, as git
+        # opens it, so samefile sees what git will see.
+        path = value if os.path.isabs(value) else os.path.join(str(root), value)
+        if var == "GIT_DIR" and os.path.isfile(path):
+            # A gitfile (a linked worktree's `.git`) is a GIT_DIR git
+            # accepts: compare the directory it points at.
+            path = _answer(_git("rev-parse", "--resolve-git-dir", path, env=env),
+                           f"rev-parse --resolve-git-dir {path}")
         if not _same(where(path) or ".", expected, f"inherited {var}"):
             _refuse(f"inherited {var}={value} {label} {expected}")
     return root

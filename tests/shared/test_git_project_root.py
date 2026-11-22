@@ -263,6 +263,47 @@ def test_inherited_variable_of_an_outer_repo_is_refused(tool, var, tmp_path):
     _assert_named_refusal(proc, root, f"inherited {var}={value}")
 
 
+def test_dot_dot_after_a_symlink_is_resolved_as_git_opens_it(tmp_path):
+    """`<root>/lnk/../.git/index` reads as this tree's index once `..` is
+    folded away literally, but `lnk` points into the outer repo, so git opens
+    the OUTER index. The check must resolve the path on disk, as git does."""
+    root, outer = _own_clone_inside_outer(tmp_path, PIPE)
+    (outer / "sub").mkdir()
+    (root / "lnk").symlink_to(outer / "sub")
+    value = f"{root}/lnk/../.git/index"
+    proc = _run(root, PIPE, "--json", GIT_INDEX_FILE=value)
+    _assert_named_refusal(proc, root, f"inherited GIT_INDEX_FILE={value}")
+
+
+def test_a_relative_git_dir_is_taken_against_the_root(tmp_path):
+    """The tools run git with `-C <root>` / `cwd=<root>`, where a relative
+    GIT_DIR resolves against the root — not against the caller's cwd."""
+    root, _ = _layout("clone", tmp_path, PIPE)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    proc = subprocess.run(
+        [sys.executable, str(root / "scripts" / "tools" / PIPE), "--json"],
+        capture_output=True, text=True, encoding="utf-8", timeout=120,
+        cwd=str(elsewhere), env=_clean_env(GIT_DIR=".git"))
+    assert proc.returncode == 0, (proc.returncode, proc.stderr)
+
+
+def test_a_gitfile_git_dir_is_compared_by_where_it_points(tmp_path):
+    """A linked worktree's `.git` is a gitfile git accepts as GIT_DIR: this
+    tree's own is accepted, one pointing at another repository is refused."""
+    wt, _ = _layout("worktree", tmp_path, PIPE)
+    assert (wt / ".git").is_file()
+    own = _run(wt, PIPE, "--json", GIT_DIR=str(wt / ".git"))
+    assert own.returncode == 0, (own.returncode, own.stderr)
+
+    (tmp_path / "foreign").mkdir()
+    root, outer = _own_clone_inside_outer(tmp_path / "foreign", PIPE)
+    gitfile = tmp_path / "foreign.gitfile"
+    gitfile.write_text(f"gitdir: {outer / '.git'}\n", encoding="utf-8")
+    proc = _run(root, PIPE, "--json", GIT_DIR=str(gitfile))
+    _assert_named_refusal(proc, root, f"inherited GIT_DIR={gitfile}")
+
+
 _HOOK = """#!/bin/sh
 "{py}" "$PWD/scripts/tools/{tool}" --json > /dev/null 2> "{log}.err"
 echo $? > "{log}.rc"
