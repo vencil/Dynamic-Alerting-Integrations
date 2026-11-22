@@ -4,7 +4,7 @@
 #3107: the one atomic writer. It moved here from ``scripts/tools/dx/`` so
 the da-tools image ships it (``state-reconcile`` rewrites its manifest
 atomically there; ``configmap-assemble``, run from the repo, does too);
-``_lib_io.write_repo_artifact`` is its entry point.
+``_lib_output.write_repo_artifact`` is its entry point.
 
 Long-running regen tools (``generate_doc_map.py``, ``generate_tool_map.py``,
 …) that write their output directly on top of the target can leave a
@@ -49,10 +49,10 @@ THE CONTRACT
 * **The tmp is private**: ``mkstemp`` beside the real target, so a file the
   user happens to call ``<target>.tmp`` is never touched.
 * **Errors name the TARGET, never the tmp.** Every ``OSError`` leaves as
-  ``_lib_io.OutputWriteError`` (or :class:`OutputNoSpaceError` for a full /
+  ``_lib_output.OutputWriteError`` (or :class:`OutputNoSpaceError` for a full /
   over-quota filesystem) naming *path* — the path the caller passed, not the
   tmp and not the symlink's resolved target. That is what lets
-  ``_lib_io.output_write`` / ``exit_on_output_write_error`` turn it into
+  ``_lib_output.output_write`` / ``exit_on_output_write_error`` turn it into
   rc 2 plus one line instead of a traceback: their attribution rule accepts
   only the path itself or an ancestor of it.
 * **The CLI flag in the message is the caller's.** ``flag="--output"`` makes
@@ -72,9 +72,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional, Union
 
-# #3107: shipped beside `_lib_io` in scripts/tools/ (and flat in the da-tools
-# image), so its one dependency is a sibling import.
-from _lib_io import OutputWriteError, safe_label  # noqa: E402
+# #3107: shipped beside `_lib_output` in scripts/tools/ (and flat in the
+# da-tools image), so its dependencies are sibling imports. #4223: not
+# `_lib_io`, which loads PyYAML and `_lib_constants`.
+from _lib_label import safe_label  # noqa: E402
+from _lib_output import OutputWriteError  # noqa: E402
 
 _DEFAULT_MODE = 0o644
 _NO_SPACE_ERRNOS = frozenset(
@@ -164,7 +166,7 @@ def _output_error(out: Path, exc: OSError, opts: _Opts, *,
 
     Named by the path the caller passed, never by the private tmp file or
     the symlink's resolved target: those are paths the operator did not type,
-    and ``_lib_io.output_write`` would not attribute them to *out*.
+    and ``_lib_output.output_write`` would not attribute them to *out*.
     """
     if getattr(exc, "errno", None) in _NO_SPACE_ERRNOS:
         return OutputNoSpaceError(out, exc, flag=opts.flag, previous_kept=previous_kept)
@@ -331,7 +333,7 @@ def atomic_write_text(
     Raises:
         OutputWriteError: any ``OSError`` while producing *path*, named by
             *path* — :class:`OutputNoSpaceError` for ENOSPC / EDQUOT. Wrap
-            the call in ``_lib_io.output_write(path, flag=...)`` and decorate
+            the call in ``_lib_output.output_write(path, flag=...)`` and decorate
             ``main`` with ``exit_on_output_write_error`` to end at rc 2.
     """
     out = Path(path)

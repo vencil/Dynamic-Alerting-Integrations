@@ -123,6 +123,8 @@ COPY scripts/tools/_lib_compat.py               ./core/_lib_compat.py
 # preview — and `docker build` still succeeds.
 # tests/ops/test_recipe_preview_image_layout.py judges a recipe in this layout.
 COPY scripts/tools/_lib_io.py                   ./core/_lib_io.py
+# #4223: _lib_io → _lib_output (the output entries, re-exported there).
+COPY scripts/tools/_lib_output.py               ./core/_lib_output.py
 # #3276: _lib_io → _lib_label (safe_label); compile_custom_alerts → _lib_paths.
 COPY scripts/tools/_lib_label.py                ./core/_lib_label.py
 COPY scripts/tools/_lib_paths.py                ./core/_lib_paths.py

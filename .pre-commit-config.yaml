@@ -263,7 +263,8 @@ repos:
         name: Tool map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_tool_map.py --check --lang all
         language: python
-        # #2128: the shared _atomic_write helper imports _lib_io, which needs PyYAML.
+        # #2128: the tool imports its write entry from _lib_io, which needs PyYAML
+        # (#4223: _lib_output does not; moving the import there is #3981's).
         additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: ^scripts/tools/.*\.py$
@@ -304,7 +305,8 @@ repos:
         name: Doc map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_doc_map.py --check --lang all
         language: python
-        # #2128: the shared _atomic_write helper imports _lib_io, which needs PyYAML.
+        # #2128: the tool imports its write entry from _lib_io, which needs PyYAML
+        # (#4223: _lib_output does not; moving the import there is #3981's).
         additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: ^docs/.*\.(md|jsx)$
@@ -1444,7 +1446,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_io\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+        files: (?:^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_(io|output)\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
 
       - id: runtime-canary-compile-check
         name: "#3679: runtime canary's compiled rules must match its recipe through the real compiler"
@@ -1458,7 +1460,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(tests/rulepacks/runtime-canary\.compiled\.rules\.yaml|tests/rulepacks/runtime-canary-recipe/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_io\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+        files: (?:^(tests/rulepacks/runtime-canary\.compiled\.rules\.yaml|tests/rulepacks/runtime-canary-recipe/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_(io|output)\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
 
       - id: retire-drift-check
         name: "#869: forbid removing a K8s exporter target while its conf.d _expected_exporters declaration remains (false-positive guard)"
@@ -1728,7 +1730,7 @@ repos:
         # `migrate_rule` and six more `_lib_*` modules — loaded on every run via
         # onboard_platform / scaffold_tenant / check_confd_schema — joined this
         # list: all seven were read by the gate and none fired it.
-        files: ^(scripts/tools/_lib_(consumer_read|input|tool_fault)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/(rule-pack-.*\.ya?ml|threshold-registry\.yaml)|helm/threshold-exporter/values\.yaml|environments/[^/]+/threshold-exporter\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_rule_packs_generated|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|parse_cache|parse_tree|paths|prometheus|prompt|python|validation|write_check|yaml_strict)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_(consumer_read|input|tool_fault)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/(rule-pack-.*\.ya?ml|threshold-registry\.yaml)|helm/threshold-exporter/values\.yaml|environments/[^/]+/threshold-exporter\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_rule_packs_generated|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|output|parse_cache|parse_tree|paths|prometheus|prompt|python|validation|write_check|yaml_strict)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + fixed point + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"

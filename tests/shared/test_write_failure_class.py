@@ -19,7 +19,7 @@ so its population was empty and it could not fail. It is not retargeted at
 the new entries: a lexical scan does not follow a catch in ``main()`` or a
 decorator. Over ``write_operator_output``, ``open_operator_output``,
 ``write_repo_artifact``, ``ensure_dir`` and ``atomic_write_text`` under
-``scripts/tools`` (``_lib_io.py`` excluded) it read 40 of 48 call sites as
+``scripts/tools`` (``_lib_output.py`` excluded) it read 40 of 48 call sites as
 "unguarded" (measured at #3107 ④); the behavioural rows measure the real rc
 and stderr instead.
 """
@@ -33,6 +33,7 @@ from pathlib import Path
 import pytest
 
 import _lib_io  # noqa: E402  (sys.path via tests/conftest.py)
+import _lib_output  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
 import _lib_python  # noqa: E402
 import _lib_yaml  # noqa: E402
@@ -238,12 +239,12 @@ class TestLibraryPassthrough:
         open (not by an old name), holds `json.dump(indent=2,
         ensure_ascii=False)` with no trailing newline, and is 0600."""
         opened = []
-        real = _lib_io._kernel_open_operator_output
+        real = _lib_output._kernel_open_operator_output
 
         def spy(path, *args, **kwargs):
             opened.append(path)
             return real(path, *args, **kwargs)
-        monkeypatch.setattr(_lib_io, "_kernel_open_operator_output", spy)
+        monkeypatch.setattr(_lib_output, "_kernel_open_operator_output", spy)
         hints = {"tenants": ["alpha"], "db_types": {"alpha": ["mariadb"]}, "note": "閾值"}
         path = _lib_io.write_onboard_hints(str(tmp_path), hints, flag="-o/--output-dir")
         assert opened == [path]
@@ -254,12 +255,12 @@ class TestLibraryPassthrough:
 
     def test_write_yaml_crd_writes_through_the_operator_entry(self, tmp_path, monkeypatch):
         opened = []
-        real = _lib_io._kernel_open_operator_output
+        real = _lib_output._kernel_open_operator_output
 
         def spy(path, *args, **kwargs):
             opened.append(path)
             return real(path, *args, **kwargs)
-        monkeypatch.setattr(_lib_io, "_kernel_open_operator_output", spy)
+        monkeypatch.setattr(_lib_output, "_kernel_open_operator_output", spy)
         out = tmp_path / "crd.yaml"
         _lib_yaml.write_yaml_crd(out, {"kind": "PrometheusRule", "b": 1, "a": "閾值"},
                                  flag="--output-dir")
@@ -272,11 +273,17 @@ class TestLibraryPassthrough:
         for name in ("OutputWriteError", "ensure_dir", "ensure_dir_or_die", "write_operator_output",
                      "write_operator_output_or_die", "open_operator_output"):
             assert getattr(_lib_python, name) is getattr(_lib_io, name), name
+            # #4223: one object, defined in _lib_output — not a second copy.
+            assert getattr(_lib_io, name) is getattr(_lib_output, name), name
 
 
 def test_helper_module_has_no_import_cycle_with_exitcodes():
-    """``_lib_io`` imports ``EXIT_CALLER_ERROR`` from the SSOT directly; this
-    only works while ``_lib_exitcodes`` does not import ``_lib_io`` back."""
+    """The output entries exit through ``_lib_exitcodes.die_caller_error``;
+    this only works while ``_lib_exitcodes`` imports neither ``_lib_output``
+    nor ``_lib_io`` back."""
     src = (TOOLS_DIR / "_lib_exitcodes.py").read_text(encoding="utf-8")
     assert "_lib_io" not in src
+    assert "_lib_output" not in src
+    import _lib_exitcodes
+    assert _lib_output.die_caller_error is _lib_exitcodes.die_caller_error
     assert _lib_io.EXIT_CALLER_ERROR == 2

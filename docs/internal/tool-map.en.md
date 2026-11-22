@@ -270,6 +270,7 @@ lang: en
 - `scripts/tools/_lib_kubectl.py`: Run kubectl: the one place that starts it, for reads and writes (#3207, #3210, #3539).
 - `scripts/tools/_lib_label.py`: `safe_label`: neutralise control characters in a value before it is printed.
 - `scripts/tools/_lib_metric_sources.py`: Where each metric a rule reads comes from — and whether a Prometheus Operator install has that source.
+- `scripts/tools/_lib_output.py`: The output entry points: every write to an output path goes through here.
 - `scripts/tools/_lib_parse_cache.py`: the conf.d reader of the routing tools, with a cache.
 - `scripts/tools/_lib_parse_tree.py`: read `da-guard parse-tree`'s document (ADR-036 §2).
 - `scripts/tools/_lib_paths.py`: The one judgement of a path the caller gave (#3276).

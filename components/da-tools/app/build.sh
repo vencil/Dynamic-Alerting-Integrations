@@ -246,12 +246,16 @@ TOOL_FILES=(
     # (columns, timestamp format); written by validate, read by shadow-verify.
     _lib_shadow_report.py
     _lib_io.py
-    # #3107 — the one atomic writer (moved from dx/): _lib_io.write_repo_artifact
+    # #4223 — stdlib + _lib_exitcodes + _lib_label only: the output entry
+    # points (write_operator_output / write_repo_artifact / ensure_dir …),
+    # imported by _lib_io (re-exported there) and _lib_atomic_write.
+    _lib_output.py
+    # #3107 — the one atomic writer (moved from dx/): _lib_output.write_repo_artifact
     # is its entry point; state-reconcile rewrites its manifest atomically.
     _lib_atomic_write.py
     # v2.10.0 (da-tools ROI r5) — minimal CRD YAML serializer shared by
     # ops/operator_generate.py + ops/migrate_to_operator.py (write_yaml_crd
-    # + _dict_to_yaml). Writes through _lib_io's operator entry (above).
+    # + _dict_to_yaml). Writes through _lib_output's operator entry (above).
     _lib_yaml.py
     # v2.8.0 PR-2 — shared dispatcher for the Go-binary
     # subcommands (guard / parser). Imported by their
