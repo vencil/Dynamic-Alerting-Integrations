@@ -20,12 +20,16 @@ least one of:
   - `scripts/tools/ops/metric_observed_map.yaml` `observed_series` values.
 
 IDENTITY COMPARISON (the substring trap): consumption is decided by exact
-full-token equality, never substring. Tokens are extracted with a PromQL
-identifier regex that treats `:` as part of the token, so
+full-name equality, never substring, so
 `tenant:alert_threshold:db2_lock_wait_time` can never "consume"
 `tenant:db2_lock_wait_time:rate5m` (old-name-is-a-prefix-of-new-name is
 exactly the drift this family of gates exists to catch — see
-feedback: substring match hides drift).
+feedback: substring match hides drift). The names an expression reads are
+Prometheus' parse tree's (`_lib_consumer_read.promql_metric_names`, #4150),
+never a scan of its text against a list of function names to skip. A
+dashboard query is read after Grafana's own variable interpolation
+(`grafana_promql`); one of a datasource that is not Prometheus is skipped
+and named, and one Prometheus' parser still refuses is a caller error.
 
 KNOWN_ORPHANS: the records already orphaned when this gate landed,
 grandfathered as INFO with a pointer to #1204 (12 then; #1204 D-del deleted 11,
@@ -96,51 +100,48 @@ EXTRA_DASHBOARDS = ("try-local/grafana/dashboards/trylocal-home.json",)
 GRAFANA_CM_GLOB = ("k8s/03-monitoring", "configmap-grafana-*.yaml")
 OBSERVED_MAP = "scripts/tools/ops/metric_observed_map.yaml"
 
-# PromQL identifier: `:` is part of the token, which is what makes the
-# comparison colon-adjacency-safe (see module docstring).
-TOKEN_RE = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
-
-# Tokens that are PromQL/Grafana syntax, not series names. Colon-less record
-# names (custom_recipe_info) share the namespace with these keywords — keep
-# any addition here from shadowing a real record.
-_AGGS = {"sum", "min", "max", "avg", "group", "stddev", "stdvar", "count",
-         "count_values", "bottomk", "topk", "quantile", "limitk", "limit_ratio"}
-_KWS = {"by", "without", "on", "ignoring", "group_left", "group_right",
-        "offset", "bool", "and", "or", "unless", "atan2", "start", "end"}
-_FUNCS = {"abs", "absent", "absent_over_time", "acos", "acosh", "asin", "asinh",
-          "atan", "atanh", "avg_over_time", "ceil", "changes", "clamp",
-          "clamp_max", "clamp_min", "cos", "cosh", "count_over_time",
-          "day_of_month", "day_of_week", "day_of_year", "days_in_month", "deg",
-          "delta", "deriv", "exp", "floor", "histogram_avg", "histogram_count",
-          "histogram_sum", "histogram_fraction", "histogram_quantile",
-          "histogram_stddev", "histogram_stdvar", "holt_winters", "hour",
-          "idelta", "increase", "info", "irate", "label_join", "label_replace",
-          "last_over_time", "ln", "log10", "log2", "mad_over_time",
-          "max_over_time", "min_over_time", "minute", "month", "pi",
-          "predict_linear", "present_over_time", "quantile_over_time", "rad",
-          "rate", "resets", "round", "scalar", "sgn", "sin", "sinh", "sort",
-          "sort_by_label", "sort_by_label_desc", "sort_desc", "sqrt",
-          "stddev_over_time", "stdvar_over_time", "sum_over_time", "tan",
-          "tanh", "time", "timestamp", "vector", "year"}
-_GRAFANA = {"label_values", "query_result", "tag_values", "__interval",
-            "__rate_interval", "__range", "__auto", "__name__"}
-_UNITS = {"s", "m", "h", "d", "w", "y", "ms"}
-STOP_TOKENS = _AGGS | _KWS | _FUNCS | _GRAFANA | _UNITS
+#: Grafana's variable syntax (grafana.com/docs/grafana/latest/dashboards/
+#: variables/variable-syntax/) as Grafana interpolates it before the query
+#: reaches Prometheus — Grafana's grammar, not PromQL's: the built-ins first,
+#: longest name first (`$__interval_ms` is not `$__interval` + `_ms`), then
+#: a variable in a duration's place (a range, a subquery, `offset`), then any
+#: other variable. The values only have to parse; no name comes from them.
+_GRAFANA_NUMBER = re.compile(r"\$\{?__(?:interval|range|rate_interval)_(?:ms|s)\}?(?![\w])")
+_GRAFANA_DURATION = re.compile(r"\$\{?__(?:rate_interval|interval|range|auto)\}?(?![\w])")
+_GRAFANA_VAR = r"\$(?:\{[^}]*\}|[A-Za-z_]\w*)"
+_GRAFANA_RANGE = re.compile(r"\[\s*" + _GRAFANA_VAR + r"\s*(?::\s*(?:" + _GRAFANA_VAR + r"|\w+)\s*)?\]")
+_GRAFANA_OFFSET = re.compile(r"\boffset\s+" + _GRAFANA_VAR)
+_GRAFANA_ANY = re.compile(_GRAFANA_VAR + r"|\[\[\w+(?::\w+)?\]\]")
+#: Grafana's query-variable functions: label_values(<query>, <label>) and
+#: query_result(<query>) wrap PromQL; label_values(<label>), label_names()
+#: and metrics() read no series.
+_GRAFANA_WRAPS = (re.compile(r"\s*label_values\((.*),\s*[A-Za-z_]\w*\s*\)\s*", re.S),
+                  re.compile(r"\s*query_result\((.*)\)\s*", re.S))
+_GRAFANA_NONE = re.compile(r"\s*(?:label_values\(\s*[A-Za-z_]\w*\s*\)|label_names\(.*\)|metrics\(.*\))\s*", re.S)
 
 
-def _strip_strings(s: str) -> str:
-    s = re.sub(r'"(?:\\.|[^"\\])*"', '""', s)
-    s = re.sub(r"'(?:\\.|[^'\\])*'", "''", s)
-    # PromQL also accepts Go-style backtick raw strings (no escapes inside);
-    # without this strip their contents would leak into TOKEN_RE (Gemini #1214).
-    s = re.sub(r'`[^`]*`', '``', s)
-    return s
+def grafana_promql(query: str) -> "str | None":
+    """The PromQL Grafana sends for the dashboard *query* (its variables
+    interpolated with placeholders that parse), or None for a query-variable
+    function that reads no series."""
+    if _GRAFANA_NONE.fullmatch(query):
+        return None
+    for wrap in _GRAFANA_WRAPS:
+        m = wrap.fullmatch(query)
+        if m:
+            query = m.group(1)
+            break
+    query = _GRAFANA_NUMBER.sub("300", query)
+    query = _GRAFANA_DURATION.sub("5m", query)
+    query = _GRAFANA_RANGE.sub(lambda m: "[5m:1m]" if ":" in m.group(0) else "[5m]", query)
+    query = _GRAFANA_OFFSET.sub("offset 5m", query)
+    return _GRAFANA_ANY.sub("x", query)
 
 
-def metric_tokens(expr: str) -> set[str]:
-    """Full-token identifier set of a PromQL/Grafana expression."""
-    return {t for t in TOKEN_RE.findall(_strip_strings(expr))
-            if t not in STOP_TOKENS}
+class DashboardQueryRefused(ValueError):
+    """A dashboard query Prometheus' parser refuses, after Grafana's
+    interpolation: the consumers it reads are unknown, so a verdict would
+    fabricate orphans — a caller error, like an unparseable dashboard."""
 
 
 def _load_yaml(path: Path):
@@ -187,21 +188,34 @@ def iter_rules(root: Path = PROJECT_ROOT):
         yield from eat(rule_file.documents[0], source)
 
 
-def _walk_json_strings(obj, keys=("expr", "query")):
+def _datasource_type(ds, inherited):
+    """A panel's / target's `datasource`: its `type` when Grafana wrote one
+    (an object), else the enclosing one's (a uid, a name or `${DS}` names
+    no type)."""
+    if isinstance(ds, dict) and isinstance(ds.get("type"), str):
+        return ds["type"]
+    return inherited
+
+
+def _walk_json_strings(obj, keys=("expr", "query"), ds_type=None):
+    """(query, datasource type or None) of every query string, the type the
+    nearest enclosing `datasource` names."""
     if isinstance(obj, dict):
+        ds_type = _datasource_type(obj.get("datasource"), ds_type)
         for k, v in obj.items():
             if k in keys and isinstance(v, str):
-                yield v
+                yield v, ds_type
             else:
-                yield from _walk_json_strings(v, keys)
+                yield from _walk_json_strings(v, keys, ds_type)
     elif isinstance(obj, list):
         for item in obj:
-            yield from _walk_json_strings(item, keys)
+            yield from _walk_json_strings(item, keys, ds_type)
 
 
 def iter_dashboard_exprs(root: Path = PROJECT_ROOT):
-    """Yield every query/expr string from dashboards (standalone JSON files
-    plus JSON embedded in configmap-grafana-* `data` values)."""
+    """Yield (source, query, datasource type or None) for every query/expr
+    string of the dashboards (standalone JSON files plus JSON embedded in
+    configmap-grafana-* `data` values)."""
     paths = []
     for d in DASHBOARD_DIRS:
         paths.extend(sorted((root / d).glob("*.json")))
@@ -212,14 +226,16 @@ def iter_dashboard_exprs(root: Path = PROJECT_ROOT):
         # fail-loud: an unparseable dashboard would silently drop consumers
         # and fabricate orphans — that is a caller error, not a finding.
         doc = json.loads(p.read_text(encoding="utf-8"))
-        yield from _walk_json_strings(doc)
+        for query, ds in _walk_json_strings(doc):
+            yield str(p.relative_to(root)), query, ds
 
     # #3206: the Grafana ConfigMaps the way kubectl reads them (da-crdecode).
     cm_dir, cm_pat = GRAFANA_CM_GLOB
     for p in sorted((root / cm_dir).glob(cm_pat)):
         for cm in _lib_consumer_read.kubernetes_documents(str(p)):   # a Kubernetes object: the manifest reading's guarantee (#3426)
-            for _key, val in (cm.get("data") or {}).items():
-                yield from _walk_json_strings(json.loads(val))
+            for key, val in (cm.get("data") or {}).items():
+                for query, ds in _walk_json_strings(json.loads(val)):
+                    yield f"{p.relative_to(root)} ({key})", query, ds
 
 
 def _walk_observed_series(obj):
@@ -244,13 +260,23 @@ def collect_consumed_tokens(root: Path = PROJECT_ROOT) -> set[str]:
     A recording rule's own expr does not consume its own name
     (self-reference is definition, not consumption)."""
     consumed: set[str] = set()
-    for _source, kind, name, expr in iter_rules(root):
-        toks = metric_tokens(expr)
-        if kind == "record":
-            toks.discard(name)
-        consumed |= toks
-    for expr in iter_dashboard_exprs(root):
-        consumed |= metric_tokens(expr)
+    rules = list(iter_rules(root))
+    for (_source, kind, name, expr), names in zip(
+            rules, _lib_consumer_read.promql_metric_names([r[3] for r in rules])):
+        if isinstance(names, _lib_consumer_read.InputRefused):
+            raise names  # a rule file Prometheus loaded parses; never reached
+        consumed |= set(names) - ({name} if kind == "record" else set())
+    queries = [(src, q) for src, q, ds in iter_dashboard_exprs(root)
+               if ds in (None, "prometheus")]
+    promql = [(src, q, grafana_promql(q)) for src, q in queries]
+    promql = [x for x in promql if x[2] is not None]
+    for (src, query, _), names in zip(promql, _lib_consumer_read.promql_metric_names(
+            [p for *_, p in promql])):
+        if isinstance(names, _lib_consumer_read.InputRefused):
+            raise DashboardQueryRefused(
+                f"{src}: Prometheus' parser refuses the query {query!r} (after Grafana's "
+                f"interpolation): {_lib_consumer_read.error_text(names)}")
+        consumed |= set(names)
     for series in _walk_observed_series(_load_yaml(root / OBSERVED_MAP)):
         consumed.add(series)  # exact full-string identity
     return consumed

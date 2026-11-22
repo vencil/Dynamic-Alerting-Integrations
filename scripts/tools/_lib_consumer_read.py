@@ -1034,6 +1034,43 @@ def shape_nodes(node: dict):
         yield from shape_nodes(arg)
 
 
+def promql_metric_names(exprs: "list[str]", binary: str | None = None) -> "list[list[str] | InputRefused]":
+    """⛔ THE one answer to "which metrics does this PromQL read" (#4150): per
+    expression of *exprs*, the value of every selector's ``__name__``
+    equality matcher (``x``, ``x{…}``, ``{__name__="x"}``), in the order
+    Prometheus' parse tree holds them (``promql_shape``: left before right),
+    each once — or the ``InputRefused`` of an expression the parser refuses.
+    A batch with one refused expression is re-read one expression at a time,
+    so a refusal names its expression and no other is lost (the batch
+    refusal does not say which). No tool reads metric names off the text of
+    an expression: a list of the function and keyword names to skip goes
+    stale with every Prometheus release (``holt_winters``)."""
+    exprs = list(exprs)
+    if not exprs:
+        return []
+    try:
+        trees: "list" = promql_shape(exprs, binary)
+    except InputRefused:
+        trees = []
+        for e in exprs:
+            try:
+                trees.append(promql_shape([e], binary)[0])
+            except InputRefused as exc:
+                trees.append(exc)
+    out: "list[list[str] | InputRefused]" = []
+    for tree in trees:
+        if isinstance(tree, InputRefused):
+            out.append(tree)
+            continue
+        names: "list[str]" = []
+        for node in shape_nodes(tree):
+            for m in node.get("matchers") or []:
+                if m["name"] == "__name__" and m["type"] == "=" and m["value"] not in names:
+                    names.append(m["value"])
+        out.append(names)
+    return out
+
+
 class RuleFileRefused(InputRefused):
     """Prometheus' rule loader refused this rule file; ``path`` names it and
     ``problem`` is the loader's reason."""

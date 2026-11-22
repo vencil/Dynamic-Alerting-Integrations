@@ -157,17 +157,16 @@ class TestExtractRulePackMetrics:
         )
         result = mod.extract_rule_pack_metrics(rule_packs, tmp_path / "no-k8s")
         assert "db" in result
-        # Real metric names get extracted (longer than 3 chars,
-        # not in _PROMQL_KEYWORDS).
+        # The metric names Prometheus' parse tree reads (#4150).
         assert "db_query_duration_seconds_total" in result["db"]
         assert "db_connections_active" in result["db"]
         # PromQL keywords are filtered out.
         assert "rate" not in result["db"]
 
-    def test_short_tokens_filtered_out(self, tmp_path):
-        # Property: tokens of 3 or fewer chars are filtered (the regex
-        # captures `[a-z_][a-z0-9_]+` which has min length 2 but the
-        # extractor adds `len > 3` filter).
+    def test_every_name_read_short_and_mixed_case_included(self, tmp_path):
+        # #4150: the names are the parse tree's. The old `len > 3` filter
+        # dropped real metrics (`up`), and its lowercase-only regex missed
+        # every mixed-case one (four ClickHouse* dictionary keys read as stale).
         rule_packs = tmp_path / "rule-packs"
         rule_packs.mkdir()
         _write(rule_packs / "rule-pack-x.yaml",
@@ -175,17 +174,14 @@ class TestExtractRulePackMetrics:
             "  - name: x\n"
             "    rules:\n"
             "      - alert: A\n"
-            "        expr: ab + abc + abcd\n"  # ab/abc filtered, abcd kept
+            '        expr: up + ab + ClickHouseMetrics_TCPConnection + on() group_left x{lbl="holt_winters"}\n'
         )
         result = mod.extract_rule_pack_metrics(rule_packs, tmp_path / "nx")
-        # `ab` and `abc` are too short; `abcd` survives.
-        assert "abcd" in result["x"]
-        assert "ab" not in result["x"]
-        assert "abc" not in result["x"]
+        assert result["x"] == {"up", "ab", "ClickHouseMetrics_TCPConnection", "x"}
 
     def test_promql_keyword_filter(self, tmp_path):
-        # Property: every keyword in _PROMQL_KEYWORDS is filtered, even
-        # if it appears in metric position.
+        # Property: functions, aggregations and label names are no metric
+        # names — read off the parse, so no keyword list to keep (#4150).
         rule_packs = tmp_path / "rule-packs"
         rule_packs.mkdir()
         # Build an expr that mentions every common keyword.
