@@ -701,7 +701,8 @@ affinity: {}
 #
 # ⛔ ON by default (#1595; was off in Phase 1). The platform pack's Vector
 # alerts — VectorBufferEventsDropped, TenantProjectionMappingErrors,
-# TenantProjectionFanoutDiscardSpike — read ONLY these internal_metrics. With
+# TenantProjectionFanoutDiscardSpike, and TenantProjectionStampMissing (whose
+# counter, tenant_stamp_missed, is exported here too) — read ONLY this port. With
 # this off their `vector_*` series do not exist at all, so they can never
 # fire and look exactly like "nothing is being dropped". Turning it off is a
 # deliberate opt-out of that alerting, not a neutral default; Prometheus also
@@ -736,6 +737,10 @@ networkPolicy:
 # job, with no jobLabel, so `job` is the Service name in both modes.
 serviceMonitor:
   enabled: false
+  # ⛔ At most 30s (the render fails above): the ADR-021 stamp-miss counter's
+  # series lives only 60-120s after its last increment, so a slower scrape can
+  # miss it and TenantProjectionStampMissing never fires. Single-unit only
+  # (15s, 30s, 500ms).
   interval: 15s
   # Labels Prometheus's serviceMonitorSelector matches. kube-prometheus-stack's
   # default selector matches `release: <its Helm release name>`; the default

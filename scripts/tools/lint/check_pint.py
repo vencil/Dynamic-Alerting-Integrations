@@ -120,9 +120,12 @@ _PINT_ARGS = ["--offline", "-c", ".pint.hcl", "lint",
 # slack exceeds the platform pack's share the floor no longer sees that pack drop out,
 # so the pair below was re-measured from CI's pint step. #3783 removed two Kafka alerts
 # (+ critical tier), their recording rules and thresholds: CI's pint step then logged
-# entries=391, so the pair moved to 391 / 383. Re-measure on every PINT_VERSION bump: a pint that stops
+# entries=391, so the pair moved to 391 / 383. Growth since then (rule additions on
+# main) brought the slack to the platform pack's share when #2789's
+# TenantProjectionStampMissing landed: CI's pint step logged entries=425, so the pair
+# moved to 425 / 417. Re-measure on every PINT_VERSION bump: a pint that stops
 # parsing a file is only visible as this count dropping.
-_MIN_PINT_ENTRIES = 383
+_MIN_PINT_ENTRIES = 417
 
 # The platform pack's share of the count, and the total measured at the same time.
 # Both are needed: the pair is what keeps the floor's DETECTION WINDOW open as the
@@ -135,7 +138,7 @@ _MIN_PINT_ENTRIES = 383
 # file's own convention is to read such values back out rather than repeat them, and
 # the lockstep test does exactly that for this constant.
 _PLATFORM_PACK_ENTRIES = 42
-_PINT_ENTRIES_AT_MEASURE = 391
+_PINT_ENTRIES_AT_MEASURE = 425
 
 
 def main() -> int:

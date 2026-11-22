@@ -10,8 +10,10 @@
 // Subcommands
 // -----------
 //
-//	apply           Open or update tenant chunk PRs from a Plan
-//	                produced by C-9 emit + C-10 BuildPlan.
+//	apply           Open or update tenant chunk PRs from a Plan and an
+//	                emit directory. Experimental: no shipped tool produces
+//	                either (Profile Builder / BuildPlan are wired to no CLI;
+//	                docs/cli-reference.md#batch-pr).
 //	refresh         After Base PR merges, rebase tenant branches
 //	                onto the merged main HEAD (PR-3 mode).
 //	refresh-source  Re-apply data-layer hot-fix files into existing
@@ -109,7 +111,7 @@ func run(args []string, stdout, errOut io.Writer) int {
 func printUsage(w io.Writer) {
 	fmt.Fprintf(w, "Usage: %s <subcommand> [flags]\n\n", programName)
 	fmt.Fprintf(w, "Subcommands:\n")
-	fmt.Fprintf(w, "  apply           Open or update tenant chunk PRs from a Plan.\n")
+	fmt.Fprintf(w, "  apply           Open or update tenant chunk PRs from a Plan (experimental).\n")
 	fmt.Fprintf(w, "  refresh         Rebase tenant branches after Base PR merges.\n")
 	fmt.Fprintf(w, "  refresh-source  Re-apply data-layer hot-fix into tenant branches.\n")
 	fmt.Fprintf(w, "  --version       Print version and exit.\n")

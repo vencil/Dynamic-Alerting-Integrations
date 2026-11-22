@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tools
 created_at: 2026-04-27
-updated_at: 2026-05-13
+updated_at: 2026-11-22
 ---
 # ADR-018: Profile-as-Directory-Default
 
@@ -21,6 +21,8 @@ updated_at: 2026-05-13
 ## 狀態
 
 🟢 **Accepted**（v2.8.0, 2026-04-27）— Profile Builder 的 PromRule→threshold translator 與 emission 隨 v2.8.0 出貨。
+
+2026-11-22：Profile Builder 沒有接到任何 CLI，batch PR pipeline 也沒有呼叫它；而一個租戶在兩個 cluster 都偏離中位數時，emission 會在兩個目錄各寫一份該租戶的檔，da-guard 以重複租戶拒收整棵樹。大量導入的做法重新選型中，現況見 [`batch-pr`](../cli-reference.md#batch-pr)。本 ADR 的 default-vs-override 邊界不受影響。
 
 ## 背景
 
@@ -88,7 +90,7 @@ Translator 內部演算法（metric_key 5-step ladder、majority vote、median �
 
 ### 與 ADR-016（目錄分層）
 
-emission 的 `<RootPrefix>/<ProposalDir>/` 對應 ADR-016 的 directory level。**Caller**（batch PR pipeline 是主要使用者）決定 `ProposalDirs[i]` 落在 L1 / L2 / L3 哪一層。**Profile Builder 不做目錄推斷**；那是 batch PR pipeline 的工作。
+emission 的 `<RootPrefix>/<ProposalDir>/` 對應 ADR-016 的 directory level。**Caller**（設計上是 batch PR pipeline；目前沒有任何呼叫者）決定 `ProposalDirs[i]` 落在 L1 / L2 / L3 哪一層。**Profile Builder 不做目錄推斷**；那是 batch PR pipeline 的工作。
 
 ### 與 Dangling Defaults Guard
 

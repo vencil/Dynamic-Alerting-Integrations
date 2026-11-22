@@ -16,7 +16,7 @@ parent: architecture-and-design.md
 
 ## 3. Projected Volume 架構 (Rule Packs)
 
-> **⚠️ 計數陷阱**：Rule Pack **總數為 16**（以 `docs/assets/platform-data.json` 為準，= `PACK_ORDER` 的 16 個 pack）。**別直接 `ls rule-packs/*.yaml | wc -l`**——雖然目前剛好也算出 16，但組成不同、隨時會偏掉：`rule-packs/` 的 16 個 YAML **含** `custom-alerts`（租戶自助告警的編譯產物，不列入標準計數）、**不含** `platform`（以 ConfigMap 直接管理、無 YAML 但列入計數）。這兩個 offset 目前剛好抵銷成 16，任一邊變動（例如新增一個編譯 pack）就會讓 `ls` 與真實計數分歧。報告 Rule Pack 數量時一律以 `platform-data.json` 為單一真實來源。
+> **⚠️ 計數陷阱**：Rule Pack **總數為 16**（以 `docs/assets/platform-data.json` 為準，= `PACK_ORDER` 的 16 個 pack）。**別直接 `ls rule-packs/*.yaml | wc -l`**——`rule-packs/` 底下除了每個 pack 一個 YAML（`platform` 也有，`rule-pack-platform.yaml`），還有兩個不是標準 pack 的檔案：`rule-pack-custom-alerts.yaml`（租戶自助告警的編譯產物，不列入標準計數）與 `threshold-registry.yaml`（閾值登記表，不是 rule pack），所以 `ls` 會比真實計數多，之後新增任何這類檔案也會再偏一次。報告 Rule Pack 數量時一律以 `platform-data.json` 為單一真實來源。
 
 ### 3.1 十六個獨立規則包
 
@@ -40,8 +40,8 @@ parent: architecture-and-design.md
 | Kubernetes | `prometheus-rules-kubernetes` | 35 | 16 |
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
-| Platform | `prometheus-rules-platform` | 1 | 56 |
-| **總計** | | **175** | **204** (= **379** rules) |
+| Platform | `prometheus-rules-platform` | 1 | 57 |
+| **總計** | | **175** | **205** (= **380** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### 團隊切分（示意，**非**擁有權宣告）

@@ -21,6 +21,8 @@ Importing a customer's existing Prometheus alerting rule corpus (PromRule CRDs /
 PromRule corpus → da-parser → profile-builder cluster + translator → da-batchpr → da-guard validation → conf.d/
 ```
 
+> ⚠️ The Profile Builder → `da-batchpr apply` step is not wired today (experimental, see [`batch-pr`](cli-reference.en.md#batch-pr)); to import customer rules, use the per-tenant [`migrate`](cli-reference.en.md#migrate).
+
 The Migration Toolkit packages this pipeline into a customer-runnable bundle that works offline, in air-gapped environments, and with verifiable binary integrity.
 
 **Currently included**:
@@ -29,7 +31,7 @@ The Migration Toolkit packages this pipeline into a customer-runnable bundle tha
 |---|---|---|
 | `da-tools` | Python CLI | 41+ existing ops / config-gen / policy-eval subcommands; new `guard` + `batch-pr` + `parser` subcommands wrapping da-guard / da-batchpr / da-parser |
 | `da-guard` | Go binary | Dangling Defaults Guard CLI (schema / cardinality / redundant-override checks; routing and domain policy are left to `da-tools generate-routes --config-dir <conf.d> --validate --strict` since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904), exit 4 when the tree holds them) |
-| `da-batchpr` | Go binary | Migration Batch PR Pipeline CLI (apply / refresh / refresh-source subcommands; plan → open PRs → rebase after Base merge / data-layer hot-fix) |
+| `da-batchpr` | Go binary | Migration Batch PR Pipeline CLI (apply / refresh / refresh-source subcommands; plan → open PRs → rebase after Base merge / data-layer hot-fix). Experimental: no tool produces `apply`'s inputs, see [`batch-pr`](cli-reference.en.md#batch-pr) |
 | `da-parser` | Go binary | PromRule parser CLI (import / allowlist subcommands; strict-PromQL compatibility check + dialect / VM-only function classification; anti-vendor-lock-in) |
 
 ## Three delivery paths
