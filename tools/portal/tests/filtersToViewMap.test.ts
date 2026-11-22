@@ -18,7 +18,7 @@ describe('filtersToViewMap', () => {
         tier: '',
         operational_mode: '',
         domain: '',
-        db_type: '',
+        expected_exporters: '',
       }),
     ).toEqual({});
   });
@@ -31,7 +31,7 @@ describe('filtersToViewMap', () => {
         tier: '',
         operational_mode: '',
         domain: 'finance',
-        db_type: '',
+        expected_exporters: '',
       }),
     ).toEqual({
       q: 'production',

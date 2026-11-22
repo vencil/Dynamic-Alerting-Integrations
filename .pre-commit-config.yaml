@@ -802,14 +802,15 @@ repos:
         additional_dependencies: ['pyyaml']
 
       # #880 Day-3 hardening: validate every tenant-shaped conf.d file against
-      # tenant-config.schema.json (metadata additionalProperties:false + db_type
-      # enum). Shifts the #869 db_type-typo silent-failure (dbType/db_typ key or a
-      # maraidb value → DBType="" → tenant silently dropped from liveness) left to
+      # tenant-config.schema.json (the closed `_` namespace, _expected_exporters as
+      # a list of the exporter-kind enum, metadata additionalProperties:false).
+      # Shifts the #869 liveness-typo silent-failure (a mistyped key or a maraidb
+      # kind → nothing declared → tenant silently dropped from liveness) left to
       # author/CI time. jsonschema is REQUIRED here (unlike md-yaml-drift it does not
       # degrade) so it is in additional_dependencies. Also wired into ci.yml's Lint
       # job (pre-commit run confd-schema-check) like routing-profiles-check.
       - id: confd-schema-check
-        name: conf.d tenant YAML + _defaults.yaml + _routing_profiles.yaml ↔ schemas (#880 db_type-typo + #658 _defaults key guard + #2245)
+        name: conf.d tenant YAML + _defaults.yaml + _routing_profiles.yaml ↔ schemas (#880 liveness-typo + #658 _defaults key guard + #2245)
         # ADR-036 step 4 (#2906): the lint reads conf.d through `da-guard
         # parse-tree` (with_da_guard.sh, as for routing-profiles-check).
         entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
@@ -1468,9 +1469,9 @@ repos:
         files: (?:^(tests/rulepacks/runtime-canary\.compiled\.rules\.yaml|tests/rulepacks/runtime-canary-recipe/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_io\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
 
       - id: retire-drift-check
-        name: "#869: forbid removing a K8s exporter target while conf.d _metadata.db_type remains (false-positive guard)"
-        # #2858: db_type is read through `da-guard served-values` (the exporter's
-        # own reading: profile, platform file, per-key layering); the wrapper
+        name: "#869: forbid removing a K8s exporter target while its conf.d _expected_exporters declaration remains (false-positive guard)"
+        # #2858: the declared kinds are read through `da-guard served-values` (the
+        # exporter's own reading: profile, platform file, the tenant file over them); the wrapper
         # builds .build/da-guard as for platform-data-check, and a run without
         # one fails by name. The Go module and the reader are in `files:` for
         # the same reason as there: they change the answer. #3206: the
@@ -1481,11 +1482,11 @@ repos:
         additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: ^(components/threshold-exporter/config/conf\.d/|helm/values-.*\.yaml$|k8s/00-namespaces/namespaces\.yaml$|scripts/tools/lint/check_retire_drift\.py$|scripts/tools/_lib_(tenant_values|parse_cache|parse_tree|consumer_read)\.py$|scripts/ops/with_da_(guard|crdecode)\.sh$|components/threshold-exporter/app/)
-        # A tenant that declares _metadata.db_type emits tenant_expected_exporter=1
+        # A tenant that declares _expected_exporters emits tenant_expected_exporter=1
         # (collector.go). If a PR deletes its K8s target (helm/values-<t>.yaml or its
-        # db-* namespace) but leaves the conf.d _metadata, TenantExporterAbsent
+        # db-* namespace) but leaves the conf.d declaration, TenantExporterAbsent
         # (#869) fires a permanent FALSE-POSITIVE critical against the dead tenant.
-        # This blocks that order. Fix: remove the conf.d _metadata entry first (or
+        # This blocks that order. Fix: remove the conf.d declaration first (or
         # in the same PR). NOTE the files: path filter can miss some PRs (e.g. a
         # delete-only diff) — the CI mirror in ci.yml runs unfiltered over HEAD.
         # The deployed custom-alert pack is COMPILED from the live conf.d

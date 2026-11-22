@@ -172,7 +172,7 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     # use absent() went stale the moment a pack changed (it still named
     # mariadb after its absent() rule was removed), and this generator does
     # not read the platform pack that lives only under k8s/.
-    lines.append("- **安全**: 唯一的風險是 `absent()`：它在 metric 不存在時就觸發，所以只適合監看一定會被 scrape 的目標（例如 platform pack 監看 threshold-exporter 自己）。租戶 exporter 的存活不用 `absent()`，改由 `TenantExporterAbsent` 逐租戶判斷，只納管在 `_metadata` 宣告 `db_type` 的租戶。")
+    lines.append("- **安全**: 唯一的風險是 `absent()`：它在 metric 不存在時就觸發，所以只適合監看一定會被 scrape 的目標（例如 platform pack 監看 threshold-exporter 自己）。租戶 exporter 的存活不用 `absent()`，改由 `TenantExporterAbsent` 逐租戶判斷，只納管在 `_expected_exporters` 宣告了 exporter kind 的租戶。")
     lines.append("")
     lines.append("### 動態卸載 (optional: true)")
     lines.append("")

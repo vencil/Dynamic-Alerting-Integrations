@@ -14,7 +14,7 @@ DSL 運算子：
   matches     — 正則表達式匹配
   one_of      — 值必須在指定清單內
   contains    — 字串包含子字串
-  （欄位值是 list 時——`_metadata.db_type`（#3771）、`tags`、`groups`——逐元素比：
+  （欄位值是 list 時——`_expected_exporters`（#4097）、`_metadata.tags`、`_metadata.groups`——逐元素比：
    主規則的值運算子一律要每個元素都成立（空 list 只滿足 `not_equals`）；`when` 條件裡
    `equals`／`matches`／`one_of`／`contains` 任一元素成立即成立，`not_equals` 仍要
    每個元素都不等）
@@ -342,10 +342,25 @@ def _regex_refusal(pattern: str) -> Optional[str]:
     return None
 
 
+#: Targets that named a field which no longer exists -> what to write
+#: instead. The path resolves to "not found", so a `when` on it never holds
+#: (the rule is skipped) and a value operator on it never fires: refused
+#: rather than read (#4097).
+REMOVED_TARGETS = {"_metadata.db_type": "_expected_exporters"}
+
+
 def _target_problem(target: str, field_name: str) -> Optional[str]:
-    """#2987: a wildcard is matched against top-level keys only, so a dotted
+    """Why *target* names nothing the engine can read, or None.
+
+    #2987: a wildcard is matched against top-level keys only, so a dotted
     target with `*` (`_metadata.*`) was looked up as a literal path, found
-    nothing and the rule was skipped."""
+    nothing and the rule was skipped. #4097: a removed field is never found
+    either."""
+    replacement = REMOVED_TARGETS.get(target.strip())
+    if replacement:
+        return (f"`{field_name}` {target!r}: this field was removed, so it is never found (a "
+                f"`when` on it would skip the rule) — use `{replacement}` (a list of exporter "
+                "kinds, compared element by element)")
     if "*" in target and "." in target:
         return (f"`{field_name}` {target!r}: a wildcard matches top-level keys only, so a "
                 "dotted path with `*` is read as a literal key and never found (the rule would "
@@ -786,8 +801,8 @@ def _evaluate_operator(operator: str, actual: Any, expected: Any, *,
     if operator == "forbidden":
         return actual is None
 
-    # A list-valued field (`_metadata.db_type` since #3771, `tags`, `groups`)
-    # is read element by element.
+    # A list-valued field (`_expected_exporters`, `_metadata.tags`,
+    # `_metadata.groups`) is read element by element.
     # * A rule's constraint holds only when EVERY element satisfies it — all
     #   five value operators — so a list cannot slip a value past the rule:
     #   `one_of: [mariadb, postgresql]` or `equals: mariadb` against
@@ -798,8 +813,8 @@ def _evaluate_operator(operator: str, actual: Any, expected: Any, *,
     #   hold when SOME element does, so a tenant declaring [mariadb, redis]
     #   stays under a rule guarded by `when: one_of [mariadb, postgresql]`.
     #   `not_equals` keeps "no element equals".
-    # A one-element list reads as the scalar it replaces (`db_type: mariadb`
-    # is served as ["mariadb"]).
+    # A one-element list reads as the scalar it stands for
+    # (`_expected_exporters: [mariadb]` satisfies `equals: mariadb`).
     if isinstance(actual, list) and operator in _ELEMENTWISE_OPERATORS:
         if operator == "not_equals":
             return all(_evaluate_operator(operator, a, expected) for a in actual)

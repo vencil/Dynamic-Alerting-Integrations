@@ -790,11 +790,33 @@ class _StdoutSink(io.TextIOBase):
     def writable(self) -> bool:
         return True
 
+    #: #4055: whether a write or flush through this sink failed — the one
+    #: case in which what stdout still buffers is dropped.
+    failed = False
+    _closing = False
+
     def write(self, s: str) -> int:  # type: ignore[override]
-        return sys.stdout.write(s)
+        try:
+            return sys.stdout.write(s)
+        except OSError:
+            self.failed = True
+            raise
 
     def flush(self) -> None:
-        sys.stdout.flush()
+        if self._closing:
+            return
+        try:
+            sys.stdout.flush()
+        except OSError:
+            self.failed = True
+            raise
+
+    def close(self) -> None:
+        """Close the sink, never ``sys.stdout``, and without flushing it
+        (#4055): the owner flushed it already, and a finalizer flushing a
+        stdout that failed would print an "Exception ignored" traceback."""
+        self._closing = True
+        super().close()
 
 
 _O_OPERATOR = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
@@ -871,8 +893,19 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
         if path == STDOUT_PATH or _is_our_stdout(pre):
             claim_stdout(flag or path)
             sink = _StdoutSink()
-            yield sink
-            sink.flush()
+            try:
+                yield sink
+                sink.flush()
+            except OSError:
+                # #4055: stdout itself failed and the caller reports it in its
+                # own line; drop what stdout still buffers, so the last flush
+                # at exit does not fail again and print a second one. Another
+                # OSError of the body leaves a working stdout alone.
+                if sink.failed:
+                    _lib_exitcodes.discard_failed_stdout()
+                raise
+            finally:
+                sink.close()
             return
         fd, regular = _kernel_open_operator_output(path, mode, append, nofollow)
         fh = io.open(fd, "w", encoding="utf-8", newline="\n", closefd=True)

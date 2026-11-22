@@ -32,14 +32,19 @@ Usage
 
 Exit codes
 ----------
-  0 — commit landed (either via normal path or plumbing fallback)
+  0 — commit landed (either via normal path or plumbing fallback); when the
+      SHA or the branch cannot be read afterwards in time, still 0, said
   2 — no commit: the normal path's `git commit` failed (a hook failed — a
       finding or a hook that could not run, which git and pre-commit both end
       at 1 and the tool cannot tell apart — or nothing to commit; read the
       output it passes through), the pre-commit hook is not installed or
       cannot start pre-commit, not in a repo, a file or the message missing, a
       git plumbing step failed, or commit-tree succeeded but the ref write
-      failed (new SHA in stderr for recovery) — scripts/tools/_lib_exitcodes.py
+      failed (new SHA in stderr for recovery), or a git step did not finish in
+      time (#3836: `git commit` gets COMMIT_TIMEOUT_S, every other step
+      STEP_TIMEOUT_S; a `git commit` cut off is stopped with its hooks, and
+      the commit's state is unknown — check with `git log -1`) —
+      scripts/tools/_lib_exitcodes.py
 
   Never 1 (#3634, owner ruling 2026-11-13): 1 means "change the content",
   and the tool cannot prove a hook failure is a finding rather than a check
@@ -61,13 +66,27 @@ import argparse
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 # #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
+
+
+#: Seconds a git plumbing step (read-tree, hash-object, commit-tree…) may take.
+STEP_TIMEOUT_S = 60
+#: #3836: seconds the normal path's `git commit` may take. It runs every
+#: pre-commit hook — over a hundred in this repository — which often takes
+#: longer than a plumbing step's limit. Past it git and its hooks are stopped
+#: as one process group (POSIX; on Windows only git is): a hook left running
+#: would stash and restore unstaged changes beside the retry.
+COMMIT_TIMEOUT_S = 1800
+#: Seconds the stopped group gets between SIGINT and SIGKILL.
+_GRACE_S = 5
 
 
 class CommandFailed(RuntimeError):
@@ -78,19 +97,36 @@ class CommandFailed(RuntimeError):
         self.returncode = returncode
 
 
-def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = True) -> str:
-    """Run cmd, return stripped stdout; raise on non-zero if check=True."""
+class CommandTimedOut(RuntimeError):
+    """A command `_run` ran did not finish within its limit (#3836); it was
+    killed. A RuntimeError, so the run ends at 2 with one named line."""
+
+
+def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = True,
+         timeout: float | None = None, group: bool = False) -> str:
+    """Run cmd, return stripped stdout; raise on non-zero if check=True.
+    *timeout*: seconds (STEP_TIMEOUT_S when not given); past it the command
+    is killed and CommandTimedOut raised. *group*: run it as its own process
+    group and stop the whole group (see COMMIT_TIMEOUT_S)."""
     merged_env = os.environ.copy()
     if env:
         merged_env.update(env)
-    result = subprocess.run(
-        cmd,
-        env=merged_env,
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
-        check=False,
-        timeout=60,
-    )
+    limit = STEP_TIMEOUT_S if timeout is None else timeout
+    try:
+        if group and os.name == "posix":
+            result = _run_group(cmd, merged_env, limit)
+        else:
+            result = subprocess.run(
+                cmd,
+                env=merged_env,
+                capture_output=True,
+                text=True, encoding="utf-8", errors="replace",
+                check=False,
+                timeout=limit,
+            )
+    except subprocess.TimeoutExpired:
+        raise CommandTimedOut(
+            f"`{' '.join(cmd)}` did not finish within {limit:g}s and was stopped") from None
     if check and result.returncode != 0:
         raise CommandFailed(
             result.returncode,
@@ -99,6 +135,52 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = Tru
             + (f"\nstdout: {result.stdout.strip()}" if result.stdout.strip() else "")
         )
     return result.stdout.strip()
+
+
+def _run_group(cmd: list[str], env: dict[str, str], limit: float) -> subprocess.CompletedProcess:
+    """``subprocess.run`` for a command that starts children (git's hooks):
+    its own session, so a timeout — or Ctrl-C here, which the new session
+    no longer passes on — stops all of them (`_stop_group`)."""
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace",
+                            start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=limit)
+    except BaseException:  # the timeout, or KeyboardInterrupt: stop the group
+        _stop_group(proc)
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def _stop_group(proc: subprocess.Popen) -> None:
+    """Stop *proc*'s process group: SIGINT first, as Ctrl-C would send it
+    (pre-commit then restores the unstaged changes it stashed), SIGKILL to
+    whatever is still there after _GRACE_S."""
+    for sig in (signal.SIGINT, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            break
+        if _group_gone(proc, _GRACE_S):
+            break
+    proc.wait()
+    for stream in (proc.stdout, proc.stderr):
+        if stream is not None:
+            stream.close()
+
+
+def _group_gone(proc: subprocess.Popen, within: float) -> bool:
+    """Whether every process of *proc*'s group ended within *within* s."""
+    deadline = time.monotonic() + within
+    while True:
+        proc.poll()  # reap git itself: a zombie still counts in the group
+        try:
+            os.killpg(proc.pid, 0)
+        except ProcessLookupError:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
 
 
 def _repo_root() -> pathlib.Path:
@@ -152,6 +234,10 @@ def plumbing_commit(
         # 3. Write tree from temp index
         tree = _run(["git", "write-tree"], env=env)
 
+        # The branch first: past commit-tree a failure would strand the new
+        # commit object with no SHA said (#3836 review).
+        branch = _run(["git", "symbolic-ref", "--short", "HEAD"])
+
         # 4. commit-tree
         if amend:
             # amend: replace HEAD; parent is HEAD's parent
@@ -182,7 +268,6 @@ def plumbing_commit(
             os.unlink(msg_path)
 
         # 5. Direct-write branch ref
-        branch = _run(["git", "symbolic-ref", "--short", "HEAD"])
         ref_path = repo_root / ".git" / "refs" / "heads" / branch
         ref_path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -280,13 +365,23 @@ def normal_commit(
     if amend:
         cmd = ["git", "commit", "--amend", "-m", message]
     try:
-        _run(cmd)
+        _run(cmd, timeout=COMMIT_TIMEOUT_S, group=True)
+    except CommandTimedOut as exc:
+        raise RuntimeError(
+            f"{exc}: whether the commit landed is unknown (a hook may still be "
+            "running); check with `git log -1` before committing again") from exc
     except CommandFailed as exc:
         raise RuntimeError(
             f"{exc}\n`git commit` failed (rc {exc.returncode}): a hook failed — "
             "a finding, or a check that could not run — or there was nothing to "
             "commit; the output above says which") from exc
-    return _run(["git", "rev-parse", "HEAD"])
+    try:
+        return _run(["git", "rev-parse", "HEAD"])
+    except CommandTimedOut:
+        # The commit landed (git commit ended 0): exit 0, say what is missing.
+        print("warn: committed, but `git rev-parse HEAD` timed out: "
+              "read the new SHA with `git log -1`", file=sys.stderr)
+        return "(unknown)"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -378,7 +473,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2  # a plumbing step or a missing file: a caller error (#3577)
 
-    branch = _run(["git", "symbolic-ref", "--short", "HEAD"], check=False) or "(detached)"
+    try:
+        branch = _run(["git", "symbolic-ref", "--short", "HEAD"], check=False) or "(detached)"
+    except CommandTimedOut:
+        branch = "(unknown)"  # the commit landed; only its label is missing
     print(f"committed: {sha}  (branch={branch})")
     return 0
 

@@ -101,24 +101,17 @@ def extract_rule_pack_metrics(rule_packs_dir: Path,
     without that list, raises ``RuleFilesRefused``.
     """
     packs: Dict[str, Set[str]] = {}
-
-    # Prometheus metric patterns in expr fields
-    metric_pattern = re.compile(r"[a-z_][a-z0-9_]+(?::[a-z0-9_]+)*")
+    exprs: List[tuple] = []
 
     def _extract_from_rules(rules_data, pack_name):
-        metrics = packs.setdefault(pack_name, set())
+        packs.setdefault(pack_name, set())
         if not rules_data or "groups" not in rules_data:
             return
         for group in rules_data["groups"]:
             for rule in group.get("rules", []):
                 expr = rule.get("expr", "")
-                if isinstance(expr, str):
-                    # Extract metric-like tokens from PromQL
-                    for m in metric_pattern.finditer(expr):
-                        token = m.group(0)
-                        # Filter out PromQL functions and keywords
-                        if token not in _PROMQL_KEYWORDS and len(token) > 3:
-                            metrics.add(token)
+                if isinstance(expr, str) and expr:
+                    exprs.append((pack_name, expr))
 
     results = []
     # rule-packs/ directory
@@ -144,25 +137,15 @@ def extract_rule_pack_metrics(rule_packs_dir: Path,
     for name, rf in results:
         if rf.problem is None:
             _extract_from_rules(rf.documents[0], name)
+    # #4150: the metrics an expression reads are Prometheus' parse tree's —
+    # a lowercase-only token regex less a hand list of function names missed
+    # every ClickHouse* metric and counted label values.
+    for (name, _), names in zip(exprs, _lib_consumer_read.promql_metric_names([e for _, e in exprs])):
+        if isinstance(names, _lib_consumer_read.InputRefused):
+            raise names  # a rule file Prometheus loaded parses; never reached
+        packs[name].update(names)
 
     return packs
-
-
-# Common PromQL functions/keywords to exclude from metric extraction
-_PROMQL_KEYWORDS = {
-    "sum", "avg", "max", "min", "count", "rate", "irate", "increase",
-    "delta", "idelta", "histogram_quantile", "label_replace", "label_join",
-    "sort", "sort_desc", "topk", "bottomk", "absent", "absent_over_time",
-    "changes", "resets", "deriv", "predict_linear", "time", "vector",
-    "scalar", "ceil", "floor", "round", "clamp", "clamp_min", "clamp_max",
-    "group_left", "group_right", "on", "ignoring", "by", "without",
-    "bool", "and", "or", "unless", "offset", "unless", "group",
-    "stddev", "stdvar", "quantile", "count_values", "sgn",
-    "last_over_time", "present_over_time", "timestamp",
-    # Common label names that look metric-like
-    "tenant", "severity", "alertname", "namespace", "job",
-    "instance", "container", "pod", "filter", "target_severity",
-}
 
 
 def check_dictionary_coverage(

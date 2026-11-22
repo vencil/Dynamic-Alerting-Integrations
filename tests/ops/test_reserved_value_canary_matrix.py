@@ -104,6 +104,8 @@ _REFUSED = {"refusal_summary"}
 _EXPECTED: dict[str, "set[str] | dict[str, set[str]]"] = {
     "_silent_mode": _VALUE_UNREAD,
     "_metadata": _VALUE_UNREAD,
+    # #4097: the exporter judges the list itself, in every layer it is read in.
+    "_expected_exporters": _VALUE_UNREAD,
     "_profile": _VALUE_UNREAD,
     "_state_": _VALUE_UNREAD,
     # The generator reads it too, and refuses the tree before the verdict.

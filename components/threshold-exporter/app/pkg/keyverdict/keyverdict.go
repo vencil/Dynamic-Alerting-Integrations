@@ -104,7 +104,9 @@ const (
 	// (config.LayerValueProblems). The key is read; its value, or part of
 	// it, is not. An error in a tenant file; a notice in a root platform
 	// file's `tenants:` entry or a profile, which the tenant cannot fix in
-	// its own file.
+	// its own file — except a problem the reader marks an error in every
+	// layer (config.LayerValueProblem.EveryLayer, #4097: an unread
+	// `_expected_exporters`, the removed `_metadata.db_type`).
 	KindValueUnread = "value_unread"
 	// KindDeadEntry (#3502): a key read, whose schedule has an entry
 	// /metrics serves at no minute of the UTC day — a window the windows
@@ -776,7 +778,8 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 // value of values about a tenant the verdict judges (tenants): in a tenant file an error on that
 // tenant's entry; in a root platform file's `tenants:` entry a notice on
 // that tenant; in a profile a notice naming the judged tenants that bind it
-// ([] for none). Never charged to a tenant through a layer it inherits
+// ([] for none) — an error in each of those layers when the problem is one
+// the reader marks so (EveryLayer, #4097). Never charged to a tenant through a layer it inherits
 // (config.LayerValueProblems).
 func valueFindings(values []config.LayerValueProblem, tenants map[string]bool,
 	effective map[string]EffectiveTenant) []Finding {
@@ -797,6 +800,8 @@ func valueFindings(values []config.LayerValueProblem, tenants map[string]bool,
 			f.Severity, f.own = SeverityNotice, false
 			if v.Layer == config.ValueLayerTenant {
 				f.Severity, f.own = SeverityError, true
+			} else if v.EveryLayer {
+				f.Severity = SeverityError
 			}
 		case config.ValueLayerProfile:
 			bound := map[string]bool{}
@@ -806,6 +811,9 @@ func valueFindings(values []config.LayerValueProblem, tenants map[string]bool,
 				}
 			}
 			f.Severity, f.Tenants = SeverityNotice, sortedKeys(bound)
+			if v.EveryLayer {
+				f.Severity = SeverityError
+			}
 		default:
 			continue
 		}

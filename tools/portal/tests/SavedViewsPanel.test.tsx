@@ -98,6 +98,30 @@ describe('SavedViewsPanel', () => {
     expect(onApplyView).toHaveBeenCalledWith({ environment: 'production' });
   });
 
+  // #4097: a view stored by v2.9 filters on `db_type`, a key nothing reads
+  // any more. Applied as stored, the filter was dropped and the view listed
+  // every tenant; its value is applied as the `expected_exporters` filter.
+  it.each([
+    ['maps a stored db_type filter to expected_exporters',
+      { environment: 'production', db_type: 'redis' },
+      { environment: 'production', expected_exporters: 'redis' }],
+    ['keeps the expected_exporters a view already has',
+      { db_type: 'redis', expected_exporters: 'mariadb' },
+      { expected_exporters: 'mariadb' }],
+  ])('%s', (_name, stored, applied) => {
+    const onApplyView = vi.fn();
+    render(
+      <SavedViewsPanel
+        currentFilters={{}}
+        onApplyView={onApplyView}
+        canWrite={false}
+        savedViews={{ ...baseHookReturn, views: views([{ id: 'old', label: 'Old', filters: stored }]) }}
+      />,
+    );
+    fireEvent.change(screen.getByTestId('saved-views-select'), { target: { value: 'old' } });
+    expect(onApplyView).toHaveBeenCalledWith(applied);
+  });
+
   it('deletes the view whose id was picked', async () => {
     const remove = vi.fn(() => Promise.resolve(true));
     render(

@@ -1,7 +1,7 @@
 """讀取端語意矩陣：值寫在哪裡，讀取端的答案都要與 Go 的 served-values 一致（#2115 0-B／B1）。
 
 讀取端：`analyze_rule_pack_gaps.load_tenant_configs(config_dir=...)`（目錄模式），以及
-`blind_spot_discovery.load_monitored_db_types`——後者自 #4026 起只讀 `_metadata.db_type`
+`blind_spot_discovery.load_declared_kinds`——後者自 #4026 起只讀 `_expected_exporters`
 的宣告（--config-facts），所以它那幾格斷言的是「送了鍵也不算」。
 
 同一個值（`custom_mysql_slow: 5`）只寫在四個位置之一：根 `defaults:`、平台檔
@@ -114,16 +114,16 @@ def test_analyze_gaps_dir_mode_matches_served_values(where, tmp_path):
 
 
 @pytest.mark.parametrize("where", sorted(POSITIONS))
-def test_blind_spot_monitored_set_is_the_declared_db_type(where, tmp_path):
-    """#4026：已監控＝Go 讀到的 `_metadata.db_type` 宣告（--config-facts），與
+def test_blind_spot_monitored_set_is_the_declared_kinds(where, tmp_path):
+    """#4026：已監控＝Go 讀到的 `_expected_exporters` 宣告（--config-facts），與
     /metrics 送了哪些鍵無關。這棵樹沒有人宣告：繼承來的 mysql_connections、
     四個位置的 custom_mysql_slow、內建層的鍵都不讓任何 DB 類型算已監控。"""
     conf_d = _tree(tmp_path, POSITIONS[where])
     want: dict[str, set[str]] = {}
     for tenant, f in tv.load_served_facts(conf_d).tenants.items():
-        for db in f.metadata["db_type"]:
+        for db in f.expected_exporters:
             want.setdefault(db, set()).add(tenant)
-    got = bsd.load_monitored_db_types(str(conf_d))
+    got = bsd.load_declared_kinds(str(conf_d))
     assert got == want == {}, where
     assert tv.load_served_values(conf_d)["tenant-a"].severities, where  # 鍵確實有列
 
@@ -133,23 +133,23 @@ def test_blind_spot_monitored_set_is_the_declared_db_type(where, tmp_path):
 # 一層，Go 不讀，blind-spot 也不算。
 _A = "tenant-a.yaml"
 _DECLARED_AT = {
-    "租戶檔": ({_A: "tenants:\n  tenant-a:\n    _metadata: {db_type: redis}\n"},
+    "租戶檔": ({_A: "tenants:\n  tenant-a:\n    _expected_exporters: [redis]\n"},
                {"redis": {"tenant-a"}}),
-    "子目錄租戶檔": ({"team/" + _A: "tenants:\n  tenant-a:\n    _metadata: {db_type: redis}\n"},
+    "子目錄租戶檔": ({"team/" + _A: "tenants:\n  tenant-a:\n    _expected_exporters: [redis]\n"},
                    {"redis": {"tenant-a"}}),
     "根平台檔 tenants:": ({"_defaults.yaml": _BASE + "tenants:\n  tenant-a:\n"
-                                            "    _metadata: {db_type: redis}\n",
+                                            "    _expected_exporters: [redis]\n",
                          _A: "tenants:\n  tenant-a:\n    _silent_mode: disable\n"},
                         {"redis": {"tenant-a"}}),
     "租戶檔換掉平台層": ({"_defaults.yaml": _BASE + "tenants:\n  tenant-a:\n"
-                                           "    _metadata: {db_type: [redis, oracle]}\n",
-                        _A: "tenants:\n  tenant-a:\n    _metadata: {db_type: kafka}\n"},
+                                           "    _expected_exporters: [redis, oracle]\n",
+                        _A: "tenants:\n  tenant-a:\n    _expected_exporters: [kafka]\n"},
                        {"kafka": {"tenant-a"}}),
-    "profile": ({"_defaults.yaml": _BASE + "profiles:\n  p1:\n    _metadata: {db_type: redis}\n",
+    "profile": ({"_defaults.yaml": _BASE + "profiles:\n  p1:\n    _expected_exporters: [redis]\n",
                  _A: "tenants:\n  tenant-a:\n    _profile: p1\n"},
                 {"redis": {"tenant-a"}}),
     "子目錄 _defaults.yaml（不算）": ({"team/_defaults.yaml": "tenants:\n  tenant-a:\n"
-                                                       "    _metadata: {db_type: redis}\n",
+                                                       "    _expected_exporters: [redis]\n",
                                     "team/" + _A: "tenants:\n  tenant-a:\n    _silent_mode: disable\n"},
                                    {}),
 }
@@ -161,14 +161,14 @@ def test_blind_spot_reads_the_declaration_wherever_go_does(where, tmp_path):
     conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, **files})
     want: dict[str, set[str]] = {}
     for tenant, f in tv.load_served_facts(conf_d).tenants.items():
-        for db in f.metadata["db_type"]:
+        for db in f.expected_exporters:
             want.setdefault(db, set()).add(tenant)
-    assert bsd.load_monitored_db_types(str(conf_d)) == want == expected, where
+    assert bsd.load_declared_kinds(str(conf_d)) == want == expected, where
 
 
 def test_disabled_and_unserved_keys_are_not_monitored(tmp_path):
     """`disable` 的鍵與沒有預設值、Go 不發的鍵，analyze-gaps 都不列；blind-spot 只看
-    `_metadata.db_type` 的宣告（#4026），送了哪些鍵都不算。"""
+    `_expected_exporters` 的宣告（#4026），送了哪些鍵都不算。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  redis_memory: 1024\n",
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    redis_memory: disable\n",
@@ -177,7 +177,7 @@ def test_disabled_and_unserved_keys_are_not_monitored(tmp_path):
     served = tv.load_served_values(conf_d)
     assert "redis_memory" not in served["tenant-a"].values
     assert "mysql_slow_queries" not in served["tenant-b"].values
-    assert bsd.load_monitored_db_types(str(conf_d)) == {}  # tenant-b 送 redis_memory，但沒宣告
+    assert bsd.load_declared_kinds(str(conf_d)) == {}  # tenant-b 送 redis_memory，但沒宣告
     cfgs = arg.load_tenant_configs(config_dir=str(conf_d))
     assert {t: {k: v.as_json()[0]["value"] for k, v in c.items() if k not in BUILTIN_DEFAULTS}
             for t, c in cfgs.items()} == {"tenant-a": {}, "tenant-b": {"redis_memory": 1024.0}}
