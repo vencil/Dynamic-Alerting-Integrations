@@ -21,6 +21,8 @@ lang: zh
 PromRule corpus → da-parser → profile-builder cluster + translator → da-batchpr → da-guard validation → conf.d/
 ```
 
+> ⚠️ 其中 Profile Builder → `da-batchpr apply` 這一段目前沒有接通（experimental，見 [`batch-pr`](cli-reference.md#batch-pr)）；要導入客戶規則請用逐租戶的 [`migrate`](cli-reference.md#migrate)。
+
 Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gapped 環境跑、可 自動驗 binary integrity 的客戶可用工具集。
 
 **目前包含**：

@@ -21,6 +21,8 @@ Importing a customer's existing Prometheus alerting rule corpus (PromRule CRDs /
 PromRule corpus → da-parser → profile-builder cluster + translator → da-batchpr → da-guard validation → conf.d/
 ```
 
+> ⚠️ The Profile Builder → `da-batchpr apply` step is not wired today (experimental, see [`batch-pr`](cli-reference.en.md#batch-pr)); to import customer rules, use the per-tenant [`migrate`](cli-reference.en.md#migrate).
+
 The Migration Toolkit packages this pipeline into a customer-runnable bundle that works offline, in air-gapped environments, and with verifiable binary integrity.
 
 **Currently included**:

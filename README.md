@@ -225,7 +225,7 @@ O(M) 複雜度（`group_left` 向量匹配）· 各 Rule Pack 以 Projected Volu
 
 ### 客戶導入：Migration Toolkit
 
-把客戶現有 PromRule corpus 全自動導入本平台 `conf.d/`（`da-parser → Profile Builder (library) → da-batchpr → da-guard`），並以 **Docker / static binary / air-gapped tar 三條交付路徑**（皆 cosign keyless 簽 + SBOM）覆蓋從外網到金融/政府/軍工封閉網路的全光譜環境。
+把客戶現有 PromRule corpus 導入本平台 `conf.d/`（設計為 `da-parser → Profile Builder (library) → da-batchpr → da-guard`；其中 Profile Builder → `da-batchpr apply` 尚未接通、為 experimental，見 [`batch-pr`](docs/cli-reference.md#batch-pr)，目前請用逐租戶的 `migrate`），並以 **Docker / static binary / air-gapped tar 三條交付路徑**（皆 cosign keyless 簽 + SBOM）覆蓋從外網到金融/政府/軍工封閉網路的全光譜環境。
 
 完整安裝與簽章驗證 → [Migration Toolkit Installation](docs/migration-toolkit-installation.md)
 

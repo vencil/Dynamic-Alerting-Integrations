@@ -3198,7 +3198,9 @@ da-tools guard effective --config-dir conf.d/
 
 #### batch-pr
 
-Migration Batch PR Pipeline（v2.8.0）。Python 包裝 shell-out 到 `da-batchpr` Go binary，把 customer 的 PromRule corpus 走完「emit → 開 PR → review → Base merge → tenant rebase → 必要時 data-layer hot-fix」整套流程。
+Migration Batch PR Pipeline（v2.8.0）。Python 包裝 shell-out 到 `da-batchpr` Go binary，設計目標是把 customer 的 PromRule corpus 走完「emit → 開 PR → review → Base merge → tenant rebase → 必要時 data-layer hot-fix」整套流程。
+
+> ⚠️ **experimental：目前沒有任何出貨的工具產生 `apply` 的兩個必填輸入。** `--plan` 的 Plan JSON 與 `--emit-dir` 的 emit 輸出原本應由 Profile Builder（`BuildProposals`／`EmitProposals`）與 `BuildPlan` 產生，但這兩者都沒有接到任何 CLI；而且 Profile Builder 輸出的目錄是「一個 cluster 一個目錄」，同一個租戶出現在兩個 cluster 時，那棵樹會被 da-guard 以重複租戶拒收。要導入客戶規則，請用逐租戶的 [`migrate`](#migrate)。大量導入的技術選型在 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211) 重做，可能整組退役（breaking）。
 
 **用法**
 
@@ -3210,7 +3212,7 @@ da-tools batch-pr <subcommand> [flags]
 
 | 子命令 | 說明 |
 |---|---|
-| `apply` | 從 Plan + profile-builder emit 輸出開出（或更新）tenant chunk PR；走 Hierarchy-Aware chunking（Base Infrastructure PR + per-domain tenant chunks） |
+| `apply` | 從 Plan + emit 目錄開出（或更新）tenant chunk PR；走 Hierarchy-Aware chunking（Base Infrastructure PR + per-domain tenant chunks）。兩個輸入目前都要自備，見上方 experimental 說明 |
 | `refresh` | Base PR merge 後對 `Blocked by` tenant branches 跑 `git rebase --onto <merged-sha>`，conflict 落地到 `refresh-report.md` |
 | `refresh-source` | 已知一組 source rule 因 parser 修 bug 導致 emission 變化時，把對應 tenant PR 的受影響檔案重寫 + 推上去（data-layer hot-fix）|
 
@@ -3226,8 +3228,8 @@ da-tools batch-pr <subcommand> [flags]
 
 | Flag | 預設 | 說明 |
 |---|---|---|
-| `--plan <path>` | （必填）| Plan JSON（從 `BuildPlan` 序列化） |
-| `--emit-dir <dir>` | （必填）| profile-builder emit 輸出目錄；CLI walk + AllocateFiles bucketing |
+| `--plan <path>` | （必填）| Plan JSON，形狀是 `batchpr.Plan`；沒有 CLI 產生它，需自備 |
+| `--emit-dir <dir>` | （必填）| 要推進 PR 的檔案目錄（原設計為 Profile Builder 的 emit 輸出，沒有 CLI 產生）；CLI walk + AllocateFiles bucketing |
 | `--repo <owner/name>` | （必填）| GitHub repo |
 | `--workdir <dir>` | （必填）| 本地 clone（git ops 的 CWD） |
 | `--base-branch <name>` | `main` | 新 PR 的 base |
@@ -3259,7 +3261,7 @@ da-tools batch-pr <subcommand> [flags]
 **範例**
 
 ```bash
-# 開 PR：把 profile-builder emit 輸出 push 進 customer repo
+# 開 PR：把自備的 emit 目錄依 Plan 分批 push 進 customer repo
 da-tools batch-pr apply \
     --plan plan.json --emit-dir ./emit/ \
     --repo vencil/customer --workdir ./customer-repo
