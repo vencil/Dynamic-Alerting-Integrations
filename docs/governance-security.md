@@ -147,7 +147,7 @@ da-tools validate-config --config-dir conf.d/ --json
 | 1 | `open()` 必須帶 `encoding="utf-8"`；原始碼不得以 UTF-8 BOM 開頭 | BOM 讀 bytes 前綴判定（本檔）；`open()` 的 encoding 由 pre-commit `open-encoding-audit` 判定，只認 builtin `open()`，不在本檔 | High |
 | 2 | `subprocess` 禁止 `shell=True` | AST 掃描 subprocess.run/call/Popen keywords | Critical |
 | 3 | 寫入檔案需搭配 `os.chmod(0o600)` | 同函式內 write-open + chmod 配對（advisory） | Medium |
-| 4 | 禁止 `yaml.load()`，強制 `yaml.safe_load()` | **bandit B506**（`.github/workflows/security-audit.yaml`，hard-fail）；`tests/shared/test_sast.py` 裡的 AST 實作已於 #1643 移除 | Critical |
+| 4 | 禁止不安全的 YAML 讀法；讀 YAML 一律經 `_lib_yaml_strict`（以 PyYAML 的 safe loader 為基底，重複鍵即拒收） | **bandit B506**（`.github/workflows/security-audit.yaml`，hard-fail）；`tests/shared/test_yaml_strict_only.py` 擋下 `_lib_yaml_strict` 以外的 PyYAML 讀取入口；`tests/shared/test_sast.py` 裡的 AST 實作已於 #1643 移除 | Critical |
 | 5 | 禁止硬編碼機密（password/token/secret/api_key） | Regex 掃描，排除環境變數引用和 placeholder | High |
 | 6 | 禁止危險函式（eval/exec/pickle.load/os.system） | AST 掃描內建函式 + 模組函式 | Critical |
 | 7 | 錯誤訊息必須路由到 stderr（`ERROR`/`Error` 開頭的 `print()` 需帶 `file=sys.stderr`） | AST 掃描 print() call 的 args 與 keywords | Medium |

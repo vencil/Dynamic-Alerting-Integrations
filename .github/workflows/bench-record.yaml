@@ -205,8 +205,8 @@ jobs:
           # `SV`/`SVScheduled` fixture constructors, which feed 8 nightly
           # benchmarks and are NOT in a `*bench_test.go` file. That gap is the
           # "⚠️ heuristic, not a proof" the ADR admits; this narrows it.
-          GLOB=$(python3 -c "import yaml,sys; print(yaml.safe_load(open('.github/bench-reference.yaml',encoding='utf-8'))['workload_closure']['derived_glob'])")
-          python3 -c "import yaml; [print(h) for h in yaml.safe_load(open('.github/bench-reference.yaml',encoding='utf-8'))['workload_closure']['helpers']]" > .build/paired/closure-helpers.txt
+          GLOB=$(python3 -c "import sys; sys.path.insert(0,'scripts/tools'); from _lib_yaml_strict import strict_safe_load as L; print(L(open('.github/bench-reference.yaml',encoding='utf-8'))['workload_closure']['derived_glob'])")
+          python3 -c "import sys; sys.path.insert(0,'scripts/tools'); from _lib_yaml_strict import strict_safe_load as L; [print(h) for h in L(open('.github/bench-reference.yaml',encoding='utf-8'))['workload_closure']['helpers']]" > .build/paired/closure-helpers.txt
           if [ ! -s .build/paired/closure-helpers.txt ] || [ -z "$GLOB" ]; then
             echo "::warning::could not read workload_closure from .github/bench-reference.yaml — leaving drift and digest absent so tonight records both as not established, not as clean"
             exit 0
