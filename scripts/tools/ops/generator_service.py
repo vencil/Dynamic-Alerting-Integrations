@@ -1967,16 +1967,15 @@ def _old_socket_at(path: str) -> bool:
     cost the work directory its `jobs`).
 
     What is refused here, before anything is touched: something at the path
-    that is no socket; a path whose directory is not there, or is no
-    directory. ⚠️ Not everything a bind can fail on: a path too long for
-    AF_UNIX is found by the bind itself, after --work-dir is prepared."""
+    that is no socket, and a path with a file on the way. ⚠️ Not everything
+    a bind can fail on: a directory that is not there and a path too long
+    for AF_UNIX are found by the bind itself, after --work-dir is prepared.
+    ⛔ The missing directory is NOT checked here: --socket may sit under a
+    --work-dir this start is about to create (a check of it, in the first
+    cut of this change, refused a start that worked)."""
     try:
         st = os.lstat(path)
     except FileNotFoundError:
-        parent = os.path.dirname(path)
-        if not os.path.isdir(parent):
-            raise RuntimeError(f"--socket {path!r}: its directory {parent!r} is not there "
-                               f"(or is no directory)") from None
         return False
     except OSError as exc:  # a file on the way (ENOTDIR), a link loop, …
         raise RuntimeError(f"--socket {path!r}: {exc.strerror}") from exc
@@ -2149,9 +2148,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         fmt = state.object_format
         _check_config_subdir(settings.git, settings.repo, settings.config_subdir,
                              safe_label(repr(args.config_subdir)), state.head)
-        # Every check without a side effect first: a start refused by one
-        # of them leaves --work-dir's `jobs` as it was (blind review of
-        # #4192: contradictory limits were found after it was emptied).
+        # What is at --socket and the limits are judged before --work-dir is
+        # prepared: a start refused by either leaves its `jobs` as it was
+        # (blind review of #4192: contradictory limits were found after it
+        # was emptied). Not every refusal is: a bind that fails and a
+        # descriptor limit too low come after.
         _old_socket_at(settings.socket)
         _check_limits(settings)
         _prepare_work_dir(settings.work_dir)
