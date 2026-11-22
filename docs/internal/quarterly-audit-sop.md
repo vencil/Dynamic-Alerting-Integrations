@@ -88,7 +88,7 @@ report 寫到 `docs/internal/audit-reports/rules-drift-YYYY-MM.md`（atomic writ
 
 - **只產 report，不自動修改**。所有合併 / 刪除 / 下放都人工決定 — speculative 自動清理會誤刪仍有效的規則。
 - **重複 ≠ 該刪**：trailer 規則「4 層」、sed-i「5 層」是 intentional safety redundancy（見 `hook-vs-skill-coverage.md` §7 Overlap）。先問「這層冗餘是不是故意的」再動。
-- **count 校正一律 YAML parse**：本工具用 `yaml.safe_load` 數 hook stage，不用 grep。TRK-307 上線首跑即抓出初版（PR #582）用 grep 配到 `jsx-babel-check-strict-linecount` 註解行造成的 50/14 誤算（真值 51/13）。
+- **count 校正一律 YAML parse**：本工具以 YAML parse（`strict_safe_load`）數 hook stage，不用 grep。TRK-307 上線首跑即抓出初版（PR #582）用 grep 配到 `jsx-babel-check-strict-linecount` 註解行造成的 50/14 誤算（真值 51/13）。
 
 ## 報表保存
 

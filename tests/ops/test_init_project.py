@@ -6156,17 +6156,18 @@ class TestStaleFiles:
         assert 'acme-c' not in (kbase / 'README.md').read_text(encoding='utf-8')
         assert 'acme-a.yaml' in (kbase / 'kustomization.yaml').read_text(encoding='utf-8')
 
-    def test_a_ledger_with_a_repeated_key_is_unreadable(self, tmp_path):
+    def test_a_ledger_with_a_repeated_key_is_its_own_state(self, tmp_path):
         """#4111: `files:` written twice kept only the second ledger (PyYAML
         keeps the last of a repeated key): init took files it wrote for files
-        it did not. Read strictly, the ledger is unreadable — no claim, and
-        nothing removed on its say-so."""
+        it did not. Read strictly, the ledger supports no claim — and the run
+        names the key instead of calling a file that reads "unreadable"."""
         out = tmp_path / 'repo'
         out.mkdir()
         (out / '.da-init.yaml').write_text(
             'files:\n  ci/a.yml: h1\nfiles:\n  ci/b.yml: h2\n', encoding='utf-8')
         own = ip._read_ownership(str(out))
-        assert own.state == ip._OWN_UNREADABLE and own.files == {}
+        assert own.state == ip._OWN_DUPLICATE_KEY and own.files == {}
+        assert own.dup.key == 'files' and own.dup.first_line == 1
 
     @pytest.mark.parametrize('key', ['../outside/victim.txt', '/etc/passwd',
                                      'a/../../outside/victim.txt'])
@@ -6259,3 +6260,117 @@ class TestStaleFiles:
         assert {'path': 'acme-c.yaml', 'delete': True, 'tenants': ['acme-c']} in seen
         assert python_unlinked == ['.gitlab-ci.yml']
         assert not (out / 'conf.d' / 'acme-c.yaml').exists()
+
+
+class TestDuplicateKeyIsNamed:
+    """#4111 (D1): a customer file that repeats a key is reported, not read.
+
+    The adversarial review measured what a strict reading alone does on
+    `init`'s customer files: the DuplicateKeyError fell into the generic
+    branches — a wired root `.gitlab-ci.yml` with a repeated key was told to
+    append (`needs-append`, from the `include:` line scan), one without an
+    `include:` was "could not be parsed". Both hand over a snippet for a
+    file GitLab reads with the LAST copy winning. Each case below drives the
+    real CLI and checks the state, the named key and line, the absent
+    snippet and the untouched bytes.
+    """
+
+    _W = '.gitlab-ci.d/dynamic-alerting.yml'
+
+    @staticmethod
+    def _cli(out, *extra):
+        import subprocess
+        env = {**os.environ, 'PYTHONUTF8': '1', 'DA_LANG': 'en',
+               'PYTHONDONTWRITEBYTECODE': '1'}
+        return subprocess.run(
+            [sys.executable, _TOOL, '-o', str(out), '--non-interactive',
+             '--tenants', 't1', '--rule-packs', 'mariadb', '--ci', 'gitlab',
+             *extra],
+            capture_output=True, text=True, encoding='utf-8',
+            errors='replace', env=env, timeout=300)
+
+    @pytest.mark.parametrize('body, key, line, first', [
+        # wired: the include is there, a later key repeats
+        (f'include:\n  - local: {_W}\nstages: [a]\nstages: [b]\n', 'stages', 4, 3),
+        # no include at all
+        ('stages: [a]\nstages: [b]\n', 'stages', 2, 1),
+        # include as a bare string, the repeat nested in another mapping
+        (f'include: {_W}\nvariables:\n  A: "1"\n  A: "2"\n', 'A', 4, 3),
+        # include itself written twice: GitLab runs only the second
+        (f'include:\n  - local: {_W}\ninclude:\n  - local: x.yml\n', 'include', 3, 1),
+        # a GitLab tag too: the duplicate check runs before any tag is built
+        ('job:\n  script: [!reference [.a, s]]\njob: {}\n', 'job', 3, 1),
+    ], ids=['wired', 'no-include', 'string-include', 'include-twice', 'reference-tag'])
+    def test_a_root_file_with_a_repeated_key(self, tmp_path, body, key, line, first):
+        out = tmp_path / 'repo'
+        out.mkdir()
+        root = out / '.gitlab-ci.yml'
+        root.write_text(body, encoding='utf-8', newline='\n')
+        assert ip._gitlab_root_shell_status(str(out)) == ip._GL_ROOT_DUPLICATE_KEY
+        assert not ip._gitlab_root_includes(tmp_path, out)
+        named = f'repeats the key `{key}` at line {line} (first defined at line {first})'
+        for argv in (('--dry-run',), ()):
+            run = self._cli(out, *argv)
+            assert run.returncode == 0, run.stderr[-800:]
+            assert named in run.stdout, run.stdout[-2000:]
+            assert 'GitLab silently keeps only the last one' in run.stdout
+            # no wiring snippet and no "could not be parsed" / "already has"
+            assert '       include:' not in run.stdout, run.stdout[-2000:]
+            assert 'could not be parsed' not in run.stdout
+            assert 'already has an `include:`' not in run.stdout
+            assert 'already in place' not in run.stdout
+            assert root.read_text(encoding='utf-8') == body
+
+    def test_a_repo_root_file_with_a_repeated_key_below_a_subdir_run(self, tmp_path):
+        """`-o alerting/` in a repo whose ROOT `.gitlab-ci.yml` repeats a key
+        (and does include us): not "already in place", no snippet, the key
+        named — in the preview and in the run."""
+        repo = tmp_path / 'repo'
+        (repo / '.git').mkdir(parents=True)
+        body = (f'include:\n  - local: alerting/{self._W}\n'
+                'stages: [a]\nstages: [b]\n')
+        (repo / '.gitlab-ci.yml').write_text(body, encoding='utf-8', newline='\n')
+        named = 'repeats the key `stages` at line 4 (first defined at line 3)'
+        for argv in (('--dry-run',), ()):
+            run = self._cli(repo / 'alerting', *argv)
+            assert run.returncode == 0, run.stderr[-800:]
+            assert named in run.stdout, run.stdout[-2000:]
+            assert 'already in place' not in run.stdout
+            assert '       include:' not in run.stdout, run.stdout[-2000:]
+            assert (repo / '.gitlab-ci.yml').read_text(encoding='utf-8') == body
+
+    def test_a_marker_with_a_repeated_key(self, tmp_path):
+        """`.da-init.yaml` repeating `files:`: named in the refusal, in the
+        preview and in the `--force` run; no file is removed on its say-so."""
+        out = tmp_path / 'repo'
+        assert self._cli(out).returncode == 0
+        marker = out / '.da-init.yaml'
+        doc = yaml.safe_load(marker.read_text(encoding='utf-8'))
+        assert doc['files']
+        listed = sorted(doc['files'])
+        text = marker.read_text(encoding='utf-8')
+        dup_line = text.count('\n') + 1   # the appended `files:` line
+        marker.write_text(text + 'files:\n  conf.d/t1.yaml: deadbeef\n',
+                          encoding='utf-8')
+        named = (f'.da-init.yaml repeats the key `files` at line {dup_line}')
+        refused = self._cli(out)
+        assert refused.returncode != 0
+        assert named in refused.stderr, refused.stderr[-1500:]
+        preview = self._cli(out, '--dry-run')
+        assert preview.returncode == 0, preview.stderr[-800:]
+        assert named in preview.stdout and 'none is removed' in preview.stdout
+        assert 'no readable file ledger' not in preview.stdout
+        # a narrower run under --force: nothing it drops is removed
+        run = self._cli(out, '--ci', 'github', '--force')
+        assert run.returncode == 0, run.stderr[-800:]
+        assert named in run.stdout and 'none was removed' in run.stdout
+        # the marker is rewritten by this run: the repeated key is gone, so
+        # the summary must not ask for it to be merged; it must say that what
+        # init generated before can no longer be traced, and what to check
+        assert 'can no longer be traced' in run.stdout, run.stdout[-2000:]
+        assert 'check conf.d/ and the CI and kustomize files' in run.stdout
+        assert 're-run' not in run.stdout.split(named, 1)[1].split('\n', 1)[0]
+        assert 'Merge the duplicate' not in run.stdout
+        assert ip._read_ownership(str(out)).state == ip._OWN_LEDGER
+        for rel in listed:
+            assert (out / rel).exists(), rel

@@ -8,7 +8,8 @@
 # >>> GENERATED:threshold-registry:pack-mongodb — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter 閾值（全部內建在讀取端，conf.d 不必列；[chart-default]=平台出貨即啟用，省略就用平台值；未標者沒有平台值，「未啟用」一行寫原因，租戶、子目錄或 profile 給值才發射）:
 #   mongodb_connections_current: 300   # count — Current connections warning
-#       未啟用（待改比值）：絕對連線數跨部署沒有意義；可攜的形式是佔「已用＋可用」連線的比例，待 #1320
+#       未啟用（依部署而定）：正常的連線數取決於工作負載與資料庫前面的連線池大小。佔「已用＋可用」連線的比例另有一條不必填值的告警
+#       MongoDBConnectionSaturation（80%）
 #   mongodb_replication_lag: 10
 #       seconds — Replication lag warning; #1196 C identity fix: renamed from
 #       mongodb_repl_lag_seconds (alert demands mongodb_replication_lag) — unwired dead key, no
