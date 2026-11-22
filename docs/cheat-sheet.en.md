@@ -69,6 +69,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `guard` | Dangling Defaults Guard (v2.8.0); shells out to the `da-guard` Go binary to validate conf.d/ schema + cardinality (routing: `generate-routes`; exit 4 when the tree has routing) | defaults-impact subcommand + --config-dir <PATH>, --scope, --required-fields, --cardinality-limit, --format md\|json | `da-tools guard --help` |
 | `parser` | PromRule parser (v2.8.0); shells out to the `da-parser` Go binary for PrometheusRule YAML parsing + dialect / VM-only / strict-PromQL portability classification | import\|allowlist subcommands + --input, --output, --validate-strict-prom, --fail-on-non-portable, --fail-on-ambiguous | `da-tools parser --help` |
 | `tenant-verify` | Print tenant effective config + merged_hash (v2.8.0; incremental migration playbook rollback checklist item 6) | <tenant-id>, --conf-d <PATH>, --expect-merged-hash <H>, --all, --json | `da-tools tenant-verify --help` |
+| `compile-custom-alerts` | Compile a conf.d's `_custom_alerts` into a rule pack (ADR-024 Capability B; see [compile-custom-alerts](cli-reference.en.md#compile-custom-alerts)) | --config-dir <DIR>, --out <FILE>, --check, --allow-empty | `da-tools compile-custom-alerts --help` |
 
 ## Quick Tips
 

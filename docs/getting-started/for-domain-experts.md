@@ -35,28 +35,26 @@ lang: zh
 
 ### 第一部分：正規化 recording rule
 
-```yaml
-# rule-packs/rule-pack-mariadb.yaml — group: mariadb-normalization（節錄）
+```yaml {.quote src="rule-packs/rule-pack-mariadb.yaml"}
 - record: tenant:mysql_connection_usage:percent
   expr: |
-    max by(tenant) (
+    max by(tenant, da_cluster) (
       100 * mysql_global_status_threads_connected
       / (mysql_global_variables_max_connections > 0)
     )
-
+# ...
 - record: tenant:mysql_slow_queries:rate5m
-  expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
+  expr: sum by(tenant, da_cluster) (rate(mysql_global_status_slow_queries[5m]))
 ```
 
 命名一律是 `tenant:<指標>:<函式>`。聚合方式依語意選：連線使用率（佔 max_connections 的 %）取 `max`（租戶裡最滿的那一台），速率取 `sum`（整個叢集的總量）。
 
 ### 第二部分：閾值正規化 recording rule
 
-```yaml
-# rule-packs/rule-pack-mariadb.yaml — group: mariadb-threshold-normalization（節錄）
+```yaml {.quote src="rule-packs/rule-pack-mariadb.yaml"}
 - record: tenant:alert_threshold:mysql_connection_usage_percent
   expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="warning"})
-
+# ...
 - record: tenant:alert_threshold:mysql_connection_usage_percent_critical
   expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="critical"})
 ```
@@ -65,8 +63,7 @@ threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：
 
 ### 第三部分：alert rule
 
-```yaml
-# rule-packs/rule-pack-mariadb.yaml — group: mariadb-alerts（節錄）
+```yaml {.quote src="rule-packs/rule-pack-mariadb.yaml"}
 - alert: MariaDBHighConnections
   expr: |
     (
@@ -87,6 +84,7 @@ threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：
     summary_zh: "{{ $labels.tenant }} 連線數過高"
     platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: connection threshold breached — review connection pool sizing"
     platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：連線數閾值超出 — 檢查連線集區大小設定"
+# ...
     runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
 ```
 
@@ -162,10 +160,9 @@ python3 scripts/tools/lint/check_threshold_registry.py --ci
 
 ### 使用指標字典
 
-`scripts/tools/metric-dictionary.yaml` 把傳統規則常用的原始指標對到平台的閾值 key。`migrate_rule.py` 轉換既有規則時會查這份字典：原始指標已經有黃金標準告警的，工具會建議直接設閾值，而不是轉出一條重複的 `custom_` 規則。
+`scripts/tools/metric-dictionary.yaml` 把傳統規則常用的原始指標對到平台的閾值 key。`migrate_rule.py` 轉換既有規則時會查這份字典：原始指標已經有黃金標準告警的，工具會建議直接設閾值，而不是轉出一條重複的 `custom_` 規則。以其中一筆為例：
 
-```yaml
-# scripts/tools/metric-dictionary.yaml（節錄）
+```yaml {.quote src="scripts/tools/metric-dictionary.yaml"}
 mysql_global_status_threads_connected:
   maps_to: mysql_connection_usage_percent
   golden_rule: MariaDBHighConnections

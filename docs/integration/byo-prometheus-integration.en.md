@@ -451,7 +451,7 @@ tenants:
         group_by: [persistentvolumeclaim]  # evaluate per-PVC (a small near-full volume isn't hidden by a large empty one)
 ```
 
-For the full example (threshold / rate / ratio / p99 / absence / `==` recipes) see [`recipes/examples/conf.d/shop-a.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/examples/conf.d/shop-a.yaml); for recipe syntax, per-mode semantics, and safe-adoption guidance (incl. the dead-exporter blind spot) see [Custom Rule Governance](../custom-rule-governance.md). Run `make custom-alerts-compile` to recompile the rule pack after editing.
+For the full example (threshold / rate / ratio / p99 / absence / `==` recipes) see [`recipes/examples/conf.d/shop-a.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/examples/conf.d/shop-a.yaml); for recipe syntax, per-mode semantics, and safe-adoption guidance (incl. the dead-exporter blind spot) see [Custom Rule Governance](../custom-rule-governance.md). After editing, recompile the rule pack with [`da-tools compile-custom-alerts --config-dir <your conf.d> --out <rule pack>`](../cli-reference.en.md#compile-custom-alerts) and have Prometheus load it (`make custom-alerts-compile` compiles only this repository's own conf.d).
 
 ### Step C: Verify
 

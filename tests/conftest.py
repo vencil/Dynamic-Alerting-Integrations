@@ -268,6 +268,36 @@ def _cwd_put_back(before):
             "(#3481); use monkeypatch.chdir, or restore it in the test")
 
 
+#: `_lib_parse_cache.JUDGED_TREES_ENV`, spelled here so that conftest does
+#: not import the tools (test_the_env_name_is_the_tools pins the two equal).
+_JUDGED_TREES_ENV = "DA_JUDGED_TREES"
+
+
+@pytest.fixture(autouse=True)
+def _no_judged_tree_outlives_its_test():
+    """What a test's judgements hand down to child processes ends with the
+    test. A tool that judges a conf.d tree records it in `DA_JUDGED_TREES`
+    for the children it starts, and adds to what its own process already
+    wrote there. In a pytest worker "its own process" is every test before
+    it: the variable only grew, one temp tree per test, until the worker's
+    environment was too large to start any process — every later test that
+    runs a subprocess (python, git, da-guard) failed with E2BIG, on whichever
+    worker xdist happened to give enough tree-judging tests. Put back to what
+    it was before the test, silently: judging a tree is what these tests are
+    for, not a leak to report."""
+    before = os.environ.get(_JUDGED_TREES_ENV)
+    yield
+    _judged_trees_put_back(before)
+
+
+def _judged_trees_put_back(before):
+    """`DA_JUDGED_TREES` back at *before* (None: unset)."""
+    if before is None:
+        os.environ.pop(_JUDGED_TREES_ENV, None)
+    else:
+        os.environ[_JUDGED_TREES_ENV] = before
+
+
 @pytest.fixture(autouse=True)
 def _reset_exit_state():
     """A tool run in-process may leave `_lib_exitcodes`' process-global exit
