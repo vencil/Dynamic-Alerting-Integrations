@@ -88,6 +88,13 @@ func TestGuard_SubtreeDefaultsAcrossAliasSpellings(t *testing.T) {
 		{"dCnullL50", [][2]string{{C, "null"}, {L, "50"}}}, {"dLnullC50", [][2]string{{L, "null"}, {C, "50"}}},
 		{"dCdis", [][2]string{{C, "disable"}}}, {"dLdis", [][2]string{{L, "disable"}}}}
 	values := []string{"30", "40", "41", "50", "60"}
+	// -short (the nightly -race -count=10 run) keeps three: equal to the
+	// root's value (30), to the deepest level's (50), and to no level's
+	// (60). Second-heaviest test of the package's nightly (#4100: 310 s of
+	// 1682 s); PR CI runs without -short and keeps all five.
+	if testing.Short() {
+		values = []string{"30", "50", "60"}
+	}
 
 	// served is what the deepest level writing the threshold hands down:
 	// canonical first inside one level. A null is no write; "disable"

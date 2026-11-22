@@ -100,7 +100,16 @@ func TestServedSchedules_PerTenantMatchesWholeTree(t *testing.T) {
 		"ungatherable": ungatherableTree,
 		"colliding":    collidingTree,
 	}
-	for seed := int64(1); seed <= 40; seed++ {
+	// -short (the nightly -race -count=10 run) keeps 5 of the 40 seeded
+	// trees: the seeds are fixed, so repeating all 40 ten times under the
+	// race detector re-checks the same documents, and this one test was
+	// half of the package's nightly time (#4100: 860 s of 1682 s). PR CI
+	// runs without -short and keeps every seed.
+	seeds := int64(40)
+	if testing.Short() {
+		seeds = 5
+	}
+	for seed := int64(1); seed <= seeds; seed++ {
 		trees[fmt.Sprintf("random-%d", seed)] = randomScheduleTree(rand.New(rand.NewSource(seed)))
 	}
 	ats := []string{scheduleAt, "2026-07-01T15:30:00Z", "2026-07-01T16:20:00Z", "2026-07-01T23:59:00Z", "2026-12-15T05:30:00Z"}
