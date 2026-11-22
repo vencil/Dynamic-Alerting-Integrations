@@ -211,7 +211,7 @@ status: wip
 
 `.github/workflows/planning-status-sync.yaml` 在 PR 開立、推新 commit、重新開啟、編輯時執行，傳入 base 分支與 PR 號碼，**不帶 `--strict`**：有問題時印到 stderr，並在 GitHub Actions 的 PR 檢查頁面加上 warning 註記，但結束碼是 0，不擋 merge。帶 `--strict`（或同義的 `--ci`）時有問題就以結束碼 1 失敗。
 
-**只警告是這一層的定案，不是過渡期。** 這一層不升級成擋 merge（不論同一項目連續幾支 PR 沒同步），檢查不通過時不在 PR 留言（只有 warning 註記），本機 pre-push 也不跑它。原因是追蹤狀態的權威不在這道檢查：新式 `TRK-<issue 號>` 條目就是那張 GitHub issue，做完與否以 issue 的開關為準，frontmatter 只是它的副本。trailer 怎麼寫仍由 [`dev-rules.md`](../internal/dev-rules.md) §P1 規範；這一層只在 commit 寫了 trailer 時提醒 frontmatter 跟著改。為了讓副本與 issue 一致而擋下 PR，代價不值。`--strict` 保留給想在本機嚴格檢查的人。
+**只警告是這一層的定案，不是過渡期。** 這一層不升級成擋 merge（不論同一項目連續幾支 PR 沒同步），檢查不通過時不在 PR 留言（只有 warning 註記），本機 pre-push 也不跑它。frontmatter 仍是索引的唯一來源；只警告的理由是它落後的代價低：新式 `TRK-<issue 號>` 條目的編號就是追蹤 issue，讀者從 issue 的開關就看得出工作做完沒有，索引上的狀態慢一步不會讓工作失蹤。為了這種落後擋下 PR，代價不值。trailer 怎麼寫仍由 [`dev-rules.md`](../internal/dev-rules.md) §P1 規範；這一層只在 commit 寫了 trailer 時提醒 frontmatter 跟著改。`--strict` 保留給想在本機嚴格檢查的人。
 
 本機可以直接跑 `python3 scripts/tools/lint/check_planning_status_sync.py`（base 預設 `origin/main`）。拿上面範例的條目、假設當前 PR 是 2202，兩個 trailer `Resolves: TRK-2150` 與 `Fixes: TRK-2160` 的回報是：
 
@@ -303,7 +303,7 @@ Default behaviour is **soft-warn** (exit 0). Run with `--strict` to exit 1 (for 
 做法是排程定期（例如每月）掃描，找出「標成完成卻沒有 PR 編號」「標成進行中卻很久沒動」的條目，列給 maintainer 季度回顧。不採用，接受 frontmatter 的狀態漂移：
 
 - 成本不值。排程要有人維護、報告要有人讀、讀完還要回頭改 frontmatter，換到的只是索引裡的狀態與實際一致。
-- 狀態的權威以 issue 為準。新式 `TRK-<issue 號>` 條目做完沒有，看 issue 的開關；frontmatter 落後是接受的漂移。
+- 落後的代價低。新式 `TRK-<issue 號>` 條目做完沒有，從 issue 的開關就看得到；frontmatter 慢一步是接受的漂移。
 
 代價是舊編號（三位數）條目的過期狀態不會被偵測，見「已知限制」。
 
