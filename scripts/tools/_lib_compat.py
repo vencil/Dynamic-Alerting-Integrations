@@ -186,9 +186,10 @@ harden_stdout_errors()
 # root is found by structure instead; see `find_project_root`.
 #
 # These markers remain only as a test-isolation guard (a staging dir must not
-# sit inside any project tree). Tools that still take the nearest `.git` as
-# their root are listed and classified in #2852; a dev tool moving off it
-# uses `require_project_root`.
+# sit inside any project tree). A dev tool reads its own tree through
+# `require_project_root`, or `require_git_project_root` when it also runs git
+# there (#2852); taking "the nearest `.git` above me" as the root is held off
+# by tests/shared/test_no_nearest_git_root.py.
 PROJECT_ROOT_MARKERS = (".git", "Makefile", "pyproject.toml")
 
 
@@ -278,4 +279,72 @@ def require_project_root(start) -> "Path":
         print(f"ERROR: {start} is not inside a scripts/tools tree, so there "
               f"is no repo to read", file=sys.stderr)
         raise SystemExit(2)
+    return root
+
+
+def require_git_project_root(start) -> "Path":
+    """``require_project_root`` for a dev tool that also runs git on its tree.
+
+    The structural root (``require_project_root``) says which tree the tool
+    sits in; it says nothing about which repository a ``git ls-files`` /
+    ``git log`` run there reads. A copy vendored into another repository has
+    no ``.git`` of its own, so git walks up and answers for the ENCLOSING
+    repository — every tracked path, every commit date is then someone
+    else's (#2852). So this asks git where the work tree containing the root
+    begins, and accepts the root only when that IS the root.
+
+    ⛔ git's repo-local environment variables are dropped for that one call
+    (the names come from ``git rev-parse --local-env-vars``, as in
+    ``scripts/ops/win_git_escape.bat``). A git hook exports ``GIT_DIR`` /
+    ``GIT_INDEX_FILE``, and with ``GIT_DIR`` set ``--show-toplevel`` reports
+    the ``-C`` directory itself, whatever it is — the check would pass for
+    any directory.
+
+    The two paths are compared with ``os.path.samefile`` (the same file on
+    disk), not as realpath strings, which differ on case-folding filesystems
+    and 8.3 names while naming one directory.
+
+    Not the root, git missing or failing, no work tree at all: print one
+    line naming the structural root and what git said, and exit 2
+    (``_lib_exitcodes``' EXIT_CALLER_ERROR, a literal for the same reason as
+    above).
+    """
+    import os
+    import subprocess
+
+    root = require_project_root(start)
+
+    def _refuse(why: str):  # never returns: SystemExit(2)
+        print(f"ERROR: {root} is not the root of a git work tree of its own "
+              f"({why}); this tool reads git ls-files / git log and would "
+              f"otherwise read another repository (#2852)", file=sys.stderr)
+        raise SystemExit(2)
+
+    try:
+        names = subprocess.run(
+            ["git", "rev-parse", "--local-env-vars"], cwd=str(root),
+            capture_output=True, timeout=30, check=True).stdout
+        env = dict(os.environ)
+        for name in os.fsdecode(names).split():
+            env.pop(name, None)
+        top = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True, timeout=30, env=env)
+    except FileNotFoundError:
+        _refuse("git is not installed")
+    except subprocess.TimeoutExpired as exc:
+        _refuse(f"`{' '.join(exc.cmd)}` timed out")
+    except subprocess.CalledProcessError as exc:
+        _refuse(f"`git rev-parse --local-env-vars` exited {exc.returncode}")
+    if top.returncode != 0:
+        detail = os.fsdecode(top.stderr).strip().splitlines()
+        _refuse(f"git: {detail[0] if detail else f'exit {top.returncode}'}")
+    reported = os.fsdecode(top.stdout).rstrip("\n")
+    try:
+        same = os.path.samefile(reported, root)
+    except OSError as exc:
+        _refuse(f"git reports the work tree root {reported!r}, which cannot "
+                f"be compared: {exc}")
+    if not same:
+        _refuse(f"git reports the work tree root {reported}")
     return root
