@@ -86,7 +86,7 @@ da-tools init \
 ```
 your-repo/
 ├── conf.d/
-│   ├── _defaults.yaml           # Platform global default thresholds
+│   ├── _defaults.yaml           # Platform-level settings (thresholds are built into the readers; only overrides and opt-outs go here)
 │   ├── prod-mariadb.yaml        # Tenant A overrides
 │   └── prod-redis.yaml          # Tenant B overrides
 ├── .github/workflows/
@@ -542,7 +542,7 @@ git push origin feature/lower-connections
 # → ConfigMap updated → threshold-exporter hot-reloads → Prometheus uses new thresholds
 ```
 
-> ⚠️ **The validate step above will not tell you what you failed to set.** The platform declares a group of keys it recognises but asserts no value for (the `optional_overrides:` list in `_defaults.yaml`): leave one unset and its alert never fires, while validation and CI stay green with **no error message of any kind** — that is the design, not a missing default (these thresholds can only be calibrated against your own baseline). For a notice at run time, subscribe to `_state_unset_thresholds` (off by default; see [for-tenants](../getting-started/for-tenants.en.md)). To see what a tenant is currently missing:
+> ⚠️ **The validate step above will not tell you what you failed to set.** The platform declares a group of keys it recognises but asserts no value for (the keys with no platform value; the `platform_defaults` row of `validate-config` lists each with how many tenants set it, but that row is always PASS): leave one unset and its alert never fires, while validation and CI stay green with **no error message of any kind** — that is the design, not a missing default (these thresholds can only be calibrated against your own baseline). For a notice at run time, subscribe to `_state_unset_thresholds` (off by default; see [for-tenants](../getting-started/for-tenants.en.md)). To see what a tenant is currently missing:
 >
 > ```bash
 > da-tools diagnose <tenant> --config-dir conf.d/ --show-inheritance

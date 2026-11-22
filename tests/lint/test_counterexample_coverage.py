@@ -211,60 +211,16 @@ def _extra_faces(doc, written) -> dict:
 
     fallback = PORTAL_FALLBACK.read_text(encoding="utf-8")
 
-    defaults_data = written["defaults_data"]
-    scaffold_presented = (set(defaults_data.get("defaults") or {})
-                          | set(defaults_data.get("optional_overrides") or []))
-
-    tenant_text = written["tenant.yaml"]
     return {
         # JSON carries the datum, not the sentence: presence of the field IS
         # the rendering for a machine-readable face.
         "docs/assets/platform-data.json": (pd_keys, pd_text),
         "portal offline fallback rule-packs-fallback.json":
             (_presented_keys(doc, fallback), fallback),
-        "scaffold_tenant → _defaults.yaml (batch path)":
-            (scaffold_presented, written["_defaults.yaml"]),
-        # ⛔ The only file a tenant ever opens. It shipped a hand-written
-        # paragraph naming two Oracle counter-examples unconditionally, so a
-        # db2-only tenant was warned about keys its file did not contain while
-        # the one key in it that HAD a measurement said nothing — and the
-        # blanket "both over-fire" was the reversal `direction` exists to stop.
-        "scaffold_tenant → <tenant>.yaml declared stub":
-            (_presented_keys(doc, tenant_text), tenant_text),
-        # The SAME stub in English (`init_project` writes this one). A separate
-        # face because it is a separate render: different wording table, and a
-        # gate that only ever exercised the language its own environment
-        # happens to select would have covered exactly half of it. The write
-        # path is already proven by the zh face above; what this adds is the
-        # other language's renderer.
-        "<tenant>.yaml declared stub (en)": _stub_face(doc, "en"),
-        # ⛔ The SECOND producer of a file called `_defaults.yaml`, writing into
-        # the same `conf.d/` as the stub above. It derives its declared list
-        # from the same shared predicate, so it lists exactly the keys with
-        # measurements — and it wrote them bare, next to a sibling file that
-        # did not, because the annotator lived in the other producer's module.
-        "init_project → _defaults.yaml": _init_project_defaults_face(doc),
+        # #3924: the scaffold and init `_defaults.yaml` and the tenant stub
+        # present no threshold key any more (every registry key is built into
+        # the readers), so they are no faces of the counter-examples.
     }
-
-
-def _init_project_defaults_face(doc):
-    init = _load_init_project()
-    packs = sorted({e["pack"] for e in doc["keys"].values()})
-    text = init._gen_defaults_yaml(packs, "monitoring")
-    return _presented_keys(doc, text), text
-
-
-def _load_init_project():
-    import importlib
-    return importlib.import_module("init_project")
-
-
-def _stub_face(doc, lang: str):
-    keys = registry_lib.shipped_optional_keys_for_packs(
-        sorted({e["pack"] for e in doc["keys"].values()}))
-    text = "\n".join(registry_lib.render_tenant_declared_stub_lines(
-        keys, lang=lang))
-    return _presented_keys(doc, text), text
 
 
 @pytest.fixture(scope="module")

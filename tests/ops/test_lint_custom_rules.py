@@ -1228,7 +1228,7 @@ def test_a_function_name_that_is_no_call_is_no_finding(expr):
 
 _FULL_SELECTOR = {"selector": "x[5m]", "start": 5, "end": 10, "range_ms": 300000,
                   "range": "5m", "subqueries_ms": [], "subqueries": [], "window_ms": 300000,
-                  "window": "5m", "matchers": [{"name": "__name__", "op": "=", "value": "x"}]}
+                  "window": "5m"}
 
 
 @pytest.mark.parametrize("entry", [
@@ -1237,13 +1237,7 @@ _FULL_SELECTOR = {"selector": "x[5m]", "start": 5, "end": 10, "range_ms": 300000
     {"selectors": [{k: v for k, v in _FULL_SELECTOR.items() if k != "window_ms"}],
      "calls": [], "problem": None},
     {"selectors": [], "calls": [{"kind": "function"}], "problem": None},
-    # #4137: the matchers label flow is told the scrape facts by
-    {"selectors": [{k: v for k, v in _FULL_SELECTOR.items() if k != "matchers"}],
-     "calls": [], "problem": None},
-    {"selectors": [{**_FULL_SELECTOR, "matchers": [{"name": "__name__", "op": "==", "value": "x"}]}],
-     "calls": [], "problem": None},
-], ids=["no-problem", "problem-not-text", "selector-no-window", "call-no-name",
-        "selector-no-matchers", "matcher-op-unknown"])
+], ids=["no-problem", "problem-not-text", "selector-no-window", "call-no-name"])
 def test_a_reading_not_of_the_promql_reads_shape_is_a_reader_fault(tmp_path, entry):
     """An incomplete answer (an older or broken da-read) is a ConsumerReadError
     before lint reads a field of it — never a KeyError in lint_expr."""
@@ -1384,12 +1378,14 @@ def test_yaml_that_is_no_rule_file_is_named_until_excluded(tmp_path, monkeypatch
     """(a) #3426：目錄內不是 rule file 也不是 manifest 的 YAML（recipe、registry、
     Chart.yaml）→ 逐檔 ERROR、建議 `--exclude`；以 `--exclude` 排除後通過，
     被排除的檔不讀。"""
-    (tmp_path / "recipes").mkdir()
-    (tmp_path / "recipes" / "threshold.yaml").write_text(_RECIPE, encoding="utf-8")
-    (tmp_path / "threshold-registry.yaml").write_text(_REGISTRY, encoding="utf-8")
-    (tmp_path / "helm").mkdir()
-    (tmp_path / "helm" / "Chart.yaml").write_text(_CHART, encoding="utf-8")
-    (tmp_path / "rules.yaml").write_text(_OK_RULE, encoding="utf-8")
+    tdir = tmp_path / "t"  # #4136: tenant t's rule files sit in its directory
+    tdir.mkdir()
+    (tdir / "recipes").mkdir()
+    (tdir / "recipes" / "threshold.yaml").write_text(_RECIPE, encoding="utf-8")
+    (tdir / "threshold-registry.yaml").write_text(_REGISTRY, encoding="utf-8")
+    (tdir / "helm").mkdir()
+    (tdir / "helm" / "Chart.yaml").write_text(_CHART, encoding="utf-8")
+    (tdir / "rules.yaml").write_text(_OK_RULE, encoding="utf-8")
     assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
     errors = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("ERROR")]
     assert len(errors) == 3, errors
@@ -1401,11 +1397,11 @@ def test_yaml_that_is_no_rule_file_is_named_until_excluded(tmp_path, monkeypatch
     monkeypatch.setattr(lint_custom_rules, "read_rule_files",
                         lambda files: seen.extend(files) or real(files))
     assert _run_main([str(tmp_path), "--ci", "--exclude", "Chart.yaml", "--exclude",
-                      "recipes/*", "--exclude", "threshold-registry.yaml"], monkeypatch) == 0
+                      "t/recipes/*", "--exclude", "threshold-registry.yaml"], monkeypatch) == 0
     assert "ERROR" not in capsys.readouterr().out
     # the excluded ones are not read (#4098: the shipped rule packs are, for
     # the records a rule may read — they are not the scan's)
-    assert [f for f in seen if str(f).startswith(str(tmp_path))] == [str(tmp_path / "rules.yaml")]
+    assert [f for f in seen if str(f).startswith(str(tmp_path))] == [str(tdir / "rules.yaml")]
 
 
 @pytest.mark.parametrize("name,text,why", [
@@ -1417,7 +1413,9 @@ def test_yaml_that_is_no_rule_file_is_named_until_excluded(tmp_path, monkeypatch
 ])
 def test_a_file_that_reads_as_no_rule_file_is_an_error(tmp_path, monkeypatch, capsys, name,
                                                        text, why):
-    (tmp_path / name).write_text(text, encoding="utf-8")
+    tdir = tmp_path / "t"  # #4136: tenant t's rule files sit in its directory
+    tdir.mkdir()
+    (tdir / name).write_text(text, encoding="utf-8")
     assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
     errors = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("ERROR")]
     assert len(errors) == 1 and name in errors[0] and why in errors[0], errors
@@ -1452,9 +1450,11 @@ def test_a_prometheusrule_is_linted(tmp_path, monkeypatch, capsys):
 ])
 def test_broken_plain_rule_file_is_an_error(tmp_path, monkeypatch, capsys, text, why):
     """(b) 有 `groups:` 但規則載入器拒收的 plain 檔 → ERROR，點名檔案。"""
-    bad = tmp_path / "broken.yaml"
+    tdir = tmp_path / "t"  # #4136: tenant t's rule files sit in its directory
+    tdir.mkdir()
+    bad = tdir / "broken.yaml"
     bad.write_text(text, encoding="utf-8")
-    (tmp_path / "recipe.yaml").write_text(_RECIPE, encoding="utf-8")
+    (tdir / "recipe.yaml").write_text(_RECIPE, encoding="utf-8")
     assert _run_main([str(tmp_path), "--ci", "--exclude", "recipe.yaml"], monkeypatch) == 1
     out = capsys.readouterr().out
     errors = [line for line in out.splitlines() if line.startswith("ERROR")]
@@ -1495,7 +1495,9 @@ def test_configmap_good_and_broken_rule_values(tmp_path, monkeypatch, capsys):
     good = _OK_RULE.replace("\n", "\n    ")
     bad = "groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n".replace(
         "\n", "\n    ")
-    (tmp_path / "cm.yaml").write_text(
+    tdir = tmp_path / "t"  # #4136: tenant t's rule files sit in its directory
+    tdir.mkdir()
+    (tdir / "cm.yaml").write_text(
         "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: rules}\ndata:\n"
         f"  good.yml: |\n    {good}\n  bad.yml: |\n    {bad}\n", encoding="utf-8")
     assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
@@ -1543,7 +1545,9 @@ def test_a_manifest_the_api_server_refuses_is_an_error(tmp_path, monkeypatch, ca
     """A ConfigMap whose `data` is a list used to be a ConfigMap with no
     rule files; a manifest with an `apiVersion` but no `kind` used to be
     other YAML. Both are named now."""
-    (tmp_path / "bad.yaml").write_text(text, encoding="utf-8")
+    tdir = tmp_path / "t"  # #4136: tenant t's rule files sit in its directory
+    tdir.mkdir()
+    (tdir / "bad.yaml").write_text(text, encoding="utf-8")
     assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
     out = capsys.readouterr().out
     errors = [ln for ln in out.splitlines() if ln.startswith("ERROR")]
@@ -1598,8 +1602,10 @@ def test_an_exclude_that_leaves_nothing_is_a_caller_error(tmp_path, monkeypatch,
 def test_a_file_with_no_object_is_an_error(tmp_path, monkeypatch, capsys):
     """F14: an empty file in a scanned directory is named (kubectl: no
     objects passed to apply)."""
-    (tmp_path / "rules.yaml").write_text(_OK_RULE, encoding="utf-8")
-    (tmp_path / "empty.yml").write_text("# nothing yet\n", encoding="utf-8")
+    tdir = tmp_path / "t"  # #4136: tenant t's rule files sit in its directory
+    tdir.mkdir()
+    (tdir / "rules.yaml").write_text(_OK_RULE, encoding="utf-8")
+    (tdir / "empty.yml").write_text("# nothing yet\n", encoding="utf-8")
     assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
     errors = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("ERROR")]
     assert len(errors) == 1 and "empty.yml" in errors[0] and "no objects" in errors[0], errors
@@ -1644,3 +1650,168 @@ def test_the_repository_lint_policy_holds_lint_keys_only():
     with open(os.path.join(root, "deployment-policy.yaml"), encoding="utf-8") as f:
         deploy = yaml.safe_load(f)
     assert set(deploy) == {"allowed_domains"}, deploy
+
+
+# ── #4136: a tenant's rule file reads and writes only that tenant ─────────
+
+def _isolation(tmp_path, rules, tenant="db-a"):
+    """The isolation findings (ERROR and WARN messages) of a rule file of
+    *tenant* holding *rules* (dicts, as written)."""
+    f = tmp_path / "r.yaml"
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": rules}]}), encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy(), tenant=tenant)
+    return [f"{r.severity}: {r.message}" for r in results
+            if "rule file" in r.message or "series" in r.message and "selector" in r.message
+            or "writes tenant" in r.message or "carry no tenant" in r.message]
+
+
+def _alert(expr, tenant="db-a"):
+    return {"alert": "A", "expr": expr, "labels": {"tenant": tenant, "owner": "o", "expiry": "2099-01-01"}}
+
+
+@pytest.mark.parametrize("expr, said", [
+    # every spelling that reads more than db-a's series (#4136 measured rc 0)
+    ('mysql_up{tenant=~".*"} == 0', "can read every tenant's series"),
+    ("mysql_up == 0", "can read every tenant's series"),
+    ('mysql_up{tenant!="db-b"} == 0', "can read every tenant's series"),
+    ('mysql_up{tenant=~"db-a|db-b"} == 0', "can read every tenant's series"),
+    ('mysql_up{tenant=~"db-a"} == 0', "can read every tenant's series"),
+    ('mysql_up{tenant="db-b"} == 0', "reads tenant db-b's series"),
+    ('mysql_up{tenant="db-a"} unless on() mysql_up{tenant="db-b"}', "reads tenant db-b's series"),
+    ('mysql_up{tenant="db-a"} unless on() mysql_up', "can read every tenant's series"),
+    # an alias alone: a series with both labels, not equal, passes it
+    ('mysql_up{namespace="db-a"} == 0', "can read every tenant's series"),
+    ('tenant:mysql_up:max == 0', "can read every tenant's series"),
+    ('{__name__="mysql_up", tenant=~".+"} == 0', "can read every tenant's series"),
+    # writing tenant from anything else than the series read
+    ('label_replace(mysql_up{tenant="db-a"}, "tenant", "db-b", "", "")', "writes tenant"),
+    ('label_join(mysql_up{tenant="db-a"}, "tenant", "", "pod")', "writes tenant"),
+    ('count_values("tenant", mysql_up{tenant="db-a"})', "writes tenant"),
+    ('mysql_up{tenant="db-a"} * on(job) group_left(tenant) mysql_up{tenant="db-a"}', "writes tenant"),
+    # Prometheus strips the parentheses around a call's argument and an
+    # aggregation's parameter, so the string still names the label (#4136 review)
+    ('label_replace(mysql_up{tenant="db-a"}, ("tenant"), "db-b", "", "")', "writes tenant"),
+    ('count_values((("tenant")), mysql_up{tenant="db-a"})', "writes tenant"),
+    # the alias the pin accepts is guarded too: written, it reaches the
+    # tenant who pins it (#4136 review)
+    ('label_replace(kube_pod_info{namespace="db-a", tenant=""}, "namespace", "db-b", "", "")',
+     "writes namespace"),
+    ('mysql_up{tenant="db-a"} * on(tenant) group_left(namespace) kube_pod_info{namespace="db-a", tenant=""}',
+     "writes namespace"),
+    # a selector in an aggregation's parameter, a subquery, a unary minus
+    ('quantile(scalar(max(y{tenant=~".*"})), mysql_up{tenant="db-a"})', "can read every tenant's series"),
+    ('max_over_time(mysql_up[1h:5m]) == 0', "can read every tenant's series"),
+    ('-mysql_up < 0', "can read every tenant's series"),
+])
+def test_a_rule_that_can_reach_another_tenant_is_an_error(tmp_path, expr, said):
+    found = _isolation(tmp_path, [_alert(expr)])
+    assert any(m.startswith("ERROR") and said in m for m in found), found
+
+
+@pytest.mark.parametrize("expr", [
+    'mysql_up{tenant="db-a"} == 0', 'tenant:mysql_up:max{tenant="db-a"} == 0',
+    'mysql_up{tenant="db-a", tenant!="db-b"} == 0',
+    'kube_pod_info{namespace="db-a", tenant=""} > 0',
+    'absent(mysql_up{tenant="db-a"})', 'vector(1)',
+    'label_replace(mysql_up{tenant="db-a"}, "x", "$1", "pod", "(.*)")',
+    'mysql_up{tenant="db-a"} * on(tenant) group_left(instance) mysql_up{tenant="db-a"}',
+])
+def test_a_rule_that_reads_only_its_tenant_passes(tmp_path, expr):
+    assert _isolation(tmp_path, [_alert(expr)]) == []
+
+
+@pytest.mark.parametrize("value, alert_ok, record_ok", [
+    ("db-a", True, True), ("db-b", False, False), ("", False, False),
+    ("{{ $labels.namespace }}", False, False),
+    # a recording rule's labels are no template: Prometheus writes the text
+    # (rules/recording.go), so the copy is literal "{{ $labels.tenant }}"
+    ("{{ $labels.tenant }}", True, False),
+])
+def test_what_a_rule_writes_as_tenant_must_be_its_tenant(tmp_path, value, alert_ok, record_ok):
+    alert = _alert('mysql_up{tenant="db-a"} == 0', tenant=value)
+    record = {"record": "custom:x:up", "expr": 'mysql_up{tenant="db-a"}', "labels": {"tenant": value}}
+    for rule, ok in ((alert, alert_ok), (record, record_ok)):
+        found = [m for m in _isolation(tmp_path, [rule]) if "in db-a's rule file" in m]
+        assert (found == []) == ok, (rule, found)
+
+
+def test_an_alias_written_in_labels_must_be_its_tenant(tmp_path):
+    record = {"record": "custom:x:up", "expr": 'kube_pod_info{namespace="db-a", tenant=""}',
+              "labels": {"namespace": "db-b"}}
+    assert any("label namespace is db-b in db-a's rule file" in m for m in _isolation(tmp_path, [record]))
+
+
+def test_the_groups_labels_are_what_prometheus_writes(tmp_path):
+    f = tmp_path / "r.yaml"
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "labels": {"tenant": "db-b"},
+                                             "rules": [{"record": "custom:x:up",
+                                                        "expr": 'mysql_up{tenant="db-a"}'}]}]}),
+                 encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy(), tenant="db-a")
+    assert any("label tenant is db-b in db-a's rule file" in r.message for r in results), results
+
+
+def test_a_record_that_aggregated_tenant_away_warns(tmp_path):
+    """Detection lost, not leaked: a reference pinned to db-a selects nothing."""
+    found = _isolation(tmp_path, [{"record": "custom:x:sum", "expr": 'sum(mysql_up{tenant="db-a"})'}])
+    assert any(m.startswith("WARN") and "carry no tenant" in m for m in found), found
+    assert _isolation(tmp_path, [{"record": "custom:x:sum",
+                                  "expr": 'sum by (tenant) (mysql_up{tenant="db-a"})'}]) == []
+    # its own labels set tenant: its series carry it (#4136 review)
+    assert _isolation(tmp_path, [{"record": "custom:x:sum", "expr": 'sum(mysql_up{tenant="db-a"})',
+                                  "labels": {"tenant": "db-a"}}]) == []
+
+
+def test_a_declared_rule_pack_is_not_a_tenants(tmp_path):
+    """lint_file without a tenant (--rule-pack-dir, the platform's packs read
+    every tenant by design) does not judge isolation."""
+    f = tmp_path / "r.yaml"
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [_alert("mysql_up == 0", "{{ $labels.tenant }}")]}]}),
+                 encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy())
+    assert not [r for r in results if "every tenant" in r.message], results
+
+
+def test_where_a_file_sits_names_its_tenant(tmp_path):
+    (tmp_path / "db-a" / "team").mkdir(parents=True)
+    a = tmp_path / "db-a" / "r.yaml"
+    deep = tmp_path / "db-a" / "team" / "r.yaml"
+    stray = tmp_path / "r.yaml"
+    (tmp_path / "Not_A_Tenant").mkdir()
+    bad = tmp_path / "Not_A_Tenant" / "r.yaml"
+    for f in (a, deep, stray, bad):
+        f.write_text("groups: []\n", encoding="utf-8")
+    at = lint_custom_rules.author_tenant
+    assert at(str(a), [str(tmp_path)]) == ("db-a", None)
+    assert at(str(deep), [str(tmp_path)]) == ("db-a", None)
+    assert at(str(a), [str(a)]) == ("db-a", None)            # a file given: its directory
+    assert at(str(stray), [str(tmp_path)])[0] is None
+    assert "sits directly in" in at(str(stray), [str(tmp_path)])[1]
+    assert "is no tenant id" in at(str(bad), [str(tmp_path)])[1]
+    # the target that holds the file decides, not the first one given
+    assert at(str(a), [str(tmp_path / "Not_A_Tenant"), str(tmp_path)]) == ("db-a", None)
+    # overlapping targets: the deepest one holding the file, in any order
+    # (#4136 review: the verdict hung on the order)
+    assert at(str(deep), [str(tmp_path / "db-a"), str(tmp_path)]) == ("team", None)
+    assert at(str(deep), [str(tmp_path), str(tmp_path / "db-a")]) == ("team", None)
+    assert at(str(a), [str(tmp_path / "db-a"), str(tmp_path)])[0] is None
+    assert at(str(a), [str(tmp_path), str(tmp_path / "db-a")])[0] is None
+
+
+def test_the_scan_paths_files_are_judged_as_their_tenants(tmp_path, monkeypatch, capsys):
+    """main(): a scan path's file is its tenant directory's; one directly in
+    the scan directory is an ERROR naming the layout; --rule-pack-dir's packs
+    are the platform's and read every tenant (#4136)."""
+    (tmp_path / "custom" / "db-a").mkdir(parents=True)
+    rule = yaml.safe_dump({"groups": [{"name": "g", "rules": [_alert('mysql_up{tenant="db-a"} == 0')]}]})
+    (tmp_path / "custom" / "db-a" / "ok.yaml").write_text(rule, encoding="utf-8")
+    assert _run_main([str(tmp_path / "custom"), "--ci"], monkeypatch) in (0, None)
+    (tmp_path / "custom" / "db-b").mkdir()
+    (tmp_path / "custom" / "db-b" / "ok.yaml").write_text(rule, encoding="utf-8")
+    capsys.readouterr()
+    assert _run_main([str(tmp_path / "custom"), "--ci"], monkeypatch) == 1
+    assert "reads tenant db-a's series in db-b's rule file" in capsys.readouterr().out
+    (tmp_path / "custom" / "db-b" / "ok.yaml").unlink()
+    (tmp_path / "custom" / "stray.yaml").write_text(rule, encoding="utf-8")
+    assert _run_main([str(tmp_path / "custom"), "--ci"], monkeypatch) == 1
+    assert "sits directly in" in capsys.readouterr().out

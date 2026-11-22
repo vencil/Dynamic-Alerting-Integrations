@@ -28,7 +28,8 @@ import (
 //	{"kind": "call", "name", "args": [<node>, …]}
 //	{"kind": "selector", "name", "matchers": [{"name", "type", "value"}, …], "range": bool}
 //	{"kind": "subquery" | "paren" | "unary", "expr": <node>}        ("unary" also has "op")
-//	{"kind": "number" | "string"}
+//	{"kind": "number"}
+//	{"kind": "string", "value"}
 //
 // and every node has "start" / "end", byte offsets into the expression's
 // UTF-8 encoding. "matching" is null when the operator has no vector on one
@@ -37,6 +38,9 @@ import (
 // "many-to-many" for the set operators). A selector's "name" is the metric
 // name it is written with, "" for `{__name__=~"…"}`; "range" says it is a
 // range selector (`x[5m]`). A matcher's "type" is "=", "!=", "=~" or "!~".
+// A string's "value" is the literal as the parser reads it (escapes
+// resolved): the label `label_replace` writes, `count_values` writes into
+// (#4136).
 // A node kind this does not know is a refusal, not a hole in the tree: a
 // reader that skipped what it did not recognise would report the rule as
 // having no grouping there.
@@ -85,6 +89,7 @@ type shapeNode struct {
 	Args     *[]*shapeNode   `json:"args,omitempty"`
 	Matchers *[]shapeMatcher `json:"matchers,omitempty"`
 	Range    *bool           `json:"range,omitempty"`
+	Value    *string         `json:"value,omitempty"`
 }
 
 // shapeParm prints an aggregation's parameter as the node or null — a
@@ -222,6 +227,8 @@ func shapeOf(n parser.Expr) (*shapeNode, error) {
 		s.Kind = shapeNumber
 	case *parser.StringLiteral:
 		s.Kind = shapeString
+		v := x.Val
+		s.Value = &v
 	default:
 		return nil, fmt.Errorf("a %T node, which promql-shape does not print", n)
 	}

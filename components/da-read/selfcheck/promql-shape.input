@@ -1,1 +1,1 @@
-["sum by (tenant, instance) (rate(x_total{job=\"a\"}[5m])) > on(tenant) group_left(sev) max without(pod) (y) unless on(tenant) (z == bool 1)", "topk(3, -abs(q))", "x[5m:1m]"]
+["sum by (tenant, instance) (rate(x_total{job=\"a\"}[5m])) > on(tenant) group_left(sev) max without(pod) (y) unless on(tenant) (z == bool 1)", "topk(3, -abs(q))", "x[5m:1m]", "label_replace(x, \"ten\\u0061nt\", \"$1\", \"pod\", \"(.*)\")"]

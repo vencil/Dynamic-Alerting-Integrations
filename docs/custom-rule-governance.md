@@ -161,7 +161,7 @@ tenants:
 Tier 3 規則放置於獨立的 Prometheus Rule Group，可設定較長的 `evaluation_interval`（例如 30s 而非預設 15s），確保 Custom Rule 的效能影響被隔離，不影響 Tier 1/2 的告警時效性。
 
 ```yaml
-# rule-packs/custom/tenant-specific.yaml（此目錄於首個 Tier 3 Rule 提交時建立）
+# rule-packs/custom/db-a/special-tablespace.yaml（目錄名 db-a 就是這份規則所屬的租戶；目錄於首個 Tier 3 Rule 提交時建立）
 groups:
   - name: custom_tenant_rules
     interval: 30s   # 獨立 evaluation interval
@@ -170,6 +170,7 @@ groups:
         expr: |
           custom_tablespace_usage{tenant="db-a", tablespace="SPECIAL_APP"} > 95
         labels:
+          tenant: "db-a"
           tier: "custom"
           owner: "team-db-a"
           expiry: "2026-06-30"
@@ -259,13 +260,34 @@ lint 工具的內建政策**就是**下面這份檔（`.github/custom-rule-polic
 >
 > ⚠️ 判定不到的事：上述以外的原始指標一律當作帶 tenant（租戶 exporter 經 tenant-exporters job 抓取時都會帶）；
 > 平台元件自己吐的指標（threshold-exporter、tenant-api、Vector 等）帶不帶 tenant 依指標而定，同樣當作帶。
-> 規則能不能讀到別的租戶的 series（`x{tenant=~".*"}`）也不在此檢查。只依 Prometheus 的語意判定，vmalert 的行為沒有另外驗證。
+> 只依 Prometheus 的語意判定，vmalert 的行為沒有另外驗證。
 > 名稱不含冒號、又不在可追範圍內的 recording rule，會被當成原始指標（Prometheus 不強制 record 名稱帶冒號）：
 > 規則讀自己寫的 record 時，把定義它的檔一起列進路徑。
 >
 > 舊鍵 `denied_patterns` 已移除（breaking）：它比對文字，`=~'.*'`、`without(tenant, b)` 就繞過了。
 > 其中 `=~".*"` 選到的 series 和拿掉這個 matcher 完全相同（比對空字串的 matcher 也會選到沒有該 label 的 series），
 > 所以那一條什麼也沒擋。政策檔還寫著它時結束碼 `2`，訊息指向 `preserved_labels`。
+
+> **租戶的規則檔只讀、只寫自己的租戶**（[#4136](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4136)）：掃描路徑下的規則檔放在 `<掃描目錄>/<租戶>/`，
+> 目錄名就是這份規則所屬的租戶（直接把檔案當路徑傳入時，取它所在的目錄名）；直接放在掃描目錄底下，
+> 或目錄名不是合法的租戶 id，都是 ERROR。政策鍵 `isolated_label` 指名要隔離的 label（內建是 `tenant`），
+> 以下都是 ERROR：
+>
+> - selector 沒有以等號寫 `tenant="<租戶>"`（alert 與 recording rule 都算）。正規式（連 `=~"db-a"` 也算）、
+>   不等式、沒寫 matcher 都會讀到每個租戶的 series；寫成別的租戶就是讀別人的。KSM 這類只有 namespace
+>   的指標寫 `namespace="<租戶>", tenant=""`（只寫 namespace 時，同時帶兩個 label 而值不同的 series 也會被選到）。
+>   讀 pack 的 record 也要寫，例如 `tenant:mysql_up:max{tenant="db-a"}`。
+> - alert、recording rule 與 group 的 `labels:` 把 `tenant`（或 `namespace`）寫成該租戶以外的值。alert 可以寫該租戶，
+>   或照抄 series 的 `{{ $labels.tenant }}`；recording rule 的 labels 不展開模板（Prometheus 照字面寫入），只能寫該租戶。
+> - 從別處寫入 `tenant` 或 `namespace`：`label_replace`／`label_join` 寫入、`count_values("tenant", …)`、
+>   `group_left(tenant)`／`group_right(tenant)`。寫入 `namespace` 也算，因為別的租戶以 `namespace="<租戶>", tenant=""` 讀它。
+>
+> recording rule 的結果不帶 tenant 時是 WARN：釘住租戶的引用選不到任何 series，讀它的 alert 永遠不會響。
+> 跨租戶的規則不收：依 §2.3，Tier 3 是單一租戶的例外，跨租戶的需求應升級成 Tier 2。`--rule-pack-dir`
+> 讀的是平台出貨的 rule pack（每個租戶都讀），不做這項判定。
+>
+> ⚠️ 這支 lint 是防失誤，不是安全邊界：租戶 repo 的 CI 由客戶自己控制，可以拿掉這一步。要在 Prometheus
+> 端強制，得在規則載入時替每個 selector 注入 tenant matcher（prom-label-proxy 的做法），本平台目前沒有。
 
 > **豁免不是跳過（四層護欄）**：(1) `path` 錨在掃描樹頂層（精確路徑、非
 > suffix），巢狀 `rule-packs/*/rule-packs/<file>` 不取得豁免；(2) 須帶

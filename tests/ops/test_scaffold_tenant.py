@@ -33,20 +33,18 @@ import pytest
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832: read from the Go table)
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scaffold_tenant import (
     CONFD_DIR,
     relabel_snippet_name,
     build_receiver_from_args,
-    counterexample_for_key,
     counterexample_prompt_lines,
     prompt_value,
     generate_defaults,
     generate_tenant,
     generate_report,
     generate_relabel_snippet,
-    is_shipped_optional_key,
     print_catalog,
     run_non_interactive,
     run_from_onboard,
@@ -57,12 +55,9 @@ from scaffold_tenant import (
     SATURATION_CRITICAL_COMMENT,
 )
 from _registry_lib import (  # noqa: E402
-    counterexample_observed as registry_counterexample_observed,
+    is_shipped_optional_key,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-# Imported, never restated: the renderer owns the wording, the gates only
-# reference it (CodeRabbit, #1344 — three files had hand-copied a fragment).
-from _registry_lib import COUNTEREXAMPLE_MARK as _CE_MARK  # noqa: E402
 
 
 # ============================================================
@@ -121,84 +116,15 @@ class TestGenerateDefaults:
     @pytest.mark.parametrize("dbs", [["kubernetes", "postgresql"], ["kubernetes", "redis"],
                                      ["kubernetes", "elasticsearch", "oracle", "rabbitmq"],
                                      list(RULE_PACKS)])
-    def test_writes_every_selected_value_but_the_built_in_ones(self, dbs):
-        """#3832 決策 7：所選 pack 的平台值，扣掉讀取端內建的鍵（照寫會釘住
-        當天的數字）；`operator` 鍵照寫。內建鍵集合取自 Go 的內建表，不經
-        產生器讀的那份生成模組。"""
-        want = {k: info["value"] for db in dbs
-                for k, info in RULE_PACKS.get(db, {}).get("defaults", {}).items()
-                if k not in BUILTIN_DEFAULTS}
-        assert generate_defaults(dbs).get("defaults", {}) == want
-        assert not set(generate_defaults(dbs).get("defaults", {})) & set(BUILTIN_DEFAULTS)
+    def test_writes_no_threshold_key(self, dbs):
+        """#3924：登錄表的鍵都內建在讀取端（平台值或 off），根檔一個閾值鍵都
+        不寫——沒有 `defaults:`、沒有 `optional_overrides:`，不論選哪些 pack。"""
+        result = generate_defaults(dbs)
+        assert "defaults" not in result and "optional_overrides" not in result, result
 
     def test_unknown_db_ignored(self):
         """未知的 DB 類型不造成錯誤。"""
         assert generate_defaults(["kubernetes", "nonexistent_db"]) == generate_defaults(["kubernetes"])
-
-
-# ============================================================
-# generate_defaults — 宣告 key 清單（#1310）
-# ============================================================
-class TestGenerateDefaultsDeclaredList:
-    """⛔ 這一格是 tenant-api 寫入路徑唯一讀得到的宣告來源。
-
-    threshold-exporter 讀 chart 渲染出來的 ConfigMap，但 tenant-api 的
-    `--config-dir` 是 init container clone 下來的**客戶 GitOps repo**
-    （`helm/tenant-api/templates/deployment.yaml`），而
-    `config.mergeTenantConfig` 從那個目錄的 `_defaults.yaml` 讀
-    `OptionalOverrides`。只出貨 chart 那一份，租戶透過 Portal / Tenant API 設這
-    些 key 仍會被 `ValidateTenantKeys` 判 unknown → HTTP 400——`merge_tenant.go`
-    的註解在事情發生前就逐字預言過這個失效模式。
-    """
-
-    def test_selected_pack_declares_its_flat_optional_keys(self):
-        result = generate_defaults(["kubernetes", "oracle"])
-        assert result["optional_overrides"] == [
-            "oracle_wait_time_rate", "oracle_hard_parse_time_percent",
-            "oracle_pga_usage_percent",
-        ]
-
-    def test_declared_keys_carry_no_value(self):
-        """是 list 不是 map：給了值就等於對每個租戶武裝一個平台選的數字，
-        正好是這一格語意的反面（platform-defaults.schema.json: array of string）。"""
-        result = generate_defaults(["kubernetes", "db2"])
-        assert isinstance(result["optional_overrides"], list)
-        assert all(isinstance(k, str) for k in result["optional_overrides"])
-        # ...而且不得同時混進 defaults（那才是「主張值」）
-        for key in result["optional_overrides"]:
-            assert key not in result["defaults"]
-
-    def test_no_critical_key_is_ever_declared(self):
-        """#1311：`<base>_critical` 走 resolveCriticalRows 讀 defaults[base]，
-        放進宣告清單只會是一格裝飾。"""
-        result = generate_defaults(list(RULE_PACKS.keys()))
-        assert not [k for k in result["optional_overrides"]
-                    if k.endswith("_critical")]
-
-    def test_unselected_pack_contributes_nothing(self):
-        """只選 postgresql（optional tier 全是 `_critical`）⇒ 整格不出現，
-        而不是出現一個空 list（空 list 讀起來像意外）。"""
-        result = generate_defaults(["kubernetes", "postgresql"])
-        assert "optional_overrides" not in result
-
-    def test_supply_face_is_untouched(self):
-        """可達性 gate 的供給面只讀 `defaults`；新增 sibling key 不得改變它。"""
-        db_packs = [k for k in RULE_PACKS if k != "kubernetes"]
-        # 42 → 39：#3783 移除 kafka_active_controllers / kafka_request_rate；#3778 把
-        # mysql_threads_running 移到宣告層（optional_overrides）。
-        # 39 → 40：#1320 oracle_process_usage_percent 預設出貨。
-        # 40 → 28：#3832 決策 7 內建鍵不再寫進根檔（扣掉 12 個內建鍵）。
-        assert len(generate_defaults(db_packs)["defaults"]) == 28
-
-    def test_derivation_is_the_shared_predicate_not_a_fourth_copy(self):
-        """清單內容必須逐字等於 chart 那一份的同 pack 子集——同一個 predicate、
-        同一個走訪順序。手抄第四份正是 #1189 的病灶。"""
-        import _registry_lib
-
-        db_packs = [k for k in RULE_PACKS if k != "kubernetes"]
-        generated = generate_defaults(db_packs)["optional_overrides"]
-        assert generated == _registry_lib.optional_override_list_keys(
-            _registry_lib.build_registry_doc())
 
 
 # ============================================================
@@ -398,17 +324,10 @@ class TestRulePacksIntegrity:
 class TestGenerateDefaultsAdvanced:
     """generate_defaults() 進階場景。"""
 
-    def test_multiple_db_packs_merged(self):
-        """多 DB pack 的非內建值全部合併。"""
-        d = generate_defaults(["kubernetes", "redis", "mongodb"])["defaults"]
-        assert "redis_connected_clients" in d   # redis
-        assert "mongodb_replication_lag" in d   # mongodb
-
-    def test_defaults_values_are_numeric(self):
-        """所有 defaults 值為數值型別。"""
+    def test_sections_are_dimensions_and_state_filters_only(self):
+        """#3924：只剩 `dimensions:`（#3475）與 `state_filters:`。"""
         result = generate_defaults(list(RULE_PACKS.keys()))
-        for key, val in result["defaults"].items():
-            assert isinstance(val, (int, float)), f"defaults['{key}'] = {val!r} 非數值"
+        assert set(result) <= {"dimensions", "state_filters"}, set(result)
 
 
 # ============================================================
@@ -898,8 +817,8 @@ class TestRunFromOnboard:
 
     def test_one_defaults_file_holds_every_tenants_packs(self):
         """⛔ 迴歸（#3206 10c-3）：每個租戶各算一份 `_defaults.yaml`、寫到同一個
-        路徑，最後一個贏——db-a 選的 mariadb 的 defaults 與 db-b 選的 oracle
-        的宣告 key 只會剩一邊。現在是所有租戶的 pack 取聯集、只寫一份。"""
+        路徑，最後一個贏。現在只寫一份（所有租戶的 pack 取聯集）；#3924 起它
+        不寫閾值鍵，兩個租戶檔都在。"""
         with tempfile.TemporaryDirectory() as d:
             hints = {
                 "tenants": ["db-a", "db-b"],
@@ -916,19 +835,10 @@ class TestRunFromOnboard:
                 db_a = f.read()
             with open(os.path.join(d, CONFD_DIR, "db-b.yaml"), encoding="utf-8") as f:
                 db_b = f.read()
-        # Both tenants' packs, minus the built-in keys (#3832 decision 7).
-        assert written.get("defaults", {}) == {
-            k: info["value"] for db in ("mariadb", "oracle")
-            for k, info in RULE_PACKS[db]["defaults"].items() if k not in BUILTIN_DEFAULTS}
-        assert "oracle_sessions_active" in written["defaults"]
-        oracle_declared = generate_defaults(["kubernetes", "oracle"])["optional_overrides"]
-        mariadb_declared = generate_defaults(["kubernetes", "mariadb"])["optional_overrides"]
-        assert mariadb_declared == ["mysql_threads_running"]  # #3778
-        assert written["optional_overrides"] == mariadb_declared + oracle_declared
-        # Each tenant file lists its OWN packs' declared keys (all in the file
-        # above): db-a chose mariadb, db-b oracle.
-        assert [k for k, _ in _stub_key_lines(db_b)] == oracle_declared
-        assert [k for k, _ in _stub_key_lines(db_a)] == mariadb_declared
+        # #3924: one file for every tenant, and no threshold key in it (each
+        # is built into the readers) — so neither tenant's packs can be lost.
+        assert "defaults" not in written and "optional_overrides" not in written, written
+        assert "db-a" in db_a and "db-b" in db_b
 
     def test_a_tenant_named_twice_is_scaffolded_once(self):
         """迴歸（#3206 10c-3）：hints 的 tenants 重複時，舊版 rc 0（同一檔寫兩次），
@@ -1131,7 +1041,6 @@ class TestSaturationWriteOutputs:
             with open(os.path.join(tmpdir, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
                 content = f.read()
             assert SATURATION_CRITICAL_COMMENT not in content
-
 
 
 class TestSaturationGenerateReport:
@@ -1344,18 +1253,17 @@ class TestGenerateTenantInteractiveMetrics:
     """互動 metric 覆寫 prompt（每個 metric 一個 input，順序 = pack 定義序）。"""
 
     def test_value_variants_empty_disable_skip(self):
-        """空白→預設值字串保留、'disable'→保留、'skip'→省略。"""
+        """空白→沿用平台值（不寫，#3924）、'disable'→保留、'skip'→省略。"""
         # kubernetes defaults 序：container_cpu(80), container_cpu_throttle(25),
-        # container_memory(85)。
+        # container_memory(85)——三個都是平台內建值。
         res = _gen_tenant_interactive("db-c", ["kubernetes"], [
-            "",         # container_cpu → str(80)
+            "",         # container_cpu → 沿用平台值，不寫
             "disable",  # container_cpu_throttle → "disable"（保留）
             "skip",     # container_memory → None（省略）
             "skip", "skip", "skip",   # k8s optional_overrides(3: container_cpu_critical, container_cpu_throttle_critical, container_memory_critical)
             _NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
         ])
         assert res == {"tenants": {"db-c": {
-            "container_cpu": "80",
             "container_cpu_throttle": "disable",
         }}}
 
@@ -1376,15 +1284,17 @@ class TestGenerateTenantInteractiveMetrics:
         """defaults 問完才問 optional_overrides（mariadb 的 _critical tiers）。"""
         # 次序：k8s defaults(3) → k8s optional_overrides(3: container_*_critical)
         #       → mariadb defaults(2: mysql_connection_usage_percent, mysql_replication_lag)
-        #       → mariadb optional_overrides(3: mysql_threads_running（宣告平鍵，#3778）,
-        #         mysql_connection_usage_percent_critical, mysql_replication_lag_critical)。
-        #       mysql_threads_running_critical 不問：它的 base 不在 defaults，寫了也送不出。
+        #       → mariadb optional_overrides(4: mysql_threads_running,
+        #         mysql_connection_usage_percent_critical, mysql_threads_running_critical,
+        #         mysql_replication_lag_critical)。#3924：每個 base 都內建（平台值或
+        #       off），所以 mysql_threads_running_critical 也問。
         res = _gen_tenant_interactive("db-c", ["kubernetes", "mariadb"], [
             "skip", "skip", "skip",   # k8s 3 defaults
             "skip", "skip", "skip",   # k8s 3 optional_overrides (container_*_critical)
             "skip", "skip",           # mariadb 2 defaults
             "skip",                   # mysql_threads_running → 省略
             "100",                    # mysql_connection_usage_percent_critical → 保留
+            "skip",                   # mysql_threads_running_critical → 省略
             "skip",                   # mysql_replication_lag_critical → 省略
             _NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
         ])
@@ -1613,7 +1523,7 @@ class TestGenerateTenantInteractiveOrder:
         # 次序：metric → 維護 → 靜音 → dedup → 路由
         res = _gen_tenant_interactive("db-c", ["kubernetes"], [
             "75",        # container_cpu
-            "",          # container_cpu_throttle → "25"
+            "",          # container_cpu_throttle → 沿用平台值，不寫（#3924）
             "skip",      # container_memory → 省略
             "skip", "skip", "skip",   # k8s optional_overrides(3: container_cpu_critical, container_cpu_throttle_critical, container_memory_critical)
             "y", "2026-06-01T00:00:00Z", "",   # 維護 enable+expires,noreason
@@ -1623,7 +1533,6 @@ class TestGenerateTenantInteractiveOrder:
         ])
         assert res == {"tenants": {"db-c": {
             "container_cpu": "75",
-            "container_cpu_throttle": "25",
             "_state_maintenance": {"target": "enable", "expires": "2026-06-01T00:00:00Z"},
             "_silent_mode": "warning",
             "_severity_dedup": "disable",
@@ -1635,24 +1544,15 @@ class TestGenerateTenantInteractiveOrder:
         }}}
 
 
-# ============================================================
-# #1310 — Enter 預設在三種 key 上的差別待遇
-# ============================================================
-class TestPromptDefaultsSplitByKeyClass:
-    """互動 prompt 的 Enter 預設，只有**平鍵**被拿掉（#1310 / #1311）。
+class TestPromptEnterWritesNothing:
+    """互動 prompt 按 Enter 一律不寫值（#3924）。
 
-    ⛔ 這是本次接線引入的 regression 的擋板，不是美化：在 `optional_overrides:`
-    清單出貨**之前**，租戶按 Enter 寫下的 `oracle_process_count: 300`
-    會被 `ValidateTenantKeys` 當 unknown key 擋掉，所以那個鍵盤動作是無害的。
-    清單一旦出貨，同一個 Enter 就真的武裝一條閾值——而 ADR-030 的盲寫參考庫
-    對這幾個數字有實測反例（備份批次 560 支 process 誤觸建議值 300）。
-
-    另外兩類**不得**受影響：
-      * `defaults` tier —— 平台本來就對每個租戶主張這個值；
-      * `<base>_critical` —— 走 `resolveCriticalRows`，base 在 `defaults:` 裡
-        有值，所以那個數字是平台真的持有的立場，可以按 Enter 採用。
-
-    prompt 本身在三類上都保留：它是租戶唯一會被告知這些 key 存在的地方。
+    登錄表的鍵都內建在讀取端：平台出貨即啟用的鍵省略就是平台值，所以 Enter
+    沿用平台值、不寫；其餘的鍵（operator 鍵、每一個 `<base>_critical`）沒有
+    平台值，Enter 跳過——把登錄表的參考數字預設寫進租戶檔，等於替客戶武裝一個
+    它沒校準過的數字（ADR-030 的盲寫參考庫對其中幾個有實測反例）。數字仍顯示，
+    因為那是操作者唯一的起點；prompt 在每一類鍵上都保留，它是租戶唯一會被告知
+    這些 key 存在的地方。
     """
 
     _NEUTRAL_TAIL = [_NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP,
@@ -1671,378 +1571,43 @@ class TestPromptDefaultsSplitByKeyClass:
             res = generate_tenant("db-c", selected_dbs, interactive=True)
         return seen, res["tenants"]["db-c"]
 
-    def test_flat_optional_key_empty_input_writes_nothing(self):
-        """oracle：3 個 defaults 全部按 Enter 保留，3 個平鍵一個都不落地；
-        2 個 `_critical`（#3658）照 `_critical` 那一類的規矩，Enter 採用平台值。"""
-        res = _gen_tenant_interactive("db-c", ["oracle"], [
-            "", "", "",          # defaults: sessions_active / tablespace / process_usage（#1320）
-            "", "", "",          # 平鍵 ×3 —— 留空即跳過
-            "", "",              # _critical ×2 —— Enter 仍採用平台值
-            *self._NEUTRAL_TAIL,
-        ])
-        assert res == {"tenants": {"db-c": {
-            "oracle_sessions_active": "200",
-            "oracle_tablespace_used_percent": "85",
-            "oracle_process_usage_percent": "85",
-            "oracle_sessions_active_critical": "280",
-            "oracle_tablespace_used_percent_critical": "95",
-        }}}
+    @pytest.mark.parametrize("dbs", [["oracle"], ["postgresql"], ["postgresql", "oracle"]])
+    def test_all_empty_input_writes_no_threshold(self, dbs):
+        prompts, overrides = self._prompts_for(dbs)
+        assert not [k for k in overrides if not k.startswith("_")], overrides
+        keys = {k for db in dbs for tier in ("defaults", "optional_overrides")
+                for k in RULE_PACKS[db].get(tier, {})}
+        for key in keys:  # every key is still asked
+            assert [p for p in prompts if p.strip().startswith(f"{key} [")], key
 
-    def test_flat_optional_key_typed_value_is_still_honoured(self):
+    def test_a_typed_value_is_written(self):
         """拿掉的是**預設**、不是這一格：租戶真的填了就照樣寫進去。"""
-        res = _gen_tenant_interactive("db-c", ["oracle"], [
-            "", "", "",
-            "60", "", "",             # wait_time_rate 填 / hard_parse_time、pga_usage 跳過
-            "", "",                   # _critical ×2 —— Enter 採用平台值
-            *self._NEUTRAL_TAIL,
-        ])
-        assert res == {"tenants": {"db-c": {
-            "oracle_sessions_active": "200",
-            "oracle_tablespace_used_percent": "85",
-            "oracle_process_usage_percent": "85",
-            "oracle_wait_time_rate": "60",
-            "oracle_sessions_active_critical": "280",
-            "oracle_tablespace_used_percent_critical": "95",
-        }}}
+        answers = iter(["70"])
 
-    def test_critical_optional_key_keeps_its_enter_default(self):
-        """postgresql 的 optional tier 全是 `_critical`：行為必須逐字不變。"""
-        res = _gen_tenant_interactive("db-c", ["postgresql"], [
-            "", "",              # defaults
-            "", "",              # _critical ×2 —— Enter 仍採用平台值
-            *self._NEUTRAL_TAIL,
-        ])
-        assert res == {"tenants": {"db-c": {
-            "pg_connections": "80",
-            "pg_replication_lag": "30",
-            "pg_connections_critical": "90",
-            "pg_replication_lag_critical": "60",
-        }}}
+        def _fake_input(prompt=""):
+            if prompt.strip().startswith("oracle_wait_time_rate ["):
+                return next(answers)
+            return ""
 
-    def test_mixed_packs_split_on_the_shipped_list_predicate(self):
-        """同一次執行內兩類並存，判準是 `is_shipped_optional_key`，不是 pack。"""
-        prompts, overrides = self._prompts_for(["postgresql", "oracle"])
-        assert set(overrides) == {
-            "pg_connections", "pg_replication_lag",
-            "pg_connections_critical", "pg_replication_lag_critical",
-            "oracle_sessions_active", "oracle_tablespace_used_percent",
-            "oracle_process_usage_percent",
-            "oracle_sessions_active_critical",
-            "oracle_tablespace_used_percent_critical",
-        }, overrides
-        for key in ("oracle_wait_time_rate", "oracle_hard_parse_time_percent",
-                    "oracle_pga_usage_percent"):
-            assert key not in overrides
+        with mock.patch("builtins.input", _fake_input):
+            res = generate_tenant("db-c", ["oracle"], interactive=True)
+        assert res["tenants"]["db-c"].get("oracle_wait_time_rate") == "70"
 
-    def test_prompt_text_shows_the_number_as_a_reference_not_a_default(self):
-        """數字仍要看得見（它是操作者唯一的起點），但不能長得像 Enter 預設。"""
+    def test_prompt_text_per_kind_of_key(self):
+        """平台給值的鍵：寫出平台值、留空沿用；沒有平台值的鍵：數字標成參考值、留空跳過。"""
+        from _rule_packs_generated import BUILTIN_DEFAULT_KEYS
         prompts, _ = self._prompts_for(["oracle"])
-        flat = [p for p in prompts if "oracle_wait_time_rate" in p]
-        assert len(flat) == 1, prompts
-        assert "無平台預設" in flat[0] and "留空跳過" in flat[0], flat[0]
-        assert "50" in flat[0], "the reference number must still be shown"
-        assert "(50 s/s)" not in flat[0], (
-            "still rendered in the Enter-default shape: " + flat[0])
-
-        # Exact key, not substring: `oracle_sessions_active_critical` (#3658)
-        # contains this name and has its own prompt.
-        valued = [p for p in prompts
-                  if p.strip().startswith("oracle_sessions_active [")]
-        assert len(valued) == 1, prompts
-        assert "(200 count)" in valued[0], (
-            "the defaults tier prompt is a UX contract and must not change: "
-            + valued[0])
-        assert "無平台預設" not in valued[0]
-
-    def test_predicate_is_the_one_the_shipped_list_is_built_from(self):
-        """判準不得再手抄第四份：prompt 與清單生成必須是同一個函式。"""
-        import scaffold_tenant as st
-        import _registry_lib
-
-        assert st.is_shipped_optional_key is _registry_lib.is_shipped_optional_key
-
-
-# ============================================================
-# 租戶 stub 的宣告 key 區塊（#1321）
-# ============================================================
-
-# ⛔ stub 格式的期望值只有一份，與 `test_init_project.py` 共用
-#（`tests/ops/_stub_declared_shared.py`）。兩包釘的是**同一個** renderer 產出的
-# 同一段格式；各留一份手抄的結果是：格式一改、只更新其中一份，另一份會繼續綠著
-# 而其實已經不再量任何東西。
-from _stub_declared_shared import (  # noqa: E402
-    REPO_ROOT,
-    STUB_PLACEHOLDER,
-    STUB_PLACEHOLDER_VALUE,
-    paste_declared_lines_under_tenant as _paste_declared_lines_under_tenant,
-    shipped_chart_declared_keys,
-    stub_key_lines as _stub_key_lines,
-)
-
-# 參數化掉的差異：這一支生成器渲染的是中文 stub。
-_LANG = "zh"
-_STUB_PLACEHOLDER = STUB_PLACEHOLDER[_LANG]
-
-# ⚠️ 這個 `os.path.join` 刻意留在**本檔**而不是搬進共用 helper：
-# `verify_diff.build_map` 只掃 `test_*.py` 取路徑引用，搬走等於把
-# `helm/threshold-exporter/values.yaml` → 本模組這條 text_map 拿掉——chart 一改
-# 就不會再選中下面那條讀 chart 的測試。
-_SHIPPED_CHART_VALUES = os.path.join(
-    REPO_ROOT, "helm", "threshold-exporter", "values.yaml")
-
-
-def _shipped_chart_declared_keys():
-    return shipped_chart_declared_keys(_SHIPPED_CHART_VALUES)
-
-
-def _tenant_yaml_for(tmpdir, dbs, tenant="db-c", overrides=None):
-    """實跑 generate_defaults + generate_tenant + write_outputs，回傳檔案全文。
-
-    ``overrides`` 給的是「該租戶已經有自己的 key」那個形狀——非互動預設產出的是
-    `db-c: {}`（flow mapping），而 flow mapping 底下的縮排不受既有 key 約束，
-    量不出 stub 縮排漂移。
-    """
-    packs = ["kubernetes", *dbs]
-    defaults = generate_defaults(packs)
-    tenant_data = generate_tenant(tenant, packs, interactive=False)
-    if overrides:
-        tenant_data["tenants"][tenant] = dict(overrides)
-    write_outputs(tmpdir, tenant, defaults, tenant_data, "report")
-    with open(os.path.join(tmpdir, CONFD_DIR, f"{tenant}.yaml"), encoding="utf-8") as f:
-        return f.read()
-
-
-class TestTenantStubDeclaredBlock:
-    """⛔ 租戶唯一會打開的檔案是 `<tenant>.yaml`——不是 `_defaults.yaml`、不是
-    rule-pack header、也不是 Portal。宣告層要讓租戶知道，就得寫在這裡。
-
-    而原本的標頭「三態: 數值=Custom, 省略=Default」對宣告層是反的：那一格沒有值
-    可繼承，省略＝沒有值＝靜默。
-    """
-
-    def _declared(self, dbs):
-        from _registry_lib import shipped_optional_keys_for_packs
-        return shipped_optional_keys_for_packs(["kubernetes", *dbs], RULE_PACKS)
-
-    def test_header_no_longer_claims_omission_means_default_for_every_key(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(tmpdir, ["oracle"])
-        assert '# 三態: 數值=Custom, 省略=Default, "disable"=停用' not in content
-        assert "省略＝沒有值＝靜默" in content
-        assert "沒有值可繼承" in content
-
-    def test_header_also_names_the_critical_tier(self):
-        """兩類還不是完整分類：`<base>_critical` 不在宣告清單裡，卻只要 `<base>`
-        在 `defaults:` 有值就會產出一條真的 critical row。停在兩類會讀成「已窮盡」
-        而其實沒有——判準與 rule-pack header 一分為三那條相同。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(tmpdir, ["oracle"])
-        assert "第三類 <base>_critical" in content
-        assert "真的 critical 閾值" in content
-
-    def test_critical_paragraph_matches_the_sibling_defaults_file(self):
-        """⛔ 第三類敘述不能是寫死的句子——它只對**本生成器**的產物為真。
-
-        `scaffold_tenant.RULE_PACKS` 的 defaults tier 一個 `_critical` 都沒有，
-        `init_project.RULE_PACK_CATALOG` 則**曾經**直接放了 16 個進 `defaults:`；
-        同一句「兩個區塊都不列」對當時的它是假的（#1218 已把那 16 個搬走，兩者
-        今天同 regime——但推導保留，寫死任一 regime 會在下次移動時靜默變假）。
-        所以這條**讀兄弟檔**（同一次 `write_outputs` 寫出去的 `_defaults.yaml`），
-        拿它推導出期望值再比對——原本那條只斷言字串存在，而一個假字串同樣會存在。
-        """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(tmpdir, ["oracle", "postgresql"])
-            with open(os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml"), encoding="utf-8") as f:
-                sibling = yaml.safe_load(f)
-        defaults = sibling["defaults"]
-        crit = [k for k in defaults if k.endswith("_critical")]
-        assert not crit, (
-            "fixture 假設變了：這一支本來是 defaults tier 不含 _critical 的那個"
-            "生成器；若真的要改，header 也必須跟著改（這正是本條在守的東西）")
-
-        from _registry_lib import render_tenant_critical_note_lines
-        expected = "\n".join(
-            render_tenant_critical_note_lines(defaults, lang="zh"))
-        assert expected in content
-
-        # 另加一條不經過 renderer 的斷言：header 的用詞必須與產物一致。
-        header = content.split("\ntenants:")[0]
-        assert ("一個都沒有列" in header) == (not crit)
-
-    def test_block_members_equal_the_derived_set(self):
-        """⛔ 這條釘的是**接線**、不是推導——名字讀起來像後者，所以明寫。
-
-        等號右邊是 `shipped_optional_keys_for_packs`，而生成器呼叫的正是同一支：
-        推導壞掉時兩邊會一起動，這條照樣綠（實測：推導反轉與 pack 過濾失效都不會
-        點亮它，是本 class 其他測試抓到的）。它真正擋得住的是整段消失、少一個 key、
-        或同一個 key 出現兩次——值得釘，因為租戶被告知可以把這段當成「我這些 pack
-        的完整清單」，而「集合相等（非子字串）」正是讓這句話讀得下去的前提。
-
-        最後一條斷言的來源是獨立的：列出的每個 key 都必須出現在**出貨的** chart
-        values 上，讀產物而非重算（與可達性 gate 同一條紀律），它不會跟著生成器動。
-        """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(tmpdir, ["oracle", "db2", "clickhouse"])
-        listed = [k for k, _rhs in _stub_key_lines(content)]
-        assert set(listed) == set(self._declared(["oracle", "db2", "clickhouse"]))
-        assert len(listed) == len(set(listed)), "重複的 key 行"
-        assert set(listed) <= _shipped_chart_declared_keys(), (
-            "stub 列出了出貨 chart 沒有宣告的 key——租戶照著填會被唯一受支援的"
-            "寫入者判 unknown key（400）")
-
-    def test_block_is_filtered_by_the_selected_packs(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(tmpdir, ["oracle"])
-        listed = {k for k, _ in _stub_key_lines(content)}
-        assert listed == set(self._declared(["oracle"]))
-        assert not [k for k in listed if k.startswith("db2_")]
-
-    def test_no_declared_key_is_ever_given_a_value(self):
-        """⛔ 這條是「好心幫租戶填預設」的擋板。#1310 PR-C 才剛為此拿掉互動 prompt
-        的 Enter 預設（ADR-030 對這幾個數字有實測反例：備份批次 560 誤觸建議的
-        300、stats-gather 22GB 誤觸建議的 4GiB）；在生成物上填回去是同一個錯。"""
-        dbs = ["oracle", "db2", "clickhouse"]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(tmpdir, dbs)
-        declared = set(self._declared(dbs))
-
-        # (a) 解析後的文件裡不得出現任何宣告 key……
-        parsed = yaml.safe_load(content)
-        assert not declared & set(parsed["tenants"]["db-c"] or {})
-
-        # (b) ……key 行上也不得出現數字（即使是註解掉的）。
-        for key, rhs in _stub_key_lines(content):
-            value = rhs.split("#")[0].strip()
-            assert value == _STUB_PLACEHOLDER, f"{key} 被填了值: {rhs!r}"
-
-    def test_reference_numbers_are_labelled_as_such(self):
-        """數字仍要看得見（它是唯一的起點），但必須標成參考起點而非背書。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(tmpdir, ["oracle"])
-        assert "參考起點 50 s/s" in content
-        assert "非背書" in content
-
-    def test_pack_without_declared_keys_gets_no_block(self):
-        """只選 postgresql（optional tier 全是 `_critical`）⇒ 整段不出現。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(tmpdir, ["postgresql"])
-        assert not _stub_key_lines(content)
-        assert "平台已宣告、但不主張值的 key" not in content
-
-    def test_stub_is_still_valid_yaml_and_block_is_all_comments(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(tmpdir, ["oracle", "db2"])
-        parsed = yaml.safe_load(content)
-        assert set(parsed) == {"tenants"}
-        lines = content.split("\n")
-        start = next(i for i, l in enumerate(lines)
-                     if l.startswith("# ── 平台已宣告"))
-        assert all(l.startswith("#") or not l.strip() for l in lines[start:])
-
-    def test_header_pointer_agrees_with_whether_the_block_exists(self):
-        """⛔ 標頭那句「清單見檔尾」是這裡最後一句寫死的話。
-
-        檔尾那一段只在宣告清單非空時才附上，而**多數** pack 的 optional tier 全是
-        `_critical`（實測 postgresql / mariadb / redis / mongodb / elasticsearch /
-        kafka / rabbitmq / jvm / nginx / kubernetes 一律推導成 []）。只選這些
-        pack 的租戶，拿到的標頭會指向一個它檔案裡不存在的段落。
-
-        ⛔ 斷言寫成與產物的**等價**、而不是「片語有出現」：改成條件句（「若有宣告
-        key 則見檔尾」）同樣能通過存在性檢查，卻把生成器自己做得到的判斷丟回給
-        租戶。
-        """
-        from _registry_lib import TENANT_STUB_DECLARED_HEADING
-        heading = TENANT_STUB_DECLARED_HEADING[_LANG]
-        shapes = [
-            ["postgresql"],            # optional tier 全 _critical
-            ["mariadb"],               # 同上，第二個
-            ["oracle"],                # 有平鍵
-            ["postgresql", "oracle"],  # 混合
-        ]
-        for dbs in shapes:
-            declared = self._declared(dbs)
-            with tempfile.TemporaryDirectory() as tmpdir:
-                content = _tenant_yaml_for(tmpdir, dbs)
-            header = content.split("\ntenants:")[0]
-
-            assert (heading in content) == bool(declared), dbs
-            assert ("清單見檔尾" in header) == bool(declared), dbs
-            assert ("所以本檔沒有那一段可看" in header) == (not declared), dbs
-            if declared:
-                assert f"本次選的 pack 有 {len(declared)} 個這種 key" in header, (
-                    dbs, header)
-            # ……而指路句所承諾的那一段，就是這份清單本身。
-            assert [k for k, _ in _stub_key_lines(content)] == declared, dbs
-
-    def test_block_matches_what_the_sibling_defaults_file_declares(self):
-        """⛔ 同一次 write_outputs 寫出兩個檔。stub 列出 `_defaults.yaml` 沒宣告的
-        key，等於請租戶去踩 tenant-api 的 unknown-key 400。"""
-        dbs = ["oracle", "db2", "clickhouse"]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(tmpdir, dbs)
-            with open(os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml"), encoding="utf-8") as f:
-                declared_in_defaults = yaml.safe_load(f)["optional_overrides"]
-        assert [k for k, _ in _stub_key_lines(content)] == declared_in_defaults
-
-    def test_declared_lines_survive_the_copy_paste_the_prose_prescribes(self):
-        """⛔ stub 對租戶承諾「縮排已對齊」，而在此之前零 gate。
-
-        stub 的縮排是 `_registry_lib.render_tenant_declared_stub_lines` 的常數
-        `indent=4`，租戶 key 的縮排是這裡 `yaml.safe_dump` 產生的——兩份各自為政
-        的事實，其中一份被寫成對租戶的承諾。實測把那個常數 +4：**324 passed、零
-        測試轉紅**，而漂移後照做貼上，最常見情境（租戶已有 4-space key）會得到
-        `YAMLError: while parsing a block mapping`。
-
-        所以真的做一次往返，並且**同時**斷言「parse 得過」與「key 落在這個租戶
-        底下」：只驗 parse 不夠——縮排過深的一行可能仍是合法 YAML，只是悄悄掛進
-        前一個巢狀 mapping。
-        """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(
-                tmpdir, ["oracle", "db2"],
-                overrides={"container_cpu": "70", "container_memory": "85"})
-        keys = [k for k, _ in _stub_key_lines(content)]
-        assert keys, "沒有宣告 key 可往返"
-
-        parsed = yaml.safe_load(_paste_declared_lines_under_tenant(content, "db-c"))
-        section = parsed["tenants"]["db-c"]
-        for key in keys:
-            assert key in section, (
-                f"{key} 沒有落在該租戶底下——stub 的縮排已與生成器 dump 出來的不符")
-            assert section[key] == STUB_PLACEHOLDER_VALUE[_LANG]
-        # 租戶原本的 key 仍在原處
-        assert section["container_cpu"] == "70"
-
-    def test_declared_lines_paste_into_an_empty_tenant_as_documented(self):
-        """空租戶（`db-c: {}`）走說明裡那條前置步驟：先拆掉 ` {}` 再貼。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            content = _tenant_yaml_for(tmpdir, ["oracle"])
-        assert "db-c: {}" in content, "fixture 假設變了：非互動產出應為空 flow mapping"
-        keys = [k for k, _ in _stub_key_lines(content)]
-        parsed = yaml.safe_load(_paste_declared_lines_under_tenant(content, "db-c"))
-        assert set(keys) <= set(parsed["tenants"]["db-c"])
-
-    def test_rewriting_the_tenant_file_does_not_stack_a_second_block(self):
-        """重跑到同一個 -o 會整份取代租戶檔（#3206 10c-3：`da-guard write` 的
-        replace），檔尾那一段仍只有一份——不會疊在舊檔的那段後面。"""
-        from _registry_lib import TENANT_STUB_DECLARED_HEADING
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            first = _tenant_yaml_for(tmpdir, ["oracle"])
-            again = _tenant_yaml_for(tmpdir, ["oracle"])
-        assert first == again
-        assert again.count(TENANT_STUB_DECLARED_HEADING["zh"]) == 1
-
-    def test_cli_path_carries_the_block_end_to_end(self):
-        """接線也要釘住：run_non_interactive 這條真正的出貨路徑要有這一段。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            args = argparse.Namespace(
-                tenant="db-c", db="oracle", output_dir=tmpdir)
-            run_non_interactive(args)
-            with open(os.path.join(tmpdir, CONFD_DIR, "db-c.yaml"), encoding="utf-8") as f:
-                content = f.read()
-        assert {k for k, _ in _stub_key_lines(content)} == set(
-            self._declared(["oracle"]))
+        oracle = {k for tier in ("defaults", "optional_overrides")
+                  for k in RULE_PACKS["oracle"].get(tier, {})}
+        armed = sorted(oracle & set(BUILTIN_DEFAULT_KEYS))
+        unarmed = sorted(oracle - set(BUILTIN_DEFAULT_KEYS))
+        assert armed and unarmed
+        for key in armed:
+            (p,) = [p for p in prompts if p.strip().startswith(f"{key} [")]
+            assert "平台值" in p and "留空沿用平台值" in p, p
+        for key in unarmed:
+            (p,) = [p for p in prompts if p.strip().startswith(f"{key} [")]
+            assert "無平台值" in p and "留空跳過" in p and "參考值" in p, p
 
 
 # ============================================================
@@ -2065,80 +1630,17 @@ class TestCounterexamplePrompt:
         assert over and under and over != under
 
     def test_warning_reaches_the_defaults_tier_branch(self, capsys, monkeypatch):
-        """The regression this pins: the declared tier is NOT the only one with
-        counter-examples. Two defaults-tier keys have them too, and those take
-        the branch where the registry number IS the Enter-default — pressing
-        Enter arms a value the reference library already contradicted."""
+        """The counter-example prints for a key with no platform value too, and
+        Enter writes nothing (#3924: the registry number is a reference, never
+        the Enter-default)."""
         monkeypatch.setattr("builtins.input", lambda _="": "")
         info = {"value": 200, "unit": "count", "desc": "d",
                 "value_counterexample": dict(self._CE)}
-        got = prompt_value("oracle_sessions_active", info)   # no_platform_default=False
-        assert got == "200", "Enter still adopts the platform value here"
+        got = prompt_value("oracle_sessions_active", info)
+        assert got is None, "Enter wrote the registry number"
         out = capsys.readouterr().out
         assert "#1176" in out and "peak reaches 240" in out
 
-    def test_non_interactive_defaults_file_carries_the_warning(self):
-        """⛔ The path that never asks anyone is the one that needed this most.
-
-        `--non-interactive`, `--from-onboard` batch onboarding, and the
-        interactive run whose operator declines to customise all go
-        generate_defaults → write_outputs, writing the platform-asserted
-        numbers straight into `_defaults.yaml` with no prompt in sight. Three
-        of those numbers have measured counter-examples.
-        """
-        defaults = generate_defaults(["oracle", "db2"])
-        # The file as written (#3206 10c-3: da-guard writes it, the caveat is
-        # the comment this tool puts above the key).
-        with tempfile.TemporaryDirectory() as tmpdir:
-            write_outputs(tmpdir, "db-c", defaults, {"tenants": {"db-c": {}}}, "r")
-            with open(os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml"), encoding="utf-8") as f:
-                lines = f.read().split("\n")
-
-        marked = 0
-        for key, info in (
-            (k, i)
-            for pack in RULE_PACKS.values()
-            for k, i in (pack.get("defaults") or {}).items()
-        ):
-            if "value_counterexample" not in info or key not in defaults["defaults"]:
-                continue
-            idx = next(i for i, l in enumerate(lines)
-                       if l.strip().startswith(f"{key}:"))
-            # Adjacency over the CONTIGUOUS comment block directly above the
-            # key, not just `lines[idx - 1]`: the clause wraps at 100 columns,
-            # so for a long `observed` the line touching the key is the
-            # continuation. Still adjacency — the block must end at this key,
-            # so a caveat parked elsewhere in the file does not count.
-            block, j = [], idx - 1
-            while j >= 0 and lines[j].strip().startswith("#"):
-                block.append(lines[j])
-                j -= 1
-            head = " ".join(" ".join(reversed(block)).replace("#", " ").split())
-            assert _CE_MARK in head, f"{key} written with no caveat"
-            # ⛔ The WHOLE clause, not its last token. `observed.split()[-1]`
-            # is a one-word substring test: two keys whose clauses end in the
-            # same word (`… reaches 360 connections` / `… active connections`)
-            # could swap caveats undetected — a comparison looser than the
-            # thing it compares (blind review, #1344).
-            # The ZH clause, because this writer emits Chinese comments. Using
-            # `observed` (English) would pass only on the fallback path that
-            # `observed_zh` exists to retire (#1344).
-            observed = " ".join(registry_counterexample_observed(
-                info["value_counterexample"], "zh").split())
-            assert observed in head, f"{key} carries a caveat that is not its own"
-            marked += 1
-        assert marked >= 2, "fewer than two keys exercised — assertion is weak"
-
-        # Counter-case: a key with nothing measured must NOT gain a line, or
-        # "silent" would stop meaning "nothing measured".
-        clean = next(k for k in defaults["defaults"]
-                     if counterexample_for_key(k) is None)
-        idx = next(i for i, l in enumerate(lines)
-                   if l.strip().startswith(f"{clean}:"))
-        assert _CE_MARK not in lines[idx - 1], clean
-
-        # ...and the result is still loadable YAML (comments, not corruption).
-        assert yaml.safe_load("\n".join(lines)) == defaults
 
     def test_every_registry_counterexample_is_reachable_from_a_prompt(self):
         """Non-vacuity: each key carrying the field must live in a tier the

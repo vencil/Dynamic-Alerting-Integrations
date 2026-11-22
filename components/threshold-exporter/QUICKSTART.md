@@ -36,7 +36,7 @@ user_threshold{component="container",metric="cpu",severity="warning",tenant="db-
 user_threshold{component="container",metric="memory",severity="warning",tenant="db-a"} 85
 ```
 
-`user_threshold` 的**值就是你在 `config/conf.d/db-a.yaml` / `_defaults.yaml` 設的閾值**。改那個數字、存檔，exporter 在 `--reload-interval`（預設 30s）內 SHA-256 偵測變更並熱重載——`/metrics` 立即反映新值，**不需重啟**。
+`user_threshold` 的**值就是你在 `config/conf.d/db-a.yaml` 設的閾值，沒設的用 exporter 內建的平台值**（上例的 memory 85）。改那個數字、存檔，exporter 在 `--reload-interval`（預設 30s）內 SHA-256 偵測變更並熱重載——`/metrics` 立即反映新值，**不需重啟**。
 
 > 想看「改閾值 → 告警紅燈」的完整連動，跑整套 stack（見下方 try-local）。
 

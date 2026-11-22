@@ -21,17 +21,13 @@ import (
 // Standard input is a JSON array of expressions; stdout is
 //
 //	{"documents": [[{"selectors": [{"start", "end", "range_ms", "subqueries_ms": [...],
-//	                                "window_ms", "window",
-//	                                "matchers": [{"name", "op": "="|"!="|"=~"|"!~", "value"}, …]}, …],
+//	                                "window_ms", "window"}, …],
 //	                 "calls": [{"name", "kind": "function"|"aggregation", "start", "end"}, …],
 //	                 "problem": null or <why Prometheus cannot evaluate it>}, …]]}
 //
 // one entry per expression, in input order; start / end are byte offsets
 // into the expression's UTF-8 encoding (of the matrix selector when the
-// selector has a range, else of the selector). "matchers" are the
-// selector's label matchers as the parser holds them — the metric name as
-// a `__name__` matcher — so a check reads which series a selector can
-// select off the parse, not off its spelling (#4137, #4136). An expression Prometheus'
+// selector has a range, else of the selector). An expression Prometheus'
 // parser refuses refuses the input (rc 2, the refusal document), as in
 // promql-selectors; standard input that is not a JSON array of strings is
 // the caller's error.
@@ -97,15 +93,6 @@ type selectorWindow struct {
 	Range      string   `json:"range"`
 	Subqueries []string `json:"subqueries"`
 	Window     string   `json:"window"`
-	// Matchers are the selector's label matchers, the metric name among
-	// them as `__name__` (#4137).
-	Matchers []matcherHit `json:"matchers"`
-}
-
-type matcherHit struct {
-	Name  string `json:"name"`
-	Op    string `json:"op"`
-	Value string `json:"value"`
 }
 
 type callHit struct {
@@ -166,10 +153,6 @@ func promqlReads(e string) (exprReads, error) {
 		}
 		w := selectorWindowOf(vs, path)
 		w.Selector = spelling[vs]
-		w.Matchers = make([]matcherHit, 0, len(vs.LabelMatchers))
-		for _, m := range vs.LabelMatchers {
-			w.Matchers = append(w.Matchers, matcherHit{m.Name, m.Type.String(), m.Value})
-		}
 		r.Selectors = append(r.Selectors, w)
 		return nil
 	})

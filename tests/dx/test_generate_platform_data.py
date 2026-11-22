@@ -156,10 +156,10 @@ class TestHappyPath:
 class TestDeclaredKeys:
     """`declaredKeys` — 平台認得但不主張值的那一格，portal 側的資料源（#1321）。
 
-    ⛔ 這裡刻意不重算成員，而是拿 `_registry_lib.shipped_optional_keys_for_packs`
-    當斷言來源——那正是 generator 呼叫的同一支，也是兩個 onboarding 生成器與出貨
-    `optional_overrides:` 清單用的同一支。若哪天有人在 generator 裡另寫一套判準，
-    集合相等就會斷。
+    ⛔ 這裡刻意不重算成員，而是拿 `_registry_lib.is_shipped_optional_key` 當
+    斷言來源——generator 用的是同一支判準。若哪天有人在 generator 裡另寫一套，
+    集合相等就會斷。（#3924 起生成器與出貨清單都不再列這些鍵；這一格只剩 portal
+    在讀，連同 tier 欄位一起留給 #4195。）
     """
 
     @staticmethod
@@ -168,11 +168,12 @@ class TestDeclaredKeys:
         if ops not in sys.path:
             sys.path.insert(0, ops)
         import scaffold_tenant  # noqa: PLC0415
-        from _registry_lib import shipped_optional_keys_for_packs  # noqa: PLC0415
+        from _registry_lib import is_shipped_optional_key  # noqa: PLC0415
 
         out = {}
-        for pack in scaffold_tenant.RULE_PACKS:
-            keys = shipped_optional_keys_for_packs([pack])
+        for pack, spec in scaffold_tenant.RULE_PACKS.items():
+            keys = [k for k in spec.get("optional_overrides") or {}
+                    if is_shipped_optional_key(k)]
             if keys:
                 out[pack] = set(keys)
         return out
