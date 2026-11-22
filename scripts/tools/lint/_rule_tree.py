@@ -54,27 +54,28 @@ if _TOOLS_DIR not in sys.path:
 import _lib_consumer_read  # noqa: E402
 
 
-def _find_repo_root() -> str:
-    """Walk up to the directory that holds `.git`, with a legible failure.
-
-    ⛔ Not `parents[3]`. That hard-codes "four levels below the root", which is
-    true here and false the moment this file is copied somewhere flatter — and
-    a sibling in this very directory (`check_rulepack_sync.py`) is already
-    copied into a flat `core/lint/` by components/recipe-preview/Dockerfile.
-    The failure mode of the index form is `IndexError: 3` at import time, with
-    nothing saying what went wrong.
-    """
-    here = Path(__file__).resolve()
-    for candidate in here.parents:
-        if (candidate / ".git").exists():
-            return str(candidate)
-    raise RuntimeError(
-        f"cannot locate the repository root above {here} — this module reads "
-        "the shipped rule tree with `git ls-files` and has nothing to read "
-        "without one. If it is being used outside a checkout, that is the bug.")
+# The tree whose rules this module reads — resolved on first use, not at
+# import (#2852). `_rule_tripwire` imports only the pure `_decode_manifest` and
+# must not need git for that; and a module-level lookup turns "this copy is
+# vendored into another repo" into an import-time crash of every importer.
+# Tests may set `_REPO_ROOT` to point the readers at a fixture tree.
+#
+# ⛔ Not `parents[3]` (a flat copy — recipe-preview's `core/lint/` — has no
+# fourth parent) and not "the nearest `.git` above this file": a copy
+# vendored into another repository finds the OUTER repo's `.git` and runs
+# `git ls-files` over someone else's tree. `require_git_project_root` takes
+# the tree this file sits in and checks that git agrees, or exits 2.
+_REPO_ROOT: "str | None" = None
 
 
-_REPO_ROOT = _find_repo_root()
+def _repo_root() -> str:
+    """This tree's root, resolved once on first use (see `_REPO_ROOT`)."""
+    global _REPO_ROOT
+    if _REPO_ROOT is None:
+        from _lib_compat import require_git_project_root  # noqa: PLC0415
+        _REPO_ROOT = str(require_git_project_root(Path(__file__).resolve().parent))
+    return _REPO_ROOT
+
 
 # Only used for HUMAN-READABLE messages (the contract tests name where the
 # platform rules deploy). It has no in-module caller by design: which files are
@@ -152,7 +153,7 @@ def _decode_manifest(raw: bytes) -> "tuple[str | None, str]":
 def _read_manifest(rel: str) -> "tuple[str | None, str]":
     """`_decode_manifest` for a repo-relative path; (None, "unreadable") on OSError."""
     try:
-        raw = (Path(_REPO_ROOT) / rel).read_bytes()
+        raw = (Path(_repo_root()) / rel).read_bytes()
     except OSError:
         return None, "unreadable"
     return _decode_manifest(raw)
@@ -183,7 +184,7 @@ def _generated_pack_names() -> frozenset:
     claims to be the source of.
     """
     packs = _lib_consumer_read.rule_pack_files(
-        Path(_REPO_ROOT, _lib_consumer_read.RULE_PACKS.directory))
+        Path(_repo_root(), _lib_consumer_read.RULE_PACKS.directory))
     names = set()
     # The packs as Prometheus' rule loader reads them, in one da-read run; a
     # pack the loader refuses is not a pack (it is the sentinel's business).
@@ -446,9 +447,9 @@ def _expected_rule_files() -> frozenset:
 
 
 def _declared_rule_files() -> "list[str]":
-    """`_lib_consumer_read.repo_rule_files` under `_REPO_ROOT`, as
+    """`_lib_consumer_read.repo_rule_files` under `_repo_root()`, as
     repo-relative POSIX paths, in declaration order."""
-    root = Path(_REPO_ROOT)
+    root = Path(_repo_root())
     return [p.relative_to(root).as_posix()
             for p in _lib_consumer_read.repo_rule_files(root)]
 
@@ -474,7 +475,7 @@ def _tracked_yaml_paths():
     # turns it into a different name that opens nothing. Same policy as
     # _lint_helpers.diff_changed_paths.
     out = subprocess.run(
-        ["git", "-C", _REPO_ROOT, "ls-files", "-z"],
+        ["git", "-C", _repo_root(), "ls-files", "-z"],
         capture_output=True, text=True, encoding="utf-8", errors="surrogateescape",
         timeout=60, check=True).stdout
     paths = sorted(p for p in out.split("\0") if p
@@ -488,7 +489,7 @@ def _tracked_yaml_paths():
         # fails makes the coverage tripwire pass by examining nothing.
         # `raise`, not `assert`: `python -O` strips the latter.
         raise AssertionError(
-            f"no tracked YAML under {_SHIPPED_ROOTS} in {_REPO_ROOT} — either "
+            f"no tracked YAML under {_SHIPPED_ROOTS} in {_repo_root()} — either "
             "the repo layout moved or `git ls-files` failed; an empty scan "
             "satisfies every contract that reads it")
     return paths
@@ -557,8 +558,8 @@ def _iter_rule_containers():
     does being a copy of a declared platform pack — see
     _is_platform_cm_location.
     """
-    yield from _containers_of(_REPO_ROOT, _declared_rule_files())
-    for rf in _lib_consumer_read.chart_values_rule_files(_REPO_ROOT):
+    yield from _containers_of(_repo_root(), _declared_rule_files())
+    for rf in _lib_consumer_read.chart_values_rule_files(_repo_root()):
         yield f"{rf.manifest}:{rf.key}", _rule_doc(rf), None
 
 

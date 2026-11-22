@@ -148,7 +148,8 @@ jobs:
           import re
           import sys
 
-          import yaml
+          sys.path.insert(0, "scripts/tools")  # #4111: the one YAML reading
+          from _lib_yaml_strict import strict_safe_load  # noqa: E402
 
           changed_path, record_path = sys.argv[1], sys.argv[2]
           with open(changed_path, encoding="utf-8") as fh:
@@ -156,7 +157,7 @@ jobs:
 
           APP = "components/threshold-exporter/app/"
           with open(".github/bench-reference.yaml", encoding="utf-8") as fh:
-              closure = (yaml.safe_load(fh) or {}).get("workload_closure") or {}
+              closure = (strict_safe_load(fh) or {}).get("workload_closure") or {}
           glob, helpers = closure.get("derived_glob"), closure.get("helpers")
           if (not isinstance(glob, str) or not glob.strip()
                   or not isinstance(helpers, list) or not helpers
@@ -166,7 +167,7 @@ jobs:
                        "cannot tell which files define the workload")
 
           with open(".github/workflows/bench-gate-pr.yaml", encoding="utf-8") as fh:
-              gate = yaml.safe_load(fh)
+              gate = strict_safe_load(fh)
           on = gate.get("on", gate.get(True)) or {}
           patterns = ((on.get("pull_request") or {}).get("paths")) or []
           if not patterns:
