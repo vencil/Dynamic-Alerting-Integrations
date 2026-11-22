@@ -67,7 +67,10 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from sync_schema import RegistryError, locate, members  # noqa: E402
+# #3981: sync_schema's reader and writer of generated targets — the output
+# entries from `_lib_output`, which does not load `_lib_constants` (a target).
+from sync_schema import (  # noqa: E402
+    RegistryError, locate, members, read_target, write_targets)
 
 CONTRACT_REL = "components/threshold-exporter/app/pkg/config/recipe_contract.json"
 SEVERITY_REL = "tests/shared/threshold_value_matrix.json"
@@ -536,25 +539,19 @@ def targets(root, c, g):
 def run(root, update):
     """Stale relpaths; writes the stale files when *update*."""
     c, grammar = load(root)
-    stale = []
+    stale, changed = [], []
     for rel, render in targets(root, c, grammar):
         path = Path(root) / rel
-        try:
-            current = path.read_text(encoding="utf-8") if path.exists() or rel not in WHOLE_FILE_TARGETS else ""
-        except (OSError, UnicodeDecodeError) as e:
-            raise ContractError(f"{rel}: cannot read: {e}") from e
+        current = read_target(path, rel, rel in WHOLE_FILE_TARGETS, ContractError)
         wanted = render(current)
         if wanted != current:
             stale.append(rel)
-            if update:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                # newline="\n": force LF on every platform. Without it,
-                # Path.write_text uses os.linesep (CRLF on Windows), which the
-                # eol=lf gitattribute hides from the working-tree status and
-                # from --check (read_text normalizes CRLF→LF) — but esbuild
-                # reads the raw bytes, so a CRLF portal copy taints the
-                # bundle's sourcemap and re-hashes the shared chunk.
-                path.write_text(wanted, encoding="utf-8", newline="\n")
+            changed.append((path, wanted))
+    if update:
+        # The artifact entry writes LF on every platform: a CRLF portal copy
+        # (os.linesep on Windows) would taint the bundle's sourcemap and
+        # re-hash the shared chunk, while --check (read_text) hides it.
+        write_targets(changed, ContractError, make_parents=True)
     return stale
 
 

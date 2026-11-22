@@ -68,6 +68,10 @@ ROWS = [
     # `additional_dependencies`) whose writing modes use the artifact entry.
     ("dx/gen_tenant_id_json.py", ["--check"]),
     ("dx/gen_am_duration_json.py", ["--check"]),
+    # #3981, fourth batch: the two `--check` hooks that now judge their
+    # targets through `_lib_output` before reading them.
+    ("dx/sync_schema.py", ["--check"]),
+    ("dx/gen_recipe_contract.py", ["--check"]),
 ]
 
 
