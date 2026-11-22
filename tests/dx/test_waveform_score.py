@@ -335,11 +335,46 @@ def test_percentiles():
     assert out["p50"] == 5 and out["p90"] == 9 and out["max"] == 10
 
 
-def test_fanout_ratio_reported():
+def test_alerts_per_series_reported():
     rec = _record(alerts=[_alert(name=f"A{i}", fire=1000) for i in range(4)])
     out = _score_one(rec, _meta())
-    assert out["summary"]["fanout_ratio"]["max"] == 4   # 1 episode ×4 series 命中
-    assert out["verdict"] == "PASS"                     # 不 gate
+    assert out["summary"]["alerts_per_series"]["max"] == 4   # 一條 series 上 4 筆告警
+    assert "fanout_ratio" not in out["summary"]              # 舊鍵不留別名（#4176）
+    assert out["schema_version"] == 2
+    assert out["verdict"] == "PASS"                          # 不 gate
+
+
+def _fanout_alert(series):
+    a = _alert(fire=1000)
+    a["labels"]["waveform_variant"] = "fanout"
+    a["labels"]["series"] = series
+    return a
+
+
+def test_alerts_per_series_counts_each_series_not_the_fault():
+    # 一個故障、3 條 fan-out series 各響 1 筆：每條 series 是 1，不加總成 3
+    # （加總只是把注入參數 N 乘回去，見 module docstring；#4176）。
+    series = ("f01", "f02", "f03")
+    recs = [_record(variant="fanout", series=x, alerts=[_fanout_alert(x)]) for x in series]
+    metas = [_meta(variant="fanout", series=x) for x in series]
+    rep = _report(recs, metas)
+    rep["fanout"] = 3
+    out = ws.score([("r.json", rep)], _TOLS)
+    assert out["summary"]["alerts_per_series"] == {"p50": 1, "p90": 1, "max": 1}
+    assert out["summary"]["fanout_series_injected"] == [3]
+
+
+def test_fanout_series_injected_is_empty_when_no_report_says():
+    out = _score_one(_record(alerts=[_alert(fire=1000)]), _meta())
+    assert out["summary"]["fanout_series_injected"] == []
+
+
+def test_redacted_report_keeps_the_per_series_counts():
+    rep = _report([_record(alerts=[_alert(fire=1000)])], [_meta()])
+    rep["fanout"] = 3
+    red = ws.redact_report(ws.score([("r.json", rep)], _TOLS))["summary"]
+    assert red["alerts_per_series"]["max"] == 1
+    assert red["fanout_series_injected"] == [3]
 
 
 # ── 按事件計（故障事件 × 告警類別）揭露比率（ADR-030 §7；只揭露不 gate） ──
@@ -910,7 +945,8 @@ def test_e2e_inject_then_score_pass(tmp_path):
     base = next(c for c in doc["cases"] if c["variant"] == "base")
     assert base["fault_window_s"] == [300, 9270]
     assert base["hits"][0]["tolerance_source"] == "default:warning"
-    assert doc["summary"]["fanout_ratio"]["max"] >= 1
+    assert doc["summary"]["alerts_per_series"]["max"] >= 1
+    assert doc["summary"]["fanout_series_injected"] == [3]
 
 
 @_needs_vm

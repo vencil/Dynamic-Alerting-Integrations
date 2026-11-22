@@ -25,6 +25,8 @@ updated_at: 2026-11-22
 
 2026-11-22：依 owner 裁決修訂第 7 節對帳單位，凍結條款原文保留。門檻（漏報為 0）以（故障, 變體）計，與計分器一致；按「故障事件 × 告警類別」計的比率改為只揭露。
 
+2026-11-22：依 owner 裁決修訂 fan-out 的揭露指標：報告揭露每條 series 的告警數與注入的 fan-out series 數，不揭露「每個故障事件帶出幾筆告警」；理由見第 7 節。
+
 依語言政策（ADR-019 起預設只寫中文），本篇沒有英文版。
 
 ## 名詞
@@ -37,7 +39,7 @@ updated_at: 2026-11-22
 - **故障波形**：某個指標在某種故障下的時間序列形狀，例如表空間在半小時內從 40% 爬到 96%。**波形庫**是一組這樣的故障描述。
 - **SME**：領域專家（subject-matter expert），例如 DBA。
 - **episode（故障事件）**：一次注入的故障。同一個故障可能讓多條 series 同時開火，按事件計時算一個事件（門檻不按事件計，見第 7 節）。
-- **fan-out**：一個故障同時出現在多條 series 上（例如同一批主機的同一指標）。**fan-out ratio** 是一個故障事件平均帶出幾筆 series 層級的告警。
+- **fan-out**：一個故障同時出現在多條 series 上（例如同一批主機的同一指標）。**每條 series 的告警數**是一條注入的 series 在容差內歸因到的告警筆數。
 - **DTW（dynamic time warping）**：比對兩條時間序列形狀是否相似的演算法，容許時間軸上的伸縮。
 - **soak**：新規則接上真實流量、與舊系統並行跑一段時間觀察。**passive shadow soak** 指只觀察、不接管告警的並行期。
 - **chaos-mesh**：Kubernetes 上的故障注入工具，能讓真的 Pod、網路或磁碟出狀況。
@@ -151,7 +153,7 @@ updated_at: 2026-11-22
 
 遷移盤點時要標出「舊系統一個告警 → 新系統多維同時開火」的規則群：這是預期中的 fan-out，差異分類記為中性，也是日後維度收斂與關聯分析的優先對象。
 
-報告另外揭露每個故障事件的 fan-out ratio。比值過高是明確的警訊：catch-rate 接住不代表通知面安全，`group_by`／inhibit 的收斂治理要在切換前跟上。這個指標只揭露、不當門檻，守住「量測點在開火層、不驗通知送達」的範圍。
+報告另外揭露每條 series 的告警數（分位數），以及注入時的 fan-out series 數 N。告警數大於 1，代表同一條 series 同時觸發多筆告警（例如 warning 與 critical 同時響），要靠 inhibit 收斂。報告不揭露「每個故障事件帶出幾筆告警」：在開火層，那個數就是 N 乘上每條 series 的告警數，N 是注入時給的參數，不帶新資訊；而把 fan-out series 聚合成一筆的規則會拿掉區分 series 的 label，告警歸不回任何一條 series，記為判不出來（indeterminate），所以「規則有沒有收斂」在開火層看不到。跨主機的 `group_by` 收斂屬於通知層，不在本驗證的範圍，要另外以 Alertmanager 的路由測試（`amtool config routes test`）驗。這兩個數只揭露、不當門檻。
 
 代價：定位較保守，不主導整個切換決策；換來範圍清楚、分工不必重談。若遷移方主動要求由本平台主導切換的放行判定，才重談範圍。
 
@@ -220,7 +222,7 @@ python3 scripts/tools/dx/waveform_score.py inject.json \
 verdict: PASS  (catch 5/5 = 100.0%, FN=0)
   must_detect 總數 5 = scored 5 + indeterminate 0 + carve-out 0（守恆）；probe/informational 不入分母 1 筆
   ⚠️ early-onset 過敏開火 5 筆（規則在 onset 段就開火、遮蔽過度敏感；只揭露不 gate）
-  fan-out ratio: p50=1 p90=1 max=1（只揭露不 gate）
+  每條 series 的告警數: p50=1 p90=1 max=1；注入的 fan-out series 數: 3（只揭露不 gate）
   按事件計（故障事件 × 告警類別）: 1/1 = 100.0%（只揭露不 gate）
 ```
 

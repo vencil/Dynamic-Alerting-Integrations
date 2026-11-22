@@ -3,7 +3,7 @@
 
 吃 ``inject_waveform.py`` 的 JSON 報告（1..N 份）+ 容差矩陣檔（ADR-030 §5 兩段式）→
 逐 injected case 做 temporal-match → episode×alert-class 對帳 → catch-rate +
-FN 清單 + indeterminate 清單 + fan-out ratio → verdict（ADR-030 §8 第 1 道）+ 結構化報告保存
+FN 清單 + indeterminate 清單 + 每條 series 的告警數 → verdict（ADR-030 §8 第 1 道）+ 結構化報告保存
 （R2-4 baseline；``schema_version`` 欄）。**不做**：通知送達／post-inhibition 層
 （ADR-030 §7 邊界）、divergence 自動歸因敘事、跨 run 趨勢比對（defer）。
 
@@ -41,8 +41,14 @@ FN 清單 + indeterminate 清單 + fan-out ratio → verdict（ADR-030 §8 第 1
   * carve-out（ADR-030 §1）：容差檔 ``carve_outs``（鍵 = case 的 ``fault_class``——
     分母排除必須在開火前可決定的 case 側身分）→ 從分母排除 + 獨立列出（dual-
     control 人工審軌）。
-  * fan-out ratio（D7/R3-1）= 每 episode 的 series-level 命中筆數；報告分位數
-    （p50/p90/max）、只揭露不 gate、無魔術閾值。
+  * 每條 series 的告警數（``alerts_per_series``；ADR-030 §7）= 每個 hit case（一條
+    series）在窗內歸因到的告警筆數；報告分位數（p50/p90/max）、只揭露不 gate、無魔術
+    閾值。大於 1 代表同一條 series 同時觸發多筆告警（例如 warning 與 critical 同時響），
+    收斂靠 inhibit。另列 ``fanout_series_injected``：各輸入報告注入時的 fan-out series
+    數（inject 報告的 ``fanout``）。不報「每個故障事件帶出幾筆告警」：那個數等於 N ×
+    每條 series 的告警數，N 是注入參數；而把 fan-out series 聚合成一筆的規則會拿掉
+    ``series`` label、歸因不回任何一條，記為 indeterminate，收斂在開火層看不到
+    （跨主機的 group_by 收斂屬通知層，不在本工具範圍）。
   * no-silent-caps 守恆（ADR-030 §8 第 2 道）：``scored 分母 + indeterminate + carve-out 排除
     == 總 must_detect case 數`` 且 ``hits + FN == scored 分母``——違反 = 工具自身
     bug → exit 2；分母的每一次縮小都顯性計數。零分母分流：**carve-out 致零分母
@@ -106,7 +112,7 @@ _REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", ".."))
 _DEFAULT_SCHEMA = os.path.join(
     _REPO_ROOT, "docs", "schemas", "waveform-tolerances.schema.json")
 
-SCHEMA_VERSION = 1              # score 報告格式版本（R2-4 結構化 baseline）
+SCHEMA_VERSION = 2              # score 報告格式版本；2：fanout_ratio 改為 alerts_per_series + fanout_series_injected（#4176）
 DEFAULT_SEVERITY_ROW = "default"
 
 SCOPE_DISCLAIMER = (
@@ -446,7 +452,7 @@ def score_case(rec: dict, fault_window, span_s: int, unattributed_nonempty: bool
 
 
 def _percentiles(values: list[int]) -> dict:
-    """fan-out 分位數（p50/p90/max；nearest-rank，無魔術警示閾值——只揭露）。"""
+    """分位數（p50/p90/max；nearest-rank，無魔術警示閾值——只揭露）。"""
     if not values:
         return {"p50": None, "p90": None, "max": None}
     v = sorted(values)
@@ -611,7 +617,9 @@ def score(reports: list[tuple[str, dict]], tol: dict, *,
             f"{flapping_suspected} 筆 hit 疑似 flapping（firing_sample_count 明顯少於 "
             f"[fire, last_fire] 連續應有樣本數，fire→resolve→fire 斷續震盪）——resolve "
             f"不計分故不改 verdict，但震盪告警品質存疑；詳 --json 的 flapping_suspected 旗標")
-    fanout_values = [len(c["hits"]) for c in hits]
+    per_series_values = [len(c["hits"]) for c in hits]
+    fanout_injected = sorted({r.get("fanout") for _, r in reports
+                              if isinstance(r.get("fanout"), int)})
     ep_pairs, ep_caught = _episode_class_tally(cases)
     effective = sorted(
         {(h["alertname"], h["tolerance_s"], h["tolerance_source"])
@@ -651,7 +659,8 @@ def score(reports: list[tuple[str, dict]], tol: dict, *,
             "hits": len(hits),
             "false_negatives": len(fns),
             "catch_rate": (len(hits) / scored) if scored else None,
-            "fanout_ratio": _percentiles(fanout_values),
+            "alerts_per_series": _percentiles(per_series_values),
+            "fanout_series_injected": fanout_injected,
             # 按事件計（故障事件 × 告警類別）的揭露比率，只揭露不 gate（ADR-030 §7）
             "episode_class_pairs": ep_pairs,
             "episode_class_caught": ep_caught,
@@ -677,7 +686,8 @@ def score(reports: list[tuple[str, dict]], tol: dict, *,
 _REDACT_SUMMARY_KEYS = (
     "must_detect_total", "carved_out", "indeterminate", "scored_denominator",
     "not_scored_probe_informational", "hits", "false_negatives",
-    "catch_rate", "fanout_ratio", "early_onset_fires", "flapping_suspected",
+    "catch_rate", "alerts_per_series", "fanout_series_injected",
+    "early_onset_fires", "flapping_suspected",
     "episode_class_pairs", "episode_class_caught", "episode_class_catch_rate",
 )
 
@@ -715,6 +725,15 @@ def _episode_line(s: dict) -> str:
             f"{s.get('episode_class_pairs')}{pct}（只揭露不 gate）")
 
 
+def _per_series_line(s: dict) -> str:
+    """每條 series 告警數的人類可讀一行（完整版與 redacted 共用；只含計數）。"""
+    fr = s.get("alerts_per_series") or {}
+    n = s.get("fanout_series_injected") or []
+    fan = "/".join(str(x) for x in n) if n else "—"
+    return (f"每條 series 的告警數: p50={fr.get('p50')} p90={fr.get('p90')} "
+            f"max={fr.get('max')}；注入的 fan-out series 數: {fan}")
+
+
 def _print_redacted_human(report: dict) -> None:
     """redacted 報告的人類可讀摘要——只印 verdict + 計數 + scope，無 per-case 明細
     /識別項（對應 redact_report 的白名單；本地看完整版不加 --redact）。"""
@@ -731,8 +750,7 @@ def _print_redacted_human(report: dict) -> None:
         print(f"  early-onset 過敏開火 {s['early_onset_fires']} 筆（揭露不 gate）")
     if s.get("flapping_suspected"):
         print(f"  疑似 flapping {s['flapping_suspected']} 筆（揭露不 gate）")
-    fr = s.get("fanout_ratio") or {}
-    print(f"  fan-out ratio: p50={fr.get('p50')} p90={fr.get('p90')} max={fr.get('max')}")
+    print(f"  {_per_series_line(s)}")
     print(f"  {_episode_line(s)}")
     print(f"  scope: {report['scope']['disclaimer']}")
     print("  [識別項與 per-case 明細已剝除；本地完整版請不加 --redact 重跑]")
@@ -769,9 +787,7 @@ def _print_human(report: dict) -> None:
     if s.get("flapping_suspected"):
         print(f"  ⚠️ 疑似 flapping {s['flapping_suspected']} 筆"
               f"（fire→resolve→fire 斷續震盪；resolve 不計分、只揭露不 gate）")
-    fr = s["fanout_ratio"]
-    print(f"  fan-out ratio: p50={fr['p50']} p90={fr['p90']} max={fr['max']}"
-          f"（只揭露不 gate）")
+    print(f"  {_per_series_line(s)}（只揭露不 gate）")
     print(f"  {_episode_line(s)}")
     print(f"  scope: {report['scope']['disclaimer']}")
 
