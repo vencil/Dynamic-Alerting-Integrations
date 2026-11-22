@@ -19,9 +19,10 @@ gate's docstring for what counts).
   the later steps wait on. (The F row came in with the gate's reach, #4111:
   helm/ was not scanned before; it is no new reader.)
 
-A second, independent axis (#4111): `LAX` — the points that read YAML
-laxly on purpose, mirroring a consumer that does. Every other point reads
-through `_lib_yaml_strict`; the gate derives which is which.
+Whether a point reads strictly is not this baseline's question: every
+reading is strict, with no exception list (#4111, D1), and
+`test_yaml_strict_only.py` refuses a lax one anywhere outside
+`_lib_yaml_strict`.
 """
 from __future__ import annotations
 
@@ -162,6 +163,8 @@ ALLOWED = {
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
     ('scripts/tools/ops/init_project.py', '_classify_root_file'):
         (2, "the customer repo's CI files (GitHub workflow, GitLab CI, pre-commit), read by those CI systems; no Go consumer"),
+    ('scripts/tools/ops/init_project.py', '_duplicate_key_in'):
+        (1, "the customer repo's root .gitlab-ci.yml, re-read only to name its repeated key (#4111); no Go consumer"),
     ('scripts/tools/ops/init_project.py', '_gitlab_root_includes'):
         (1, "the customer repo's .gitlab-ci.yml, read by GitLab CI; no Go consumer"),
     ('scripts/tools/ops/init_project.py', '_precommit_root_relative_paths'):
@@ -237,18 +240,4 @@ ALLOWED = {
 DEBT: dict = {
     ('helm/vector/projection-gate/verify_tenant_projections.py', 'load_yaml'):
         (2, Reading.F),
-}
-
-#: ⛔ #4111: the points that read YAML LAXLY on purpose — a repeated key keeps
-#: its last value — because the file's consumer reads it so and the point
-#: mirrors that consumer. Value: (count, the consumer and why). Every other
-#: point reads through `_lib_yaml_strict`. A file the repo writes is never
-#: here (a repeated key in it is our mistake; the strict reading is its lint).
-LAX = {
-    ('scripts/tools/ops/init_project.py', '_classify_root_file'):
-        (2, "the customer's root .gitlab-ci.yml, as GitLab (Ruby Psych) reads it: the last of a "
-            "repeated key wins and every `<<` merges; init only tells the customer what to add"),
-    ('scripts/tools/ops/init_project.py', '_gitlab_root_includes'):
-        (1, "the customer's root .gitlab-ci.yml, as GitLab (Ruby Psych) reads it, to tell whether "
-            "it already includes our pipeline"),
 }

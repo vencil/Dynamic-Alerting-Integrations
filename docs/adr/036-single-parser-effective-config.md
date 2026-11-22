@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-11-15
+updated_at: 2026-11-21
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -48,6 +48,7 @@ updated_at: 2026-11-15
 - **2026-11-15 修訂**：da-read 與 da-crdecode 拒收輸入時在標準輸出印一份固定形狀的被拒文件；結束碼 2 而沒有這份文件（用法錯、打不開檔、讀寫標準輸入輸出失敗、Go 當機、舊版程式）算沒跑成，不再當成拒收（§3）。
 - **2026-11-15 修訂**：產生器容器對 `POST /v1/validate` 的回應不帶自由文字：拿掉 `message` 與 `stderr_tail`，只留封閉的 `error`／`reason` 與結構化欄位（`result`、`rc`、`findings`、`validated`、`cache`、`key_verdict`，503 `tool_fault` 另帶結構化的 `tool_fault`，與 `GET /v1/status` 的同形）；容器知道的細節寫進它自己的 log。回應以 ASCII 編碼，任何值都編得出來。tenant-api 給呼叫端的文字本來就由 reason 組出（§3、§5）。
 - **2026-11-15 修訂**：產生器容器只在 da-guard、da-read、da-crdecode 內建的自檢都通過之後才回報就緒；判定或暖機的工具故障只由通過的自檢清除，跑完全程的判定不再清除（§3）。
+- **2026-11-21 修訂**：§12 的第二條邊界改為只有一種讀法：Python 讀 YAML 一律經嚴格讀法，不再有「照消費者讀法」的例外清單，客戶檔案的重複鍵也是回報給客戶修的錯；lint 範圍擴到 repo 裡所有 Python 檔（測試除外）。
 - **2026-11-15 修訂**：§6 多一種會放行的版本落差：平台預設啟用的閾值內建在讀取端之後，檢查端比部署中的 exporter 新時，靠內建值的樹在檢查端通過、exporter 卻不送那些列；決策不變。
 
 ## 摘要
@@ -643,7 +644,7 @@ $ da-crdecode --any-shape values.yaml
 
 **邊界與怎麼守住**：檔案有 Go 消費者，Python 就不得以 PyYAML 讀它。CI 以 AST lint（解析 Python 原始碼的語法樹，找出呼叫 YAML 解析器的地方）列出每個呼叫點；呼叫點所在的檔要列在白名單（或下述的棘輪 baseline）裡，白名單逐檔附上理由（例如「只讀 GitHub workflow，沒有 Go 消費者」）。白名單只收沒有 Go 消費者的讀者。有 Go 消費者但還沒遷移的呼叫點不進白名單，列在另一份棘輪 baseline：新增呼叫點讓 CI 失敗，已遷移的呼叫點沒從 baseline 刪掉也讓 CI 失敗，所以 baseline 只會縮小，遷移完成時是空的。
 
-同一支 lint 另守第二條、與上面互相獨立的邊界：**Python 讀 YAML 一律經同一個嚴格讀法**（`_lib_yaml_strict`：同一個 mapping 裡重複的鍵即拒收，鍵的比對方式同 yaml.v3）。PyYAML 預設遇到重複鍵會不出聲地取後者，前面那一份就消失了。lint 從語法樹推出每個呼叫點是經共用的讀取函式、還是直接呼叫 PyYAML；共用讀取函式所在的模組只准在嚴格讀法的基底碰到 PyYAML，所以經它們讀的都是嚴格讀法。直接呼叫 PyYAML 的呼叫點要列在另一份清單，逐點寫明它照的是哪個消費者的讀法。只有「檔案的消費者本身就取後者」時才列得進去，例如客戶的 `.gitlab-ci.yml`：GitLab 以 Ruby 的 Psych 讀，重複鍵取後者、兩個 `<<` 都合併，init 判斷客戶檔案時照這個讀法讀。repo 自己寫的檔一律不列：裡面的重複鍵只會是寫錯，嚴格讀法就是它的 lint。
+另一條、與上面互相獨立的邊界：**Python 讀 YAML 只有一種讀法，就是 YAML 規格的讀法**——同一個 mapping 裡的鍵必須唯一。讀法只有一處（`_lib_yaml_strict`：重複的鍵即拒收，鍵的比對方式同 yaml.v3）。PyYAML 預設遇到重複鍵會不出聲地取後者，前面那一份就消失了。另一支 AST lint（`tests/shared/test_yaml_strict_only.py`）掃 repo 裡每個被追蹤的 Python 檔（測試除外），在 `_lib_yaml_strict` 以外，凡是引用 PyYAML 或 ruamel.yaml 的讀取入口（`safe_load`、`load`、`compose`、各個 Loader 類別等）或 `construct_object` 就失敗；沒有例外清單，也沒有只減不增的債務清單。客戶的檔案也不例外：即使它的消費者本身取後者（例如 GitLab 讀 `.gitlab-ci.yml`），重複鍵也是要回報給客戶修的錯，不是照消費者的讀法讀下去——init 遇到時點名重複的鍵與行號、說明 GitLab 會靜默取後者，不給接線片段，請客戶修正後重跑。測試不掃：測試讀的是自己寫的 fixture，嚴格讀法自己的測試也需要寬鬆讀法當對照組。
 
 範例：
 
@@ -655,7 +656,7 @@ files:
   ci/b.yml: h2
 ```
 
-以 PyYAML 預設的讀法，第一段 `files:` 消失，init 會把它寫過的 `ci/a.yml` 當成不是自己的；嚴格讀法拒收這份檔，init 判為「讀不了」，什麼都不刪。
+以 PyYAML 預設的讀法，第一段 `files:` 消失，init 會把它寫過的 `ci/a.yml` 當成不是自己的；嚴格讀法拒收這份檔，init 點名重複的 `files`（第 4 行，第一次出現在第 2 行）、把清冊當成讀不到，什麼都不刪。
 
 範圍：本節的工作順序見 §7。portal 以 js-yaml 做的預覽照 §2 的範圍說明，不在此列。
 

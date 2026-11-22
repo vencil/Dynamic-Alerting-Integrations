@@ -49,7 +49,9 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import read_shipped_da_tools_version, try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
-from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
+from _lib_yaml_strict import (  # noqa: E402  (#4111: duplicate keys refused)
+    DuplicateKeyError, strict_safe_load,
+)
 from _lib_python import (  # noqa: E402
     detect_cli_lang, ensure_dir_or_die, exit_on_output_write_error, output_dir_type,
 )
@@ -2261,6 +2263,11 @@ _GL_ROOT_NEEDS_INCLUDE = 'needs-include'  # their root file, no `include:` key
 _GL_ROOT_NEEDS_APPEND = 'needs-append'    # `include:` is a LIST — append an item
 _GL_ROOT_NEEDS_CONVERT = 'needs-convert'  # `include:` exists but is NOT a list
 _GL_ROOT_UNPARSEABLE = 'unparseable'      # their root file did not parse
+# #4111: their root file repeats a key in one mapping. Its own state, never
+# UNPARSEABLE or a NEEDS_* one: those hand over a wiring snippet, and on a
+# file GitLab reads with the last of a repeated key winning, any verdict on
+# `include:` is a verdict on a block GitLab may never see.
+_GL_ROOT_DUPLICATE_KEY = 'duplicate-key'
 
 
 def _gitlab_include_path(raw: str) -> str:
@@ -2521,7 +2528,9 @@ def _gitlab_root_includes(repo_root: Path, output_dir: Path) -> bool:
     except OSError:
         return False
     try:
-        doc = yaml.safe_load(body)
+        # #4111: strict. A file that repeats a key is not "wired" whichever
+        # copy carries the include; `_classify_root_file` names the key.
+        doc = strict_safe_load(body)
     except yaml.YAMLError:
         return False
     try:
@@ -2580,7 +2589,8 @@ def _classify_root_file(root: Path, want: str) -> str:
     except OSError:
         # Unreadable, a directory, or a broken symlink. Hands off, and say so.
         return _GL_ROOT_UNPARSEABLE
-    # ⛔ `safe_load`, deliberately, even though it costs us a case. A stranger's
+    # ⛔ The strict safe reading (#4111), deliberately, even though it costs us
+    # a case. A stranger's
     # pipeline may use GitLab's own tags (`!reference` is ordinary), and
     # SafeLoader raises on an unknown tag — so such a file lands in
     # UNPARSEABLE and its owner is told to check the include rather than being
@@ -2592,7 +2602,16 @@ def _classify_root_file(root: Path, want: str) -> str:
     # ALREADY_WIRED prints the wiring instructions, so the loss is one
     # redundant reminder, never a false all-clear.
     try:
-        doc = yaml.safe_load(body)
+        doc = strict_safe_load(body)
+    except DuplicateKeyError:
+        # ⛔ #4111: before the generic branch below, which would turn this
+        # into NEEDS_APPEND (an `include:` line is there) or UNPARSEABLE and
+        # hand over a snippet. GitLab keeps the LAST of a repeated key, so the
+        # file it runs is not the file the customer reads top to bottom: they
+        # must fix it first (`_gl_duplicate_key_text` names the key and line).
+        # The duplicate check runs on the composed tree, before any tag is
+        # constructed, so a file that also uses `!reference` lands here too.
+        return _GL_ROOT_DUPLICATE_KEY
     except yaml.YAMLError:
         # ⛔ Do not fall through to the block-shaped snippet. `!reference` is
         # the ordinary route into this branch, and a pipeline sophisticated
@@ -2625,7 +2644,7 @@ def _classify_root_file(root: Path, want: str) -> str:
         # opens with `---` a top paste is a parse error while an EOF append
         # is fine. The message says "at the end" for this reason.
         try:
-            pasted = yaml.safe_load(body + '\n' + _gl_block_for(want))
+            pasted = strict_safe_load(body + '\n' + _gl_block_for(want))
         except yaml.YAMLError:
             return _GL_ROOT_NEEDS_CONVERT
         if not (isinstance(pasted, dict)
@@ -2648,6 +2667,57 @@ def _classify_root_file(root: Path, want: str) -> str:
 # document did not parse — enough to choose a snippet SHAPE, never enough to
 # claim the pipeline is wired.
 _GL_INCLUDE_KEY_RE = re.compile(r'^include\s*:', re.MULTILINE)
+
+
+def _duplicate_key_in(path: Path) -> Optional[DuplicateKeyError]:
+    """The repeated key in *path* as the strict reading reports it, or None
+    (no file, unreadable, no duplicate, or another parse error)."""
+    try:
+        strict_safe_load(path.read_text(encoding='utf-8', errors='replace'))
+    except DuplicateKeyError as exc:
+        return exc
+    except (OSError, yaml.YAMLError):
+        return None
+    return None
+
+
+def _duplicate_key_where(exc: Optional[DuplicateKeyError], is_zh: bool) -> str:
+    """`repeats the key `k` at line N (first defined at line M)`.
+
+    A key written as an alias carries the anchor's marks, not a line the key
+    is on (`DuplicateKeyError.through_alias`), so no line is claimed then."""
+    if exc is None:
+        return '重複了某個鍵' if is_zh else 'repeats a key'
+    if exc.through_alias or exc.problem_mark is None:
+        return (f'重複了鍵 `{exc.key}`（以 alias 寫成，沒有可靠的行號）' if is_zh
+                else f'repeats the key `{exc.key}` (written through an alias, '
+                     f'so there is no reliable line)')
+    line = exc.problem_mark.line + 1
+    return (f'第 {line} 行重複了鍵 `{exc.key}`（第一次出現在第 {exc.first_line} 行）'
+            if is_zh else
+            f'repeats the key `{exc.key}` at line {line} (first defined at '
+            f'line {exc.first_line})')
+
+
+def _gl_duplicate_key_text(root: Path, is_zh: bool) -> str:
+    """What to say about a root pipeline in `_GL_ROOT_DUPLICATE_KEY` (#4111).
+
+    No snippet goes with it: every snippet is a statement about the file's
+    `include:`, and with a repeated key the block GitLab runs is the last
+    copy, not necessarily the one the customer would edit."""
+    where = _duplicate_key_where(_duplicate_key_in(root), is_zh)
+    name = _GL_ROOT_SHELL_REL.as_posix()
+    if is_zh:
+        return (f"你的 repo 根目錄 {name} {where} — 未修改。YAML 不允許同一個 "
+                f"mapping 裡有重複的鍵；GitLab 讀它時會靜默只取最後一個，前面"
+                f"那段設定等於不存在。init 不替你猜哪一段才對，所以這次無法判斷 "
+                f"include 該怎麼接：請先刪掉或合併重複的鍵，再重跑 init。")
+    return (f"Your repo's root {name} {where} — left untouched. YAML does not "
+            f"allow a key twice in one mapping, and GitLab silently keeps only "
+            f"the last one, so the earlier block is ignored. init will not "
+            f"guess which one you meant, so it cannot tell how the include "
+            f"should be wired: remove or merge the duplicate key, then re-run "
+            f"init.")
 
 
 def _gitlab_root_snippet_for(status: str) -> str:
@@ -4289,6 +4359,10 @@ _LEDGER_KEY = 'files'
 _OWN_ABSENT = 'absent'          # no marker: init owns no file here
 _OWN_NO_LEDGER = 'no-ledger'    # marker from before issue 1465
 _OWN_UNREADABLE = 'unreadable'  # marker present, `files:` not a str→str map
+# #4111: the marker repeats a key in one mapping (`files:` twice, say). It
+# supports no claim, like `unreadable`, but is told apart so the run names
+# the key instead of saying "no readable ledger" about a file that reads.
+_OWN_DUPLICATE_KEY = 'duplicate-key'
 _OWN_LEDGER = 'ledger'
 
 # Classification of a file that already sits at a path this run writes.
@@ -4296,6 +4370,7 @@ _EXIST_UNCHANGED = 'unchanged'  # in the ledger, bytes match: init's own output
 _EXIST_EDITED = 'edited'        # in the ledger, bytes differ: edited since
 _EXIST_UNOWNED = 'unowned'      # ledger does not list it (or there is none)
 _EXIST_UNKNOWN = 'unknown'      # a marker exists but its ledger cannot answer
+_EXIST_LEDGER_DUPLICATE = 'ledger-duplicate'  # #4111: the marker repeats a key
 _EXIST_UNREADABLE = 'unreadable'  # listed, but its bytes cannot be read
 _EXIST_NOT_FILE = 'not-a-file'  # a directory or a dangling symlink sits there
 _EXIST_OUTSIDE = 'outside'      # its directory resolves outside --output-dir
@@ -4305,6 +4380,8 @@ _EXIST_UNREMOVABLE = 'unremovable'  # stale and unchanged, but unlink failed
 class _Ownership(NamedTuple):
     state: str
     files: dict
+    #: the repeated key, for `_OWN_DUPLICATE_KEY`
+    dup: Optional[DuplicateKeyError] = None
 
 
 def _sha256_file(path: Path) -> str:
@@ -4323,6 +4400,11 @@ def _read_ownership(output_dir: str) -> _Ownership:
         return _Ownership(_OWN_ABSENT, {})
     try:
         doc = strict_safe_load(marker.read_text(encoding='utf-8'))
+    except DuplicateKeyError as exc:
+        # #4111: before the generic branch. PyYAML's default reading kept the
+        # LAST copy, so a second `files:` silently replaced the first ledger;
+        # which copy is right is not init's to guess.
+        return _Ownership(_OWN_DUPLICATE_KEY, {}, exc)
     except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return _Ownership(_OWN_UNREADABLE, {})
     if not isinstance(doc, dict):
@@ -4394,6 +4476,8 @@ def _classify_existing(paths: list[str], output_dir: str,
             found[rel] = _EXIST_UNCHANGED if digest == recorded else _EXIST_EDITED
         elif own.state == _OWN_ABSENT:
             found[rel] = _EXIST_UNOWNED
+        elif own.state == _OWN_DUPLICATE_KEY:
+            found[rel] = _EXIST_LEDGER_DUPLICATE
         else:
             found[rel] = _EXIST_UNKNOWN
     return found
@@ -4407,6 +4491,7 @@ def _existing_tag(kind: str, is_zh: bool) -> str:
             _EXIST_EDITED: '（init 上次產生後被改過）',
             _EXIST_UNOWNED: '（不是 init 產生的）',
             _EXIST_UNKNOWN: '（.da-init.yaml 沒有可讀的檔案清冊，無法判斷是否改過）',
+            _EXIST_LEDGER_DUPLICATE: '（.da-init.yaml 有重複的鍵，清冊不能作答，無法判斷是否改過）',
             _EXIST_UNREADABLE: '（讀不到內容，無法判斷是否改過）',
             _EXIST_NOT_FILE: '（不是一般檔案：目錄或懸空的符號連結）',
             _EXIST_OUTSIDE: '（所在目錄經符號連結指到輸出目錄之外）',
@@ -4418,6 +4503,8 @@ def _existing_tag(kind: str, is_zh: bool) -> str:
         _EXIST_UNOWNED: ' (not written by init)',
         _EXIST_UNKNOWN: (' (.da-init.yaml has no readable file ledger: '
                          'cannot tell whether it was edited)'),
+        _EXIST_LEDGER_DUPLICATE: (' (.da-init.yaml repeats a key, so its ledger '
+                                  'cannot answer: cannot tell whether it was edited)'),
         _EXIST_UNREADABLE: (' (cannot be read: cannot tell whether it was '
                             'edited)'),
         _EXIST_NOT_FILE: ' (not a regular file: a directory or a dangling symlink)',
@@ -4438,6 +4525,8 @@ class _Stale(NamedTuple):
     known: bool
     remove: list
     keep: dict
+    #: #4111: why it is not known, when the marker repeats a key
+    dup: Optional[DuplicateKeyError] = None
 
 
 def _still_generated(config: dict, output_dir: str,
@@ -4467,7 +4556,7 @@ def _stale_files(config: dict, output_dir: str, plan: '_ConfdPlan',
     if own.state == _OWN_ABSENT:
         return None
     if own.state != _OWN_LEDGER:
-        return _Stale(False, [], {})
+        return _Stale(False, [], {}, own.dup)
     out = Path(output_dir)
     keep_now = _still_generated(config, output_dir, plan)
     remove: list = []
@@ -4493,11 +4582,29 @@ def _stale_files(config: dict, output_dir: str, plan: '_ConfdPlan',
     return _Stale(True, remove, keep)
 
 
+def _marker_duplicate_key_text(exc: DuplicateKeyError, is_zh: bool) -> str:
+    """#4111: what a run says when `.da-init.yaml` repeats a key."""
+    where = _duplicate_key_where(exc, is_zh)
+    if is_zh:
+        return (f"⚠️ {_MARKER_REL} {where}。YAML 不允許同一個 mapping 裡有重複"
+                f"的鍵（寬鬆的讀法會靜默只取後者，前一段等於消失）；init 不猜"
+                f"哪一段才對，把檔案清冊當成讀不到：不據它刪任何檔，也無法點名"
+                f"改過的檔。請先把重複的鍵合併成一個，再重跑。")
+    return (f"⚠️ {_MARKER_REL} {where}. YAML does not allow a key twice in one "
+            f"mapping (a lax reader silently keeps the last one and the earlier "
+            f"block vanishes). init will not guess which one is right and "
+            f"treats the file ledger as unreadable: what init generated before "
+            f"cannot be known, none is removed, and edited files cannot be "
+            f"named. Merge the duplicate into one key, then re-run.")
+
+
 def _stale_lines(stale: Optional[_Stale], is_zh: bool, *,
                  done: bool) -> list[str]:
     """What the preview (`done=False`) or the summary (`done=True`) says."""
     if stale is None:
         return []
+    if not stale.known and stale.dup is not None:
+        return [_marker_duplicate_key_text(stale.dup, is_zh)]
     if not stale.known:
         return [("⚠️ .da-init.yaml 沒有可讀的檔案清冊：無法得知 init 先前產生過"
                  "哪些檔，這次不再產生的檔量不到，一個都不刪。之後的執行也"
@@ -5190,32 +5297,42 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
             # took the customer's ENTIRE root pipeline down.
             root_status = _classify_root_file(
                 repo_root / _GL_ROOT_SHELL_REL, want)
-            # CREATE (there is no repo-root pipeline at all) takes the block
-            # too: the customer is writing a brand-new file whose entire
-            # content is what we print, so there is no existing style to
-            # collide with. NEEDS_INCLUDE is the append-at-EOF case the
-            # post-condition already proved safe.
-            snippet = (_gl_block_for(want)
-                       if root_status in (_GL_ROOT_CREATE,
-                                          _GL_ROOT_NEEDS_INCLUDE)
-                       else _gl_example_for(want))
-            if is_zh:
-                print(f"  {step}. ⚠️ 這次的輸出目錄是 `{rel.as_posix()}/`，"
-                      f"不是 repo 根目錄。GitLab 只會自動載入 **repo 根目錄** 的 "
-                      f"`.gitlab-ci.yml`，所以產在這個子目錄裡的那一份不會被讀到。"
-                      f"請讓 repo 根目錄的 `.gitlab-ci.yml` 最後長成這樣"
-                      f"（保留你原本的項目，照你檔案既有的縮排）：")
+            if root_status == _GL_ROOT_DUPLICATE_KEY:
+                # #4111: no snippet for a file GitLab reads differently from
+                # how it looks — say where the output went, name the key, stop.
+                lead = (f"這次的輸出目錄是 `{rel.as_posix()}/`，要由 repo 根目錄的 "
+                        f"`.gitlab-ci.yml` include 它，但" if is_zh else
+                        f"This run wrote into `{rel.as_posix()}/`, which the "
+                        f"repository-root `.gitlab-ci.yml` has to include, but: ")
+                print(f"  {step}. ⚠️ {lead}"
+                      + _gl_duplicate_key_text(repo_root / _GL_ROOT_SHELL_REL, is_zh))
             else:
-                print(f"  {step}. ⚠️ This run wrote into `{rel.as_posix()}/`, "
-                      f"not the repository root. GitLab auto-loads only the "
-                      f"**repository root** `.gitlab-ci.yml`, so the one "
-                      f"generated here is not read. Make your "
-                      f"repository-root `.gitlab-ci.yml` end up like this "
-                      f"(keep your own entries, match its indentation):")
-            print()
-            for line in snippet.rstrip('\n').splitlines():
-                print(f"       {line}")
-            print()
+                # CREATE (there is no repo-root pipeline at all) takes the block
+                # too: the customer is writing a brand-new file whose entire
+                # content is what we print, so there is no existing style to
+                # collide with. NEEDS_INCLUDE is the append-at-EOF case the
+                # post-condition already proved safe.
+                snippet = (_gl_block_for(want)
+                           if root_status in (_GL_ROOT_CREATE,
+                                              _GL_ROOT_NEEDS_INCLUDE)
+                           else _gl_example_for(want))
+                if is_zh:
+                    print(f"  {step}. ⚠️ 這次的輸出目錄是 `{rel.as_posix()}/`，"
+                          f"不是 repo 根目錄。GitLab 只會自動載入 **repo 根目錄** 的 "
+                          f"`.gitlab-ci.yml`，所以產在這個子目錄裡的那一份不會被讀到。"
+                          f"請讓 repo 根目錄的 `.gitlab-ci.yml` 最後長成這樣"
+                          f"（保留你原本的項目，照你檔案既有的縮排）：")
+                else:
+                    print(f"  {step}. ⚠️ This run wrote into `{rel.as_posix()}/`, "
+                          f"not the repository root. GitLab auto-loads only the "
+                          f"**repository root** `.gitlab-ci.yml`, so the one "
+                          f"generated here is not read. Make your "
+                          f"repository-root `.gitlab-ci.yml` end up like this "
+                          f"(keep your own entries, match its indentation):")
+                print()
+                for line in snippet.rstrip('\n').splitlines():
+                    print(f"       {line}")
+                print()
         elif gl_root_written:
             if is_zh:
                 print(f"  {step}. GitLab 接線已完成：已產生根目錄 "
@@ -5249,7 +5366,11 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
             # list item for NEEDS_APPEND; flow sequences, aliases and
             # non-2-space indentation all made that a syntax error that took
             # the customer's whole pipeline down.)
-            if gl_status == _GL_ROOT_NEEDS_INCLUDE:
+            if gl_status == _GL_ROOT_DUPLICATE_KEY:
+                # #4111: no snippet — see `_gl_duplicate_key_text`.
+                print(f"  {step}. ⚠️ " + _gl_duplicate_key_text(
+                    Path(output_dir) / _GL_ROOT_SHELL_REL, is_zh))
+            elif gl_status == _GL_ROOT_NEEDS_INCLUDE:
                 if is_zh:
                     print(f"  {step}. ⚠️ 你的 repo 已有根目錄 "
                           f"{_GL_ROOT_SHELL_REL.as_posix()}，但裡面沒有 "
@@ -5302,10 +5423,11 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
                           f"own entries, and match your file's existing "
                           f"indentation; do not add a second `include:` key "
                           f"— it would drop what you have):")
-            print()
-            for line in _gitlab_root_snippet_for(gl_status).rstrip('\n').splitlines():
-                print(f"       {line}")
-            print()
+            if gl_status != _GL_ROOT_DUPLICATE_KEY:
+                print()
+                for line in _gitlab_root_snippet_for(gl_status).rstrip('\n').splitlines():
+                    print(f"       {line}")
+                print()
         step += 1
 
     # ⛔ Placement is not wiring. The two steps above say where to PUT the
@@ -5545,6 +5667,11 @@ def _check_existing_init(output_dir: str, force: bool, parser: argparse.Argument
                   "--force will not delete it.", file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
     if marker.is_file() and not force and not dry_run:
+        own = _read_ownership(output_dir)
+        if own.state == _OWN_DUPLICATE_KEY:
+            # #4111: the refusal is the first thing read; name the key here.
+            print(_marker_duplicate_key_text(own.dup, _LANG == 'zh'),
+                  file=sys.stderr)
         if _LANG == 'zh':
             print(f"⚠️  此目錄已初始化 ({marker_path})。", file=sys.stderr)
             print("   加上 --force 會**重新產生每一個檔案並覆寫**——包含"
@@ -5933,6 +6060,11 @@ def _handle_dry_run(config: dict, output_dir: str,
                   f"{'' if len(affected) > 1 else 's'} only "
                   f"the repository root, so CI config generated here is not "
                   f"loaded (the real run prints the remedy).")
+        if ci_sel in ('gitlab', 'both') and _duplicate_key_in(
+                repo_root / _GL_ROOT_SHELL_REL) is not None:
+            # #4111: the remedy the real run prints is "fix this first".
+            print("  ⚠️ " + _gl_duplicate_key_text(
+                repo_root / _GL_ROOT_SHELL_REL, is_zh))
     elif repo_root is not None:
         # ⛔ Subdirectory, and the include is already in place — so the block
         # above (whose text is "not loaded") would be false here and stayed
@@ -5964,7 +6096,12 @@ def _handle_dry_run(config: dict, output_dir: str,
                   f"`{rel.as_posix()}/` prefix).")
     elif ci_sel in ('gitlab', 'both'):
         status = _gitlab_root_shell_status(output_dir)
-        if status not in (_GL_ROOT_CREATE, _GL_ROOT_ALREADY_WIRED):
+        if status == _GL_ROOT_DUPLICATE_KEY:
+            # #4111: the real run prints no snippet for it either.
+            print()
+            print("  ⚠️ " + _gl_duplicate_key_text(
+                Path(output_dir) / _GL_ROOT_SHELL_REL, is_zh))
+        elif status not in (_GL_ROOT_CREATE, _GL_ROOT_ALREADY_WIRED):
             print()
             if is_zh:
                 print(f"  ⚠️ 你的 repo 已有根目錄 {_GL_ROOT_SHELL_REL.as_posix()}，"
@@ -6162,10 +6299,10 @@ def main():
                            prune=stale.remove if stale and args.force else None,
                            prune_failed=prune_failed)
         if stale and prune_failed:
-            stale = _Stale(stale.known,
-                           [r for r in stale.remove if r not in prune_failed],
-                           {**stale.keep,
-                            **{r: _EXIST_UNREMOVABLE for r in prune_failed}})
+            stale = stale._replace(
+                remove=[r for r in stale.remove if r not in prune_failed],
+                keep={**stale.keep,
+                      **{r: _EXIST_UNREMOVABLE for r in prune_failed}})
             for rel, why in sorted(prune_failed.items()):
                 print(f"WARN: init_project: could not remove {rel}: {why}",
                       file=sys.stderr)
