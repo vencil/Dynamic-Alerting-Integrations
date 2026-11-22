@@ -141,7 +141,7 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 		}
 
 		// Federation token issuance is data egress — require admin on
-		// the target tenant (ADR-020 Wave-0 decision 5). Org-scope-aware
+		// the target tenant (ADR-020). Org-scope-aware
 		// (ADR-027 §7): an org-scoped rule only grants admin on
 		// a tenant inside the caller's org.
 		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), req.TenantID, rbac.PermAdmin, handler.WriteScopeMeta(d.ConfigDir)) {
@@ -251,13 +251,13 @@ func writeTokenNotFound(w http.ResponseWriter, r *http.Request, tokenID string) 
 
 // DeleteFederationToken handles DELETE /api/v1/federation/tokens/{id}.
 //
-// Revokes the token (ADR-020 Posture B): the bookkeeping record is
+// Revokes the token (ADR-020 §Token): the bookkeeping record is
 // removed and the token id is added to the revoked set the API gateway
 // consults. Revocation is eventually consistent — it propagates to the
 // gateway within the ConfigMap projected-volume sync window (~1-2 min).
 //
 // @Summary     Revoke a federation token
-// @Description Revokes a federation token — removes its record and adds it to the gateway revoked set. NOTE: revocation is eventually consistent and propagates to the gateway within ~1-2 minutes (ADR-020 Posture B). Requires admin permission on the token's tenant.
+// @Description Revokes a federation token — removes its record and adds it to the gateway revoked set. NOTE: revocation is eventually consistent and propagates to the gateway within ~1-2 minutes (ADR-020 §Token). Requires admin permission on the token's tenant.
 // @Description A caller without that permission gets the same 404 as for a token that does not exist, so a token id reveals nothing about its tenant.
 // @Tags        federation
 // @Produce     json

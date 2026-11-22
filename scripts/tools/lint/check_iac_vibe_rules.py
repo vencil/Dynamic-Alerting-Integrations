@@ -47,10 +47,20 @@ project-specific rules that hadolint cannot express:
 
 Engine (hadolint) finding -> action, by ``level``:
   error    -> BLOCK  (Critical)
-  warning  -> WARN   (High; recorded in docs/internal/iac-lint-baseline.md)
+  warning  -> WARN   (High; non-blocking once registered, see below)
   info     -> INFO
   style    -> INFO
 Vibe rule violations (V1/V2/V3/V4) and unregistered Dockerfiles -> BLOCK.
+
+#3863: every WARN must be registered, with its rationale, in
+``_iac_warn_baseline.REGISTER`` (keyed by Dockerfile and rule code, not by
+line). The table in docs/internal/iac-lint-baseline.md between the
+``BEGIN/END GENERATED: iac-l1-warn-baseline`` markers is rendered from this
+run's WARNs joined with the register; ``--write-baseline`` rewrites it. Under
+``--ci`` the run fails (rc 1) on an unregistered WARN, a register entry no
+WARN produced (stale), or a table that differs from the rendering (drift).
+The PR-body bypass does not cover these: the fix is to write the reason.
+A registered WARN stays non-blocking.
 
 The unified Critical/High/Medium/Low -> BLOCK/WARN/INFO table is finalised
 across all four layers in TRK-314; Layer 1 uses the BLOCK/WARN reduction
@@ -89,11 +99,14 @@ code and level are read, not the line). Anything else is exit 2.
 
 Usage:
     python3 scripts/tools/lint/check_iac_vibe_rules.py [--ci]
+    python3 scripts/tools/lint/check_iac_vibe_rules.py --write-baseline
     python3 scripts/tools/lint/check_iac_vibe_rules.py --list
 
 Exit codes:
-    0  no BLOCK findings (WARN / INFO may be present), or bypass matched
-    1  BLOCK findings present (only when --ci)
+    0  no BLOCK findings and no WARN-register problem (registered WARN /
+       INFO may be present), or bypass matched for the BLOCK findings
+    1  BLOCK findings present (only when --ci), or a WARN-register problem
+       (unregistered / stale / drift) under --ci or --write-baseline
     2  no verdict: hadolint unavailable (no binary, no docker), did not
        run (non-zero exit, no JSON array on stdout; see above), or did not
        report the canary at the registered levels (#3643)
@@ -125,6 +138,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 import _lib_engine  # noqa: E402
 from _lint_helpers import parse_bypass_tag  # noqa: E402
+import _iac_warn_baseline  # noqa: E402  (#3863: the WARN register + generated table)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HADOLINT_VERSION = "v2.12.0"
@@ -517,8 +531,12 @@ def _read_pr_body(pr_body_file: str | None) -> str | None:
     return os.environ.get("PR_BODY") or None
 
 
-def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
+def collect_findings(dockerfiles: list[str],
+                     warn_out: list[dict] | None = None) -> dict[str, list[str]]:
     """Run all rules; return {'BLOCK': [...], 'WARN': [...], 'INFO': [...]}.
+
+    *warn_out*, when given, receives the raw hadolint findings classified
+    WARN (the WARN register is judged on them, #3863).
 
     An engine that is missing, or that does not show it ran, is exit 2 with
     or without ``--ci`` (#3611 Q1)."""
@@ -554,6 +572,8 @@ def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
             f"{f.get('level')}] {f.get('message')}"
         )
         findings[action].append(line)
+        if action == "WARN" and warn_out is not None:
+            warn_out.append(f)
 
     # Vibe rules V1 / V2 per Dockerfile.
     for df in registered:
@@ -604,13 +624,52 @@ def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
     return findings
 
 
+def check_warn_baseline(warns: list[dict], write: bool) -> list[str]:
+    """#3863: judge this run's WARNs against the register and the doc's
+    generated table; with *write*, rewrite the table first. Returns the
+    problems left (unregistered / stale / drift), one line each.
+
+    The table is not written while a WARN is unregistered: its row would
+    have no reason to show."""
+    wb = _iac_warn_baseline
+    out = wb.problems(warns, wb.REGISTER)
+    doc = REPO_ROOT / wb.DOC
+    try:
+        text = doc.read_text(encoding="utf-8")
+        new = wb.splice(text, wb.render(warns, wb.REGISTER))
+    except (OSError, UnicodeDecodeError, wb.BaselineDocError) as e:
+        return out + [f"cannot use {wb.DOC}: {e}"]
+    if new == text:
+        return out
+    if write and not any(p.startswith("unregistered") for p in out):
+        # #3981: a tracked file a regen tool owns goes through the artifact
+        # entry. Imported here: `_lib_io` imports PyYAML, and the
+        # iac-sast-check hook's environment has none (it never writes).
+        import _lib_io  # noqa: E402, PLC0415
+        _lib_io.write_repo_artifact(doc, new)
+        print(f"wrote the generated WARN table in {wb.DOC}")
+        return out
+    if any(p.startswith("unregistered") for p in out):
+        # --write-baseline refuses while a WARN is unregistered (above), so
+        # pointing at it here would send the reader to a command that fails.
+        return out + [f"the generated WARN table in {wb.DOC} is out of date — "
+                      f"register the WARN(s) above first, then run --write-baseline"]
+    return out + [f"the generated WARN table in {wb.DOC} is out of date — run "
+                  f"`python3 scripts/tools/lint/check_iac_vibe_rules.py --write-baseline`, "
+                  f"then re-read each changed row's summary and rationale: a count "
+                  f"change can mean a new finding the old reason does not cover"]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__.strip().splitlines()[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--ci", action="store_true",
-                        help="Exit 1 on any BLOCK finding")
+                        help="Exit 1 on any BLOCK finding or WARN-register problem")
+    parser.add_argument("--write-baseline", action="store_true",
+                        help="Rewrite the generated WARN table in "
+                             "docs/internal/iac-lint-baseline.md (#3863)")
     parser.add_argument("--list", action="store_true",
                         help="List discovered Dockerfiles + contexts and exit")
     parser.add_argument("--pr-body-file", default=None,
@@ -626,7 +685,8 @@ def main() -> int:
             print(f"  {df}  ->  {ctx}")
         return EXIT_OK
 
-    findings = collect_findings(dockerfiles)
+    warns: list[dict] = []
+    findings = collect_findings(dockerfiles, warns)
     engine_error = findings.pop("__engine_error__", None)
 
     for action in ("BLOCK", "WARN", "INFO"):
@@ -636,16 +696,47 @@ def main() -> int:
     if engine_error:  # the scan did not run: a caller error (#3577, #3611)
         return EXIT_CALLER_ERROR
 
+    if args.write_baseline:
+        # A write failure is rc 2, named, with the old file kept (#3981).
+        import _lib_io  # noqa: E402, PLC0415  (see check_warn_baseline)
+        baseline = _lib_io.exit_on_output_write_error(check_warn_baseline)(warns, True)
+    else:
+        baseline = check_warn_baseline(warns, False)
+    for line in baseline:
+        print(f"  [BASELINE] {line}")
+    # Not waivable by the PR-body bypass: the fix is to write the reason.
+    baseline_fails = bool(baseline) and (args.ci or args.write_baseline)
+
     n_block = len(findings["BLOCK"])
     n_warn = len(findings["WARN"])
     n_info = len(findings["INFO"])
 
+    if baseline:
+        print(
+            f"\nFAIL Container SAST Layer 1 WARN register — {len(baseline)} problem(s) above.\n"
+            f"   容器 SAST 第 1 層 WARN 列管不一致：未登記的 WARN 要在 "
+            f"scripts/tools/lint/_iac_warn_baseline.py 補 rationale、過期登記要刪除、"
+            f"產生表要以 --write-baseline 重寫（#3863）。"
+        )
+
     if n_block == 0:
+        if baseline_fails:
+            return EXIT_VIOLATION
+        if baseline:
+            # Without --ci / --write-baseline a register problem does not fail
+            # the run, but the WARNs are then not all registered: say so.
+            print(
+                f"\nOK Container SAST Layer 1 — 0 BLOCK / {n_warn} WARN / {n_info} INFO "
+                f"across {len(dockerfiles)} Dockerfile(s); the WARN register has "
+                f"problems (above) that fail under --ci.\n"
+                f"   容器 SAST 第 1 層：0 個阻擋項；但 WARN 列管有上列問題，--ci 下會擋。"
+            )
+            return EXIT_OK
         print(
             f"\nOK Container SAST Layer 1 — 0 BLOCK / {n_warn} WARN / {n_info} INFO "
             f"across {len(dockerfiles)} Dockerfile(s).\n"
-            f"   容器 SAST 第 1 層通過：0 個阻擋項；WARN 為 baseline High "
-            f"（記於 docs/internal/iac-lint-baseline.md），不擋 merge。"
+            f"   容器 SAST 第 1 層通過：0 個阻擋項；WARN 皆已登記 rationale "
+            f"（docs/internal/iac-lint-baseline.md 的產生表），不擋 merge。"
         )
         return EXIT_OK
 
@@ -658,7 +749,7 @@ def main() -> int:
             f"   {n_block} BLOCK finding(s) above are author-acknowledged; "
             f"reviewer must confirm the bypass is justified."
         )
-        return EXIT_OK
+        return EXIT_VIOLATION if baseline_fails else EXIT_OK
 
     print(
         f"\nFAIL Container SAST Layer 1 — {n_block} BLOCK / {n_warn} WARN / "
@@ -671,7 +762,7 @@ def main() -> int:
         f"     reason: <>=30 words>\n"
         f"   詳見 docs/internal/lint-policy.md §4 與 epic #448 / TRK-311。"
     )
-    return EXIT_VIOLATION if args.ci else EXIT_OK
+    return EXIT_VIOLATION if (args.ci or baseline_fails) else EXIT_OK
 
 
 if __name__ == "__main__":

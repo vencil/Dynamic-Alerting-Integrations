@@ -273,9 +273,10 @@ data:
     \ }} has had evaluation\n\n        failures for 15m. Recording rules then serve\
     \ stale data,\n\n        and alerts built on them silently stop firing — the\n\
     \n        platform goes blind. A likely cause is a rule query\n\n        exceeding\
-    \ the global --query.max-samples cap (ADR-020\n\n        IV-2c); inspect the failing\
-    \ rule on /rules and either\n\n        optimise it or raise the cap + the Prometheus\
-    \ memory\n\n        limit together.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md\n\
+    \ the global --query.max-samples cap (ADR-020\n\n        §儲存後端的查詢上限); inspect\
+    \ the failing rule on /rules and either\n\n        optimise it or raise the cap\
+    \ + the Prometheus memory\n\n        limit together.\n\n        '\n      runbook_url:\
+    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md\n\
     \      summary: Prometheus rule evaluation failing in group {{ $labels.rule_group\
     \ }}\n  - alert: TenantApiSSEReconnectFailure\n    expr: \"sum without (pod, instance,\
     \ endpoint) (tenant_api_sse_clients{job=\\\"tenant-api\\\"}) == 0\\nand\\nmin\
@@ -509,14 +510,15 @@ data:
     \       ADR-023 assumed when it accepted a brief read outage on every\n\n    \
     \    `strategy: Recreate` deploy. This is the codified RE-TRIGGER for the\n\n\
     \        deferred read/write split (#678 / #788, closed deferred; see ADR-023\n\
-    \n        Deferred A4). NOT an outage. Action: reopen the CQRS split, and\n\n\
-    \        sequence it WITH the write-plane K8s Lease (#787 / A3) — A4 alone\n\n\
-    \        leaves writes (Save) dropping on deploy. Details:\n\n        docs/api/tenant-api-hardening.md\
-    \ §5.6. Dashboard: tenant_api_sse_clients.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md\n\
+    \n        §讀寫拆分部署). NOT an outage. Action: reopen the CQRS split, and\n\n    \
+    \    sequence it WITH the write-plane K8s Lease (ADR-023 §Lease) — the\n\n   \
+    \     split alone leaves writes (Save) dropping on deploy. Details:\n\n      \
+    \  docs/api/tenant-api-hardening.md §5.6. Dashboard: tenant_api_sse_clients.\n\
+    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md\n\
     \      summary: tenant-api read load sustained — revisit read/write CQRS split\
-    \ (ADR-023 A4)\n  - alert: TenantApiSingleWriterBreach\n    expr: \"max by (namespace,\
-    \ deployment, da_cluster) (\\n  kube_deployment_spec_replicas{deployment=\\\"\
-    tenant-api\\\"}\\n) > 1\\nor\\nmax by (namespace, deployment, da_cluster) (\\\
+    \ (ADR-023 §讀寫拆分部署)\n  - alert: TenantApiSingleWriterBreach\n    expr: \"max by\
+    \ (namespace, deployment, da_cluster) (\\n  kube_deployment_spec_replicas{deployment=\\\
+    \"tenant-api\\\"}\\n) > 1\\nor\\nmax by (namespace, deployment, da_cluster) (\\\
     n  kube_deployment_status_replicas{deployment=\\\"tenant-api\\\"}\\n) > 1\\n\"\
     \n    for: 2m\n    labels:\n      alert_source: platform\n      severity: critical\n\
     \    annotations:\n      description: 'The tenant-api Deployment has more than\
@@ -533,10 +535,10 @@ data:
     \ and find\n\n        what set it — check `kubectl get events`, the GitOps app''s\
     \ sync history\n\n        / an `ignoreDifferences` on replicas, and any HPA targeting\
     \ tenant-api.\n\n        This alert is ALSO the codified re-eval trigger for the\
-    \ deferred K8s\n\n        Lease (ADR-023 Deferred A3 / #787): if multi-writer\
-    \ is now a real\n\n        operational need, build leader-election — do NOT raise\
-    \ replicaCount.\n\n        Details: docs/api/tenant-api-hardening.md §5.7.\n\n\
-    \        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md\n\
+    \ deferred K8s\n\n        Lease (ADR-023 §Lease / #787): if multi-writer is now\
+    \ a real\n\n        operational need, build leader-election — do NOT raise replicaCount.\n\
+    \n        Details: docs/api/tenant-api-hardening.md §5.7.\n\n        '\n     \
+    \ runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md\n\
     \      summary: tenant-api running >1 replica — single-writer invariant (ADR-023)\
     \ breached at runtime\n  - alert: FederationRevocationTamperSuspected\n    expr:\
     \ max_over_time(federation_revocation_tamper_suspected[1h]) > 0\n    for: 5m\n\

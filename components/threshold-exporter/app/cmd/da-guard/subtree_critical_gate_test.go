@@ -36,12 +36,14 @@ func TestGuard_SubtreeCriticalOverAnUnvaluedBase(t *testing.T) {
 			"_defaults.yaml":      "defaults:\n  mysql_connections: 80\noptional_overrides: [redis_memory]\n",
 			"team/_defaults.yaml": sub, "team/tx.yaml": "tenants:\n  tx:\n    redis_memory: \"70\"\n",
 		}, exitFindings, []string{"subtree_default_undeliverable/tx/redis_memory_critical"}},
-		// root_defaults_critical_key is the warning on the root's own
-		// `_critical` key, unrelated to the subtree's value.
+		// #4173: a root `_critical` is a critical default, served only over
+		// a valued base — so it values no base, and the subtree's value over
+		// it is as undeliverable as without it; root_defaults_critical_key
+		// names the root's own line, which serves nothing either.
 		{"the root values the _critical key itself, no base", map[string]string{
 			"_defaults.yaml":      "defaults:\n  redis_memory_critical: 5\n",
 			"team/_defaults.yaml": sub, "team/tx.yaml": "tenants:\n  tx: {}\n",
-		}, exitOK, []string{"root_defaults_critical_key//_defaults.yaml:defaults.redis_memory_critical"}},
+		}, exitFindings, []string{"subtree_default_undeliverable/tx/redis_memory_critical", "root_defaults_critical_key//_defaults.yaml:defaults.redis_memory_critical"}},
 		// A root-null base: the subtree value is undeliverable (an error);
 		// before #3378 it was delivered and named root_default_null_undeclared
 		// (a warning).

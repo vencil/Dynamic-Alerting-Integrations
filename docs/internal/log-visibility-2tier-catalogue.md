@@ -1,14 +1,14 @@
 ---
-title: "2-Tier 日誌可見度 Catalogue（ADR-021 Phase 1 / #609）"
+title: "2-Tier 日誌可見度 Catalogue（ADR-021 / #609）"
 tags: [internal, governance, federation, logs, multi-tenant, visibility]
 audience: [platform-engineers, sre]
 version: v2.9.0
 lang: zh
 ---
 
-# 2-Tier 日誌可見度 Catalogue（ADR-021 Phase 1 / #609）
+# 2-Tier 日誌可見度 Catalogue（ADR-021 / #609）
 
-> 本文件是 ADR-021 [實作計畫 item 6](../adr/021-tenant-log-query-federation.md)
+> 本文件是 ADR-021 [§寫入時只留白名單欄位](../adr/021-tenant-log-query-federation.md)
 > 「2-tier log visibility policy schema + 可見度 catalogue」的落地，與
 > [平台日誌彙整 runbook §8](platform-log-aggregation-runbook.md) 互為一體（runbook
 > 講 (b) 投影**怎麼運作**；本文件講「**哪些 stream / field 對租戶可見**」的策展邊界）。
@@ -18,7 +18,7 @@ lang: zh
 
 ## ⛔ 先讀：這是「控制平面策展」、不是「查詢期硬阻擋」
 
-ADR-021 [§治理邊界](../adr/021-tenant-log-query-federation.md) 把**安全邊界**與**治理邊界**刻意分開，本 catalogue 屬於後者：
+ADR-021 [§寫入時只留白名單欄位](../adr/021-tenant-log-query-federation.md) 把**安全邊界**與**治理邊界**刻意分開，本 catalogue 屬於後者：
 
 | | 機制 | 在哪強制 |
 |---|---|---|
@@ -122,7 +122,7 @@ enforced（runbook §8.1 / §8.3）。
   / `federation_evidence` / JWT-fail）：tier-1 不投影，永遠 `0:0`。`federation_evidence`
   更強一級——它走 `origin_split` 的獨立分支、**根本不進 `demux`**，因此連進入
   `tenant_project` 的物理路徑都沒有（`vector test` 的 `no_outputs_from: [demux, ...]` 釘住）。
-- **`(a)` 應用 log（`ProjectID=1`）**：Phase 2 defer-with-trigger（ADR-021 Future Work 1）；
+- **`(a)` 應用 log（`ProjectID=1`）**：延後（ADR-021 §後果與已知限制）；
   Phase 1 只有 `(b)` 平台營運 log（`ProjectID=0`）。
 
 ## 變更 SOP（誰改、改哪、怎麼驗）
@@ -133,11 +133,11 @@ enforced（runbook §8.1 / §8.3）。
 | 讓某 `log_type` 對租戶可見 / 不可見 | Vector `tenant_route` 邏輯 + ADR review | 本文件 §Tier-1 表 | `vector test`（runbook §8.6 negative assertion）|
 | 改 stream field 維度 | `tenantProjectionStreamFields` | 本文件 §Stream fields | `test_vector_projection_vrl.py` |
 
-> 所有變更走 GitOps commit 歷史（控制平面 audit；ADR-021 §Audit log control-plane）。
+> 所有變更走 GitOps commit 歷史（控制平面 audit；ADR-021 §稽核）。
 
 ## 關聯
 
-- [ADR-021 §MVP 範圍與可見度治理](../adr/021-tenant-log-query-federation.md) — 2-tier policy 的決策依據（安全 vs 治理邊界分離）
+- [ADR-021 §寫入時只留白名單欄位](../adr/021-tenant-log-query-federation.md) — 2-tier policy 的決策依據（安全 vs 治理邊界分離）
 - [平台日誌彙整 runbook §8](platform-log-aggregation-runbook.md) — (b) 投影資料平面運作 + `vector test` 自證
 - [租戶日誌查詢 onboarding 指南](../integration/tenant-log-query.md) — 租戶端視角（看得到哪些 stream / field）
 - `helm/vector/values.yaml` `tenantProjectionKeepFields` / `tenantProjectionStreamFields` — tier-2 enforced SSOT

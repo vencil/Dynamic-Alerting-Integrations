@@ -8,11 +8,11 @@ lang: zh
 
 # Federation Data-Layer Label Enrichment Audit
 
-> ADR-020 IV-2.0（issue [#505](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/505)）的前置 audit。在 federation MVP（IV-2e policy schema / IV-2g smoke test）開工前，盤點 data-layer 的租戶 label 現況，確認 prom-label-proxy 注入的 matcher 配得到 series。
+> ADR-020 §資料層的租戶標籤（issue [#505](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/505)）的前置 audit。在 federation MVP（IV-2e policy schema / IV-2g smoke test）開工前，盤點 data-layer 的租戶 label 現況，確認 prom-label-proxy 注入的 matcher 配得到 series。
 
 ## 為什麼做這個 audit
 
-ADR-020 §前提約束 把「data-layer label enrichment」列為 IV-2 的 blocker：Layer-3 的 prom-label-proxy 對每個 PromQL selector 強制注入一個 per-tenant label matcher。若某 metric 原生不帶該 label，注入後的查詢得到 **empty vector** —— 租戶看到 dashboard 空白、報修「federation 壞了」，SRE 要從 token 一路查到 scrape config 才找得到根因。是典型的 silent-failure 地雷。
+ADR-020 §資料層的租戶標籤 把「data-layer label enrichment」列為 federation 的前置條件：prom-label-proxy 對每個 PromQL selector 強制注入一個 per-tenant label matcher。若某 metric 原生不帶該 label，注入後的查詢得到 **empty vector** —— 租戶看到 dashboard 空白、報修「federation 壞了」，SRE 要從 token 一路查到 scrape config 才找得到根因。是典型的 silent-failure 地雷。
 
 本 audit 在開工前盤點哪些 metric family 已帶租戶 label、哪些沒有，產出 federation whitelist 的 eligible / ineligible 初始清單（IV-2e #510 的輸入）。
 
@@ -24,7 +24,7 @@ audit 最重要的發現不是「某些 metric 缺 label」，而是 **label 的
 |---|---|---|
 | Data layer（實際） | **`tenant`** | `k8s/03-monitoring/configmap-prometheus.yaml` job `tenant-exporters` relabel `target_label: tenant`；`components/threshold-exporter/app/collector.go` `labelNames := []string{"tenant", ...}`；`k8s/03-monitoring/configmap-rules-*.yaml` 中 DB / middleware 類 rule pack（13/15）一律 `on(tenant)` join / `by(tenant)` 聚合（其餘 2 個 `operational` / `platform` 為不分租戶的平台內部規則，亦不用 `tenant_id`） |
 | Federation proxy（IV-2a #506 已 merge） | `tenant_id` | `helm/federation-proxy/values.yaml` `tenant.label: tenant_id` → `prom-label-proxy -label=tenant_id` |
-| ADR-020 prose | `tenant_id` | §前提約束 / 四層路由圖 / §實作計畫 多處寫 `{tenant_id="<X>"}` |
+| ADR-020 prose | `tenant_id` | （改寫前的）前提約束、四層路由圖、實作計畫多處寫 `{tenant_id="<X>"}` |
 
 `tenant_id` 在整個 `k8s/` data-layer 設定裡 **一次都沒出現**。
 
@@ -39,7 +39,7 @@ Federation **對齊平台既有的 `tenant`**。反方向（把平台的 relabel
 issue #505 的 PR 一併處理：
 
 - `helm/federation-proxy/values.yaml`：`tenant.label` `tenant_id` → `tenant`（+ chart README / chart version）。
-- `docs/adr/020-tenant-federation.md` §前提約束：label 名對齊 `tenant` + 本 audit 的修正註記。
+- `docs/adr/020-tenant-federation.md`（現 §資料層的租戶標籤）：label 名對齊 `tenant` + 本 audit 的修正註記。
 
 ## 現況盤點表
 
@@ -84,4 +84,4 @@ issue #505 的 PR 一併處理：
 
 ---
 
-_2026-05-17 — ADR-020 IV-2.0 前置 audit。盤點依據：`k8s/03-monitoring/configmap-prometheus.yaml`、`k8s/03-monitoring/configmap-rules-*.yaml`、`components/threshold-exporter/app/collector.go`、`helm/federation-proxy/`。_
+_2026-05-17 — ADR-020 §資料層的租戶標籤 前置 audit。盤點依據：`k8s/03-monitoring/configmap-prometheus.yaml`、`k8s/03-monitoring/configmap-rules-*.yaml`、`components/threshold-exporter/app/collector.go`、`helm/federation-proxy/`。_

@@ -79,7 +79,7 @@ func guardBareTenantID(tenantID string) error {
 }
 
 // FederationSubsetDirName is the conf.d subdirectory holding one federation
-// metric-subset file per tenant (ADR-020 IV-2e). It is a conf.d-shaped
+// metric-subset file per tenant (ADR-020 §隔離與治理的分界). It is a conf.d-shaped
 // directory — one `<id>.yaml`/`<id>.yml` per tenant — so every per-tenant
 // question about it is answered by the SAME resolver as conf.d itself, called
 // with FederationSubsetDir as the directory (#1698). The read handler, the

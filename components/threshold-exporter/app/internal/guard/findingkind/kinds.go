@@ -46,13 +46,12 @@ var (
 	// root-relative path.
 	FindingDefaultsTopLevelIgnored = register("defaults_toplevel_ignored",
 		"judges a defaults file's top-level keys beside its `defaults:` mapping")
-	// FindingRootDefaultsCriticalKey (warn, TenantID ""; #2544): a
+	// FindingRootDefaultsCriticalKey (warn, TenantID ""; #2544, #4173): a
 	// `<metric>_critical` key (either #1231 spelling) under the conf.d root
-	// carrier's `defaults:` mapping. It does not become `<metric>`'s
-	// severity=critical row, which only a tenant's override map
-	// carries (the tenant's own key, or one a subtree `_defaults.yaml`, a root
-	// platform `tenants:` entry or a profile hands it). Field is
-	// `<file>:defaults.<key>`. Not blocking (owner decision on #2544, option b).
+	// carrier's `defaults:` mapping whose `<metric>` has no value at the root
+	// or from the built-in layer. The key is every tenant's critical default,
+	// but a critical row is served only over a valued base, so it serves
+	// nothing. Field is `<file>:defaults.<key>`. Not blocking.
 	FindingRootDefaultsCriticalKey = register("root_defaults_critical_key",
 		"judges a `<metric>_critical` key in the conf.d root defaults")
 	// FindingRootDefaultRefused (error, TenantID ""; #3140, #3250): a
@@ -74,11 +73,10 @@ var (
 	// FindingRootDisableFamilyValue (error, TenantID ""; #3832 decision 3):
 	// the conf.d root carrier's `defaults:` writes a default-armed key as
 	// `disable` (config.RootDisableText) and also gives a value to a key of
-	// its family — `<key>_critical` or a dimensional `<key>{…}`. A root
-	// `<key>{…}` goes off with the base, so its value reaches no tenant
-	// that gives the base no value; a root `<key>_critical` is a threshold
-	// of its own, served while the base is off. Either way the two lines
-	// contradict each other. Field is
+	// its family — `<key>_critical` or a dimensional `<key>{…}`. Either goes
+	// off with the base (#4173: a root `<key>_critical` is every tenant's
+	// critical default), so its value reaches no tenant that gives the base
+	// no value: the two lines contradict each other. Field is
 	// `<file>:defaults.<family key>`.
 	FindingRootDisableFamilyValue = register("root_disable_family_value",
 		"judges a value the conf.d root defaults give a family its own root disable switches off")

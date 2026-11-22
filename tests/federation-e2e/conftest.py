@@ -1,4 +1,4 @@
-"""pytest fixtures for the federation E2E driver (ADR-020 IV-2j, #516).
+"""pytest fixtures for the federation E2E driver (ADR-020, #516).
 
 The driver runs on the host; the stack is the docker-compose harness
 brought up by scripts/ops/federation_e2e_run.sh. Service URLs come from

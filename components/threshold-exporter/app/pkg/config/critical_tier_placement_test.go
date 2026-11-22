@@ -4,35 +4,22 @@ package config
 // `<base>_critical` key depending on WHICH SECTION it is written in (#1218 /
 // TRK-344).
 //
-// This is a characterization pin, not a bug reproduction: the behaviour below
-// is the designed one (`resolveCriticalRows` iterates TENANT OVERRIDES;
-// `resolveBaseRows` iterates `defaults` and does not skip the suffix). It is
-// pinned here because several artifacts outside this package now assert it in
-// prose, and every one of them was written from reading the code rather than
-// from running it. A prose claim about a resolver is only as good as a test
-// that runs the resolver.
+// A characterization pin: `resolveCriticalRows` reads a `<base>_critical`
+// from the tenant's overrides and, since #4173, from the root `defaults:` as
+// every tenant's default; `resolveBaseRows` skips the suffix. Several
+// artifacts outside this package describe it in prose, so a change here has
+// to move with them:
 //
-// Enforced elsewhere, so a change here has to move with them:
-//
-//   - `check_threshold_reachability`'s defaults-tier face rejects a `_critical`
-//     key under `defaults:` across every `_defaults.yaml` surface — four
-//     enumerated GENERATORS plus every tracked ARTIFACT the predicate finds —
-//     on the strength of this behaviour. (Deliberately no number here: an
-//     earlier revision said "all six producers", which the same PR later had to
-//     retract once the artifact half became derived.)
+//   - `check_threshold_reachability`'s defaults-tier face keeps a `_critical`
+//     key out of every shipped `_defaults.yaml` — now a producer policy (a
+//     generator must not arm every tenant's critical alert), no longer a
+//     resolver limit; #3924 revisits it.
 //   - `TestDocsDefaultsSamplesHaveNoTenantOnlyKeys` (docs_defaults_sample_test.go)
-//     holds documentation samples to the same rule and describes the emitted
-//     series shape in its failure message.
-//   - `onboard_platform._render_critical_suggestion` prints this mechanism
-//     verbatim into a file a migrating customer reads.
-//
-// ⛔ And one that is DELIBERATELY unreachable, so do not read the list as "grep
-// and update": `_registry_lib._TENANT_STUB_CRITICAL_NOTE`'s "defaults ships the
-// critical value" branch describes a state the gate above now forbids. It used
-// to tell a customer "the critical row fires without you doing anything" — the
-// exact opposite of the first test below — and it is kept, corrected, only so
-// that a regression is described honestly rather than crashing a customer's
-// CLI. Nothing exercises it but its own unit tests.
+//     holds documentation samples to the same policy.
+//   - `_registry_lib._TENANT_STUB_CRITICAL_NOTE`'s "defaults ships the
+//     critical value" branch tells a customer the root value is every
+//     tenant's critical default; the gate above keeps the shipped generators
+//     out of that branch.
 
 import (
 	"testing"
@@ -73,41 +60,43 @@ func hasSig(rows []ResolvedThreshold, want rowSig) bool {
 	return false
 }
 
-// TestCriticalKeyUnderDefaultsProducesNoCriticalTier is the measurement the
-// #1218 fix rests on: a platform that writes `<base>_critical` into `defaults:`
-// gets a WARNING row whose metric label carries the suffix — a series no
-// recording rule joins — and no critical row at all.
+// TestCriticalKeyUnderDefaultsIsThePlatformsCriticalTier (#4173): a platform
+// that writes `<base>_critical` into the root `defaults:` gives every tenant
+// that critical value — a severity=critical row of `<base>`, the one
+// `tenant:alert_threshold:<base>_critical` reads — and no suffixed warning
+// series. (Before #4173 the key was served as a warning row of its own,
+// metric `connections_critical`, which no rule read: the #1218 measurement.)
 //
-// The whole resolved set is asserted, not just the presence of one row: the
-// claim being pinned is an ABSENCE ("no critical tier"), and an absence that is
-// only spot-checked is the shape that quietly stops holding.
-func TestCriticalKeyUnderDefaultsProducesNoCriticalTier(t *testing.T) {
+// The whole resolved set is asserted: the claim includes an ABSENCE (no
+// suffixed series), and an absence only spot-checked quietly stops holding.
+func TestCriticalKeyUnderDefaultsIsThePlatformsCriticalTier(t *testing.T) {
 	t.Parallel()
 	cfg := ThresholdConfig{
 		Defaults: map[string]float64{
 			placementBase:     80,
-			placementCritical: 90, // ← what init_project used to emit
+			placementCritical: 90,
 		},
-		Tenants: map[string]map[string]ScheduledValue{"t-1": {}},
+		Tenants: map[string]map[string]ScheduledValue{"t-1": {}, "t-2": {placementCritical: {Default: "95"}}},
 	}
 
 	rows := cfg.ResolveAt(fixedNow)
 
-	if len(rows) != 2 {
-		t.Fatalf("want exactly 2 rows (both from resolveBaseRows), got %d: %+v", len(rows), sigs(rows))
-	}
-	if !hasSig(rows, rowSig{"pg", "connections", "warning", 80}) {
-		t.Errorf("base key must still emit its warning row: %+v", sigs(rows))
-	}
-	// parseMetricKey splits on the FIRST underscore, so the `_critical` suffix
-	// survives into the metric label instead of becoming a severity.
-	if !hasSig(rows, rowSig{"pg", "connections_critical", "warning", 90}) {
-		t.Errorf("a _critical key in defaults: emits a suffixed WARNING series: %+v", sigs(rows))
+	if len(rows) != 4 {
+		t.Fatalf("want exactly 4 rows (a warning and a critical per tenant), got %d: %+v", len(rows), sigs(rows))
 	}
 	for _, r := range rows {
+		if r.Metric != "connections" {
+			t.Errorf("a suffixed series is served: %+v", sigs(rows))
+		}
+		want := 80.0
 		if r.Severity == "critical" {
-			t.Errorf("defaults: cannot produce a critical tier — resolveCriticalRows "+
-				"iterates tenant overrides, not defaults; got %+v", sigs(rows))
+			want = 90 // the platform's critical value
+			if r.Tenant == "t-2" {
+				want = 95 // the tenant's own replaces it
+			}
+		}
+		if r.Value != want {
+			t.Errorf("%s %s = %v, want %v", r.Tenant, r.Severity, r.Value, want)
 		}
 	}
 }
@@ -139,6 +128,80 @@ func TestCriticalKeyAsTenantOverrideProducesTheCriticalTier(t *testing.T) {
 	for _, r := range rows {
 		if r.Metric == "connections_critical" {
 			t.Errorf("the suffix must not reach the metric label on this path: %+v", sigs(rows))
+		}
+	}
+}
+
+// #4173: a tenant `_critical` the reader refuses ("abc") falls back to the
+// root's critical value, as an unreadable base value falls back to the root
+// default — recorded as unparsed (served), not as dropped. With no root
+// critical value it is dropped (the control).
+func TestUnreadableTenantCriticalFallsBackToTheRootCriticalValue(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		rootCritical bool
+		want         []rowSig
+		reason       string
+	}{
+		"root critical": {true, []rowSig{{"pg", "connections", "critical", 90}}, NotServedValueUnparsed},
+		"no root value": {false, nil, NotServedValueUnparsedDropped},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			defaults := map[string]float64{placementBase: 80}
+			if tc.rootCritical {
+				defaults[placementCritical] = 90
+			}
+			cfg := ThresholdConfig{
+				Defaults: defaults,
+				Tenants:  map[string]map[string]ScheduledValue{"t-1": {placementCritical: {Default: "abc"}}},
+			}
+			var got []rowSig
+			for _, s := range sigs(cfg.ResolveAt(fixedNow)) {
+				if s.severity == "critical" {
+					got = append(got, s)
+				}
+			}
+			if len(got) != len(tc.want) || (len(got) == 1 && got[0] != tc.want[0]) {
+				t.Errorf("critical rows %+v, want %+v", got, tc.want)
+			}
+			if r := cfg.ValuesNotServed(fixedNow)["t-1"][placementCritical]; r != tc.reason {
+				t.Errorf("not served reason %q, want %q", r, tc.reason)
+			}
+		})
+	}
+}
+
+// #4173 review: a root `<base>{…}_critical` is no tier (#2031, #3556): it
+// serves no row — not a critical row whose metric carries the label segment.
+func TestARootDimensionalCriticalKeyServesNoRow(t *testing.T) {
+	t.Parallel()
+	cfg := loadTree(t, map[string]string{
+		"_defaults.yaml": "dimensions:\n  pg_connections: [db]\ndefaults:\n  pg_connections: 80\n" +
+			"  'pg_connections{db=\"a\"}': 70\n  'pg_connections{db=\"a\"}_critical': 96\n",
+		"t.yaml": "tenants:\n  ta: {}\n",
+	})
+	for _, r := range cfg.ResolveAt(fixedNow) {
+		if r.Tenant == "ta" && r.Severity == "critical" {
+			t.Errorf("critical row served: %+v", r)
+		}
+	}
+}
+
+// #4173 review: a root `<key>_critical` arms the critical alert for every
+// tenant, so user_threshold_unset does not name its key.
+func TestUnsetThresholds_ARootCriticalDefaultConfiguresTheKey(t *testing.T) {
+	t.Parallel()
+	if _, ok := UnsetThresholdKeys()["jvm_memory"]; !ok {
+		t.Fatal("jvm_memory is not in the unset table: the fixture needs another key")
+	}
+	cfg := loadTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  jvm_memory_critical: 90\n",
+		"t.yaml":         "tenants:\n  ta: {}\n",
+	})
+	for _, u := range cfg.UnsetThresholdsAt(fixedNow, map[string]bool{"ta": true}) {
+		if u.Key == "jvm_memory" {
+			t.Errorf("jvm_memory listed unset: %+v", u)
 		}
 	}
 }

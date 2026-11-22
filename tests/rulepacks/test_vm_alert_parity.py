@@ -179,19 +179,46 @@ def xlate_dir(tmp_path_factory) -> Path:
     return dst
 
 
+#: Wall-clock limit for one ``vmalert-tool unittest`` run. It is there to end a
+#: run that hangs, not to judge speed: vmalert-tool replays every evaluation
+#: interval up to a group's largest ``eval_time``, so a fixture's cost is its
+#: steps times the rules it loads. The heaviest today
+#: (tenant-log-query-platform: six groups reaching 1530m for an ``offset 1d``
+#: baseline; unset-thresholds: sixteen groups over eleven packs) take 70-150 s
+#: on a 4-core machine under load, and the earlier limit of 120 s failed the
+#: required check on a slow runner with nothing wrong (#4118).
+_VMALERT_TIMEOUT_S = 600
+
+
+def _run_vmalert_unittest(fixture: str, xlate_dir: Path) -> subprocess.CompletedProcess:
+    """Run one translated fixture through ``vmalert-tool unittest``. Running
+    out of time fails the test by name as a timeout — it says nothing about
+    parity, and a bare ``TimeoutExpired`` traceback reads like a divergence."""
+    cmd = [
+        _VMALERT_TOOL, "unittest", "--disableAlertgroupLabel",
+        f"--files={(xlate_dir / fixture).as_posix()}",
+    ]
+    try:
+        return subprocess.run(
+            cmd, cwd=str(xlate_dir), capture_output=True,
+            text=True, encoding="utf-8", errors="replace",
+            timeout=_VMALERT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"{fixture}: vmalert-tool did not finish within {_VMALERT_TIMEOUT_S}s. "
+            "This is a TIMEOUT, not a parity divergence — no verdict was reached. "
+            "Run it alone to see how long it takes: "
+            f"`{' '.join(cmd[:3])} --files=<translated {fixture}>`; a fixture whose "
+            "groups reach a large eval_time, or that loads many rule files, is the "
+            "usual cause (see _VMALERT_TIMEOUT_S).",
+            pytrace=False)
+
+
 @pytest.mark.parametrize("fixture", _fixtures())
 def test_rulepack_parity_on_vmalert(fixture: str, xlate_dir: Path) -> None:
     catalogued = fixture in _catalogued_fixtures()
-    proc = subprocess.run(
-        [
-            _VMALERT_TOOL, "unittest", "--disableAlertgroupLabel",
-            f"--files={(xlate_dir / fixture).as_posix()}",
-        ],
-        cwd=str(xlate_dir),
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
-        timeout=120,
-    )
+    proc = _run_vmalert_unittest(fixture, xlate_dir)
     diverged = proc.returncode != 0
 
     if catalogued:
@@ -254,6 +281,30 @@ def test_rulepack_parity_on_vmalert(fixture: str, xlate_dir: Path) -> None:
             f"--- vmalert-tool stdout ---\n{proc.stdout}\n"
             f"--- vmalert-tool stderr ---\n{proc.stderr}"
         )
+
+
+def test_a_timeout_is_reported_as_a_timeout_not_a_divergence(tmp_path, monkeypatch) -> None:
+    """#4118: a fixture that runs out of time fails by name as a timeout — not
+    with a bare TimeoutExpired traceback, which reads like the engine
+    diverging — and the limit it ran under is the module's one constant."""
+    seen: dict = {}
+
+    def never_finishes(cmd, **kwargs):
+        seen.update(kwargs, cmd=cmd)
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", never_finishes)
+    with pytest.raises(pytest.fail.Exception) as failed:
+        _run_vmalert_unittest("slow_test.yaml", tmp_path)
+    message = str(failed.value)
+    assert "slow_test.yaml" in message
+    assert "TIMEOUT, not a parity divergence" in message
+    assert f"{_VMALERT_TIMEOUT_S}s" in message
+    assert seen["timeout"] == _VMALERT_TIMEOUT_S
+    assert seen["cmd"][-1] == f"--files={(tmp_path / 'slow_test.yaml').as_posix()}"
+    # The measured heaviest fixtures need 70-150 s on a loaded 4-core machine;
+    # a limit near that is the bug this test is here for.
+    assert _VMALERT_TIMEOUT_S >= 4 * 150
 
 
 def test_gate_detects_a_known_divergence(tmp_path: Path) -> None:

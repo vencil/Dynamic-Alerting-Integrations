@@ -99,7 +99,7 @@ Fixes: Trap #12
 
 ⛔ **The colon is load-bearing.** `check_planning_status_sync.py` reads these with `git log --format='%(trailers:key=Resolves,…)'`, and git only recognises `Key: value` lines as trailers. A colon-less `Resolves TRK-228` is not merely ignored: sitting in the last paragraph it makes git treat the **whole** paragraph as prose, so `Refs:` / `Self-Review-Pass-2:` / `Co-Authored-By:` next to it vanish too (both `git interpret-trailers --parse` and `%(trailers)` return nothing).
 
-The verb (`Resolves` / `Closes` / `Fixes` / `Fix`) is **case-insensitive**; the ID itself must be `\b`-bounded so that `TRK-1` does not eat `TRK-100`. CI's `check_planning_status_sync.py` (chunk 2b, pending) verifies that the matching `frontmatter status:` flips to `done` and the `pr_ref:` field is populated in the same PR.
+The verb (`Resolves` / `Closes` / `Fixes` / `Fix`) is **case-insensitive**; the ID itself must be `\b`-bounded so that `TRK-1` does not eat `TRK-100`. CI's `check_planning_status_sync.py` (live, warn-only: it annotates the PR and never blocks merge) checks that the matching `frontmatter status:` flips to `done` and the `pr_ref:` field is populated in the same PR.
 
 **Namespace rules (effective v2.8.1, per [ADR-019 §編號政策](../adr/019-planning-ssot.md#編號政策三種前綴並存)):**
 

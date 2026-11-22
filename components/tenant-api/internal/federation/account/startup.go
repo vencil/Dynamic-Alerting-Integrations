@@ -1,7 +1,6 @@
 package account
 
-// Startup integrity guard + the shared conf.d tenant enumeration (#609 / ADR-021,
-// Gemini #2).
+// Startup integrity guard + the shared conf.d tenant enumeration (#609 / ADR-021).
 //
 // Threat: the registry file is truncated to 0 bytes (a botched mount, an
 // interrupted write, a disk-full). Parse() treats blank input as a brand-new

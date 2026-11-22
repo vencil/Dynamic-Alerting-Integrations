@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: docs
 created_at: 2026-05-10
-updated_at: 2026-11-21
+updated_at: 2026-11-22
 ---
 
 # ADR-019: 計畫追蹤的單一來源 — 各條目自帶 frontmatter，索引自動產生
@@ -18,7 +18,7 @@ updated_at: 2026-11-21
 >
 > 依語言政策，本 ADR 只有中文版。
 
-**決策摘要**：每一個追蹤項目（技術債、DX（開發者體驗）待辦、回歸、ADR、sprint 條目）都在它所在的檔案裡帶一段固定格式的 frontmatter，那段 frontmatter 就是這個項目狀態的唯一來源。`docs/internal/planning-index.md` 是由程式掃描全 repo、把這些 frontmatter 彙整出來的索引，不手改。PR 裡的 commit 用 trailer 宣告「解決了某項目」時，CI 檢查該項目的 frontmatter 有沒有同步改成已完成（目前只警告、不擋 merge）。新的追蹤項目一律用 `TRK-<追蹤 issue 號>` 編號；ADR 與 sprint 條目保留各自的編號。
+**決策摘要**：每一個追蹤項目（技術債、DX（開發者體驗）待辦、回歸、ADR、sprint 條目）都在它所在的檔案裡帶一段固定格式的 frontmatter，那段 frontmatter 就是這個項目狀態的唯一來源。`docs/internal/planning-index.md` 是由程式掃描全 repo、把這些 frontmatter 彙整出來的索引，不手改。PR 裡的 commit 用 trailer 宣告「解決了某項目」時，CI 檢查該項目的 frontmatter 有沒有同步改成已完成（只警告、不擋 merge）。新的追蹤項目一律用 `TRK-<追蹤 issue 號>` 編號；ADR 與 sprint 條目保留各自的編號。
 
 ## 狀態
 
@@ -28,6 +28,7 @@ updated_at: 2026-11-21
 |:--|:--|:--|
 | 2026-09 | 新條目的編號改為追蹤 issue 的號碼，手工看表配號停用（[#2106](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2106)） | 決策 › 編號政策 |
 | 2026-11-21 | 改寫表達，對照現行工具行為更新描述；決策不變 | 全文 |
+| 2026-11-22 | 撤回原列為「尚未實作」的六項強化：同步檢查定案為只警告（不升級擋 merge、不留言、不進 pre-push），索引不在 commit 時自動重產，不做定期掃描，CLAUDE.md 只在路由表指向 | 決策 › 第二層、第三層、AI agent 從哪裡找到索引；已知限制；替代方案 |
 
 ## 名詞
 
@@ -148,7 +149,7 @@ frontmatter 可以寫在四種位置，產生器都會找到：
 - 依 `status` 分組，順序是 `in-progress`、`accepted`、`proposed`、`done`、`abandoned`、`superseded`；組內依 `tracking_kind`、再依 `id` 排序。三種前綴的條目混在同一組裡，不分開顯示。
 - 每列連到來源檔；來源不是 `.md` 時（程式碼、`flaky-tests.yaml`）連結附行號。
 - `make planning-index`（等同 `--write`）重新產生索引；`--check` 只比對，索引過期就以結束碼 1 失敗。
-- pre-commit 的 `planning-index-check` 會在 `docs/` 底下的 `.md`、`flaky-tests.yaml`、產生器本身或索引變動時執行 `--check`。
+- pre-commit 的 `planning-index-check` 會在 `docs/` 底下的 `.md`、`flaky-tests.yaml`、產生器本身或索引變動時執行 `--check`。它只比對、不改檔：索引過期時 commit 失敗，由作者跑 `make planning-index` 後把索引一起加進 commit。不在 commit 時自動重產索引並偷偷加進暫存區，因為那會讓提交的內容和作者看過的不一樣。
 
 用自動發現而不是寫死來源檔清單，是為了讓新增的 backlog 文件不必有人記得去登記：第一個寫上合格 frontmatter 的條目就會出現在索引裡。
 
@@ -210,6 +211,8 @@ status: wip
 
 `.github/workflows/planning-status-sync.yaml` 在 PR 開立、推新 commit、重新開啟、編輯時執行，傳入 base 分支與 PR 號碼，**不帶 `--strict`**：有問題時印到 stderr，並在 GitHub Actions 的 PR 檢查頁面加上 warning 註記，但結束碼是 0，不擋 merge。帶 `--strict`（或同義的 `--ci`）時有問題就以結束碼 1 失敗。
 
+**只警告是這一層的定案，不是過渡期。** 這一層不升級成擋 merge（不論同一項目連續幾支 PR 沒同步），檢查不通過時不在 PR 留言（只有 warning 註記），本機 pre-push 也不跑它。frontmatter 仍是索引的唯一來源；只警告的理由是它落後的代價低：新式 `TRK-<issue 號>` 條目的編號就是追蹤 issue，讀者從 issue 的開關就看得出工作做完沒有，索引上的狀態慢一步不會讓工作失蹤。為了這種落後擋下 PR，代價不值。trailer 怎麼寫仍由 [`dev-rules.md`](../internal/dev-rules.md) §P1 規範；這一層只在 commit 寫了 trailer 時提醒 frontmatter 跟著改。`--strict` 保留給想在本機嚴格檢查的人。
+
 本機可以直接跑 `python3 scripts/tools/lint/check_planning_status_sync.py`（base 預設 `origin/main`）。拿上面範例的條目、假設當前 PR 是 2202，兩個 trailer `Resolves: TRK-2150` 與 `Fixes: TRK-2160` 的回報是：
 
 ```text
@@ -218,7 +221,7 @@ Found 2 planning-status sync issue(s) across 2 trailer reference(s):
   [pr-ref-mismatch] TRK-2150: trailer `Resolves TRK-2150` (commit abc1234) but entry in docs/internal/example-spec.md has pr_ref `2201` ≠ current PR `2202`. Fill the entry's `pr_ref:` field.
   [missing-entry] TRK-2160: trailer `Fixes TRK-2160` (commit abc1234) but no matching planning entry found in repo. Add frontmatter (`id:` + `tracking_kind:` + `status:`) to the backlog file so the entry is discoverable.
 
-Default behaviour is **soft-warn** (exit 0). Run with `--strict` to fail CI on these issues.
+Default behaviour is **soft-warn** (exit 0). Run with `--strict` to exit 1 (for local strict checks).
 ```
 
 `TRK-2160` 明明有自己的檔案，回報卻是 `missing-entry`：因為它的 `status` 不合列舉、沒被收錄。
@@ -247,6 +250,10 @@ Default behaviour is **soft-warn** (exit 0). Run with `--strict` to fail CI on t
 
 **CI 的 checkout 必須拿到完整歷史。** `actions/checkout` 預設只拉一個 commit，`<base>..HEAD` 的範圍算不出來。`planning-status-sync.yaml` 與 `self-review-pass2.yaml`（同樣讀 PR 範圍內的 trailer）都設了 `fetch-depth: 0`，並另外 `git fetch` base 分支。base ref 找不到時，工具以結束碼 2 結束並提示檢查 `fetch-depth: 0`。
 
+### AI agent 從哪裡找到索引
+
+根目錄 `CLAUDE.md` 只在路由表的「Planning / Tracking ID」一列指向 [`planning-id-mapping.md`](../internal/planning-id-mapping.md) 與本 ADR，不在起手式要求 AI agent 每次先讀 `planning-index.md`。`CLAUDE.md` 是路由表，只在情境符合時把讀者帶到對的文件；要求每個 session 都先讀一份與手上工作多半無關的索引，只會加長起手成本。
+
 ## 後果與已知限制
 
 **得到的**：
@@ -263,13 +270,8 @@ Default behaviour is **soft-warn** (exit 0). Run with `--strict` to fail CI on t
 
 **已知限制**：
 
-- CI 同步檢查目前只警告、不擋 merge（workflow 沒有帶 `--strict`）。「PR 解決了某項目、frontmatter 沒改成 `done`」仍然合得進去，只會留下 warning 註記。本決策還要求以下幾件事，目前都沒有實作：
-  - 同一個項目連續三支 PR 仍未同步，就改為擋 merge。
-  - 同步檢查不通過時在 PR 留言提醒（現在只有 warning 註記）。
-  - 本機 pre-push 時先跑一次同步檢查。
-  - 每次 commit 時自動重產索引並加進 commit（現在 pre-commit 只做 `--check`，過期就失敗，要自己跑 `make planning-index`）。
-  - 每月一次的定期掃描，列出過期條目給 maintainer 季度回顧。
-  - 在 CLAUDE.md 的起手式要求 AI agent 先讀 `planning-index.md`（現行 CLAUDE.md 只在路由表指向對照表與本 ADR）。
+- CI 同步檢查只警告、不擋 merge（見第三層）。「PR 解決了某項目、frontmatter 沒改成 `done`」合得進去，只會留下 warning 註記；frontmatter 的狀態可能落後於對應 issue 的開關狀態。
+- 舊編號（三位數 TRK，含從 TD／HA／REG 換過來的）條目不是以 issue 號編號，無法從編號直接找到 issue 來對照狀態；它們的狀態過期時沒有任何機制會發現：第三層只在有 commit 寫了 trailer 時才檢查，也不做定期掃描。
 - `pr_ref` 只能填一個號碼。填成清單時會被串成 `"375, 380"` 這樣的字串，與 PR 號碼比對一定不符，同步檢查回報 `pr-ref-mismatch`。
 - 欄位值不在列舉內、或 YAML 解析失敗的條目會被靜默略過，不報錯。它不會出現在索引裡；有 commit 宣告解決它時，CI 回報的是 `missing-entry`，而不是指出欄位寫錯。
 - 只認 commit trailer。寫在 PR 標題或 PR 說明裡的「Resolves …」不會被檢查。
@@ -296,9 +298,14 @@ Default behaviour is **soft-warn** (exit 0). Run with `--strict` to fail CI on t
 
 好處是不必改寫任何既有引用，只要補 frontmatter。不採用的原因：TD、HA、REG 本質同類，長期並存是歷史包袱；AI agent 與新貢獻者要學好幾種看起來都像待辦的前綴；而且沒有解決核心問題——分散不只是「散在不同檔案」，也是「同一個概念有三個名字」。省下的改寫成本很小，換來的是編號分散永久存在。
 
-### 只靠定期掃描找過期條目（不當主要防線，保留為次要安全網）
+### 定期掃描找過期條目（不採用）
 
-做法是排程定期掃描，找出「標成完成卻沒有 PR 編號」「標成進行中卻很久沒動」的條目。不當主要防線的原因：這是被動的，漂移已經發生才會發現。PR 宣告解決某項目的那一刻是最主動的檢查點，在 CI 階段驗證成本最低。決策是以 PR 時的檢查為主，每月一次的定期掃描為輔，列出過期條目給 maintainer 季度回顧；這個每月掃描目前沒有實作（見已知限制）。
+做法是排程定期（例如每月）掃描，找出「標成完成卻沒有 PR 編號」「標成進行中卻很久沒動」的條目，列給 maintainer 季度回顧。不採用，接受 frontmatter 的狀態漂移：
+
+- 成本不值。排程要有人維護、報告要有人讀、讀完還要回頭改 frontmatter，換到的只是索引裡的狀態與實際一致。
+- 落後的代價低。新式 `TRK-<issue 號>` 條目做完沒有，從 issue 的開關就看得到；frontmatter 慢一步是接受的漂移。
+
+代價是舊編號（三位數）條目的過期狀態不會被偵測，見「已知限制」。
 
 ### 在產生器裡寫死來源檔清單（不採用）
 

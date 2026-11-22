@@ -1,19 +1,15 @@
 package main
 
-// #2544 (owner decision: option b): da-guard's redundant-override advice on
-// `<metric>_critical` keys. The metric's severity=critical row comes only from
-// the tenant's override map (resolveCriticalRows); a subtree
-// `_defaults.yaml`, a platform `tenants:` entry and a profile fill that map,
-// the root `_defaults.yaml` does not — its `_critical` key is served as a
-// threshold of its own (metric `<metric>_critical`, severity=warning). So a
-// tenant key equal to a root-only `_critical` default is not redundant:
-// deleting it removes the critical row. The root key is reported by a warn
-// finding of its own (root_defaults_critical_key) instead.
+// da-guard's redundant-override advice on `<metric>_critical` keys. Since
+// #4173 a root `_defaults.yaml` `_critical` is every tenant's critical default
+// (resolveCriticalRows), so it is a fallback like any root threshold: a
+// tenant key equal to it is redundant, and deleting it keeps the critical
+// row. (Under #2544 the root key was a warning series of its own, and such a
+// tenant key was not redundant.) root_defaults_critical_key names a root
+// `_critical` whose base has no value, which serves nothing.
 //
 // The oracle is /metrics at the label level (servedSeries, the exporter's own
-// collector), never `served-values`: with the key at the root AND in the
-// tenant, served-values exits 2 (TestServedValues_RootAndTenantCriticalExits2),
-// so a test that read it would have no oracle for exactly the shape at issue.
+// collector).
 
 import (
 	"os"
@@ -80,36 +76,33 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 		rootWarn []string // root_defaults_critical_key Fields expected
 		symlink  bool     // read the tree through a symlink to its real root
 	}{
-		// The measured false advice (redundant before the fix), each spelling.
-		{name: "root-only-critical-key-is-not-redundant",
+		// #4173: a root `_critical` over a valued base is every tenant's
+		// critical default, so a tenant writing the same value is redundant —
+		// deleting it keeps the critical row — in each spelling and root
+		// carrier. (Under #2544 it was a warning series of its own, no
+		// fallback, and these were not redundant.)
+		{name: "root-only-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + conn + ": 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60",
-			rootWarn: []string{"_defaults.yaml:defaults." + conn}},
-		{name: "root-only-new-spelling-critical-key-is-not-redundant",
+			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
+		{name: "root-only-new-spelling-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + threads + ": 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_threads_running: 70\n", line: threads + ": 60",
-			rootWarn: []string{"_defaults.yaml:defaults." + threads}},
-		{name: "root-only-legacy-spelling-critical-key-is-not-redundant",
+			tfile: "tx.yaml", keep: "    mysql_threads_running: 70\n", line: threads + ": 60", redundant: true},
+		{name: "root-only-legacy-spelling-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + legacy + ": 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_threads_running: 70\n", line: legacy + ": 60",
-			rootWarn: []string{"_defaults.yaml:defaults." + legacy}},
-		{name: "root-only-critical-key-under-a-subtree-without-it-is-not-redundant",
+			tfile: "tx.yaml", keep: "    mysql_threads_running: 70\n", line: legacy + ": 60", redundant: true},
+		{name: "root-only-critical-key-under-a-subtree-without-it-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + conn + ": 60\n", "sub/_defaults.yaml": "defaults:\n  mysql_connections: 75\n"},
-			tfile: "sub/tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60",
-			rootWarn: []string{"_defaults.yaml:defaults." + conn}},
-		{name: "root-critical-key-a-subtree-nulls-is-not-redundant",
+			tfile: "sub/tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
+		{name: "root-critical-key-a-subtree-nulls-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + conn + ": 60\n", "sub/_defaults.yaml": "defaults:\n  " + conn + ": null\n"},
-			tfile: "sub/tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60",
-			rootWarn: []string{"_defaults.yaml:defaults." + conn}},
+			tfile: "sub/tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
 		// The root level is found by PATH, against the scan's resolved root.
-		{name: "root-only-critical-key-through-a-symlinked-config-dir-is-not-redundant",
+		{name: "root-only-critical-key-through-a-symlinked-config-dir-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + conn + ": 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60",
-			rootWarn: []string{"_defaults.yaml:defaults." + conn}, symlink: true},
-		{name: "root-only-critical-key-in-a-yml-root-carrier-is-not-redundant",
+			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true, symlink: true},
+		{name: "root-only-critical-key-in-a-yml-root-carrier-is-redundant",
 			files: map[string]string{"_defaults.yml": root + "  " + conn + ": 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60",
-			rootWarn: []string{"_defaults.yml:defaults." + conn}},
+			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
 		// Control (the ticket's): the same shape with no root `_critical` —
 		// not redundant before the fix either, and no root warning.
 		{name: "no-root-critical-key-is-not-redundant",
@@ -125,8 +118,7 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 			tfile: "sub/tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
 		{name: "root-and-subtree-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + conn + ": 60\n", "sub/_defaults.yaml": "defaults:\n  " + conn + ": 60\n"},
-			tfile: "sub/tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true,
-			rootWarn: []string{"_defaults.yaml:defaults." + conn}},
+			tfile: "sub/tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
 		{name: "platform-entry-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "tenants:\n  tx:\n    " + conn + ": 60\n"},
 			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
@@ -208,13 +200,13 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 	}
 }
 
-// TestServedValues_RootAndTenantCriticalExits2 pins the premise the test
-// above is built around: with the same `_critical` key at the root and in
-// the tenant, `served-values` refuses the tree (the key owns a warning row
-// from the root and a critical row from the tenant), while da-guard's
-// defaults-impact still reports on it — the root warning, and no
-// redundant_override on the tenant's line.
-func TestServedValues_RootAndTenantCriticalExits2(t *testing.T) {
+// TestServedValues_RootAndTenantCriticalServesTheTenants (#4173): with the
+// same `_critical` key at the root and in the tenant, the key owns one row —
+// the tenant's critical value, the root's being every tenant's default —
+// so `served-values` answers (it refused the tree while the root's key was a
+// warning row of its own, #2115 F0), and da-guard reports the tenant's line
+// redundant and the root's key nothing.
+func TestServedValues_RootAndTenantCriticalServesTheTenants(t *testing.T) {
 	t.Parallel()
 	for _, key := range []string{"mysql_connections_critical", "mysql_threads_running_critical"} {
 		t.Run(key, func(t *testing.T) {
@@ -225,41 +217,44 @@ func TestServedValues_RootAndTenantCriticalExits2(t *testing.T) {
 				"tx.yaml":        "tenants:\n  tx:\n    " + base + ": 70\n    " + key + ": 60\n",
 			}
 			code, doc, dir, stderr := served(t, files, "")
-			if code != exitCallerErr {
-				t.Fatalf("served-values exit = %d, want %d; stderr=%q", code, exitCallerErr, stderr)
-			}
-			if doc.Tenants != nil || !strings.Contains(stderr, "owns rows with different values") {
-				t.Fatalf("served-values: want no JSON and the two-rows refusal; tenants=%v stderr=%q", doc.Tenants, stderr)
+			mustOK(t, code, stderr)
+			wantValue(t, doc, "tx", key, 60)
+			if s := doc.Tenants["tx"].Severities[key]; s != "critical" {
+				t.Errorf("%s severity %q, want critical", key, s)
 			}
 
 			gcode, stdout, gstderr := runOnce(t, "--config-dir", dir, "--format", "json")
 			if gcode != exitOK {
 				t.Fatalf("da-guard exit = %d, want %d; stderr=%q", gcode, exitOK, gstderr)
 			}
-			if !strings.Contains(stdout, `"kind": "root_defaults_critical_key"`) {
-				t.Errorf("da-guard: want a root_defaults_critical_key finding; stdout=%s", stdout)
+			if strings.Contains(stdout, `"kind": "root_defaults_critical_key"`) {
+				t.Errorf("da-guard: no root_defaults_critical_key over a valued base; stdout=%s", stdout)
 			}
-			if strings.Contains(stdout, "redundant_override") {
-				t.Errorf("da-guard: the tenant's %s is not redundant; stdout=%s", key, stdout)
+			if !strings.Contains(stdout, "redundant_override") {
+				t.Errorf("da-guard: the tenant's %s repeats the root's value: redundant; stdout=%s", key, stdout)
 			}
 		})
 	}
 }
 
-// #2518: a root `_critical` key written as null is no write — the exporter
-// serves no series for it — so root_defaults_critical_key, which describes
-// "a threshold of its own (severity=warning)", must not fire for it.
+// #2518: a root `_critical` key written as null is no write, so
+// root_defaults_critical_key must not fire for it. #4173: the finding names a
+// root `_critical` whose base has no value (it serves nothing); the control
+// is a key outside the built-in layer, whose base the root does not write.
 func TestGuard_RootNullCriticalKeyIsNotReported(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	testutil.WriteFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  container_cpu: 70\n  mysql_connections_critical: null\n  mysql_threads_running_critical: 90\n")
+		"defaults:\n  container_cpu: 70\n  mysql_connections_critical: null\n  app_queue_depth_critical: 90\n  mysql_threads_running_critical: 90\n")
 	testutil.WriteFile(t, filepath.Join(dir, "tb.yaml"), "tenants:\n  tb:\n    container_cpu: \"1\"\n")
 	got := rootCriticalFields(t, dir)
 	if got["_defaults.yaml:defaults.mysql_connections_critical"] {
 		t.Errorf("null root _critical key reported: %v", got)
 	}
-	if !got["_defaults.yaml:defaults.mysql_threads_running_critical"] {
-		t.Errorf("numeric root _critical key not reported (control): %v", got)
+	if !got["_defaults.yaml:defaults.app_queue_depth_critical"] {
+		t.Errorf("numeric root _critical key with no base not reported (control): %v", got)
+	}
+	if got["_defaults.yaml:defaults.mysql_threads_running_critical"] {
+		t.Errorf("root _critical over a base the built-in layer values reported: %v", got)
 	}
 }

@@ -48,7 +48,7 @@ func registerFederationStoreFlags(fs *flag.FlagSet) *federationFlags {
 	fs.StringVar(&f.KeyPath, "federation-key", envOrDefault("TA_FEDERATION_KEY", ""),
 		"Path to the RS256 private key (PEM) for signing federation tokens. Empty disables the federation endpoint.")
 	fs.StringVar(&f.ConfigMapName, "federation-store", envOrDefault("TA_FEDERATION_STORE", "tenant-federation-store"),
-		"Name of the ConfigMap holding the federation token record store (ADR-020 Posture B). The Helm chart pre-creates it.")
+		"Name of the ConfigMap holding the federation token record store (ADR-020 §Token). The Helm chart pre-creates it.")
 	fs.StringVar(&f.Namespace, "federation-namespace", envOrDefault("TA_FEDERATION_NAMESPACE", ""),
 		"Namespace of the federation store ConfigMap. Empty uses the pod's own namespace.")
 	return f

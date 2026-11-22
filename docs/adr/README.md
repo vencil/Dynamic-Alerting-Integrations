@@ -51,10 +51,10 @@ lang: zh
 | ADR-017 | [_defaults.yaml 多層繼承與雙雜湊熱重載](./017-defaults-yaml-inheritance-dual-hash.md) | ✅ Accepted | v2.7.0 |
 | ADR-018 | [Profile-as-Directory-Default](./018-profile-as-directory-default.md) | 🟢 Accepted | v2.8.0 |
 | ADR-019 | [計畫追蹤的單一來源 — 各條目自帶 frontmatter，索引自動產生](./019-planning-ssot.md) | ✅ Accepted | v2.8.0 |
-| ADR-020 | [Tenant Federation — Label-Injection Proxy over Self-Built Endpoint](./020-tenant-federation.md) | ✅ Accepted | v2.8.0 |
-| ADR-021 | [Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled](./021-tenant-log-query-federation.md) | ✅ Accepted | v2.9.0 |
+| ADR-020 | [租戶把自己的指標拉回自家系統 — 用現成的標籤注入代理，不自寫端點](./020-tenant-federation.md) | ✅ Accepted | v2.9.0 |
+| ADR-021 | [租戶在平台上查自己的日誌 — 平台只管查詢授權，日誌進入端另以契約約束](./021-tenant-log-query-federation.md) | ✅ Accepted | v2.9.0 |
 | ADR-022 | [tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment](./022-dev-auth-bypass-four-layer-containment.md) | ✅ Accepted | v2.9.0 |
-| ADR-023 | [tenant-api 寫入平面 — 單一寫者不變式](./023-write-plane-single-writer-invariant.md) | ✅ Accepted | — |
+| ADR-023 | [tenant-api 的寫入只能有一個寫者，讀取可以水平擴展](./023-write-plane-single-writer-invariant.md) | ✅ Accepted | — |
 | ADR-024 | [宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts](./024-version-aware-threshold-via-dimensional-label.md) | ✅ Accepted | v2.9.0 |
 | ADR-025 | [告警平面自我存活性 — 讓告警系統能偵測自己的死亡](./025-alerting-plane-self-liveness.md) | ✅ Accepted | — |
 | ADR-026 | [Node/Cluster 維護告警抑制 — 不需要子系統](./026-node-maintenance-liveness-suppression.md) | 🟡 Proposed | — |

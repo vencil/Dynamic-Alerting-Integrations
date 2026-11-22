@@ -123,8 +123,10 @@ repos:
       # baseline at each build-context root. hadolint's levels and trusted
       # registries are the wrapper's HADOLINT_RULES registry, passed as flags
       # and proven per run by a canary — there is no .hadolint.yaml (#3643).
-      # BLOCK findings fail the commit;
-      # WARN/INFO are recorded in docs/internal/iac-lint-baseline.md.
+      # BLOCK findings fail the commit; WARN must be registered with a
+      # rationale (_iac_warn_baseline.REGISTER) and the WARN table in
+      # docs/internal/iac-lint-baseline.md is generated from it — unregistered,
+      # stale or drifted fails the commit too (#3863). INFO is only printed.
       # Layers 2-4 (Helm template / values / k8s manifest) land via TRK-312
       # ~ TRK-314. CI wires this in .github/workflows/ci.yml (Lint job).
       - id: iac-sast-check
@@ -132,7 +134,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_iac_vibe_rules.py --ci
         language: python
         pass_filenames: false
-        files: '(^|/)Dockerfile(\.[^/]+)?$|(^|/)\.dockerignore$|^scripts/tools/(lint/check_iac_vibe_rules|_lib_engine)\.py$'
+        files: '(^|/)Dockerfile(\.[^/]+)?$|(^|/)\.dockerignore$|^scripts/tools/(lint/check_iac_vibe_rules|lint/_iac_warn_baseline|_lib_engine)\.py$|^docs/internal/iac-lint-baseline\.md$'
         additional_dependencies: ['pathspec']
 
       # --- Container/k8s IaC SAST Layer 2 (#448 / TRK-312) ---
@@ -1279,8 +1281,8 @@ repos:
         # a per-process lock + in-memory PR tracker that do NOT coordinate across
         # pods. replicaCount>1 OR a missing `strategy: Recreate` reintroduces the
         # phantom-writer / dual-writer breach (git tree corruption, duplicate PRs).
-        # Layer 2 of ADR-023 enforcement; layer 1 is the chart's render-time
-        # `fail` guard. Horizontal write scaling needs a K8s Lease (Deferred A3).
+        # ADR-023 §設定守衛, together with the chart's render-time
+        # `fail` guard. Horizontal write scaling needs a K8s Lease (ADR-023 §Lease).
 
       - id: cross-ns-url-check
         name: "#1004: service URLs must pin canonical namespaces (tenant-api → tenant-api ns)"

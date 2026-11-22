@@ -5,12 +5,12 @@
   across pods. Two replicas push to the same git working tree → tree corruption
   + silent data loss; two PR-mode replicas open duplicate PRs for one tenant.
   replicaCount MUST stay 1. Horizontal write scaling needs a K8s Lease
-  (leader-election) — ADR-023 Deferred option A3, not a replicaCount bump.
+  (leader-election) — ADR-023 §Lease, not a replicaCount bump.
 */ -}}
 {{- include "tenant-api.writeBackGuard" . }}
 {{- include "tenant-api.generatorGuard" . }}
 {{- if gt (int .Values.replicaCount) 1 }}
-{{- fail (printf "ADR-023 single-writer invariant violated: tenant-api replicaCount=%d but MUST be 1. The write plane has no cross-pod coordination; multi-replica writes corrupt the shared git tree. To scale writes, implement a K8s Lease (ADR-023 Deferred option A3) — do not raise replicaCount." (int .Values.replicaCount)) }}
+{{- fail (printf "ADR-023 single-writer invariant violated: tenant-api replicaCount=%d but MUST be 1. The write plane has no cross-pod coordination; multi-replica writes corrupt the shared git tree. To scale writes, implement a K8s Lease (ADR-023 §Lease) — do not raise replicaCount." (int .Values.replicaCount)) }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment

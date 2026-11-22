@@ -1,4 +1,4 @@
-"""test_single_writer_guard.py — ADR-023 layer-1 Helm guard
+"""test_single_writer_guard.py — ADR-023 §設定守衛 Helm guard
 
 The tenant-api chart hard-`fail`s at render time if `replicaCount > 1`, because
 the write plane is a single writer with no cross-pod coordination (per-process

@@ -7,7 +7,7 @@ metadata:
   labels:
     {{- include "federation-gateway.labels" . | nindent 4 }}
 data:
-  # logrotate config for the audit-log emptyDir mirror (ADR-020 IV-2f).
+  # logrotate config for the audit-log emptyDir mirror (ADR-020 §稽核日誌與指標).
   # The mirror only feeds the audit-metrics sidecar; the durable trail is Envoy's
   # stdout sink, so this just stops the emptyDir from evicting the pod.
   federation-audit.conf: |

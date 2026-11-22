@@ -37,6 +37,7 @@ updated_at: 2026-11-21
 | 2026-11-15 | 平台預設啟用的閾值由讀取端內建，排在根目錄 `_defaults.yaml` 之下：根目錄沒寫、寫 `null` 或寫了讀不了的值，都拿平台值；最終設定與 `merged_hash` 涵蓋它；`validate-config` 印出內建表摘要與每個鍵的處理 | 決策 1、2、3、4、7、11 |
 | 2026-11-16 | 根目錄 `defaults:` 可以對內建層給值的鍵寫 `"disable"`，整棵樹關掉那一族；只收這個字 | 決策 4、11 |
 | 2026-11-21 | 平台不給值的鍵也進內建層，值是 off：根目錄不必再宣告，租戶的值、`<鍵>_critical` 與 profile 的值都送出 | 決策 11 |
+| 2026-11-21 | 根目錄 `defaults:` 的 `<鍵>_critical` 是每個租戶的 critical 預設值，租戶可覆寫；基底沒有值時不送，基底關掉時跟著關 | 決策 3、11 |
 
 ## 名詞
 
@@ -149,7 +150,7 @@ tenants:
 讀這個範例要注意兩件事：
 
 - **租戶的值加引號，`defaults:` 裡不加。** 租戶的閾值是字串或帶排程的物件，未加引號的數字會被 `check_confd_schema.py` 擋下；平台預設只收數字。
-- **子目錄只能改根目錄已宣告的閾值；內建層給值的鍵算已宣告。** 子目錄寫 `pg_connections: 60`，即使根目錄沒寫它，`/metrics` 也送 60。把根目錄的 `pg_locks_count` 拿掉，最終設定仍顯示 100，但 `/metrics` 不送它。`da-guard effective` 的每個租戶有一個 `not_served` 欄位，逐鍵列出「最終設定顯示了、`/metrics` 卻不送」的值與原因，這裡標 `undeliverable`；da-guard 以 `subtree_default_undeliverable` 報錯，結束碼 1。修法是在根目錄 `_defaults.yaml` 或 `optional_overrides:` 宣告這個閾值。子目錄寫的 `<base>_critical` 條件更嚴：基底要在根目錄 `defaults:` 有值，或由內建層給值（包括 off，見決策 11；exporter 只為這種基底送 critical 列），內建層以外的基底只在 `optional_overrides:` 宣告或根目錄寫成 null 都不算，同樣標 `undeliverable`；根目錄 `defaults:` 直接給了該 `_critical` key 的值時例外（它被當成一個獨立的閾值讀）。
+- **子目錄只能改根目錄已宣告的閾值；內建層給值的鍵算已宣告。** 子目錄寫 `pg_connections: 60`，即使根目錄沒寫它，`/metrics` 也送 60。把根目錄的 `pg_locks_count` 拿掉，最終設定仍顯示 100，但 `/metrics` 不送它。`da-guard effective` 的每個租戶有一個 `not_served` 欄位，逐鍵列出「最終設定顯示了、`/metrics` 卻不送」的值與原因，這裡標 `undeliverable`；da-guard 以 `subtree_default_undeliverable` 報錯，結束碼 1。修法是在根目錄 `_defaults.yaml` 或 `optional_overrides:` 宣告這個閾值。子目錄寫的 `<base>_critical` 條件更嚴：基底要在根目錄 `defaults:` 有值，或由內建層給值（包括 off，見決策 11；exporter 只為這種基底送 critical 列），內建層以外的基底只在 `optional_overrides:` 宣告或根目錄寫成 null 都不算，同樣標 `undeliverable`；根目錄 `defaults:` 給了同一個 `_critical` 鍵也不例外：它是租戶沒寫時的 critical 預設值，同樣只在基底有值時送出。
 
 ### 4. 閾值寫 `null` 等於這一層沒寫
 
@@ -360,7 +361,7 @@ tenants:
 - **只收 `disable` 這個字**（大小寫不拘）。子目錄把 `false`、`off`、`disabled` 也讀成停用；根目錄收這些別名的話，`helm --set …=false` 會靜靜關掉整棵樹的一族。在根目錄它們是讀不了的值：da-guard 以 `root_default_refused` 報錯（結束碼 1），該鍵照送平台值。
 - **不收排程與 `expires:`**。根目錄的值只能是純量；寫成排程的根目錄檔整份讀不了，內建層撤掉（上表）。限時關閉寫在子目錄或租戶檔。
 - **只對內建層裡的鍵有效**（有數字的鍵與 off 的鍵）。其他鍵照決策 4 是讀不了的值。
-- **根目錄不得同時給同一族的值**。根目錄寫了 `<鍵>: "disable"`，又給 `<鍵>{…}` 值時，那個值跟著基底一起關掉，送不到任何沒自己給基底值的租戶；又給 `<鍵>_critical` 值時，它在根目錄是一個獨立的閾值（決策 3），基底關掉了它照送。兩種都是自相矛盾，da-guard 以 `root_disable_family_value` 報錯，結束碼 1。
+- **根目錄不得同時給同一族的值**。根目錄寫了 `<鍵>: "disable"`，又給 `<鍵>{…}` 值時，那個值跟著基底一起關掉，送不到任何沒自己給基底值的租戶；又給 `<鍵>_critical` 值時，那個 critical 預設值也跟著基底關掉，同樣送不到任何租戶。兩種都是自相矛盾，da-guard 以 `root_disable_family_value` 報錯，結束碼 1。
 
 根目錄的 `optional_overrides:`（宣告「平台認得這個鍵、但不給值」的鍵名清單）不影響內建層。根目錄 `defaults:` 沒寫這個預設啟用鍵（或寫 `null`）卻把它列在裡面時，da-guard 以 `root_optional_builtin` 報錯，結束碼 1：列名關不掉這條告警，要整棵樹關掉就在根目錄 `defaults:` 寫 `"disable"`。
 

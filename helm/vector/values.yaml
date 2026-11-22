@@ -362,7 +362,7 @@ evidenceChannel:
     - token_id
     - expires_at
 
-# ── (b) Tenant-sanitized log projection — ADR-021 Phase 1 / #609 ────────────
+# ── (b) Tenant-sanitized log projection — ADR-021 §平台副本與租戶副本 / #609 ────────────
 # Fan-out (NOT a move): the platform full copy keeps flowing to the primary
 # `victorialogs` sink at (AccountID, ProjectID) = (victorialogs.accountId,
 # victorialogs.projectId) — by default (0, 0). This list adds a SECOND,
@@ -511,7 +511,7 @@ projectionGate:
         memory: 64Mi
 
 # ⛔ ALLOWLIST of the ONLY fields projected into a tenant partition (ADR-021
-# §Fork B; fail-CLOSED sanitization). The tenant copy is rebuilt from scratch
+# §寫入時只留白名單欄位; fail-CLOSED sanitization). The tenant copy is rebuilt from scratch
 # containing ONLY these fields (+ the trusted `account_id`) — everything else
 # is structurally absent. This is a DENYLIST→ALLOWLIST inversion (adversarial
 # review): demux deep-merges the whole gateway audit JSON to the event root, so

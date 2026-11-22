@@ -9,7 +9,7 @@ lang: zh
 # Platform Log Aggregation Runbook
 
 \#539 Phase 1。federation-gateway 把 audit log 用 JSON 寫到 stdout
-（ADR-020 IV-2f）；本 pipeline 把它搬進中央 log store，讓「過去 6h 這
+（ADR-020 §稽核日誌與指標）；本 pipeline 把它搬進中央 log store，讓「過去 6h 這
 顆 token 碰過什麼」這種 incident query 有得問。
 
 ```
@@ -664,7 +664,7 @@ GitOps self-heal，**不在 chart 內、是部署叢集的責任**：
 
 > 狀態與 fix shape 以 [#566](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/566) 為 SSOT，T5 除外：T5 已由 [#902](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/902) 取代（第三方 image 的 digest pin 與 Renovate 追蹤;first-party image 不釘 digest 寫在該 issue 的 out of scope），Grafana plugin 釘版本由 [#2605](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2605) 處理;本表只列「operator 該知道的殘餘邊界」，不重複 issue 內的 severity / rollout 細節。
 
-## 8. (b) 租戶淨化投影（ADR-021 Phase 1 / #609）
+## 8. (b) 租戶淨化投影（ADR-021 §平台副本與租戶副本 / #609）
 
 讓租戶在平台上**就地查自己的**營運 log（federation audit），又**看不到**基礎設施拓樸或他租戶的列。資料平面（本 PR）鋪好後，查詢授權平面（gateway `victorialogs` mode + tenant-api AccountID 配發）才把租戶接上。完整設計見 [ADR-021](../adr/021-tenant-log-query-federation.md)；本節是 operator 的 how-to。
 
@@ -803,7 +803,7 @@ promtool fire/no-fire 與上述 §8.7 spike alert 同放 `tests/rulepacks/tenant
 - **audit-metrics sidecar 在 log flood 下的殘留丟失**：logrotate 用 **rename + Envoy `/reopen_logs`**（非 copytruncate，rotation 當下**不丟行**），但極端洪流（瞬間海量 401/403）下 sidecar（CPU limit `100m`）parse 落後到 >`keep` 次 rotation 時，最舊的 renamed 檔會在讀完前被刪 → 靜默丟數 → rejection alert 分子採樣不足而延後/漏 fire。**load-test 50MB/10s 洪流、量 sidecar CPU + 丟失率**，必要時放寬 `auditLog.metrics.resources` 的 CPU limit。（#1278 D1 前是 mtail，原建議監控 `mtail_progs_processing_errors_total`；Vector sidecar 目前未開 `internal_metrics`，若要同等能見度需在程式加一個 internal_metrics source。）
 - **metric 能見度邊界**：counter 只計**通過 JWT 後**的拒絕；過期/壞簽/錯 audience token 由 `jwt_authn` 在 account_id 注入**前** 401、**不計入**（攻擊噪音，由 jwt_authn 自身 stats 觀測，與 ADR-020 一致）。`account_id`<1000 的誤發 token 若被 Lua 403 仍會計入並標成該低 id（實務 tenant-api 不發 <1000，latent）。3xx/1xx status 不落任何 bucket（VictoriaLogs read API 幾乎不回，刻意不計）。
 
-### 8.9 投影 GATE degrade/enforce 觀測與復原（ADR-021 Phase 2(a) / #908 PR-3a）
+### 8.9 投影 GATE degrade/enforce 觀測與復原（ADR-021 §平台副本與租戶副本 / #908 PR-3a）
 
 §8.7 盯「投影被 abort 丟棄」，本節盯**更上游**的「投影 GATE 本身降級/卡死」——`tenantProjections` 與 registry（`_account_registry.yaml`）不符（unique-but-wrong accountId 跨租戶洩漏類）或 boot 時讀不到 registry 時，fail-closed gate 的反應與**復原 SOP**。
 
@@ -877,7 +877,7 @@ kubectl delete pod <stuck-vector-pod> -n <ns>   # 修好後，讓它以正確 sp
 
 - 源 issue：[#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539)
 - 產生 audit JSON 的 Envoy access_log：`helm/federation-gateway/files/envoy.yaml`
-- ADR-020 §Audit log
-- ADR-021 §Audit log + anomaly metric（#609 PR-4 觀測層）
-- ADR-021 Phase 2(a) 投影 GATE 觀測（#908 PR-3a，§8.9）：[#908](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/908)
+- ADR-020 §稽核日誌與指標
+- ADR-021 §稽核（#609 PR-4 觀測層）
+- ADR-021 §平台副本與租戶副本 投影 GATE 觀測（#908 PR-3a，§8.9）：[#908](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/908)
 - Consumer #2：[#552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/552)

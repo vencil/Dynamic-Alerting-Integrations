@@ -1,4 +1,4 @@
-"""Shared helpers for the federation E2E driver (ADR-020 IV-2j, #516)."""
+"""Shared helpers for the federation E2E driver (ADR-020, #516)."""
 import json
 import secrets
 import time

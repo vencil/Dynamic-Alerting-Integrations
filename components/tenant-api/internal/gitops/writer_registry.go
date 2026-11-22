@@ -22,7 +22,7 @@ var counterLine = regexp.MustCompile(`(?m)^\+\s*([A-Za-z0-9_]+):\s*(\d+)\s*$`)
 // EVER held across the full git history of conf.d/<filename>, or 0 if the file
 // has no history yet (a never-committed path is exit-0 + empty, not an error).
 //
-// This is the revert-proof high-water mark (ADR-021 §AccountID #1/#3): a
+// This is the revert-proof high-water mark (ADR-021 §單調性靠什麼守): a
 // `git revert` or hand-edit that LOWERS the field writes a NEW commit, but the
 // higher value it held before still lives in an older commit's diff — so an
 // allocator that floors its counter to this value can never re-issue an id a
