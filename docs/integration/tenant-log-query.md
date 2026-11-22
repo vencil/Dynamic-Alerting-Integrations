@@ -174,7 +174,7 @@ gateway 採 **default-deny 白名單**——只放行 VictoriaLogs 的 LogsQL **
 - POST 的 body 只接受 form-urlencoded（或不帶 body、參數全放 URL）；multipart、壓縮過
   （帶 `Content-Encoding`）或其他格式的 body 回 `415`。
 - LogsQL 裡的 `| limit N` pipe 可以照用，但只能讓結果更少：VictoriaLogs 會把請求的 `limit`
-  接在你的 pipe 之後、取較小的那個。
+  接在你所有 pipe 的最後面，回傳筆數不會超過它。
 
 | 請求 | 結果 |
 |---|---|

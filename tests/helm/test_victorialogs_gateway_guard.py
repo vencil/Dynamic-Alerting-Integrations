@@ -190,7 +190,10 @@ def test_victorialogs_query_limit_filter_wired_after_buffer(repo_root: Path):
     assert i == len(names) - 2 and names[-1] == "envoy.filters.http.router", (
         f"query-limit filter must be the last filter before the router: {names}")
     lua = data.get("query_limit.lua", "")
-    assert "local MAX_LIMIT = 1000\n" in lua, "chart default maxQueryLimit not templated into the Lua"
+    default = yaml.safe_load((repo_root / _CHART / "values.yaml").read_text(encoding="utf-8"))[
+        "victorialogs"]["maxQueryLimit"]
+    assert f"local MAX_LIMIT = {int(default)}\n" in lua, (
+        "chart default maxQueryLimit not templated into the Lua")
     assert 'QUERY_PATH_RE = "^/select/logsql/query/?$"' in lua
 
 

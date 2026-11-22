@@ -52,7 +52,10 @@ tests:
                 auth-failed / bad-request) for 15m. Check the
                 tenant-log-query dashboard — likely a REVOKED token (Lua
                 403), a tenant exceeding its rate limit, or a client hitting
-                the victorialogs-mode endpoint allowlist. NOTE: this counts
+                the victorialogs-mode endpoint allowlist. A bad_request surge
+                right after a gateway upgrade is most likely
+                /select/logsql/query calls without a valid `limit` (400) or
+                with a non-form POST body (415). NOTE: this counts
                 POST-JWT rejections only — an EXPIRED / bad-signature / wrong-
                 audience token 401s at jwt_authn BEFORE account_id is stamped,
                 so it is NOT counted here (attack noise; see jwt_authn stats,
@@ -117,7 +120,10 @@ tests:
                 auth-failed / bad-request) for 15m. Check the
                 tenant-log-query dashboard — likely a REVOKED token (Lua
                 403), a tenant exceeding its rate limit, or a client hitting
-                the victorialogs-mode endpoint allowlist. NOTE: this counts
+                the victorialogs-mode endpoint allowlist. A bad_request surge
+                right after a gateway upgrade is most likely
+                /select/logsql/query calls without a valid `limit` (400) or
+                with a non-form POST body (415). NOTE: this counts
                 POST-JWT rejections only — an EXPIRED / bad-signature / wrong-
                 audience token 401s at jwt_authn BEFORE account_id is stamped,
                 so it is NOT counted here (attack noise; see jwt_authn stats,

@@ -237,7 +237,7 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 
   - **為什麼拒絕、不補上預設值或調降**：補值或調降會讓租戶拿到被截斷的結果卻無從得知，容易被當成完整的稽核紀錄；直接拒絕讓請求者自己決定要縮小範圍還是分批查，也與 gateway 其他檢查一致：不確定的請求不轉送。
   - **為什麼也看 POST body**：VictoriaLogs 用 Go 的 `Request.FormValue` 讀參數，POST 的 form body 優先於 URL，租戶指南的 curl 範例也是以 form body 送出。只看 URL 的話，「URL 帶小 `limit`、body 帶大 `limit`」就能繞過。檢查放在 body 緩衝之後的第三個 Lua filter（`files/query_limit.lua`），URL 與 body 一起數；gateway 讀不懂的 body（multipart、壓縮過的）直接拒絕，不留 gateway 與日誌庫各讀到不同值的空間。重複的 `limit` 也因此拒絕：Go 取第一個，別的解析器可能取最後一個。
-  - **查詢文字裡的 `| limit N` 不必檢查**：VictoriaLogs 把請求的 `limit` 以 `| offset … | limit …` 接在租戶自己的 pipe 之後，並把相鄰的 `limit` 合併成較小的那個，所以查詢文字裡的 `limit` 只能讓結果更少，抬不高上限。
+  - **查詢文字裡的 `| limit N` 不必檢查**：VictoriaLogs 把請求的 `limit` 以 `| offset … | limit …` 接在租戶自己所有 pipe 的**最後面**，回傳筆數一定不超過它；租戶的 `| limit` 不論寫在哪裡，都只能讓結果更少。
   - 被拒的請求仍會寫進稽核日誌（檢查排在稽核擷取之後），並計入 `tenant_log_query_requests_total{status="bad_request"}`。
 - 路由前先把路徑正規化（包括解碼 `%2F`），`/select/logsql%2Fquery` 這類變形無法繞過白名單。
 
@@ -268,8 +268,9 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 
 - **已決定、尚未實作：偵測「該蓋章卻落進 `0:0`」的告警。** 本 ADR 決定在查詢端保留一個結構性的檢查：偵測本該帶租戶身分、卻掉進平台分區的日誌（進入端蓋章失效的訊號），發標準的 Alertmanager 告警（`warning`，通知平台維運），而**不**自動切斷租戶的查詢（誤判會切斷合法租戶、引發 SLA 事故），也不做依內容的異常偵測或自動斷流。rule pack 目前沒有完整涵蓋它的告警。`TenantProjectionFanoutDiscardSpike` 涵蓋一部分：`federation_audit` 列的 `tenant_id` 空白或對映不到 AccountID、因此只留在 `0:0` 的量，比自己一天的平均高出三倍時告警；量小或長期存在的落差會被併入基準而不觸發，其他日誌類別也不在範圍內。
 - **已決定、尚未實作：租戶自選的可見度子集。** 本 ADR 決定可見度分兩層：平台策展哪些日誌類別與欄位可以給租戶看，租戶再從中選自己要看的子集。目前只有平台那一層（`tenantProjectionKeepFields` 與只投影 `federation_audit`），沒有租戶自選子集的機制。
-- **`limit` 只管 `/query` 一個端點、只管回傳筆數。** 其他白名單端點沒有強制上限：`field_values`、`stream_field_values`、`streams`、`stream_ids`、`facets` 接受選填的 `limit`，gateway 不強制；`field_names`、`stream_field_names` 沒有 `limit` 參數；`hits` 依時間桶與分組欄位回傳（`fields_limit` 選填）；`stats_query`、`stats_query_range` 的列數取決於 `by (…)` 分組的基數。它們回的是彙總或不重複值、不是原始日誌列，目前只靠時間範圍上限與執行時限收斂。`/query` 的 `offset` 也沒有上限：回傳筆數仍不超過 `limit`，但日誌庫要先掃過 `offset + limit` 列。
-- **查詢文字裡的 `| limit` 抬不高上限，靠的是 VictoriaLogs 的行為。** 「請求的 `limit` 接在租戶 pipe 之後、相鄰 `limit` 取較小值」是對照 VictoriaLogs v1.53.0（`helm/victorialogs` 目前釘的版本）原始碼確認的；gateway 的 E2E 用模擬日誌庫，驗證的是 gateway 擋下或放行哪些請求，驗不到這一點。升級 VictoriaLogs 時要重新確認。
+- **`limit` 只管 `/query` 一個端點，其他端點仍能不受上限地取回日誌內容。** `field_values`、`stream_field_values`、`streams`、`stream_ids`、`facets` 接受選填的 `limit`，gateway 不強制，不帶就不限筆數；`field_names`、`stream_field_names` 沒有 `limit` 參數；`hits` 依時間桶與分組欄位回傳（`fields_limit` 選填）；`stats_query`、`stats_query_range` 的列數取決於 `by (…)` 分組的基數。這些端點能回傳的不只是彙總：`/select/logsql/field_values?query=*&field=_msg` 不帶 `limit` 會回傳時間範圍內每一個不同的 `_msg`，也就是日誌本文；`stats_query` 以 `by (_msg)` 分組也一樣。它們目前只受時間範圍上限、執行時限與 VictoriaLogs 每個 pipe 的記憶體狀態預算限制。是否把上限延伸到這些端點，要另外決定：Grafana 的 VictoriaLogs data source 做自動完成時可能不帶 `limit` 呼叫 `field_values`，強制會影響它。
+- **`/query` 的 `offset` 沒有上限。** 回傳筆數仍不超過 `limit`，但 VictoriaLogs 會把 `offset X | limit Y` 改寫成取前 X+Y 筆的排序，排序狀態放在記憶體、受同一個狀態預算限制，所以很大的 `offset` 花的是排序記憶體。
+- **查詢文字裡的 `| limit` 抬不高上限，靠的是 VictoriaLogs 的行為。** 「請求的 `limit` 是查詢的最後一個 pipe」是對照 VictoriaLogs v1.53.0（`helm/victorialogs` 目前釘的版本）原始碼確認的；gateway 的 E2E 用模擬日誌庫，驗證的是 gateway 擋下或放行哪些請求，驗不到這一點。升級 VictoriaLogs 時要重新確認。
 - **VictoriaLogs 本身的分區沒有被平台測試驗證。** 選原生分區的理由之一是它同樣套在 metadata 類端點（`field_values`、`stream_field_values` 等）上，不像 ADR-020 要顯式開 `-enable-label-apis`。但 gateway 的 E2E（`tests/federation-e2e/test_victorialogs_e2e.py`）用的是模擬日誌庫，驗證的是 gateway 送出的 header，不是 VictoriaLogs 對每個端點的隔離。
 - **租戶應用日誌延後。** 要先有另一份日誌進入端的設計，依 namespace 蓋章並滿足上面的契約與節點隔離硬化；屆時沿用同一個 gateway 模式，`ProjectID=1`，Vector 的對映改由帳本產生，解決固定 sink 在大量租戶下無法擴展的問題。觸發條件：合約把「應用日誌代管與合規稽核」列為必選；或客戶願意付加值授權費，足以支撐儲存擴容與節點採集架構的常態維運成本。
 - **不同日誌類別無法有不同保留期。** 社群版 VictoriaLogs 的 `-retentionPeriod` 是全域單一值（`helm/victorialogs` 預設 30 天）；應用日誌若需要更長的合規保留，要另起一個 VictoriaLogs 實例或用企業版。

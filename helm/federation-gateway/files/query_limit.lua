@@ -21,9 +21,9 @@
 --     this filter cannot read but Go's form parser could (415).
 --
 -- A `| limit N` pipe inside the LogsQL text needs no check: VictoriaLogs
--- appends `| offset <offset> | limit <limit>` from the URL/form argument AFTER
--- the tenant's pipes, and merges adjacent limits to the smaller one, so an
--- in-query limit can lower the cap but never raise it.
+-- appends `| offset <offset> | limit <limit>` from the URL/form argument as
+-- the LAST pipes of the query, so the result never exceeds it wherever the
+-- tenant's own `| limit` sits — an in-query limit can only lower it.
 --
 -- Parameter keys are percent-decoded before comparing (`%6Cimit` is `limit`
 -- to Go too), so an encoded key is counted, not missed.

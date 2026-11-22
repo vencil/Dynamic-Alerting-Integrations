@@ -823,10 +823,13 @@ data:
     \ /\n\n        auth-failed / bad-request) for 15m. Check the\n\n        tenant-log-query\
     \ dashboard — likely a REVOKED token (Lua\n\n        403), a tenant exceeding\
     \ its rate limit, or a client hitting\n\n        the victorialogs-mode endpoint\
-    \ allowlist. NOTE: this counts\n\n        POST-JWT rejections only — an EXPIRED\
-    \ / bad-signature / wrong-\n\n        audience token 401s at jwt_authn BEFORE\
-    \ account_id is stamped,\n\n        so it is NOT counted here (attack noise; see\
-    \ jwt_authn stats,\n\n        per ADR-020).\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
+    \ allowlist. A bad_request surge\n\n        right after a gateway upgrade is most\
+    \ likely\n\n        /select/logsql/query calls without a valid `limit` (400) or\n\
+    \n        with a non-form POST body (415). NOTE: this counts\n\n        POST-JWT\
+    \ rejections only — an EXPIRED / bad-signature / wrong-\n\n        audience token\
+    \ 401s at jwt_authn BEFORE account_id is stamped,\n\n        so it is NOT counted\
+    \ here (attack noise; see jwt_authn stats,\n\n        per ADR-020).\n\n      \
+    \  '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
     \      summary: Log-query requests for account {{ $labels.account_id }} are mostly\
     \ rejected\n  - alert: TenantProjectionMappingErrors\n    expr: \"sum without\
     \ (instance, pod, host) (\\n  (\\n    vector_component_discarded_events_total{component_id=\\\

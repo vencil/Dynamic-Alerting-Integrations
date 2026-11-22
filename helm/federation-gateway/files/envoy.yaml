@@ -5,7 +5,8 @@
 # HTTP filter chain, cheap-before-expensive:
 #   per-IP rate limit -> JWT verify -> Lua (revoked + tenant wiring)
 #   -> per-token rate limit -> per-tenant rate limit -> buffer
-#   -> Lua (audit-query extraction) -> router
+#   -> Lua (audit-query extraction)
+#   -> Lua (query limit; victorialogs mode only, 7b) -> router
 # The body buffer sits AFTER the rate limiters so a rejected request is
 # never buffered into Envoy memory — the rate limit bounds buffer cost.
 admin:

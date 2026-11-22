@@ -122,7 +122,7 @@ Which read APIs a tenant can call through the gateway depends on the mode:
   gateway and the store can never read two different values. A POST body it
   cannot read (multipart, compressed, other content types) gets `415`. A
   `| limit N` pipe in the LogsQL text cannot raise the cap: VictoriaLogs
-  appends the request's limit after the tenant's pipes and keeps the smaller.
+  appends the request's limit as the last pipe, after all of the tenant's.
 - **Tokens never reach a log.** `jwt_authn` is configured `from_headers`
   only — an `?access_token=` in the URL is not accepted — and the access log
   records the path **without** its query string (`%REQ_WITHOUT_QUERY(:PATH)%`),

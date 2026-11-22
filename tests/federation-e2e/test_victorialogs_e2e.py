@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 import requests
+import yaml
 
 from helpers import load_signing, sign_logs_token, sign_token
 
@@ -471,7 +472,10 @@ def test_vl10_gateway_rereads_a_rotated_password(vl_gateway_url, logs_signer):
 # gateway (400/415) and never reaches the store. The harness renders the chart
 # default max (victorialogs.maxQueryLimit).
 _QUERY_PATH = "/select/logsql/query"
-_MAX_LIMIT = 1000  # helm/federation-gateway values.yaml victorialogs.maxQueryLimit
+# The harness renders the chart default; read it rather than copy it.
+_GATEWAY_VALUES = os.path.join(os.path.dirname(__file__), "..", "..", "helm", "federation-gateway", "values.yaml")
+with open(_GATEWAY_VALUES, encoding="utf-8") as _fh:
+    _MAX_LIMIT = int(yaml.safe_load(_fh)["victorialogs"]["maxQueryLimit"])
 _FORM_CT = "application/x-www-form-urlencoded"
 
 
@@ -598,7 +602,7 @@ def test_vl11e_post_bodies_the_gateway_cannot_read_are_refused(vl_gateway_url, l
 
 def test_vl11f_in_query_pipe_and_other_endpoints_are_not_gated(vl_gateway_url, logs_signer):
     """A `| limit N` pipe in the LogsQL text is forwarded as-is: VictoriaLogs
-    appends the URL limit after it and keeps the smaller one, so the pipe cannot
+    appends the URL limit as the query's last pipe, so the tenant's pipe cannot
     raise the cap (an upstream property this mock cannot show). The other
     allowlisted endpoints take no mandatory limit."""
     _, token = logs_signer(*TENANT_A)
