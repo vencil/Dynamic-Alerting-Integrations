@@ -172,8 +172,8 @@ gateway 採 **default-deny 白名單**——只放行 VictoriaLogs 的 LogsQL **
 
 ## 5. 你能看到什麼：2-tier 可見度
 
-可見範圍由兩層策展決定（**治理機制，不是查詢期安全邊界**——硬隔離已由 AccountID 分區 +
-ingest-time 淨化擔保）：
+可見範圍先由平台的兩層策展決定（Tier-1 類別、Tier-2 欄位，**治理機制，不是查詢期安全邊界**——硬隔離已由 AccountID 分區 +
+ingest-time 淨化擔保），你再從 Tier-2 欄位中選自己要保留的子集（§5.1）：
 
 ```
 Tier-1 platform whitelist（平台 maintainer 策展）：哪些 stream class 可投影給租戶
@@ -203,7 +203,7 @@ VictoriaLogs (AccountID, ProjectID)：強制隔離
 ```text
 GET /api/v1/tenants/<你的租戶>/federation/log-visibility
 → {"tenant_id":"<你的租戶>","fields":null,
-   "visible_fields":["tenant_id","log_type","log_event_id","timestamp","status","method","path","query","token_id","duration_ms","response_flags"],
+   "selected_visible_fields":["tenant_id","log_type","log_event_id","timestamp","status","method","path","query","token_id","duration_ms","response_flags"],
    "always_visible_fields":["tenant_id","log_type","log_event_id","timestamp"],
    "selectable_fields":["status","method","path","query","token_id","duration_ms","response_flags"]}
 
@@ -218,8 +218,13 @@ PUT /api/v1/tenants/<你的租戶>/federation/log-visibility
 - 只能從 `selectable_fields` 挑：列了清單外的欄位（例如 `upstream`）、重複的欄位、永遠保留的欄位，或
   body 帶了 `fields` 以外的鍵，都回 `400`、不寫入。**選擇只會縮小你看到的欄位，不會擴大。**
 - ⚠️ **生效時機**：選擇存在 tenant-api，由 Vector 在**寫入**你的分區時套用——平台要把它抄進投影設定
-  （§2.2），之後新寫入的列才照新選擇；**已經寫進分區的列不會改變**。`GET` 回的是你的選擇，不是
-  Vector 目前實際套用的設定；不確定是否已套用，查一筆最新的列看欄位即可。
+  （§2.2），之後新寫入的列才照新選擇；**已經寫進分區的列不會改變**。`GET` 回的是你的選擇，
+  `selected_visible_fields` 是「平台套用後」每列會保留的欄位，不是 Vector 目前實際套用的設定（tenant-api
+  不知道是否已套用）；不確定時查一筆最新的列看欄位即可。
+- body 必須是只有 `fields` 一個鍵的 JSON 物件，鍵名大小寫要完全相同，回到預設也要明寫
+  `{"fields": null}`；`{}`、多出的鍵、物件後面還有資料都回 `400`，不會被當成「回到預設」。
+- 拿掉 `status` 時，新寫入的列不帶這個欄位，也就不帶這個 stream 標籤：這些列併成一條 stream，
+  以 `status` 過濾查不到它們。
 - portal 目前沒有這個設定的畫面，與指標子集相同。
 
 > **值班報修 tip**：你的淨化截圖裡有個 `log_event_id`（time-sortable UUIDv7）。報修時附上它，平台

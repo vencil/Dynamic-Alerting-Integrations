@@ -645,6 +645,16 @@ data:
       {{-     end }}
       {{-   end }}
       {{- end }}
+      {{- /* tenantProjectionAlwaysVisibleFields is FIXED (ADR-021 §租戶自選的可見度子集):
+             tenant-api offers tenants exactly the complement as selectable,
+             so an override would silently keep fields a tenant chose to drop
+             (an addition) or drop the join key / partition identity (a
+             removal) without tenant-api knowing. It is a value only so the
+             set is written next to tenantProjectionKeepFields and read by
+             tenant-api's vocabulary test; any other set fails the render. */}}
+      {{- $alwaysWant := list "log_event_id" "log_type" "tenant_id" "timestamp" }}
+      {{- $alwaysGot := .Values.tenantProjectionAlwaysVisibleFields | default list }}
+      {{- if ne (sortAlpha $alwaysGot | toJson) (toJson $alwaysWant) }}{{- fail (printf "tenantProjectionAlwaysVisibleFields must be exactly %s (got %s): tenant-api offers tenants the rest of tenantProjectionKeepFields as selectable, so changing this set would silently override their selections. It is not configurable." (toJson $alwaysWant) (toJson $alwaysGot)) }}{{- end }}
       # ── (b) Tenant-sanitized projection — ADR-021 §平台副本與租戶副本 / #609 ────────
       # FAN-OUT, not a move: the platform full copy keeps flowing to the
       # `victorialogs` sink (0:0) below, UNCHANGED. This adds a SECOND,

@@ -184,7 +184,8 @@ ok  	github.com/vencil/tenant-api/internal/federation/account	0.019s
 可見度分兩層：平台策展哪些日誌類別、哪些欄位可以進租戶分區（上一節），租戶再從這些欄位中選自己的副本要保留哪些。例如租戶不想讓自己的查詢文字（`query`）留在分區裡、被它所有的 token 持有者讀到，就可以不選它。
 
 - **選擇存在哪裡**：tenant-api 的 state store，每個租戶一筆 `_log_visibility.<tenant>.yaml`，與 ADR-020 的指標子集同一個 store、同樣以 compare-and-swap 寫入並記 `state_write` 稽核日誌。經 `GET`／`PUT /api/v1/tenants/{id}/federation/log-visibility` 讀寫；`PUT` 要該租戶的 admin，門檻與指標子集、簽發 token 相同。
-- **可選的欄位**：`tenantProjectionKeepFields` 扣掉四個永遠保留的欄位：`tenant_id`、`log_type`（分區的身分，也是 stream field）、`timestamp`（事件時間），以及 `log_event_id`（值班回 `0:0` 找完整那一列的關聯鍵）。四個欄位列在 `helm/vector` 的 `tenantProjectionAlwaysVisibleFields`。tenant-api 拒絕不在可選清單上的欄位、重複的欄位與永遠保留的欄位；請求帶了 `fields` 以外的鍵也拒絕，避免拼錯的鍵被讀成「回到預設」。
+- **可選的欄位**：`tenantProjectionKeepFields` 扣掉四個永遠保留的欄位：`tenant_id`、`log_type`（分區的身分，也是 stream field）、`timestamp`（事件時間），以及 `log_event_id`（值班回 `0:0` 找完整那一列的關聯鍵）。四個欄位列在 `helm/vector` 的 `tenantProjectionAlwaysVisibleFields`，這組值不能改，覆寫會讓 chart 渲染失敗：tenant-api 把其餘欄位全部開放給租戶選，改了這組就會在 tenant-api 不知情下蓋掉租戶的選擇。`status` 雖是租戶分區的 stream field 仍可拿掉，拿掉後新寫入的列沒有這個 stream 標籤，以 `status` 過濾查不到它們。
+- **任何讀不懂的輸入都不會變成「全部欄位」**：最寬的選擇是「回到預設」，所以 tenant-api 拒絕不在可選清單上的欄位、重複的欄位與永遠保留的欄位，也拒絕任何會被寬鬆解析讀成 `fields: null` 的請求：沒有 `fields` 鍵、鍵名拼錯或大小寫不同、多出其他鍵、物件後面還有資料。回到預設必須明寫 `{"fields": null}`。讀取已存的紀錄同樣嚴格：缺 `fields` 鍵、有未知的鍵或空白的紀錄視為損壞，`GET` 回 500，不當成預設。
 - **沒選就是平台預設**：沒有紀錄、或 `fields: null`，保留平台策展的全部欄位，包括平台日後新增的欄位，與加入這一層之前的行為相同。`fields: []` 只留四個永遠保留的欄位。
 - **在哪裡強制：寫入時，Vector 的租戶投影。** 平台把租戶的選擇抄進該租戶的 `tenantProjections` 項目（`visibleFields`），流程與從帳本抄 AccountID 相同。投影重建每一列時，迴圈仍只走 `tenantProjectionKeepFields`，不在選擇裡的可選欄位不複製；重新序列化的 `message` 只由留下的欄位組成，所以被拿掉的欄位也不會藏在字串裡。白名單外的欄位沒有任何路徑能經選擇加進來；chart 另在渲染時拒絕 `visibleFields` 中不在白名單上的欄位，抄錯會在部署時失敗，不會悄悄生效。沒有任何租戶帶 `visibleFields` 時，渲染出的設定與加入這一層之前逐字相同。
 - **為什麼不在查詢端套用**：gateway 只注入 header。要在查詢端只回某些欄位，得改寫租戶的 LogsQL（例如補一段欄位篩選），也就是本 ADR 拒絕的自寫 LogsQL 過濾：漏掉一種語法，選擇就失效，而且失效的方向是多回欄位。寫入端從白名單重建，出錯的方向是少一個欄位，維持 fail-closed。代價與上一節相同：改選擇只影響之後寫入的列，已經寫進分區的列保持原樣。
@@ -285,10 +286,11 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 **已知限制**
 
 - **已決定、尚未實作：偵測「該蓋章卻落進 `0:0`」的告警。** 本 ADR 決定在查詢端保留一個結構性的檢查：偵測本該帶租戶身分、卻掉進平台分區的日誌（進入端蓋章失效的訊號），發標準的 Alertmanager 告警（`warning`，通知平台維運），而**不**自動切斷租戶的查詢（誤判會切斷合法租戶、引發 SLA 事故），也不做依內容的異常偵測或自動斷流。rule pack 目前沒有完整涵蓋它的告警。`TenantProjectionFanoutDiscardSpike` 涵蓋一部分：`federation_audit` 列的 `tenant_id` 空白或對映不到 AccountID、因此只留在 `0:0` 的量，比自己一天的平均高出三倍時告警；量小或長期存在的落差會被併入基準而不觸發，其他日誌類別也不在範圍內。
-- **租戶的可見度選擇要平台抄進 Vector 才生效。** tenant-api 存的是租戶要的；Vector 讀的是 `tenantProjections[].visibleFields` 這份副本，抄寫與 AccountID 一樣靠 PR review，沒有機制比對兩者。沒抄或抄到舊的，租戶的副本保留的是平台預設或舊的選擇：仍在平台策展的範圍內，只是沒有縮小，不會多出白名單外的欄位。`GET` 回的是租戶的選擇，不是 Vector 實際套用的設定。改由機制同步的觸發條件：投影改由帳本自動產生時（見下「租戶應用日誌延後」）一併從 state store 產生；或有租戶把某個欄位不保留列為合規要求。
+- **租戶的可見度選擇要平台抄進 Vector 才生效。** tenant-api 存的是租戶要的；Vector 讀的是 `tenantProjections[].visibleFields` 這份副本，抄寫與 AccountID 一樣靠 PR review，沒有機制比對兩者。沒抄或抄到舊的，租戶的副本保留的是平台預設或舊的選擇：仍在平台策展的範圍內，只是沒有縮小，不會多出白名單外的欄位。`GET` 回的是租戶的選擇（`selected_visible_fields` 是套用後會保留的欄位），不是 Vector 實際套用的設定。改由機制同步的觸發條件：投影改由帳本自動產生時（見下「租戶應用日誌延後」）一併從 state store 產生；或有租戶把某個欄位不保留列為合規要求。
 - **只能選欄位，不能選日誌類別。** 平台目前只策展 `federation_audit` 一個類別，選類別等於「全部或不投影」。平台策展第二個類別時再擴充成類別加欄位。
 - **tenant-api 的可選清單是 chart 預設白名單的鏡像。** 兩者由 `components/tenant-api/internal/federation/logvis/logvis_test.go` 比對 `helm/vector/values.yaml`。部署端若覆寫了 `tenantProjectionKeepFields`：新增的欄位租戶選不到（沒選擇時仍看得到）；被移除的欄位若出現在某租戶抄過來的選擇裡，chart 渲染失敗，要把那一項從 `visibleFields` 拿掉。
 - **租戶目前只能直接呼叫 API 設定。** portal 沒有對應的畫面，與指標子集相同。
+- **退回前一版 tenant-api 後，備份還原會拒絕含可見度紀錄的備份。** 前一版的 `state restore` 不認得 `_log_visibility.*` 鍵，會把整份備份判為「不是 tenant-api state 備份」。要退版又要還原，先從備份移除這些鍵。孤兒偵測也不涵蓋這些紀錄，退租時要手動刪（見 offboarding runbook）。
 - **已決定、尚未實作：在 gateway 強制 `/query` 帶 `limit`。** 本 ADR 決定 `/query` 除了時間範圍上限，還要強制帶 `limit` 收斂串流回傳量；gateway 目前不檢查也不補上 `limit`，只靠時間範圍上限與租戶指南。
 - **VictoriaLogs 本身的分區沒有被平台測試驗證。** 選原生分區的理由之一是它同樣套在 metadata 類端點（`field_values`、`stream_field_values` 等）上，不像 ADR-020 要顯式開 `-enable-label-apis`。但 gateway 的 E2E（`tests/federation-e2e/test_victorialogs_e2e.py`）用的是模擬日誌庫，驗證的是 gateway 送出的 header，不是 VictoriaLogs 對每個端點的隔離。
 - **租戶應用日誌延後。** 要先有另一份日誌進入端的設計，依 namespace 蓋章並滿足上面的契約與節點隔離硬化；屆時沿用同一個 gateway 模式，`ProjectID=1`，Vector 的對映改由帳本產生，解決固定 sink 在大量租戶下無法擴展的問題。觸發條件：合約把「應用日誌代管與合規稽核」列為必選；或客戶願意付加值授權費，足以支撐儲存擴容與節點採集架構的常態維運成本。

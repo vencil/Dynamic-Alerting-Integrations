@@ -1803,13 +1803,17 @@ definitions:
         items:
           type: string
         type: array
-      tenant_id:
-        type: string
-      visible_fields:
-        description: VisibleFields is every field a projected row keeps under Fields.
+      selected_visible_fields:
+        description: |-
+          SelectedVisibleFields is every field a projected row would keep under
+          Fields once the platform applies this selection to Vector's tenant
+          projection. tenant-api does not track whether it has been applied, so
+          this is the selection's meaning, not what the tenant's rows carry now.
         items:
           type: string
         type: array
+      tenant_id:
+        type: string
     type: object
   internal_handler_federation.PutFederationPolicyRequest:
     properties:

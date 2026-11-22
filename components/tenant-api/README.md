@@ -154,8 +154,8 @@
 | `POST` | `/api/v1/federation/accounts/backfill` | admin(平台層級) | 替 conf.d 裡還沒有 `account_id` 的租戶一次配發(單一寫入);冪等,重跑不會配新號。回應列出這次配到號的租戶與已有號的租戶數。用途見 [tenant-log-query §2.1](../../docs/integration/tenant-log-query.md) |
 | `GET` | `/api/v1/tenants/{id}/federation` | read | 取得該租戶的聯邦 metric 子集(讀 state store 的 `_federation.<id>.yaml`);無紀錄回空子集 |
 | `PUT` | `/api/v1/tenants/{id}/federation` | admin | 更新該租戶的聯邦 metric 子集(需該租戶 admin;子集不得超出平台白名單);寫入 state store 的 `_federation.<id>.yaml` |
-| `GET` | `/api/v1/tenants/{id}/federation/log-visibility` | read | 取得該租戶的日誌可見度選擇(讀 state store 的 `_log_visibility.<id>.yaml`);無紀錄回 `fields: null`,即平台預設的全部策展欄位 |
-| `PUT` | `/api/v1/tenants/{id}/federation/log-visibility` | admin | 更新該租戶的日誌可見度選擇(需該租戶 admin;欄位只能從平台策展的可選欄位中挑,只會縮小不會擴大;`{"fields": null}` 回到預設);由 Vector 的租戶投影在寫入時套用,平台把它抄進 `tenantProjections[].visibleFields` 後才生效,見 ADR-021 |
+| `GET` | `/api/v1/tenants/{id}/federation/log-visibility` | read | 取得該租戶的日誌可見度選擇(讀 state store 的 `_log_visibility.<id>.yaml`);無紀錄回 `fields: null`,即平台預設的全部策展欄位;`selected_visible_fields` 是平台套用後每列會保留的欄位,tenant-api 不追蹤是否已套用 |
+| `PUT` | `/api/v1/tenants/{id}/federation/log-visibility` | admin | 更新該租戶的日誌可見度選擇(需該租戶 admin;欄位只能從平台策展的可選欄位中挑,只會縮小不會擴大;`{"fields": null}` 回到預設,`fields` 鍵必填);由 Vector 的租戶投影在寫入時套用,平台把它抄進 `tenantProjections[].visibleFields` 後才生效,見 ADR-021 |
 
 > 群組、saved view、聯邦白名單與子集、AccountID 帳本是 tenant-api 自己的紀錄,存在 state store(`--state-store`,見下方環境變數),**不在 conf.d、不產生 git commit 或 PR**([#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856))。每次寫入記一筆結構化 `state_write` 事件(key、entity、author、notes)。寫入錯誤:持續撞上並行寫入回 409、store 連不上回 503(帶 `Retry-After`)、ConfigMap 將超過約 900 KiB 回 507。
 

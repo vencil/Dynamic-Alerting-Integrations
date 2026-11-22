@@ -37,8 +37,11 @@ type LogVisibilityResponse struct {
 	// Fields is the tenant's selection; null means no selection — the
 	// platform default, every curated field (including ones added later).
 	Fields *[]string `json:"fields"`
-	// VisibleFields is every field a projected row keeps under Fields.
-	VisibleFields []string `json:"visible_fields"`
+	// SelectedVisibleFields is every field a projected row would keep under
+	// Fields once the platform applies this selection to Vector's tenant
+	// projection. tenant-api does not track whether it has been applied, so
+	// this is the selection's meaning, not what the tenant's rows carry now.
+	SelectedVisibleFields []string `json:"selected_visible_fields"`
 	// AlwaysVisibleFields are kept whatever the selection.
 	AlwaysVisibleFields []string `json:"always_visible_fields"`
 	// SelectableFields are the fields a selection may name.
@@ -48,11 +51,11 @@ type LogVisibilityResponse struct {
 func logVisibilityResponse(tenantID string, s *logvis.Selection) LogVisibilityResponse {
 	eff := logvis.Effective(s)
 	return LogVisibilityResponse{
-		TenantID:            tenantID,
-		Fields:              eff.Fields,
-		VisibleFields:       logvis.VisibleFields(eff),
-		AlwaysVisibleFields: logvis.AlwaysVisibleFields,
-		SelectableFields:    logvis.SelectableFields,
+		TenantID:              tenantID,
+		Fields:                eff.Fields,
+		SelectedVisibleFields: logvis.VisibleFields(eff),
+		AlwaysVisibleFields:   logvis.AlwaysVisibleFields,
+		SelectableFields:      logvis.SelectableFields,
 	}
 }
 
@@ -104,8 +107,10 @@ func GetTenantLogVisibility(d *handler.Deps) http.HandlerFunc {
 // Requires admin on the tenant, the bar of the federation metric subset and of
 // token issuance. Every field must be one the platform curates as selectable
 // (the containment rule); `{"fields": null}` returns to the platform default.
-// Unknown body keys are refused: a misspelled `fields` would otherwise read
-// as null and silently reset the selection to the default.
+// The body must be exactly one JSON object whose only key is `fields`, spelt
+// exactly, present even when null: a missing, misspelt or differently-cased
+// key, or trailing data, would otherwise read as null and silently widen the
+// selection back to every curated field.
 //
 // @Summary     Replace a tenant's log visibility selection
 // @Tags        federation
@@ -140,19 +145,17 @@ func PutTenantLogVisibility(d *handler.Deps) http.HandlerFunc {
 			handler.WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
 			return
 		}
-		var sel logvis.Selection
-		dec := json.NewDecoder(bytes.NewReader(body))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&sel); err != nil {
-			handler.WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		sel, err := decodeLogVisibilityBody(body)
+		if err != nil {
+			handler.WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
-		if pv := logvis.Validate(&sel); len(pv) > 0 {
+		if pv := logvis.Validate(sel); len(pv) > 0 {
 			handler.WriteValidationErrors(w, r, toLogVisViolations(pv))
 			return
 		}
 
-		yamlBytes, err := yaml.Marshal(&sel)
+		yamlBytes, err := yaml.Marshal(sel)
 		if err != nil {
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, "marshal log visibility: "+err.Error())
 			return
@@ -166,8 +169,47 @@ func PutTenantLogVisibility(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(logVisibilityResponse(tenantID, &sel))
+		_ = json.NewEncoder(w).Encode(logVisibilityResponse(tenantID, sel))
 	}
+}
+
+// decodeLogVisibilityBody reads a PUT body strictly. Go's json decoding
+// matches keys case-insensitively, ignores a missing key and stops after the
+// first value, and each of those would turn a malformed body into
+// `fields: null` — the widest selection — so the body is read as a raw object
+// first and each of them refused.
+func decodeLogVisibilityBody(body []byte) (*logvis.Selection, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	var raw map[string]json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %v", err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("invalid JSON: trailing data after the request object")
+	}
+	if raw == nil {
+		return nil, errors.New(`request body must be a JSON object with a "fields" key`)
+	}
+	for k := range raw {
+		if k != "fields" {
+			return nil, fmt.Errorf(`unknown key %q: the only key is "fields"`, k)
+		}
+	}
+	fv, ok := raw["fields"]
+	if !ok {
+		return nil, errors.New(`"fields" is required; send {"fields": null} to return to the platform default`)
+	}
+	if bytes.Equal(bytes.TrimSpace(fv), []byte("null")) {
+		return &logvis.Selection{}, nil
+	}
+	var fields []string
+	if err := json.Unmarshal(fv, &fields); err != nil {
+		return nil, fmt.Errorf(`"fields" must be null or a list of field names: %v`, err)
+	}
+	if fields == nil {
+		fields = []string{}
+	}
+	return &logvis.Selection{Fields: &fields}, nil
 }
 
 // readLogVisibility loads tenantID's selection; no record is the default.

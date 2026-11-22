@@ -53,23 +53,42 @@ func TestValidate_RejectsFieldsOutsidePlatformSet(t *testing.T) {
 	}
 }
 
-func TestParse_NullAndAbsentAreDefault(t *testing.T) {
+func TestParse_ExplicitNullIsDefault(t *testing.T) {
 	t.Parallel()
-	for _, doc := range []string{"", "fields: null\n", "{}\n"} {
-		s, err := Parse([]byte(doc))
-		if err != nil {
-			t.Fatalf("Parse(%q): %v", doc, err)
-		}
-		if s.Fields != nil {
-			t.Errorf("Parse(%q).Fields = %v, want nil (default)", doc, *s.Fields)
-		}
+	s, err := Parse([]byte("fields: null\n"))
+	if err != nil {
+		t.Fatalf("Parse(fields: null): %v", err)
 	}
-	s, err := Parse([]byte("fields: []\n"))
+	if s.Fields != nil {
+		t.Errorf("Parse(fields: null).Fields = %v, want nil (default)", *s.Fields)
+	}
+	s, err = Parse([]byte("fields: []\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.Fields == nil || len(*s.Fields) != 0 {
 		t.Errorf("Parse(fields: []) = %v, want a non-nil empty list", s.Fields)
+	}
+}
+
+// TestParse_DamagedRecordFailsClosed: tenant-api always writes the `fields`
+// key, so a record without it, with another key, or empty is damaged. Read
+// leniently each would be `fields: null` — every curated field — so each must
+// be an error, never the default.
+func TestParse_DamagedRecordFailsClosed(t *testing.T) {
+	t.Parallel()
+	for _, doc := range []string{
+		"",
+		"{}\n",
+		"bogus: 1\n",
+		"fields: [status]\nbogus: 1\n",
+		"Fields: [status]\n",
+		"- status\n",
+		"fields: {status: true}\n",
+	} {
+		if s, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("Parse(%q) = %+v, want an error (a damaged record must not read as a selection)", doc, s)
+		}
 	}
 }
 

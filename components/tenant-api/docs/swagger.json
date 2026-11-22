@@ -4172,15 +4172,15 @@
                         "type": "string"
                     }
                 },
-                "tenant_id": {
-                    "type": "string"
-                },
-                "visible_fields": {
-                    "description": "VisibleFields is every field a projected row keeps under Fields.",
+                "selected_visible_fields": {
+                    "description": "SelectedVisibleFields is every field a projected row would keep under\nFields once the platform applies this selection to Vector's tenant\nprojection. tenant-api does not track whether it has been applied, so\nthis is the selection's meaning, not what the tenant's rows carry now.",
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
+                },
+                "tenant_id": {
+                    "type": "string"
                 }
             }
         },

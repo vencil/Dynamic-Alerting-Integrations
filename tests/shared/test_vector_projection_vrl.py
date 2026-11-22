@@ -381,6 +381,25 @@ class TestProjectionEnabledShape:
         assert "not in tenantProjectionKeepFields" in r.stderr, r.stderr
 
     @_needs_helm
+    def test_always_visible_set_is_not_configurable(self, repo_root: Path) -> None:
+        """tenant-api offers tenants exactly keepFields − tenantProjectionAlwaysVisibleFields
+        as selectable, so changing the always-visible set would silently override
+        their selections: adding `query` keeps a field a tenant dropped, removing
+        `log_event_id` drops the 0:0 join key. Either must fail the render; the
+        same set in another order renders."""
+        for override in ("{tenant_id,log_type,log_event_id,timestamp,query}",
+                         "{tenant_id,log_type,timestamp}",
+                         "{}"):
+            r = _render_result(repo_root / "helm/vector", sets={
+                **_PROJECTION_SETS, "tenantProjectionAlwaysVisibleFields": override})
+            assert r.returncode != 0, f"override {override} must not render"
+            assert "tenantProjectionAlwaysVisibleFields must be exactly" in r.stderr, r.stderr
+        r = _render_result(repo_root / "helm/vector", sets={
+            **_PROJECTION_SETS,
+            "tenantProjectionAlwaysVisibleFields": "{timestamp,log_event_id,log_type,tenant_id}"})
+        assert r.returncode == 0, r.stderr
+
+    @_needs_helm
     def test_visible_fields_narrowing_only_iterates_the_allowlist(self, repo_root: Path) -> None:
         """The narrowing condition is attached to allowlist copies only: every
         `kept.<f> = .<f>` line still comes from tenantProjectionKeepFields, and

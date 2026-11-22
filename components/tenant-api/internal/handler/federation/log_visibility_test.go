@@ -53,8 +53,8 @@ func TestGetTenantLogVisibility_NoRecordIsPlatformDefault(t *testing.T) {
 	}
 	got := decodeLogVis(t, w.Body.Bytes())
 	want := logvis.VisibleFields(&logvis.Selection{})
-	if !reflect.DeepEqual(got.VisibleFields, want) {
-		t.Errorf("visible_fields = %v, want every curated field %v", got.VisibleFields, want)
+	if !reflect.DeepEqual(got.SelectedVisibleFields, want) {
+		t.Errorf("selected_visible_fields = %v, want every curated field %v", got.SelectedVisibleFields, want)
 	}
 }
 
@@ -94,14 +94,86 @@ func TestPutTenantLogVisibility_CannotWidenPastPlatformSet(t *testing.T) {
 	}
 }
 
-func TestPutTenantLogVisibility_RejectsUnknownKey(t *testing.T) {
+// TestPutTenantLogVisibility_MalformedBodyNeverResetsToDefault: every body
+// below would decode as fields:null — a silent widening back to every curated
+// field — under Go's default json decoding. Each must be a 400 that writes
+// nothing, leaving the tenant's earlier, narrower selection in place.
+func TestPutTenantLogVisibility_MalformedBodyNeverResetsToDefault(t *testing.T) {
 	t.Parallel()
+	for name, body := range map[string]string{
+		"misspelt key":     `{"field":["status"]}`,
+		"other casing":     `{"Fields":["status"]}`,
+		"no fields key":    `{}`,
+		"trailing object":  `{"fields":["status"]}{"fields":null}`,
+		"trailing garbage": `{"fields":["status"]} x`,
+		"json null":        `null`,
+		"not a list":       `{"fields":"status"}`,
+		"extra key":        `{"fields":["status"],"reset":true}`,
+		"array body":       `["status"]`,
+		"empty body":       ``,
+		"both casings":     `{"fields":["path"],"Fields":null}`,
+	} {
+		d, dir := logVisDeps(t, logVisAdminRBAC)
+		key := filepath.Join(dir, statestore.LogVisibilityKey(logVisTenant))
+		if err := os.WriteFile(key, []byte("fields:\n    - path\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		w := executeWithRBAC(t, PutTenantLogVisibility(d), fedReq(t, "PUT", logVisPath, "id", logVisTenant, body))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s (%s): status = %d, want 400, body: %s", name, body, w.Code, w.Body.String())
+			continue
+		}
+		if got, _ := os.ReadFile(key); string(got) != "fields:\n    - path\n" {
+			t.Errorf("%s: the stored selection changed to %q", name, got)
+		}
+	}
+	// A body without the key is told how to reset, not just that it failed.
 	d, _ := logVisDeps(t, logVisAdminRBAC)
-	// "field" (singular) would decode as fields:null — a silent reset to the
-	// default — if unknown keys were ignored.
-	w := executeWithRBAC(t, PutTenantLogVisibility(d), fedReq(t, "PUT", logVisPath, "id", logVisTenant, `{"field":["status"]}`))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400, body: %s", w.Code, w.Body.String())
+	w := executeWithRBAC(t, PutTenantLogVisibility(d), fedReq(t, "PUT", logVisPath, "id", logVisTenant, `{}`))
+	if !strings.Contains(w.Body.String(), `\"fields\" is required`) {
+		t.Errorf(`{} should be refused as a missing "fields" key, body: %s`, w.Body.String())
+	}
+}
+
+// TestGetTenantLogVisibility_DamagedRecordIs500: a stored record that does not
+// parse strictly is an error, never read as the default (every field).
+func TestGetTenantLogVisibility_DamagedRecordIs500(t *testing.T) {
+	t.Parallel()
+	d, dir := logVisDeps(t, "")
+	if err := os.WriteFile(filepath.Join(dir, statestore.LogVisibilityKey(logVisTenant)), []byte("bogus: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := executeWithRBAC(t, GetTenantLogVisibility(d), fedReq(t, "GET", logVisPath, "id", logVisTenant, ""))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "selected_visible_fields") {
+		t.Errorf("a damaged record must not answer with a selection: %s", w.Body.String())
+	}
+}
+
+// logVisReadWriteRBAC grants read and write, but not admin, on logVisTenant.
+const logVisReadWriteRBAC = `groups:
+  - name: platform-admins
+    tenants: ["tenant-alpha"]
+    permissions: [read, write]
+`
+
+// TestPutTenantLogVisibility_ReadWriteIsNotAdmin pins the permission LEVEL:
+// write on the tenant is not enough, the bar is admin (as for the metric
+// subset and token issuance).
+func TestPutTenantLogVisibility_ReadWriteIsNotAdmin(t *testing.T) {
+	t.Parallel()
+	d, dir := logVisDeps(t, logVisReadWriteRBAC)
+	w := executeWithRBAC(t, PutTenantLogVisibility(d), fedReq(t, "PUT", logVisPath, "id", logVisTenant, `{"fields":["status"]}`))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "log visibility") {
+		t.Errorf("403 should come from the handler's admin gate: %s", w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, statestore.LogVisibilityKey(logVisTenant))); !os.IsNotExist(err) {
+		t.Error("a refused PUT must not write a record")
 	}
 }
 
@@ -115,8 +187,8 @@ func TestPutTenantLogVisibility_StoresAndResets(t *testing.T) {
 	}
 	put := decodeLogVis(t, w.Body.Bytes())
 	wantVisible := append(append([]string{}, logvis.AlwaysVisibleFields...), "status", "path")
-	if !reflect.DeepEqual(put.VisibleFields, wantVisible) {
-		t.Errorf("PUT visible_fields = %v, want %v", put.VisibleFields, wantVisible)
+	if !reflect.DeepEqual(put.SelectedVisibleFields, wantVisible) {
+		t.Errorf("PUT selected_visible_fields = %v, want %v", put.SelectedVisibleFields, wantVisible)
 	}
 
 	w = executeWithRBAC(t, GetTenantLogVisibility(d), fedReq(t, "GET", logVisPath, "id", logVisTenant, ""))
@@ -143,7 +215,7 @@ func TestPutTenantLogVisibility_EmptyKeepsOnlyAlwaysVisible(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
 	}
-	if got := decodeLogVis(t, w.Body.Bytes()); !reflect.DeepEqual(got.VisibleFields, logvis.AlwaysVisibleFields) {
-		t.Errorf("visible_fields = %v, want only %v", got.VisibleFields, logvis.AlwaysVisibleFields)
+	if got := decodeLogVis(t, w.Body.Bytes()); !reflect.DeepEqual(got.SelectedVisibleFields, logvis.AlwaysVisibleFields) {
+		t.Errorf("selected_visible_fields = %v, want only %v", got.SelectedVisibleFields, logvis.AlwaysVisibleFields)
 	}
 }

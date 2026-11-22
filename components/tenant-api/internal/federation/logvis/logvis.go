@@ -21,6 +21,8 @@
 package logvis
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/vencil/tenant-api/internal/confd"
@@ -53,14 +55,28 @@ type Violation struct {
 	Reason string `json:"reason"`
 }
 
-// Parse decodes a selection record. An empty document is the platform
-// default. parse-tree's verdict comes first, as for every state record.
+// Parse decodes a selection record, strictly: parse-tree's verdict first, as
+// for every state record, then a mapping whose only key is `fields`, present.
+// tenant-api always writes that key (null for the default), so an empty
+// document, a missing key or an unknown one is a damaged record. A lenient
+// decode would read each of those as `fields: null` — every curated field,
+// the widest selection — so they are refused instead (the caller answers
+// 500), the direction a damaged record must fail in.
 func Parse(data []byte) (*Selection, error) {
 	if err := confd.Judge(data); err != nil {
 		return nil, err
 	}
+	var probe map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return nil, err
+	}
+	if _, ok := probe["fields"]; !ok {
+		return nil, errors.New(`log visibility record has no "fields" key`)
+	}
 	var s Selection
-	if err := yaml.Unmarshal(data, &s); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&s); err != nil {
 		return nil, err
 	}
 	return &s, nil
