@@ -107,6 +107,50 @@ def test_withdrawn_draft_codes_fail(adrs, line, code):
     assert _sections(adrs, line) == [code]
 
 
+# A link to the ADR between ADR-NNN and §, and a reference broken onto the
+# next line (a wrapped comment or paragraph), are the same reference (#4193).
+@pytest.mark.parametrize(
+    ("text", "want"),
+    [
+        ("see [ADR-024](../adr/024-example.md) §3.", []),
+        ("[ADR-024](../adr/024-example.md#3-custom) §Blast radius", ["Blast"]),
+        ("[ADR-024](../adr/024-example.md)§9 and §5", ["9"]),
+        ("(ADR-024\n# §5 validation)", []),
+        ("(ADR-024\n# §Blast radius Layer 3)", ["Blast"]),
+        ("// see ADR-024\n// §3、§8", ["8"]),
+        ("-- ADR-024\n-- §4", ["4"]),
+        (" * ADR-024's\n * §S6b-2", ["S6b-2"]),
+        ("; ADR-024 \n; §4", ["4"]),
+        ("> quoting [ADR-024](x.md)\n> §4 here", ["4"]),
+        ("a paragraph wrapped after ADR-024\n§4 as its section", ["4"]),
+        ("ADR-099\n# §1", ["1"]),
+    ],
+)
+# adr-check: ADR-027/9.8a
+def test_link_and_line_break_references_are_checked(adrs, text, want):
+    assert _sections(adrs, text) == want
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ADR-024\n\n§4 after a blank line is not its section",
+        "ADR-024 is cited\n§4 here is not after it",  # ADR-NNN does not end the line
+        "ADR-024\n# see §4 below",  # § does not open the next line
+        "ADR-024",  # the last line
+    ],
+)
+# adr-check: ADR-027/9.8a
+def test_a_section_not_continuing_the_reference_is_not_its_section(adrs, text):
+    assert _sections(adrs, text) == []
+
+
+# adr-check: ADR-027/9.8a
+def test_a_broken_reference_is_reported_on_the_line_with_the_adr(adrs):
+    found = lint.scan_text("x.yaml", "a: 1\n# (ADR-024\n#  §4)\n", adrs)
+    assert [(f.line, f.adr, f.section) for f in found] == [(2, "024", "4")]
+
+
 # adr-check: ADR-027/9.8b
 def test_draft_code_needs_adr_027_before_it(adrs):
     # MED-8 alone is a security-finding ID, not an ADR reference.
