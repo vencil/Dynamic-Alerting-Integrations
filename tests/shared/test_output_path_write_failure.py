@@ -2881,8 +2881,31 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "switch, not a path. A write that fails is held by "
         "tests/lint/test_check_doc_links.py "
         "(test_fix_anchors_that_cannot_write_the_doc_is_exit_2).",
+    # #3981, third batch: four generators of committed copies of a schema or
+    # a contract. Each names its own targets; `--root` (two of them) is the
+    # tree read AND written, never a file.
+    "dx/gen_tenant_id_json.py":
+        "the default mode rewrites the two `tenant-id.json` copies the tool "
+        "names; it takes no path. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    "dx/gen_am_duration_json.py":
+        "the default mode rewrites the `am-duration.json` copy the tool names; "
+        "it takes no path. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    "dx/sync_schema.py":
+        "`--update` rewrites the reserved-key copies the tool names under "
+        "`--root`; the flag names the tree, not a file. A write that fails is "
+        "held by tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    "dx/gen_recipe_contract.py":
+        "`--update` rewrites the recipe-contract copies the tool names under "
+        "`--root`; the flag names the tree, not a file. A write that fails is "
+        "held by tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 13
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 17
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

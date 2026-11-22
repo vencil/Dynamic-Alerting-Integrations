@@ -630,8 +630,19 @@ def run(root, registry, update):
     reg = load_registry(registry)
     d = derive(reg)
     stale = []
+    if update:
+        # Imported here, not at the top: `_lib_io` imports PyYAML, and
+        # `--check` runs as a pre-commit hook in an environment that has
+        # none (#3981).
+        from _lib_io import (  # noqa: E402, PLC0415
+            OutputWriteError, check_repo_artifact, write_repo_artifact)
     for rel, render in targets(root, d):
         path = Path(root) / rel
+        if update:
+            try:
+                check_repo_artifact(path)  # before the read: a FIFO would block it
+            except OutputWriteError as e:
+                raise RegistryError(str(e)) from e
         try:
             current = path.read_text(encoding="utf-8") if path.exists() or rel not in WHOLE_FILE_TARGETS else ""
         except (OSError, UnicodeDecodeError) as e:
@@ -640,7 +651,10 @@ def run(root, registry, update):
         if wanted != current:
             stale.append(rel)
             if update:
-                path.write_text(wanted, encoding="utf-8", newline="\n")
+                try:
+                    write_repo_artifact(path, wanted)
+                except OutputWriteError as e:
+                    raise RegistryError(str(e)) from e
     return stale
 
 

@@ -103,13 +103,25 @@ def main() -> int:
               f"{SCHEMA_REL} definitions.tenantId.")
         return 0
 
-    for rel, path in targets:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # newline="\n": force LF on every platform (CRLF would taint the portal
-        # bundle's sourcemap once the portal imports this file; see
-        # gen_recipe_contract.py).
-        path.write_text(generated, encoding="utf-8", newline="\n")
-        print(f"WROTE: {rel}")
+    # Imported here, not at the top: `_lib_io` imports PyYAML, and `--check`
+    # runs as a pre-commit hook in an environment that has none (#3981).
+    from _lib_io import (  # noqa: E402, PLC0415
+        OutputWriteError, check_repo_artifact, ensure_dir, write_repo_artifact)
+    try:
+        # Every copy is judged before the first is written: a copy that is
+        # no regular file (a FIFO blocked the write, a symlink was written
+        # through) leaves the others as they were.
+        for _rel, path in targets:
+            check_repo_artifact(path)
+        for rel, path in targets:
+            ensure_dir(path.parent)
+            # The artifact entry writes LF on every platform (CRLF would
+            # taint the portal bundle's sourcemap; see gen_recipe_contract.py).
+            write_repo_artifact(path, generated)
+            print(f"WROTE: {rel}")
+    except OutputWriteError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     return 0
 
 
