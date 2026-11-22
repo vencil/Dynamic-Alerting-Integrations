@@ -474,6 +474,14 @@ def _build_tenant_api_rules():
         "require_match": True,
     })
 
+    # ⚠️ No rule for helm/vector's projection-gate registry reader (#4164,
+    # projectionGate.registryReader.image.tag). It must move with this line,
+    # but rewriting it changes the vector chart, whose version no release line
+    # moves — check_chart_version_bump would refuse every release wrap. The
+    # move is made by hand: tests/shared/test_vector_projection_gate_image_tag.py
+    # fails until the tag and the chart version are bumped together (#4212
+    # retires the pin).
+
     # da-tools README versioning table — the tenant-api row.
     #
     # Every OTHER row of that five-row table already had a dedicated rule

@@ -939,8 +939,8 @@ data:
     \      summary: Vector projection gate could not read the account registry at\
     \ boot (mode={{ $labels.mode }}) — tenant routing silently degraded\n  - alert:\
     \ VectorProjectionGateStuck\n    expr: \"max by (namespace, da_cluster) (\\n \
-    \ max_over_time(\\n    kube_pod_init_container_status_waiting_reason{container=\\\
-    \"projection-gate\\\", reason=~\\\"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError\\\
+    \ max_over_time(\\n    kube_pod_init_container_status_waiting_reason{container=~\\\
+    \"projection-gate|projection-gate-registry\\\", reason=~\\\"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError\\\
     \"}[5m]\\n  )\\n) > 0\\n\"\n    for: 5m\n    labels:\n      alert_source: platform\n\
     \      severity: critical\n    annotations:\n      description: 'The projection-gate\
     \ init-container is stuck waiting (crash loop,\n\n        image-pull failure,\
@@ -952,9 +952,10 @@ data:
     \ KSM signal is the\n\n        only one. Causes: `tenantProjectionGate: enforce`\
     \ + a config-bug\n\n        mismatch (fail-closed working as designed — REVERT\
     \ the bad\n\n        `tenantProjections` change); a wrong/garbled gate image or\
-    \ args\n\n        (any mode — fix `projectionGate.image` / the init spec); a\n\
-    \n        missing staging ConfigMap. Inspect `kubectl describe pod` for\n\n  \
-    \      the waiting reason and `kubectl logs <vector-pod> -c\n\n        projection-gate\
+    \ args\n\n        (any mode — fix `projectionGate.image`, the registry reader''s\n\
+    \n        `projectionGate.registryReader.image` / the init spec); a\n\n      \
+    \  missing staging ConfigMap. Inspect `kubectl describe pod` for\n\n        the\
+    \ waiting reason and `kubectl logs <vector-pod> -c\n\n        projection-gate\
     \ --previous` for crash output. Consider `degrade`\n\n        mode if a hard rollout\
     \ stop is worse than fail-available 0:0 for\n\n        your environment. See platform-log-aggregation-runbook\
     \ §8.9.3.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\

@@ -2825,12 +2825,13 @@ groups:
       # when the matcher was broadened — "enforce" was a misnomer once image-level
       # wedges (which hit degrade mode too) were included.
       #
-      # Signal: kube_pod_init_container_status_waiting_reason{container="projection-gate",
-      # reason=~...}=1 (KSM job, default metric set — confirmed emitted, no
+      # Signal: kube_pod_init_container_status_waiting_reason{container=~"projection-gate|projection-gate-registry",
+      # reason=~...}=1 (#4164: the registry reader runs first, tenant-api's
+      # image; it always exits 0, so it wedges only on its image or config) (KSM job, default metric set — confirmed emitted, no
       # --metric-allowlist filter). `max by (namespace)` collapses the per-node
       # DaemonSet pods (and the reason fan-out) to one series and keeps `namespace`
       # on the page (Vector may be installed outside `monitoring`); the stable
-      # container name `projection-gate` scopes it. `max_over_time(...[5m])` is the
+      # container names of the two gate init-containers scope it. `max_over_time(...[5m])` is the
       # kube-prometheus KubePodCrashLooping idiom: a CrashLoopBackOff series briefly
       # drops to absent while kubelet re-runs the container between backoffs (and
       # ErrImagePull/ImagePullBackOff alternate), and real Prometheus injects a
@@ -2845,7 +2846,7 @@ groups:
         expr: |
           max by (namespace, da_cluster) (
             max_over_time(
-              kube_pod_init_container_status_waiting_reason{container="projection-gate", reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError"}[5m]
+              kube_pod_init_container_status_waiting_reason{container=~"projection-gate|projection-gate-registry", reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError"}[5m]
             )
           ) > 0
         for: 5m
@@ -2865,7 +2866,8 @@ groups:
             only one. Causes: `tenantProjectionGate: enforce` + a config-bug
             mismatch (fail-closed working as designed — REVERT the bad
             `tenantProjections` change); a wrong/garbled gate image or args
-            (any mode — fix `projectionGate.image` / the init spec); a
+            (any mode — fix `projectionGate.image`, the registry reader's
+            `projectionGate.registryReader.image` / the init spec); a
             missing staging ConfigMap. Inspect `kubectl describe pod` for
             the waiting reason and `kubectl logs <vector-pod> -c
             projection-gate --previous` for crash output. Consider `degrade`

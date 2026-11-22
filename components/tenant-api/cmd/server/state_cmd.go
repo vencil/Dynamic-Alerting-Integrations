@@ -48,8 +48,9 @@ state restore:
 
 Restores tenant-api's state store from a backup (#2884). A backup is the
 state ConfigMap as "kubectl get configmap tenant-api-state -o yaml" (or
--o json) prints it, or a copy of the --state-dir directory; "-" reads the
-ConfigMap document from standard input. On Kubernetes, run it in the
+-o json) prints it, or a copy of the --state-dir directory (a symlink in it
+to a file is followed, as a mounted ConfigMap holds its keys); "-" reads
+the ConfigMap document from standard input. On Kubernetes, run it in the
 tenant-api pod so it uses the pod's ServiceAccount and settings:
 
   kubectl exec -i deploy/tenant-api -c tenant-api -- tenant-api state restore --from - --dry-run < backup.yaml

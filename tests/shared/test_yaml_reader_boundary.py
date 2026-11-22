@@ -202,16 +202,9 @@ def scan(sources: "dict[str, str]") -> Scan:
     return Scan(points, {h: frozenset(v) for h, v in defined.items()}, frozenset(home_bare))
 
 
-#: Where the gate looks (#4111: helm/ too — the projection gate's init
-#: container reads YAML in Python).
+#: Where the gate looks (#4111: helm/ too — Python ships in chart images; the
+#: projection gate read YAML there until it asked tenant-api, #4164).
 SCAN_ROOTS = ("scripts", "helm")
-
-#: Byte-identical copies of a home a build context cannot reach (a Docker
-#: context of one directory): not scanned — the copy IS the home, pinned
-#: equal below (`test_a_vendored_home_is_the_home`).
-VENDORED_HOMES = {
-    "helm/vector/projection-gate/_lib_yaml_strict.py": "scripts/tools/_lib_yaml_strict.py",
-}
 
 #: ⛔ Where the homes may name PyYAML themselves (#4111): only the strict
 #: loader's base. Every wrapper of a home reaches the parser through it, so
@@ -223,8 +216,7 @@ STRICT_ROOT = frozenset({("scripts/tools/_lib_yaml_strict.py", "StrictSafeLoader
 def _scripts() -> "dict[str, str]":
     return {p.relative_to(REPO).as_posix(): p.read_text(encoding="utf-8")
             for p in repo_files(".py")
-            if p.relative_to(REPO).parts[0] in SCAN_ROOTS
-            and p.relative_to(REPO).as_posix() not in VENDORED_HOMES}
+            if p.relative_to(REPO).parts[0] in SCAN_ROOTS}
 
 
 @pytest.fixture(scope="module")
@@ -320,7 +312,7 @@ def test_debt_lists_by_reading() -> None:
 #: `da-read prometheus`; C: every reader of an Alertmanager config asks
 #: `da-read alertmanager`; D: every reader of a Kubernetes manifest, Helm
 #: values file or rendered chart asks `da-crdecode`.
-CLEARED: "frozenset[Reading]" = frozenset({Reading.A, Reading.B, Reading.C, Reading.D})
+CLEARED: "frozenset[Reading]" = frozenset({Reading.A, Reading.B, Reading.C, Reading.D, Reading.F})
 #: A class not cleared yet but down to these rows only — the rows an owner
 #: decision holds back. Empty for a class once it moves to CLEARED.
 REMAINING: "dict[Reading, frozenset[tuple[str, str]]]" = {}
@@ -436,7 +428,3 @@ def test_the_homes_name_pyyaml_only_at_the_strict_root(found: Scan) -> None:
     `yaml.safe_load` would make every caller of it lax unseen."""
     assert found.home_bare == STRICT_ROOT, sorted(found.home_bare - STRICT_ROOT)
 
-
-def test_a_vendored_home_is_the_home() -> None:
-    for copy, home in VENDORED_HOMES.items():
-        assert (REPO / copy).read_bytes() == (REPO / home).read_bytes(), (copy, home)
