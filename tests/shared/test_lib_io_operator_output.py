@@ -287,3 +287,64 @@ def test_atomic_only_replaces_a_hard_linked_file(tmp_path):
     os.link(p, other)
     _lib_io.write_repo_artifact(str(p), "new", flag="--output", atomic_only=True)
     assert p.read_text(encoding="utf-8") == "new" and other.read_text(encoding="utf-8") == "old"
+
+
+# ── #4055: a `-` output whose stdout fails ends with one line ─────────
+#
+# Only an output smaller than stdout's buffer showed it: the write is
+# buffered, the flush fails, and what stays buffered failed again twice —
+# in the sink's finalizer ("Exception ignored" + a traceback) and in the
+# last flush at exit (a second ERROR line). A larger output fails in the
+# write itself, so a test on a real tool's large output passes either way.
+
+_TOOLS_DIR = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir,
+                          "scripts", "tools")
+_ENTRY = """\
+import sys
+sys.path.insert(0, sys.argv[1])
+import _lib_exitcodes, _lib_io
+def main():
+    _lib_io.write_operator_output_or_die("-", "x" * int(sys.argv[2]), flag="-o/--output")
+    return 0
+if sys.argv[3] == "run":
+    _lib_exitcodes.run(main)
+main()
+"""
+
+
+@pytest.mark.parametrize("redirect", [">/dev/full", ">&-"], ids=["ENOSPC", "closed"])
+@pytest.mark.parametrize("size", [10, 100_000], ids=["buffered", "unbuffered"])
+@pytest.mark.parametrize("way_out", ["run", "atexit"])
+def test_a_failed_stdout_output_says_one_line_and_no_traceback(tmp_path, redirect, size, way_out):
+    import shlex
+    import subprocess
+    if redirect == ">/dev/full" and not os.path.exists("/dev/full"):
+        pytest.skip("no /dev/full")
+    script = tmp_path / "entry.py"
+    script.write_text(_ENTRY, encoding="utf-8")
+    cmd = " ".join(shlex.quote(a) for a in (
+        sys.executable, "-I", str(script), os.path.abspath(_TOOLS_DIR), str(size), way_out))
+    done = subprocess.run(["sh", "-c", f"exec {cmd} {redirect}"], stdin=subprocess.DEVNULL,
+                          stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                          timeout=60)
+    lines = done.stderr.splitlines()
+    assert done.returncode == 2, done.stderr
+    assert len(lines) == 1 and lines[0].startswith("ERROR: cannot write -:"), done.stderr
+
+
+def test_closing_the_stdout_sink_never_flushes_stdout(monkeypatch):
+    """#4055: the sink's finalizer closes it; a flush there of a stdout that
+    already failed prints an "Exception ignored" traceback. And a body that
+    raises something else must not have that replaced by the flush's error
+    from the ``finally`` that closes the sink."""
+    flushes = []
+
+    class _Broken(io.StringIO):
+        def flush(self):
+            flushes.append(1)
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(sys, "stdout", _Broken())
+    sink = _lib_io._StdoutSink()
+    sink.close()
+    assert flushes == [] and sink.closed

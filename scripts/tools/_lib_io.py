@@ -794,7 +794,17 @@ class _StdoutSink(io.TextIOBase):
         return sys.stdout.write(s)
 
     def flush(self) -> None:
-        sys.stdout.flush()
+        if not self._closing:
+            sys.stdout.flush()
+
+    _closing = False
+
+    def close(self) -> None:
+        """Close the sink, never ``sys.stdout``, and without flushing it
+        (#4055): the owner flushed it already, and a finalizer flushing a
+        stdout that failed would print an "Exception ignored" traceback."""
+        self._closing = True
+        super().close()
 
 
 _O_OPERATOR = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
@@ -871,8 +881,17 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
         if path == STDOUT_PATH or _is_our_stdout(pre):
             claim_stdout(flag or path)
             sink = _StdoutSink()
-            yield sink
-            sink.flush()
+            try:
+                yield sink
+                sink.flush()
+            except OSError:
+                # #4055: the caller reports this failure in its own line;
+                # drop what stdout still buffers, so the last flush at exit
+                # does not fail again and print a second one.
+                _lib_exitcodes.discard_failed_stdout()
+                raise
+            finally:
+                sink.close()
             return
         fd, regular = _kernel_open_operator_output(path, mode, append, nofollow)
         fh = io.open(fd, "w", encoding="utf-8", newline="\n", closefd=True)
