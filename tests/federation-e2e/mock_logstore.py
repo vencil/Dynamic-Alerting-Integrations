@@ -32,7 +32,11 @@ a python:3.12-alpine image, no requirements install.
 from __future__ import annotations
 
 import json
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+_HOLD_PREFIX = "e2e-hold:"
 
 # Synthetic per-partition log rows. Keyed by AccountID (as the gateway forwards it).
 # Each tenant's rows are tagged with its own account_id so the driver can assert a
@@ -65,10 +69,24 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _hold(self) -> None:
+        """A LogsQL `query=e2e-hold:<seconds>` (GET) makes the store sit on the
+        request that long before answering: a slow query, so the gateway's
+        per-token in-flight limit has something in flight to count (VL11).
+        Capped at 25s, under the gateway's 30s route timeout."""
+        q = parse_qs(urlparse(self.path).query).get("query", [""])[0]
+        if q.startswith(_HOLD_PREFIX):
+            try:
+                secs = float(q[len(_HOLD_PREFIX):])
+            except ValueError:
+                return
+            time.sleep(max(0.0, min(secs, 25.0)))
+
     def _handle(self) -> None:
         # Echo what the gateway injected + the rows for that partition. The driver
         # reads `received_account_id` to assert the verified value won, and `rows`
         # to assert cross-tenant isolation.
+        self._hold()
         acct = self._received_account()
         proj = self.headers.get("ProjectID", "")
         self._respond(200, {

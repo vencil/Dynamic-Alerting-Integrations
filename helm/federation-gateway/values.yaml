@@ -9,8 +9,9 @@
 #   2. RS256 JWT verify + jwt_cache     (envoy.filters.http.jwt_authn)
 #   3. revoked-set check + tenant wiring (Lua filter)
 #   4. per-token + per-tenant rate limit (Sybil defense)
+#   5. per-token in-flight limit         (inflightLimit; concurrent queries)
 #
-# A request only reaches the upstream if all four pass.
+# A request only reaches the upstream if all five pass.
 
 # prom-label-proxy | vm-cluster | victorialogs
 #   prom-label-proxy — inject the verified tenant id as a trusted header
@@ -302,12 +303,36 @@ rateLimit:
     fillInterval: "60s"
     maxDynamicDescriptors: 1024
 
+# ── Per-token in-flight limit (ADR-020 §Gateway) ─────────────────────
+# At most maxPerToken queries per token in flight AT ONCE on one Envoy
+# instance; the next one gets 429 (audit status `rate_limited`, same as the
+# rate limiters). The rate limits above bound how many queries a token
+# starts per minute, not how many slow ones it keeps open together.
+#
+# What the number bounds:
+#  • per INSTANCE, like the rate limits: N replicas = N x maxPerToken
+#    cluster-wide (8 at the default 2 replicas, 32 at the HPA max of 8).
+#  • counted per Envoy WORKER (no memory is shared between workers) and
+#    split evenly: each worker allows maxPerToken / concurrency. The sum can
+#    never exceed maxPerToken, but a token whose connections all land on one
+#    worker gets only maxPerToken / concurrency in flight (2 by default).
+#    maxPerToken must therefore be a multiple of `concurrency` — the render
+#    fails otherwise. concurrency: 1 makes the per-instance count exact.
+#  • a slot is freed when the response completes. A client that DISCONNECTS
+#    mid-query frees its slot only when the slot's lease expires, 35s after
+#    it was taken (the 30s route timeout + 5s): Envoy's Lua filter gets no
+#    callback for a client reset. Errs towards refusing, never leaks.
+inflightLimit:
+  enabled: true
+  maxPerToken: 4
+
 listenPort: 8080
 
 # Envoy worker-thread count. Envoy otherwise defaults to one worker per
 # NODE CPU — far more than a CPU-limited pod can use, which wastes context
 # switches and multiplies the per-worker revoked-set cache. Keep this
-# roughly aligned with resources.limits.cpu.
+# roughly aligned with resources.limits.cpu. inflightLimit.maxPerToken must
+# be a multiple of it (the in-flight count is split over the workers).
 concurrency: 2
 
 service:

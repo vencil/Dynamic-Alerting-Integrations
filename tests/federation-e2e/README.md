@@ -172,7 +172,7 @@ mock-logstore <── federation-gateway (mode=victorialogs) <── pytest driv
 
 | File | Role |
 |---|---|
-| `test_victorialogs_e2e.py` | the 14 scenarios + their fixtures (fixtures live in the test module, not a sibling conftest — a second `conftest.py` cannot coexist with the metrics one in this dir) |
+| `test_victorialogs_e2e.py` | the scenarios + their fixtures (fixtures live in the test module, not a sibling conftest — a second `conftest.py` cannot coexist with the metrics one in this dir) |
 | `mock_logstore.py` | stand-in for VictoriaLogs: a pure-stdlib echo server that reflects the `AccountID`/`ProjectID` headers the gateway injected + serves synthetic rows keyed by the received AccountID |
 | `victorialogs-compose.yml` | the 2-service stack (mock-logstore + gateway) |
 
@@ -188,6 +188,14 @@ mock-logstore <── federation-gateway (mode=victorialogs) <── pytest driv
 | VL5 | **Fail-closed claim** | a logs-audience token with a missing / empty / `<1000` / `0` / non-integer / non-numeric / overflow `account_id` claim → 403 before injection (never reaches the store → never lands in partition 0) |
 | VL5b | Valid-floor control | `account_id=1000` (the reserved floor) is accepted — so VL5's 403s are malformed-claim rejection, not a blanket deny |
 | VL6 | Endpoint default-deny | `/tail`, `/insert/*`, a cross-tenant enumeration, an unknown path, and a sub-path of an allowed endpoint → 403; an allowlisted metadata endpoint → 200 |
+| VL11 | Per-token in-flight limit (ADR-020) | `cap` slow queries in flight on one token (`query=e2e-hold:<s>` makes the mock store sit on them) → the next query on that token is 429, another token of the same tenant is 200, the 429 is in the gateway's stdout audit log with the token id, and after the slow queries complete the token is 200 again |
+| VL12 | In-flight slot after a client reset | `cap` slow queries whose client closes the connection mid-query → still 429 right after (Envoy's Lua filter gets no callback for a client reset), then 200 again only once the lease TTL has passed — never before it, never not at all |
+
+The in-flight limit is mode-agnostic Lua; it is tested in this stack because
+only here can the driver make the upstream slow. The runner renders both
+gateways with `concurrency=1` to match their `--concurrency 1`, so the
+rendered per-worker count is the per-instance cap; per-worker splitting with
+several workers is not exercised (same boundary as the revoked-set cache).
 
 ### Victorialogs fidelity boundary
 

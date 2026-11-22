@@ -81,6 +81,10 @@ echo "[fed-e2e] rendering chart configs into rendered/"
 rm -rf "$RENDERED"
 mkdir -p "$RENDERED"
 
+# concurrency=1 matches the `--concurrency 1` both compose files run Envoy
+# with. The chart divides inflightLimit.maxPerToken over that worker count, so
+# rendering the chart default (2) against one worker would halve the cap the
+# E2E sees.
 helm template fed "$GATEWAY_CHART" \
     --show-only templates/configmap-envoy.yaml \
     --set upstream.host=federation-proxy \
@@ -96,6 +100,7 @@ helm template fed "$GATEWAY_CHART" \
     --set rateLimit.perIp.tokensPerFill=100000 \
     --set revokedSet.reloadIntervalSeconds=2 \
     --set auditLog.enabled=true \
+    --set concurrency=1 \
     > /tmp/fed-e2e-cm-envoy.yaml
 
 helm template fed "$GATEWAY_CHART" \
@@ -109,14 +114,14 @@ import yaml
 
 rendered = sys.argv[1]
 cm = yaml.safe_load(open("/tmp/fed-e2e-cm-envoy.yaml"))
-for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua"):
+for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua", "inflight_limit.lua"):
     with open(f"{rendered}/{key}", "w", newline="\n") as fh:
         fh.write(cm["data"][key])
 am = yaml.safe_load(open("/tmp/fed-e2e-cm-audit-metrics.yaml"))
 with open(f"{rendered}/audit-metrics.yaml", "w", newline="\n") as fh:
     fh.write(am["data"]["audit-metrics.yaml"])
 print("[fed-e2e] rendered envoy.yaml + revoked_check.lua + "
-      "audit_extract.lua + audit-metrics.yaml")
+      "audit_extract.lua + inflight_limit.lua + audit-metrics.yaml")
 PYEOF
 
 # ---------------------------------------------------------------------------
@@ -155,6 +160,7 @@ helm template fedlogs "$GATEWAY_CHART" \
     --set rateLimit.perIp.tokensPerFill=100000 \
     --set revokedSet.reloadIntervalSeconds=2 \
     --set auditLog.enabled=false \
+    --set concurrency=1 \
     > /tmp/fed-e2e-cm-envoy-vl.yaml
 
 "$PY" - "$RENDERED/victorialogs" <<'PYEOF'
@@ -163,10 +169,11 @@ import yaml
 
 rendered = sys.argv[1]
 cm = yaml.safe_load(open("/tmp/fed-e2e-cm-envoy-vl.yaml"))
-for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua"):
+for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua", "inflight_limit.lua"):
     with open(f"{rendered}/{key}", "w", newline="\n") as fh:
         fh.write(cm["data"][key])
-print("[fed-e2e] rendered victorialogs envoy.yaml + revoked_check.lua + audit_extract.lua")
+print("[fed-e2e] rendered victorialogs envoy.yaml + revoked_check.lua + "
+      "audit_extract.lua + inflight_limit.lua")
 PYEOF
 : > "$RENDERED/victorialogs/revoked.txt"
 

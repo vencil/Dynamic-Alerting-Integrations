@@ -5,7 +5,8 @@
 # HTTP filter chain, cheap-before-expensive:
 #   per-IP rate limit -> JWT verify -> Lua (revoked + tenant wiring)
 #   -> per-token rate limit -> per-tenant rate limit -> buffer
-#   -> Lua (audit-query extraction) -> router
+#   -> Lua (audit-query extraction) -> Lua (per-token in-flight limit)
+#   -> router
 # The body buffer sits AFTER the rate limiters so a rejected request is
 # never buffered into Envoy memory — the rate limit bounds buffer cost.
 admin:
@@ -227,7 +228,7 @@ static_resources:
                                     regex: "^(GET|POST)$"
                           route:
                             cluster: federation_upstream
-                            timeout: 30s
+                            timeout: {{ include "federation-gateway.routeTimeoutSeconds" . }}s
                           # x-fed-token-id is the internal per-token rate-limit
                           # key — stripped here so it never reaches the upstream
                           # (the rate-limit filters ran earlier and already
@@ -262,7 +263,9 @@ static_resources:
                             prefix: "/"
                           route:
                             cluster: federation_upstream
-                            timeout: 30s
+                            # One definition, shared with the in-flight lease
+                            # TTL (_helpers.tpl routeTimeoutSeconds).
+                            timeout: {{ include "federation-gateway.routeTimeoutSeconds" . }}s
                           # x-fed-token-id is an internal rate-limit key —
                           # never let it reach the upstream.
                           request_headers_to_remove:
@@ -417,7 +420,21 @@ static_resources:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
                       default_source_code:
                         filename: /etc/envoy/audit_extract.lua
-                  # 8. Router — must be the last HTTP filter.
+                  {{- if include "federation-gateway.inflightEnabled" . }}
+                  # 8. Per-token in-flight limit — at most
+                  #    inflightLimit.maxPerToken queries per token in flight
+                  #    on this instance (split evenly over the workers; see
+                  #    inflight_limit.lua for what it bounds and how a slot is
+                  #    released). LAST before the router so a slot is taken at
+                  #    the moment the request is forwarded — the same moment
+                  #    the route timeout starts, which the lease TTL relies on.
+                  - name: envoy.filters.http.lua.inflight
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        filename: /etc/envoy/inflight_limit.lua
+                  {{- end }}
+                  # 9. Router — must be the last HTTP filter.
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router

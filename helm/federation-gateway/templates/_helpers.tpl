@@ -58,6 +58,7 @@ victorialogs mode, jwt.audience MUST be `tenant-federation-logs`.
 {{- end }}
 {{- include "federation-gateway.validateRevokedSet" . }}
 {{- include "federation-gateway.validatePreflight" . }}
+{{- include "federation-gateway.validateInflightLimit" . }}
 {{- end }}
 
 {{/*
@@ -214,4 +215,85 @@ NetworkPolicy matches the pod port, so set the override when they differ).
 {{- fail (printf "federation-gateway: upstream port %d (upstream.port or networkPolicy.upstreamPort) is not 1-65535 (#1295)" $port) -}}
 {{- end -}}
 {{- $port -}}
+{{- end }}
+
+{{/*
+Upstream route timeout, in seconds — ONE definition for every forwarding route
+in files/envoy.yaml and for the in-flight lease TTL in files/inflight_limit.lua.
+The lease TTL is only a sound bound if it is longer than the longest request a
+route can carry, so the two must not be able to drift apart.
+*/}}
+{{- define "federation-gateway.routeTimeoutSeconds" -}}30{{- end }}
+
+{{/*
+In-flight lease TTL, in seconds: the route timeout plus a 5s margin. Envoy's
+Lua filter gets no callback when the CLIENT resets a stream (no
+envoy_on_response, no destroy hook), so a slot taken by a request whose client
+disconnected is reclaimed when its lease expires. The route timeout bounds how
+long a legitimate request can hold the slot (it covers the complete upstream
+response, body included), so a lease older than this is never a live query.
+*/}}
+{{- define "federation-gateway.inflightLeaseSeconds" -}}
+{{- add (atoi (include "federation-gateway.routeTimeoutSeconds" .)) 5 -}}
+{{- end }}
+
+{{/*
+Per-token in-flight limit (ADR-020 §Gateway 驗章、撤銷與限流), read null-safe:
+a release upgraded with --reuse-values from a chart without `inflightLimit`
+gets the ADR default (on, 4), not a missing-key render error.
+`inflightEnabled` renders "true" or "".
+*/}}
+{{- define "federation-gateway.inflightEnabled" -}}
+{{- $il := .Values.inflightLimit | default dict -}}
+{{- $on := true -}}
+{{- if hasKey $il "enabled" -}}{{- $on = $il.enabled -}}{{- end -}}
+{{- if not (kindIs "bool" $on) -}}
+{{- fail (printf "federation-gateway: inflightLimit.enabled must be a boolean, got %v (%s)" $on (kindOf $on)) -}}
+{{- end -}}
+{{- if $on -}}true{{- end -}}
+{{- end }}
+
+{{/*
+The per-WORKER slot count templated into inflight_limit.lua.
+
+The Lua counter lives in each Envoy worker thread's own Lua state (there is no
+memory shared between workers), and the kernel spreads a token's connections
+over the workers. So `inflightLimit.maxPerToken`, a per-INSTANCE value, is
+divided evenly over `.Values.concurrency` workers: the sum over all workers can
+then never exceed maxPerToken, which is what makes it a real per-instance upper
+bound. The price is that a token whose connections all land on one worker gets
+only maxPerToken / concurrency in flight. Both ways of making that division lie are
+refused at render time:
+  * maxPerToken < concurrency — a worker would get 0 slots (every request 429);
+  * maxPerToken not a multiple of concurrency — the enforced instance bound
+    would silently be lower than the configured one.
+*/}}
+{{- define "federation-gateway.inflightPerWorker" -}}
+{{- $il := .Values.inflightLimit | default dict -}}
+{{- $max := 4 -}}
+{{- if hasKey $il "maxPerToken" -}}{{- $max = $il.maxPerToken -}}{{- end -}}
+{{- if not (or (kindIs "float64" $max) (kindIs "int64" $max) (kindIs "int" $max)) -}}
+{{- fail (printf "federation-gateway: inflightLimit.maxPerToken must be a whole number, got %v (%s)" $max (kindOf $max)) -}}
+{{- end -}}
+{{- $maxI := int $max -}}
+{{- if or (ne (float64 $maxI) (float64 $max)) (lt $maxI 1) -}}
+{{- fail (printf "federation-gateway: inflightLimit.maxPerToken must be a whole number >= 1, got %v" $max) -}}
+{{- end -}}
+{{- $w := int .Values.concurrency -}}
+{{- if lt $w 1 -}}
+{{- fail (printf "federation-gateway: concurrency must be >= 1, got %v" .Values.concurrency) -}}
+{{- end -}}
+{{- if or (lt $maxI $w) (ne (mod $maxI $w) 0) -}}
+{{- fail (printf "federation-gateway: inflightLimit.maxPerToken (%d) must be a multiple of concurrency (%d). The limit is counted per Envoy worker (no memory is shared between workers) and split evenly over them, so %d cannot be enforced exactly with %d workers. Use a multiple of %d, or change concurrency." $maxI $w $maxI $w $w) -}}
+{{- end -}}
+{{- div $maxI $w -}}
+{{- end }}
+
+{{/*
+Render-time check for the in-flight limit; a no-op when it is disabled.
+*/}}
+{{- define "federation-gateway.validateInflightLimit" -}}
+{{- if include "federation-gateway.inflightEnabled" . -}}
+{{- $_ := include "federation-gateway.inflightPerWorker" . -}}
+{{- end -}}
 {{- end }}

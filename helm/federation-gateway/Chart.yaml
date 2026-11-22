@@ -1,6 +1,6 @@
 apiVersion: v2
 name: federation-gateway
-description: Tenant federation API gateway (ADR-020 §Gateway) — Envoy that verifies the RS256 federation JWT, checks the revoked set, and per-token / per-tenant rate-limits before forwarding to the Layer 3 proxy
+description: Tenant federation API gateway (ADR-020 §Gateway) — Envoy that verifies the RS256 federation JWT, checks the revoked set, per-token / per-tenant rate-limits and caps per-token in-flight queries before forwarding to the Layer 3 proxy
 type: application
 # version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
 # 0.2.0 — ADR-020 IV-2f: audit-log dual sink + mtail / logrotate sidecars
@@ -67,7 +67,8 @@ type: application
 # 0.8.0 — #1295: the NetworkPolicy also restricts egress, to DNS and TCP upstream.port in the upstream's namespace (`networkPolicy.upstreamNamespace`, else read from upstream.host `<svc>.<ns>.svc`). Before, the gateway had no egress at all in a namespace that defaults to deny, as k8s/03-monitoring does. ⚠️ BREAKING: an upstream.host that is not a Service name (external FQDN, IP) fails the render until upstreamNamespace is set or `networkPolicy.restrictEgress: false`; the rule matches the destination POD port: where the upstream Service maps ports, set `networkPolicy.upstreamPort`
 # 0.8.1 — #2789: comments and descriptions only (they ship in the package): ADR-028 section references renamed after the ADR rewrite. No template or value change.
 # 0.8.2 — #2789: comments and descriptions only (they ship in the package): ADR-020/021 section references renamed after the ADR rewrite (NOTES.txt wording included). No template logic or value change.
-version: 0.8.2
+# 0.9.0 — #2789: per-token in-flight limit (ADR-020). New `inflightLimit` {enabled: true, maxPerToken: 4} and a third Lua filter (files/inflight_limit.lua, last before the router): a token with maxPerToken queries in flight on an instance gets 429. Counted per Envoy worker and split evenly (maxPerToken must be a multiple of `concurrency`, render fails otherwise); a slot is released when the response completes, or by a 35s lease after a client reset. Route timeout moved to one helper shared with the lease TTL (still 30s). MINOR, not patch: new value keys and a runtime behaviour change (requests that passed before can now 429). `--reuse-values` from an older release still renders the limit on (null-safe default).
+version: 0.9.0
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle
