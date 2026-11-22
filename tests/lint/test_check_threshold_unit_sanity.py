@@ -32,12 +32,13 @@ from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() 
 
 
 def _registry(**keys) -> dict:
-    """Build a registry doc shaped like the real one (packs → key → spec)."""
-    return {"version": 1, "packs": {"t": {k: v for k, v in keys.items()}}}
+    """Build a registry doc shaped like the real one (a flat `keys:` map)."""
+    return {"version": 1, "packs": {"t": {}},
+            "keys": {k: {"pack": "t", **v} for k, v in keys.items()}}
 
 
-def _spec(value, unit, tier="defaults", **extra) -> dict:
-    return {"value": value, "unit": unit, "tier": tier, **extra}
+def _spec(value, unit, **extra) -> dict:
+    return {"value": value, "unit": unit, **extra}
 
 
 def _write(root, rel, text):
@@ -477,7 +478,7 @@ def test_tier_inversion_is_flagged(tmp_path):
     _conf_d(tmp_path, {"defaults": {"k": 90, "k_critical": 80}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert any("TIER-INVERSION" in e for e in errs), errs
 
@@ -486,7 +487,7 @@ def test_equal_tiers_are_flagged(tmp_path):
     _conf_d(tmp_path, {"defaults": {"k": 80, "k_critical": 80}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert any("TIER-INVERSION" in e for e in errs), errs
 
@@ -499,7 +500,7 @@ def test_dimensional_spellings_are_no_tier_pair(tmp_path):
                                          'k_critical{version="v3"}': "98"}}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert not any("TIER-INVERSION" in e for e in errs), errs
 
@@ -511,7 +512,7 @@ def test_a_dimensional_spelling_does_not_mask_the_plain_pair(tmp_path):
                                          'k{pod="zzz"}': "50"}}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert any("TIER-INVERSION" in e for e in errs), errs
 
@@ -523,7 +524,7 @@ def test_a_dimensional_warning_is_held_to_the_plain_critical(tmp_path):
                                          'k{version="v2"}': "99"}}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert any("TIER-INVERSION" in e and "dimensional warning" in e for e in errs), errs
 
@@ -535,7 +536,7 @@ def test_a_dimensional_critical_value_is_no_warning(tmp_path):
                                          'k{instance="x"}': "500:critical"}}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert not any("TIER-INVERSION" in e for e in errs), errs
 
@@ -550,7 +551,7 @@ def test_percentiles_do_not_feed_tier_ordering(tmp_path):
                            "unit": "count"}}}))
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert errs == [], errs
 
@@ -561,7 +562,7 @@ def test_tier_ordering_is_per_surface(tmp_path):
     _conf_d(tmp_path, {"tenants": {"t": {"k": 200}}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert errs == [], errs
 

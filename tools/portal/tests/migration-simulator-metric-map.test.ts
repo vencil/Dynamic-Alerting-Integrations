@@ -9,10 +9,12 @@
  *
  * Two committed, gate-synced SoT faces are read here:
  *
- *   1. Liveness — docs/assets/platform-data.json rulePacks[*].defaults.
- *      This is the shipped platform-default supply set; a tenant override of
- *      a key outside it is never emitted (#1189), so every METRIC_MAP value
- *      must be ⊆ this set. (Same read pattern as rule-packs.test.ts.)
+ *   1. Liveness — docs/assets/platform-data.json: rulePacks[*].defaults (keys
+ *      with a platform value) plus declaredKeys (keys without one). Since
+ *      #4163 every registry key is built into the readers, so a tenant value
+ *      of any key in either set is served; a key outside both is not a
+ *      threshold key at all (#1189), so every METRIC_MAP value must be ⊆
+ *      their union (#4195 moved the operator keys to declaredKeys).
  *
  *   2. Critical capability — rule-packs/threshold-registry.yaml `keys:`
  *      section. `<key>_critical` overrides only work when a critical-tier
@@ -36,7 +38,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../../../');
 
-/** Shipped platform-default threshold keys across all rule packs → their unit. */
+/** Every flat threshold key platform-data carries (platform value or declared) → its unit. */
 function platformDefaultUnits(): Map<string, string> {
   const raw = readFileSync(
     resolve(repoRoot, 'docs/assets/platform-data.json'), 'utf-8');
@@ -47,10 +49,13 @@ function platformDefaultUnits(): Map<string, string> {
       units.set(key, String(info?.unit ?? ''));
     }
   }
+  for (const rows of Object.values(platform.declaredKeys ?? {}) as any[][]) {
+    for (const row of rows ?? []) units.set(row.key, String(row?.unit ?? ''));
+  }
   return units;
 }
 
-/** Union of shipped platform-default threshold keys across all rule packs. */
+/** Union of those keys. */
 function platformDefaultKeys(): Set<string> {
   return new Set(platformDefaultUnits().keys());
 }
@@ -81,10 +86,10 @@ describe('METRIC_MAP ↔ threshold SoT', () => {
   const registryKeys = registryKeyNames();
 
   it('SoT reads are sane (fail loud on format drift, never silently pass)', () => {
-    // platform-data ships 16 packs / ~36 default keys; registry ~65 keys.
+    // platform-data ships 16 packs / ~50 flat keys; registry ~84 keys.
     expect(liveKeys.size).toBeGreaterThanOrEqual(30);
     expect(registryKeys.size).toBeGreaterThanOrEqual(60);
-    // Every live key must exist in the registry (defaults tier ⊆ registry) —
+    // Every live key must exist in the registry —
     // if this breaks, one of the two extractions is reading garbage.
     for (const key of liveKeys) {
       expect(registryKeys.has(key), `live key ${key} missing from registry read`)
@@ -95,12 +100,12 @@ describe('METRIC_MAP ↔ threshold SoT', () => {
     expect(registryKeys.has('pg_connections_critical')).toBe(true);
   });
 
-  it('every METRIC_MAP value is a shipped platform-default key', () => {
+  it('every METRIC_MAP value is a threshold key the readers serve', () => {
     for (const [promMetric, key] of Object.entries(METRIC_MAP)) {
       expect(
         liveKeys.has(key),
-        `METRIC_MAP.${promMetric} → "${key}" is not a shipped platform-default ` +
-        'threshold key — the generated tenant YAML would be silently ignored (#1189)',
+        `METRIC_MAP.${promMetric} → "${key}" is not a flat threshold key ` +
+        'platform-data carries — the generated tenant YAML would be silently ignored (#1189)',
       ).toBe(true);
     }
   });

@@ -719,7 +719,7 @@ def test_platform_default_comes_from_scaffold():
     import scaffold_tenant
     for key in ("container_cpu", "container_memory"):
         assert (baseline_discovery.platform_default(key)
-                == scaffold_tenant.RULE_PACKS["kubernetes"]["defaults"][key]["value"])
+                == scaffold_tenant.RULE_PACKS["kubernetes"]["thresholds"][key]["value"])
 
 
 @pytest.mark.parametrize("observed", [40, 70, 92])

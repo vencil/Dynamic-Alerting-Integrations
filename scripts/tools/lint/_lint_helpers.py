@@ -133,7 +133,7 @@ BUILD_EXEMPT = frozenset({
     # filtered by the orphan check; listed for symmetry with metric-dictionary.yaml).
     "metric_observed_map.yaml",
     # #1310 — threshold-registry loader lib. Imported at top level by
-    # scaffold_tenant.py for `is_shipped_optional_key` (which optional_overrides
+    # scaffold_tenant.py for `is_flat_key` (which optional_overrides
     # keys the platform ships on the declared list, and therefore which ones the
     # interactive prompt may pre-fill). Library, not CLI: the registry gate that
     # drives it is a pre-commit lint, not a `da-tools <cmd>`.

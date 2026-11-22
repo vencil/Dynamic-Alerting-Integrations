@@ -122,9 +122,10 @@ function getAllMetricKeys(selectedPacks) {
   return keys;
 }
 
-// Keys the platform RECOGNISES but assigns no value to (registry tier
-// `optional_overrides`, flat spellings). A tenant may set one and it fires;
-// leaving it out is silence, not a default — there is nothing to fall back to.
+// Keys the platform RECOGNISES but assigns no value to: every flat registry key
+// without a platform value (`arming: operator`, built in as off since #4163). A
+// tenant may set one and it fires; leaving it out is silence, not a default —
+// there is nothing to fall back to.
 //
 // Kept OUT of getAllMetricKeys on purpose: every consumer of that list treats
 // an entry as "a default the platform supplies" (it spreads `value`/`unit`
@@ -132,35 +133,13 @@ function getAllMetricKeys(selectedPacks) {
 // `value` the platform does not stand behind. Separate accessor, separate
 // meaning.
 //
-// Top-level rather than a field on RULE_PACK_DATA, and NOT because the drift
-// gate forces it: `carried()` in rule-packs-fallback-drift.test.ts is a
-// ten-field WHITELIST, so a new per-pack field would be dropped on both sides
-// and never compared at all. That is the actual reason — a per-pack field
-// would silently need hand-copying into the inline catalog with nothing to
-// catch it. A top-level field gets its own drift gate instead
-// (declared-keys.test.ts), which is the same shape images.js uses.
-//
-// The inline fallback below is a mirror, not a guess: it exists so the
-// standalone / file:// / fetch-failed path does not fall back into telling a
-// tenant that a documented key is unknown. ⛔ Do NOT hand-edit it — regenerate
-// platform-data.json and copy; the drift test compares it key-for-key.
-const DECLARED_KEYS = window.__PLATFORM_DATA?.declaredKeys || {
-  mariadb: [
-    { key: 'mysql_threads_running', value: 30, unit: 'threads', desc: "threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 30 = PMM/Nichter 'high' tier, a reference start to calibrate per host (a healthy count scales with CPU cores); renamed from mysql_cpu (2-release alias window, old spelling still resolves)" },
-  ],
-  oracle: [
-    { key: 'oracle_wait_time_rate', value: 50, unit: 's/s', desc: 'Wait time rate (5m)' },
-    { key: 'oracle_hard_parse_time_percent', value: 20, unit: '% of DB time', desc: 'Hard parse time warning: v$sys_time_model "hard parse elapsed time" as a share of "DB time" over 5m (the AWR Time Model "% of DB Time" row), per exporter, busiest per tenant; only while the database averages at least one active session (AAS >= 1)' },
-    { key: 'oracle_pga_usage_percent', value: 85, unit: '% of PGA_AGGREGATE_LIMIT', desc: 'PGA usage warning: v$pgastat total PGA allocated as a share of PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant; a database with no limit set (0) has no share. Replaces the absolute-bytes key oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)' },
-  ],
-  db2: [
-    { key: 'db2_deadlocks_per_5m', value: 5, unit: 'count/5m', desc: "Deadlocks in the last 5 minutes, summed over the tenant's exporters; 5 is the threshold of the grafana ibm-db2 mixin's IBMDB2HighNumberOfDeadlocks (increase over 5m > 5, per database, for 5m). Replaces the per-second key db2_deadlock_rate (#1320: a unit change is a removal plus an addition, no alias)", valueCounterexample: { issue: 1176, direction: 'over_fire', observed: "one reference library's normal level is about 6 deadlocks per 5 minutes (0.02/s), above 5", observed_zh: '其中一個參考庫的正常水位約每 5 分鐘 6 次 deadlock（0.02/s），高於 5' } },
-  ],
-  clickhouse: [
-    { key: 'clickhouse_max_part_count', value: 300, unit: 'count', desc: 'Max part count per partition' },
-    { key: 'clickhouse_replication_queue', value: 50, unit: 'count', desc: 'Replication queue size' },
-  ],
-};
+// Top-level rather than a field on RULE_PACK_DATA: `carried()` in
+// rule-packs-fallback-drift.test.ts is a field WHITELIST, so a new per-pack
+// field would be dropped on both sides and never compared. The offline arm is
+// the generated fallback's own top-level `declaredKeys` (#4195; it used to be a
+// hand-typed mirror right here), checked by declared-keys.test.ts.
+const DECLARED_KEYS = window.__PLATFORM_DATA?.declaredKeys
+  || RULE_PACKS_FALLBACK.declaredKeys;
 
 function getDeclaredKeys(selectedPacks) {
   const keys = [];
@@ -202,9 +181,9 @@ function getValueCounterexample(metricKey) {
     const meta = pack?.defaults?.[metricKey];
     if (meta?.valueCounterexample) return meta.valueCounterexample;
   }
-  // ⛔ BOTH tiers. Looking only at `defaults` made this blind to exactly the
-  // keys #1320 D1 says a tenant can fill in today — the reference numbers most
-  // likely to be copied were the ones with no caveat attached.
+  // ⛔ BOTH sets. Looking only at `defaults` made this blind to exactly the
+  // keys a tenant fills in itself — the reference numbers most likely to be
+  // copied were the ones with no caveat attached.
   for (const rows of Object.values(DECLARED_KEYS)) {
     for (const row of rows || []) {
       if (row.key === metricKey && row.valueCounterexample) return row.valueCounterexample;
@@ -303,7 +282,7 @@ function counterexampleComment(ce) {
   return `⚠ #${ce.issue} ${mark}${colon}${observed}${open}${verdict}${close}`;
 }
 
-/** The platform-asserted number for a key, across both tiers — or null. */
+/** The number shown for a key — its platform value, else its reference value — or null. */
 function platformValue(metricKey) {
   for (const pack of Object.values(RULE_PACK_DATA)) {
     const meta = pack?.defaults?.[metricKey];

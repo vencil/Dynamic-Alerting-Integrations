@@ -120,7 +120,7 @@ class TestShippedDeclaredListIsSettable:
         import _registry_lib as rl  # noqa: PLC0415
         return sorted(k for k, e in rl.registry_keys(rl.load_registry()).items()
                       if e.get("tier") == "optional_overrides"
-                      and rl.is_shipped_optional_key(k))
+                      and rl.is_flat_key(k))
 
     def test_the_shipped_artifacts_carry_no_declared_list(self):
         """#3924：三份產物都不列 registry 鍵——內建層已經涵蓋，列了不改變任何事。

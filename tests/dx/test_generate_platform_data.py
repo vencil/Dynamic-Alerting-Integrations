@@ -156,7 +156,7 @@ class TestHappyPath:
 class TestDeclaredKeys:
     """`declaredKeys` — 平台認得但不主張值的那一格，portal 側的資料源（#1321）。
 
-    ⛔ 這裡刻意不重算成員，而是拿 `_registry_lib.is_shipped_optional_key` 當
+    ⛔ 這裡刻意不重算成員，而是拿 `_registry_lib.is_flat_key` 當
     斷言來源——generator 用的是同一支判準。若哪天有人在 generator 裡另寫一套，
     集合相等就會斷。（#3924 起生成器與出貨清單都不再列這些鍵；這一格只剩 portal
     在讀，連同 tier 欄位一起留給 #4195。）
@@ -168,12 +168,13 @@ class TestDeclaredKeys:
         if ops not in sys.path:
             sys.path.insert(0, ops)
         import scaffold_tenant  # noqa: PLC0415
-        from _registry_lib import is_shipped_optional_key  # noqa: PLC0415
+        from _registry_lib import is_flat_key  # noqa: PLC0415
+        from _rule_packs_generated import BUILTIN_DEFAULT_KEYS  # noqa: PLC0415
 
         out = {}
         for pack, spec in scaffold_tenant.RULE_PACKS.items():
-            keys = [k for k in spec.get("optional_overrides") or {}
-                    if is_shipped_optional_key(k)]
+            keys = [k for k in spec.get("thresholds") or {}
+                    if is_flat_key(k) and k not in BUILTIN_DEFAULT_KEYS]
             if keys:
                 out[pack] = set(keys)
         return out
@@ -188,6 +189,26 @@ class TestDeclaredKeys:
     def test_is_non_vacuous(self):
         # 沒有這條，上面那條在「兩邊都空」時會真空通過。
         assert self._derived(), "推導端不該是空的——registry 有 9 個平鍵"
+
+    def test_defaults_and_declared_split_the_flat_keys_by_arming(self):
+        """#4195: `rulePacks[*].defaults` is exactly the keys with a platform
+        value (`arming: default`, BUILTIN_DEFAULT_KEYS) and `declaredKeys`
+        every other flat registry key — disjoint, and together the whole flat
+        set, so no key is lost or shown twice."""
+        ops = str(_REPO_ROOT / "scripts" / "tools" / "ops")
+        if ops not in sys.path:
+            sys.path.insert(0, ops)
+        from _registry_lib import is_flat_key  # noqa: PLC0415
+        from _rule_packs_generated import BUILTIN_DEFAULT_KEYS  # noqa: PLC0415
+        mod = _load_module()
+        data = mod.build_platform_data()
+        defaults = {k for p in data["rulePacks"].values() for k in p.get("defaults") or {}}
+        declared = {r["key"] for rows in data["declaredKeys"].values() for r in rows}
+        flat = {k for p in mod.load_scaffold_rule_packs().values()
+                for k in p.get("thresholds") or {} if is_flat_key(k)}
+        assert defaults == set(BUILTIN_DEFAULT_KEYS)
+        assert not defaults & declared
+        assert defaults | declared == flat
 
     def test_never_emits_a_critical_spelling(self):
         # `<base>_critical` 走 resolveCriticalRows 讀 defaults[base]，不屬這一格；
@@ -204,7 +225,7 @@ class TestDeclaredKeys:
         # Required core stays closed: an unexpected field here would reach the
         # portal's hand-written fallback with nothing comparing the two.
         required = {"key", "value", "unit", "desc"}
-        optional = {"valueCounterexample"}
+        optional = {"valueCounterexample", "metricClass"}
         mod = _load_module()
         rows = mod.build_declared_keys(mod.load_scaffold_rule_packs())
         seen_optional = 0
@@ -214,9 +235,9 @@ class TestDeclaredKeys:
                 assert set(row) <= required | optional, row
                 seen_optional += "valueCounterexample" in row
         assert seen_optional, (
-            "no declared row carries valueCounterexample — the declared tier is "
-            "the one a tenant can fill in TODAY, so a bare reference number "
-            "there is the most likely to be copied (#1320 D1)")
+            "no declared row carries valueCounterexample — a tenant fills these "
+            "keys in itself, so a bare reference number there is the most "
+            "likely to be copied (#1320 D1)")
 
     def test_lands_at_the_top_level_not_under_rulepacks(self):
         # 放進 rulePacks[*] 會被 rule-packs.js 那份手寫 fallback 的 per-pack

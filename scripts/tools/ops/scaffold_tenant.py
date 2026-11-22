@@ -235,7 +235,7 @@ _SCAFFOLD_PACK_EXTRAS = {'kubernetes': {'state_filters': {'container_crashloop':
                                       'rabbitmq_queue_messages{queue="bulk-processing"}': '500000'}}}
 
 # RULE_PACKS: the registry's threshold half (display / exporter / default_on /
-# rule_pack_file / defaults / optional_overrides) plus the extras above. Same
+# rule_pack_file / thresholds) plus the extras above. Same
 # shape and API as the hand-written dict it replaces; edit thresholds in the
 # registry, never here.
 RULE_PACKS = {
@@ -257,12 +257,13 @@ _SATURATION_CRITICAL_RE = re.compile(r"([A-Za-z0-9_]+)_critical")
 
 
 def saturation_default_keys() -> set[str]:
-    """回傳 RULE_PACKS defaults 中標記為 saturation 的 base key set。"""
+    """回傳 RULE_PACKS 中標記為 saturation 的 base key set（不含 `<base>_critical`）。"""
     return {
         key
         for pack in RULE_PACKS.values()
-        for key, info in pack.get("defaults", {}).items()
+        for key, info in pack.get("thresholds", {}).items()
         if info.get("metric_class") == "saturation"
+        and not key.endswith("_critical")
     }
 
 
@@ -270,7 +271,7 @@ def saturation_critical_head(at: tuple, value: object) -> str | None:
     """飽和類 `<base>_critical` 鍵上方的教育註解：`_lib_confedit.data_value` 的
     *head*（鍵路徑, 值）→ 註解文字，其他鍵 None。
 
-    - base key 以 RULE_PACKS defaults 的 ``metric_class == "saturation"`` set 判定
+    - base key 以 RULE_PACKS 的 ``metric_class == "saturation"`` set 判定
     - 任何深度的 mapping 鍵都算（租戶檔、`_profiles.yaml`）；序列項目不算
     - 註解由 da-guard 寫在該鍵上方、同縮排（ADR-036 §2：寫 conf.d 的只有 Go）
     """
@@ -459,12 +460,11 @@ def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
         # Every threshold key of the pack, each asked once (#3924: no key is
         # declared in `_defaults.yaml` any more — every one is built in, so a
         # `<base>_critical` always has its base and is asked too).
-        for tier in ("defaults", "optional_overrides"):
-            for key, info in pack.get(tier, {}).items():
-                val = prompt_value(key, info,
-                                   platform_value=key in _BUILTIN_DEFAULT_KEYS)
-                if val and val != "skip":
-                    tenant_config[key] = val
+        for key, info in pack.get("thresholds", {}).items():
+            val = prompt_value(key, info,
+                               platform_value=key in _BUILTIN_DEFAULT_KEYS)
+            if val and val != "skip":
+                tenant_config[key] = val
 
     # Always add maintenance state control (disabled by default)
     # v1.7.0: supports structured format with expires for auto-deactivation
@@ -634,8 +634,9 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
     saturation_keys = sorted({
         key
         for db in selected_dbs
-        for key, info in (RULE_PACKS.get(db) or {}).get("defaults", {}).items()
+        for key, info in (RULE_PACKS.get(db) or {}).get("thresholds", {}).items()
         if info.get("metric_class") == "saturation"
+        and not key.endswith("_critical")
     })
     if saturation_keys:
         lines.extend([
@@ -903,7 +904,8 @@ def print_catalog() -> None:
     print("║          Dynamic Alerting — Supported Exporters            ║")
     print("╠══════════════════════════════════════════════════════════════╣")
     for key, pack in RULE_PACKS.items():
-        metrics = ", ".join(pack.get("defaults", {}).keys())
+        metrics = ", ".join(k for k in pack.get("thresholds", {})
+                            if not k.endswith("_critical"))
         print(f"║ [預載] {pack['display']:<45}║")
         print(f"║   Exporter: {pack['exporter']:<44}║")
         print(f"║   Metrics:  {metrics:<44}║")

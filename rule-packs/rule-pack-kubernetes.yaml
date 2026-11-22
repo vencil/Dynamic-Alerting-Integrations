@@ -11,7 +11,7 @@
 #   container_cpu: 80   [chart-default]   # % — Container CPU % of limit (weakest link)
 #   container_cpu_throttle: 25   [chart-default]
 #       % — Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost (critical tier
-#       opt-in via container_cpu_throttle_critical, declared in optional_overrides; #944)
+#       opt-in via container_cpu_throttle_critical; #944)
 #   container_memory: 85   [chart-default]   # % — Container memory % of limit (weakest link)
 #
 # <base>_critical（critical 層；沒有平台值）：租戶、子目錄或 profile 寫了就送一條
