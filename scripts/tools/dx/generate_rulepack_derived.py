@@ -94,6 +94,8 @@ from check_leftouterjoin_enrichment import METADATA_ANNOTATIONS  # noqa: E402
 # sync_metadata writes each template between double quotes, unescaped.
 assert not any('"' in v or "\\" in v for v in METADATA_ANNOTATIONS.values())
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    check_repo_artifact, exit_on_output_write_error, write_repo_artifact)
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
 try:
@@ -690,6 +692,7 @@ def _pack(path: Path) -> str | None:
     return _lib_consumer_read.RULE_PACKS.member(path)
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None) -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -716,6 +719,9 @@ def main(argv: list[str] | None = None) -> int:
 
     problems: list[str] = []
     stale: list[Path] = []
+    pending: list[tuple[Path, str]] = []
+    # The packs come from --rule-packs-dir when it was given (#3981).
+    flag = "--rule-packs-dir" if args.rule_packs_dir else None
     for p in packs:
         if _pack(p) == CUSTOM_ALERTS_PACK:
             continue  # the compiler's output: checked below, never written
@@ -735,7 +741,14 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"ERROR: {p}: {msg} — not written; this layout needs a hand edit",
                               file=sys.stderr)
                     return EXIT_CALLER_ERROR
-                p.write_text(new, encoding="utf-8", newline="\n")
+                pending.append((p, new))
+    # #3981: every rewrite was checked above and every target is judged here
+    # before the first is written — a later pack that cannot be rewritten no
+    # longer leaves the earlier ones changed.
+    for p, _new in pending:
+        check_repo_artifact(p, flag=flag)
+    for p, new in pending:
+        write_repo_artifact(p, new, flag=flag)
 
     # Always judge the result as Prometheus reads it — after a write too, so a
     # rewrite this tool got wrong cannot exit 0.

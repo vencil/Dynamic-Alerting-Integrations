@@ -629,3 +629,37 @@ def test_group_labels_reach_the_record_under_the_rules_own(da_read_env, tmp_path
     rp = _pack_with(tmp_path, _GROUP_LABELS.format(rule_labels=rule_labels))
     assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
     assert said in capsys.readouterr().err
+
+
+# ── #3981: every rewrite judged before the first is written ──────────────────
+
+_CLAUSE = '          unless on(tenant)\n          (user_state_filter{filter="maintenance"} == 1)\n'
+
+
+def test_a_refused_pack_leaves_the_earlier_stale_one_alone(da_read_env, tmp_path, capsys):
+    """Two stale packs, the later one this process's stdin (refused before it
+    is replaced): rc 2, one line naming it, and the earlier pack keeps its
+    bytes — the rewrite used to happen pack by pack, inside the read loop."""
+    import os
+    rp = tmp_path / "rule-packs"
+    shutil.copytree(_REPO / "rule-packs", rp)
+    first, second = rp / "rule-pack-clickhouse.yaml", rp / "rule-pack-redis.yaml"
+    for p in (first, second):
+        text = p.read_text(encoding="utf-8")
+        assert _CLAUSE in text, p
+        p.write_text(text.replace(_CLAUSE, "", 1), encoding="utf-8")
+    before = first.read_bytes()
+    saved = os.dup(0)
+    try:
+        with open(second, "rb") as fh:
+            os.dup2(fh.fileno(), 0)
+        with pytest.raises(SystemExit) as exc:
+            grd.main(["--rule-packs-dir", str(rp)])
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert str(second) in err and "--rule-packs-dir" in err, err
+    assert len(err.strip().splitlines()) == 1, err
+    assert first.read_bytes() == before
