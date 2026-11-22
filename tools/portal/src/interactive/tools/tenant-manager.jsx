@@ -40,7 +40,7 @@ import { DEMO_TENANTS, DEMO_GROUPS } from './tenant-manager/fixtures/demo-tenant
 import { styles } from './tenant-manager/styles.js';
 import { generateMaintenanceYaml, generateSilentModeYaml } from './tenant-manager/utils/yaml-generators.js';
 import { useTenantData } from './tenant-manager/hooks/useTenantData.js';
-import { expectedExporterKindsOf, declaresExporter } from './tenant-manager/utils/expected-exporters.js';
+import { expectedExporterKindsOf, declaresExporter, exporterFilterOptions } from './tenant-manager/utils/expected-exporters.js';
 import { apiFetch, ApiPathError } from './_common/api/api-fetch.js';
 import { useSavedViews } from './tenant-manager/hooks/useSavedViews.js';
 import { GroupSidebar } from './tenant-manager/components/GroupSidebar.jsx';
@@ -929,8 +929,9 @@ export default function TenantManager() {
               style={styles.filterSelect}
             >
               <option value="">{t('所有種類', 'All kinds')}</option>
-              {filterOptions.exporterKinds.map(kind => (
-                <option key={kind} value={kind}>{kind}</option>
+              {/* the value in effect is always listed: a saved view may carry a whole entry (mariadb@east) */}
+              {exporterFilterOptions(filterOptions.exporterKinds, filterExporter).map(option => (
+                <option key={option} value={option}>{option}</option>
               ))}
             </select>
           </div>

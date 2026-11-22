@@ -123,6 +123,7 @@ and on nothing a Prometheus scraped itself.
 * MassExporterOutage counts (tenant, pack) PAIRS, and a pair with entries for
   three clusters is three rows: both sides are reduced to pairs first, and a
   pair is absent when TenantExporterAbsent's expression has any row for it.
+  A pair carries no ``da_cluster`` either: floor and ratio are the fleet's.
   That expression is written there with ``without`` instead of ``by`` (see
   :func:`absent_expr`).
 
@@ -358,8 +359,11 @@ def absent_expr(aggregate_by: bool = True) -> str:
 
 
 #: Every declared (tenant, pack) once, however many clusters it is declared
-#: for (and however many exporter replicas serve the row).
-DECLARED_PAIRS = (f"max without (instance, pod, {EXPECTED_CLUSTER_LABEL}) "
+#: for, however many exporter replicas serve the row, and whichever Prometheus
+#: the row came through: federated from the edges, the same declarations arrive
+#: with each edge's ``da_cluster``, and a pair that kept it would be counted —
+#: floor and ratio both — once per source instead of once in the fleet.
+DECLARED_PAIRS = (f"max without (instance, pod, {EXPECTED_CLUSTER_LABEL}, {CLUSTER_LABEL}) "
                   "(tenant_expected_exporter)")
 
 
@@ -426,7 +430,10 @@ def mass_outage_expr() -> str:
     both sides (#4097): a pair declared for three clusters is three rows of
     tenant_expected_exporter and up to three of TenantExporterAbsent — counted
     as rows, one such tenant would weigh three times in the numerator, the
-    denominator, or both. `count without` throughout — a `by (tenant)` would
+    denominator, or both. Both are FLEET-WIDE: the pairs drop the `da_cluster`
+    of the Prometheus the declaration came through (:data:`DECLARED_PAIRS`),
+    so the same absent set gives one alert, with no `da_cluster`, however the
+    declarations are split across sources. `count without` throughout — a `by (tenant)` would
     read to the platform-alert guard (_grar_validate) as an alert carrying a
     tenant label.
     """

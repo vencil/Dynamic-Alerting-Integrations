@@ -191,6 +191,16 @@ def test_every_identity_label_is_one(label):
      cid.CLUSTER),
     ('label_replace(max by (tenant, expected_cluster) (user_threshold{expected_cluster!=""}), '
      '"da_cluster", "$1", "expected_cluster", "(.+)")', cid.CLUSTER),
+    # … and every aggregation on the way keeps it: one that dropped the source
+    # label leaves label_replace nothing to copy
+    ('label_replace(max by (tenant, pack) (user_threshold{expected_cluster!=""}), '
+     '"da_cluster", "$1", "expected_cluster", "(.+)")', cid.FLAT),
+    ('label_replace(max without (expected_cluster) (user_threshold{expected_cluster!=""}), '
+     '"da_cluster", "$1", "expected_cluster", "(.+)")', cid.FLAT),
+    ('label_replace(max without (instance, pod) (user_threshold{expected_cluster!=""}), '
+     '"da_cluster", "$1", "expected_cluster", "(.+)")', cid.CLUSTER),
+    ('label_replace(topk by (tenant) (1, user_threshold{expected_cluster!=""}), '
+     '"da_cluster", "$1", "expected_cluster", "(.+)")', cid.CLUSTER),
     ('label_replace(user_threshold, "da_cluster", "$1", "expected_cluster", "(.+)")', cid.FLAT),
     ('label_replace(user_threshold{expected_cluster=~".*"}, "da_cluster", "$1", "expected_cluster", "(.+)")',
      cid.FLAT),
@@ -412,6 +422,9 @@ _EXPECTED = ('label_replace(max by (tenant, pack, expected_cluster) (user_thresh
 #: the same without `expected_cluster!=""`: the rows that declare no cluster
 #: come out of the label_replace without one
 _EXPECTED_UNGUARDED = _EXPECTED.replace('{expected_cluster!=""}', "")
+#: the same with the source label aggregated away before it is copied:
+#: label_replace finds no `expected_cluster` and writes no `da_cluster`
+_EXPECTED_DROPPED = _EXPECTED.replace("max by (tenant, pack, expected_cluster)", "max by (tenant, pack)")
 
 
 @pytest.mark.parametrize("expr, want", [
@@ -425,6 +438,10 @@ _EXPECTED_UNGUARDED = _EXPECTED.replace('{expected_cluster!=""}', "")
     # satisfies them, every tenant that wrote the kind alone alerts forever
     (_EXPECTED_UNGUARDED + ' unless on (tenant, pack, da_cluster) db_up',
      [("on-cluster-with-flat-side", "tenant,pack,da_cluster")]),
+    # the source label aggregated away before the copy: no row has a cluster,
+    # and none can match presence on it
+    (_EXPECTED_DROPPED + ' unless on (tenant, pack, da_cluster) db_up',
+     [("on-cluster-with-flat-side", "tenant,pack,da_cluster")]),
     # the declared cluster never copied: a flat side matched on the cluster label
     ('max by (tenant, pack, expected_cluster) (user_threshold) unless on (tenant, pack, da_cluster) db_up',
      [("on-cluster-with-flat-side", "tenant,pack,da_cluster")]),
@@ -432,7 +449,7 @@ _EXPECTED_UNGUARDED = _EXPECTED.replace('{expected_cluster!=""}', "")
     (_EXPECTED + ' unless on (tenant, pack, da_cluster) db_up{da_cluster=""}',
      [("on-cluster-with-flat-side", "tenant,pack,da_cluster")]),
 ], ids=["per-cluster", "unlabelled-presence", "match-drops-cluster", "undeclared-rows-let-in",
-        "cluster-not-copied", "unlabelled-on-cluster"])
+        "source-label-aggregated-away", "cluster-not-copied", "unlabelled-on-cluster"])
 def test_expected_in_a_cluster_is_matched_per_cluster(expr, want):
     assert found(expr) == want
 

@@ -11,6 +11,7 @@ import {
   expectedExporterKind,
   expectedExporterKindsOf,
   declaresExporter,
+  exporterFilterOptions,
 } from '../src/interactive/tools/tenant-manager/utils/expected-exporters.js';
 
 describe('expectedExportersOf', () => {
@@ -68,5 +69,19 @@ describe('declaresExporter', () => {
   it('nothing declared matches nothing', () => {
     expect(declaresExporter([], 'mariadb')).toBe(false);
     expect(declaresExporter(undefined, 'mariadb')).toBe(false);
+  });
+});
+
+describe('exporterFilterOptions', () => {
+  const kinds = ['mariadb', 'redis'];
+  it('lists the kinds, each once, when the filter is off or is one of them', () => {
+    expect(exporterFilterOptions(kinds, '')).toEqual(['mariadb', 'redis']);
+    expect(exporterFilterOptions(kinds, 'redis')).toEqual(['mariadb', 'redis']);
+    expect(exporterFilterOptions(['mariadb', 'mariadb'], '')).toEqual(['mariadb']);
+  });
+  it('adds the value in effect when no kind option is it (a saved view with a whole entry)', () => {
+    expect(exporterFilterOptions(kinds, 'mariadb@east')).toEqual(['mariadb', 'redis', 'mariadb@east']);
+    expect(exporterFilterOptions(kinds, 'kafka')).toEqual(['mariadb', 'redis', 'kafka']);
+    expect(exporterFilterOptions([], 'mariadb@east')).toEqual(['mariadb@east']);
   });
 });

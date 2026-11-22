@@ -2113,11 +2113,17 @@ groups:
       # tenant_expected_exporter, so it is read as `max without (instance, pod)`
       # — otherwise each replica yields its own count series and the sentinel
       # pages once per replica (see the replica-collapse note above).
+      # FLEET-WIDE (#4097): the same read drops `da_cluster` too. Federated from
+      # the edges, tenant_expected_exporter arrives with each edge's `da_cluster`;
+      # kept, floor and ratio would be evaluated once per source (3 absent tenants
+      # via each of two edges: no alert; the same declarations via both: two). The
+      # alert therefore carries no `da_cluster`
+      # (tests/rulepacks/platform-mass-outage-per-cluster_test.yaml R1–R3).
       - alert: MassExporterOutage
         expr: |
           (
             count without (tenant) (count without (pack) (
-              max without (instance, pod, expected_cluster) (tenant_expected_exporter)
+              max without (instance, pod, expected_cluster, da_cluster) (tenant_expected_exporter)
               and on(tenant, pack) (
                 (
                   label_replace(
@@ -2175,7 +2181,7 @@ groups:
             and
             (
               count without (tenant, pack) (
-                max without (instance, pod, expected_cluster) (tenant_expected_exporter)
+                max without (instance, pod, expected_cluster, da_cluster) (tenant_expected_exporter)
                 and on(tenant, pack) (
                   (
                     label_replace(
@@ -2231,7 +2237,7 @@ groups:
                 )
               )
               /
-              count without (tenant, pack) (max without (instance, pod, expected_cluster) (tenant_expected_exporter))
+              count without (tenant, pack) (max without (instance, pod, expected_cluster, da_cluster) (tenant_expected_exporter))
             ) > 0.1
           )
           unless on() absent(up{job="tenant-exporters"})

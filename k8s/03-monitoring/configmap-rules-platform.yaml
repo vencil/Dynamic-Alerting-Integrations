@@ -696,44 +696,44 @@ data:
     \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/federation-integration.md\n\
     \      summary: Entire tenant-exporters scrape job is absent — per-tenant liveness\
     \ is BLIND\n  - alert: MassExporterOutage\n    expr: \"(\\n  count without (tenant)\
-    \ (count without (pack) (\\n    max without (instance, pod, expected_cluster)\
-    \ (tenant_expected_exporter)\\n    and on(tenant, pack) (\\n      (\\n       \
-    \ label_replace(\\n          max without(instance, pod, da_cluster) (tenant_expected_exporter{expected_cluster!=\\\
-    \"\\\"}),\\n          \\\"da_cluster\\\", \\\"$1\\\", \\\"expected_cluster\\\"\
-    , \\\"(.+)\\\")\\n        unless on(tenant, pack, da_cluster) (\\n          label_replace(pg_up{job=\\\
-    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\"\
-    )\\n          or label_replace(mysql_up{job=\\\"tenant-exporters\\\"}, \\\"pack\\\
-    \", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(redis_up{job=\\\
-    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"redis\\\", \\\"\\\", \\\"\\\")\\n \
-    \         or label_replace(mongodb_up{job=\\\"tenant-exporters\\\"}, \\\"pack\\\
-    \", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(elasticsearch_exporter_build_info{job=\\\
-    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\
-    \")\\n          or label_replace(query_interval{query=\\\"oracle_liveness\\\"\
-    , job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"oracle\\\", \\\"\\\", \\\"\\\
-    \")\\n          or label_replace(query_interval{query=\\\"db2_liveness\\\", job=\\\
-    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"db2\\\", \\\"\\\", \\\"\\\")\\n   \
-    \       or label_replace(ClickHouseMetrics_TCPConnection{job=\\\"tenant-exporters\\\
-    \"}, \\\"pack\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(kafka_brokers{job=\\\
-    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n \
-    \         or label_replace(rabbitmq_up{job=\\\"tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\
-    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\\
-    n          or label_replace(jvm_memory_used_bytes{job=\\\"tenant-exporters\\\"\
-    } or jvm_memory_bytes_used{job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"jvm\\\
-    \", \\\"\\\", \\\"\\\")\\n          or label_replace(nginx_up{job=\\\"tenant-exporters\\\
-    \"}, \\\"pack\\\", \\\"nginx\\\", \\\"\\\", \\\"\\\")\\n        )\\n        unless\
-    \ on(tenant, pack) (\\n          label_replace(pg_up{job=\\\"tenant-exporters\\\
-    \", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\"\
-    )\\n          or label_replace(mysql_up{job=\\\"tenant-exporters\\\", da_cluster=\\\
-    \"\\\"}, \\\"pack\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(redis_up{job=\\\
-    \"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"redis\\\", \\\"\
-    \\\", \\\"\\\")\\n          or label_replace(mongodb_up{job=\\\"tenant-exporters\\\
-    \", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\\
+    \ (count without (pack) (\\n    max without (instance, pod, expected_cluster,\
+    \ da_cluster) (tenant_expected_exporter)\\n    and on(tenant, pack) (\\n     \
+    \ (\\n        label_replace(\\n          max without(instance, pod, da_cluster)\
+    \ (tenant_expected_exporter{expected_cluster!=\\\"\\\"}),\\n          \\\"da_cluster\\\
+    \", \\\"$1\\\", \\\"expected_cluster\\\", \\\"(.+)\\\")\\n        unless on(tenant,\
+    \ pack, da_cluster) (\\n          label_replace(pg_up{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(mysql_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\\
+    n          or label_replace(redis_up{job=\\\"tenant-exporters\\\"}, \\\"pack\\\
+    \", \\\"redis\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(mongodb_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\\
     n          or label_replace(elasticsearch_exporter_build_info{job=\\\"tenant-exporters\\\
-    \", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\
-    \")\\n          or label_replace(query_interval{query=\\\"oracle_liveness\\\"\
-    , job=\\\"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"oracle\\\
+    \"}, \\\"pack\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(query_interval{query=\\\
+    \"oracle_liveness\\\", job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"oracle\\\
     \", \\\"\\\", \\\"\\\")\\n          or label_replace(query_interval{query=\\\"\
-    db2_liveness\\\", job=\\\"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\
+    db2_liveness\\\", job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"db2\\\", \\\
+    \"\\\", \\\"\\\")\\n          or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\"\
+    )\\n          or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\"}, \\\
+    \"pack\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(rabbitmq_up{job=\\\
+    \"tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\"tenant-exporters\\\"\
+    }, \\\"pack\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(jvm_memory_used_bytes{job=\\\
+    \"tenant-exporters\\\"} or jvm_memory_bytes_used{job=\\\"tenant-exporters\\\"\
+    }, \\\"pack\\\", \\\"jvm\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(nginx_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"nginx\\\", \\\"\\\", \\\"\\\")\\n \
+    \       )\\n        unless on(tenant, pack) (\\n          label_replace(pg_up{job=\\\
+    \"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"postgresql\\\"\
+    , \\\"\\\", \\\"\\\")\\n          or label_replace(mysql_up{job=\\\"tenant-exporters\\\
+    \", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\\
+    n          or label_replace(redis_up{job=\\\"tenant-exporters\\\", da_cluster=\\\
+    \"\\\"}, \\\"pack\\\", \\\"redis\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(mongodb_up{job=\\\
+    \"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"mongodb\\\", \\\
+    \"\\\", \\\"\\\")\\n          or label_replace(elasticsearch_exporter_build_info{job=\\\
+    \"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"elasticsearch\\\
+    \", \\\"\\\", \\\"\\\")\\n          or label_replace(query_interval{query=\\\"\
+    oracle_liveness\\\", job=\\\"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"\
+    pack\\\", \\\"oracle\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(query_interval{query=\\\
+    \"db2_liveness\\\", job=\\\"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\
     \", \\\"db2\\\", \\\"\\\", \\\"\\\")\\n          or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
     \"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"clickhouse\\\"\
     , \\\"\\\", \\\"\\\")\\n          or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\
@@ -768,9 +768,9 @@ data:
     \", \\\"\\\", \\\"\\\")\\n          or label_replace(nginx_up{job=\\\"tenant-exporters\\\
     \"}, \\\"pack\\\", \\\"nginx\\\", \\\"\\\", \\\"\\\")\\n        )\\n      )\\\
     n    )\\n  )) > 5\\n  and\\n  (\\n    count without (tenant, pack) (\\n      max\
-    \ without (instance, pod, expected_cluster) (tenant_expected_exporter)\\n    \
-    \  and on(tenant, pack) (\\n        (\\n          label_replace(\\n          \
-    \  max without(instance, pod, da_cluster) (tenant_expected_exporter{expected_cluster!=\\\
+    \ without (instance, pod, expected_cluster, da_cluster) (tenant_expected_exporter)\\\
+    n      and on(tenant, pack) (\\n        (\\n          label_replace(\\n      \
+    \      max without(instance, pod, da_cluster) (tenant_expected_exporter{expected_cluster!=\\\
     \"\\\"}),\\n            \\\"da_cluster\\\", \\\"$1\\\", \\\"expected_cluster\\\
     \", \\\"(.+)\\\")\\n          unless on(tenant, pack, da_cluster) (\\n       \
     \     label_replace(pg_up{job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"postgresql\\\
@@ -834,13 +834,13 @@ data:
     \"tenant-exporters\\\"}, \\\"pack\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\"\
     )\\n            or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\"},\
     \ \\\"pack\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n            or label_replace(rabbitmq_up{job=\\\
-    \"tenant-exporters\\\"} or\\\n      \\ rabbitmq_identity_info{job=\\\"tenant-exporters\\\
+    \"\\\n      tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\"tenant-exporters\\\
     \"}, \\\"pack\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\n            or label_replace(jvm_memory_used_bytes{job=\\\
     \"tenant-exporters\\\"} or jvm_memory_bytes_used{job=\\\"tenant-exporters\\\"\
     }, \\\"pack\\\", \\\"jvm\\\", \\\"\\\", \\\"\\\")\\n            or label_replace(nginx_up{job=\\\
     \"tenant-exporters\\\"}, \\\"pack\\\", \\\"nginx\\\", \\\"\\\", \\\"\\\")\\n \
     \         )\\n        )\\n      )\\n    )\\n    /\\n    count without (tenant,\
-    \ pack) (max without (instance, pod, expected_cluster) (tenant_expected_exporter))\\\
+    \ pack) (max without (instance, pod, expected_cluster, da_cluster) (tenant_expected_exporter))\\\
     n  ) > 0.1\\n)\\nunless on() absent(up{job=\\\"tenant-exporters\\\"})\\n\"\n \
     \   for: 3m\n    labels:\n      alert_source: platform\n      severity: critical\n\
     \    annotations:\n      description: 'More than 5 tenants AND over 10% of the\

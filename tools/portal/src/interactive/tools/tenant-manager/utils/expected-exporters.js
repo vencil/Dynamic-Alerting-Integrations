@@ -18,6 +18,12 @@ purpose: |
   declaring `mariadb@east`; a value with `@` (a saved view may carry one)
   is a whole entry and matches only that entry.
 
+  exporterFilterOptions is what the filter's dropdown lists: the kinds,
+  plus the value in effect when it is not one of them (a saved view's
+  `mariadb@east`, or a kind no tenant declares any more) — a select whose
+  value is not among its options shows another option as if it were the
+  one applied.
+
   Pure functions, no React.
 ---
 
@@ -43,4 +49,13 @@ function declaresExporter(value, filter) {
   );
 }
 
-export { expectedExportersOf, expectedExporterKind, expectedExporterKindsOf, declaresExporter };
+function exporterFilterOptions(kinds, current) {
+  const options = [...new Set(kinds)];
+  if (current && !options.includes(current)) options.push(current);
+  return options;
+}
+
+export {
+  expectedExportersOf, expectedExporterKind, expectedExporterKindsOf, declaresExporter,
+  exporterFilterOptions,
+};

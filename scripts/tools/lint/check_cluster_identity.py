@@ -67,7 +67,8 @@ Not judged (say so rather than look covered)
     that declares the kind alone asked for exactly that reading.
   * whether the regex of a `label_replace` that writes `da_cluster` matches
     every series beyond "the source label is not empty" (`_writes_cluster`
-    requires `src!=""` on every selector under it; a narrower regex such as
+    requires `src!=""` on every selector under it and every aggregation
+    under it to keep `src`; a narrower regex such as
     `"(east|west)"` is not checked), a `label_replace` that writes it empty,
     and `label_join` into it.
   * a tenant's own metric whose name starts with a platform family's prefix
@@ -232,7 +233,7 @@ def _writes_cluster(args: list) -> bool:
     (`"$1"` … `"(.+)"`) writes nothing on a series where that label is empty
     — the series comes out as it went in, without a cluster — so it counts
     only when every selector under *v* requires the source label
-    (`src!=""`). Dropping that matcher from TenantExporterAbsent's
+    (`src!=""`) and every aggregation under *v* keeps it. Dropping that matcher from TenantExporterAbsent's
     per-cluster branch lets the rows that declare no cluster into a
     per-cluster match that nothing satisfies (review of #4097 PR-B)."""
     if not (len(args) == 5 and all(a["kind"] == "string" for a in args[1:])
@@ -244,7 +245,22 @@ def _writes_cluster(args: list) -> bool:
     selectors = _selectors_under(args[0])
     return bool(src) and bool(selectors) and all(
         any(m["name"] == src and m["type"] == "!=" and m["value"] == "" for m in sel["matchers"])
-        for sel in selectors)
+        for sel in selectors) and _aggregations_keep(args[0], src)
+
+
+def _aggregations_keep(node, label: str) -> bool:
+    """Every aggregation under *node* hands *label* on: `by` lists it,
+    `without` does not (a selecting one — topk — returns its input series
+    whole). `max by (tenant, pack) (x{src!=""})` has dropped the source label
+    before label_replace reads it, so nothing is written (review of #4097)."""
+    if isinstance(node, list):
+        return all(_aggregations_keep(child, label) for child in node)
+    if not isinstance(node, dict):
+        return True
+    if (node.get("kind") == "aggregate" and node["op"] not in _SELECTING_AGGREGATIONS
+            and (label in node["labels"]) == bool(node["without"])):
+        return False
+    return all(_aggregations_keep(child, label) for child in node.values())
 
 
 def _selectors_under(node) -> "list[dict]":

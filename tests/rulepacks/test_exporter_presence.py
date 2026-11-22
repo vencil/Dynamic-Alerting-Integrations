@@ -366,9 +366,11 @@ def test_per_cluster_rows_are_reduced_before_the_cluster_is_copied():
 
 def test_mass_outage_counts_pairs_on_both_sides():
     """Numerator and denominator are both reduced to (tenant, pack) pairs —
-    `expected_cluster` aggregated away — before they are counted."""
+    `expected_cluster` aggregated away — before they are counted; and the
+    `da_cluster` of the Prometheus a declaration came through too, so floor
+    and ratio are the fleet's, not one per source."""
     mass = presence.mass_outage_expr()
-    pairs = "max without (instance, pod, expected_cluster) (tenant_expected_exporter)"
+    pairs = "max without (instance, pod, expected_cluster, da_cluster) (tenant_expected_exporter)"
     assert presence.DECLARED_PAIRS == pairs
     assert f"count without (tenant, pack) ({pairs})" in mass            # the denominator
     assert mass.count(pairs + "\n") == 2                                 # the two numerators' pairs
