@@ -838,20 +838,31 @@ class TestFederationEvidenceChannel:
 class TestProjectionGateWiring:
     @_needs_helm
     def test_init_container_present_and_wired_when_projections_set(self, repo_root: Path) -> None:
-        """The fail-closed gate runs as a Vector init-container: it reads the
-        registry + projections (read-only), WRITES the config-dir Vector loads, and
-        honours the degrade/enforce toggle. Vector then loads --config-dir from the
-        gate-populated emptyDir, not the ConfigMap directly."""
+        """The fail-closed gate runs as a Vector init-container: it reads
+        tenant-api's reading of the registry (the registry-reader init-container
+        before it, #4164) + the projections (read-only), WRITES the config-dir
+        Vector loads, and honours the degrade/enforce toggle. Vector then loads
+        --config-dir from the gate-populated emptyDir, not the ConfigMap directly."""
         docs = _render(repo_root / "helm/vector", sets=_PROJECTION_SETS)
         spec = [d for d in docs if d.get("kind") == "DaemonSet"][0]["spec"]["template"]["spec"]
-        inits = {c["name"]: c for c in spec.get("initContainers", [])}
-        assert "projection-gate" in inits, "gate init-container must run when projections are set"
+        order = [c["name"] for c in spec.get("initContainers", [])]
+        assert order == ["projection-gate-registry", "projection-gate"], (
+            "the registry reader runs first, then the gate reads what it left")
+        inits = {c["name"]: c for c in spec["initContainers"]}
+        reader = inits["projection-gate-registry"]
+        assert "tenant-api state show --from /conf.d" in " ".join(reader["args"])
+        rmounts = {m["name"]: m for m in reader["volumeMounts"]}
+        assert rmounts["registry"].get("readOnly") is True
+        assert rmounts["registry"].get("subPath") == "_account_registry.yaml", (
+            "the registry key alone, as a regular file (a ConfigMap volume's keys are symlinks)")
+        assert not reader.get("env"), "no env: tenant-api refuses an unknown TA_* variable"
         gate = inits["projection-gate"]
-        assert gate["args"][:2] == ["--registry", "/conf.d/_account_registry.yaml"]
+        assert gate["args"][:2] == ["--registry-state", "/registry-state"]
         assert "/staging/tenant-projections.json" in gate["args"]
         assert "--config-dir" in gate["args"]
         mounts = {m["name"]: m for m in gate["volumeMounts"]}
-        assert mounts["registry"].get("readOnly") is True, "registry is read-only (gate never writes it)"
+        assert "registry" not in mounts, "the gate reads tenant-api's reading, not the registry"
+        assert mounts["registry-state"].get("readOnly") is True
         assert mounts["staging"].get("readOnly") is True
         assert mounts["config"].get("readOnly", False) is False, "gate must WRITE the config-dir emptyDir"
         vector = [c for c in spec["containers"] if c["name"] == "vector"][0]
@@ -860,6 +871,7 @@ class TestProjectionGateWiring:
         assert "emptyDir" in vols["config"], "Vector's config-dir is the init-populated emptyDir"
         assert vols["staging"]["configMap"]["name"].endswith("-config")
         assert vols["registry"]["configMap"]["name"], "registry ConfigMap must be wired"
+        assert "emptyDir" in vols["registry-state"]
 
     @_needs_helm
     def test_no_gate_overhead_when_projections_empty(self, repo_root: Path) -> None:
