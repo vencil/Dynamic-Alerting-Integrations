@@ -716,6 +716,8 @@ tenantProjections:
 
 > ⛔ **為何 allowlist 而非 denylist**（對抗 review 修正——曾為 denylist 而漏）：demux 把整包 gateway audit JSON `merge(deep)` 進 event root，所以 denylist（`del()` 固定清單）是 **fail-open**——它接不到原始 `.message` 字串（內嵌 `upstream` 後端 IP），也接不到 gateway／未來 producer 新增或巢狀的任何欄位。allowlist **fail-closed**：未列舉者一律不進租戶分區。**新增要給租戶看的欄位＝改 `tenantProjectionKeepFields`**——這是資安相關變更，須確認該欄位不洩漏平台基礎設施或他租戶資訊（把「記得 drop」的負擔反轉成「明確 opt-in」）。
 
+> **租戶自選子集**（ADR-021 §租戶自選的可見度子集）：`tenantProjections[]` 項目可帶 `visibleFields`（從 tenant-api `GET /api/v1/tenants/<id>/federation/log-visibility` 的 `fields` 抄；`null` 就不寫），該租戶的副本只保留選中的欄位加上固定的 `tenantProjectionAlwaysVisibleFields`（`tenant_id`/`log_type`/`log_event_id`/`timestamp`，覆寫會讓渲染失敗）。只會縮小：複製迴圈仍只走 `tenantProjectionKeepFields`，`visibleFields` 列了清單外的欄位渲染失敗。抄寫沒有機制比對 tenant-api 與 values。
+
 > ingest-time 重建不可逆（改清單只影響改後新進的列；舊資料等 retention 自然汰換）。動態 read-time strip 留 Future Work。`projection_tests.yaml` 的 allowlist 案例以 gateway **真實 json_format**（含 `upstream`）+ 注入值 seed，斷言租戶副本只剩安全欄位、`upstream`/raw-message/注入 id 皆無。
 
 ### 8.4 `log_event_id` 跨分區 join SOP（淨化不拉長 MTTR）

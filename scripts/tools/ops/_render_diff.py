@@ -42,8 +42,8 @@ as written).
 string where it shows up in a field not named like a credential — a YAML
 alias or a copy puts it there, and the renders cannot tell (#2865).
 Inhibit rules are compared as a multiset, each belonging to the tenant its
-`tenant="X"` matcher names. The severity dedup rule names no tenant (#3899:
-one rule for every tenant); when it changes only in its target's
+`tenant="X"` matcher names. The severity dedup rules name no tenant (#3899:
+the same rules for every tenant; #4097: two of them); when one changes only in its target's
 `tenant!~"a|b"` exclusion list, the change belongs to each tenant that list
 gained or lost — one removed / added pair per such tenant — not to the
 platform.
@@ -434,8 +434,8 @@ def diff_routes(base: dict[str, Any], pr: dict[str, Any]) -> list:
         n = pi.get(key, 0) - bi.get(key, 0)
         (added if n > 0 else removed).extend(json.loads(key) for _ in range(abs(n)))
     for old, new in _exclusion_pairs(removed, added):
-        # #3899: one dedup rule for every tenant, a tenant set to `disable` in
-        # its `tenant!~` list — the change belongs to the tenants that list
+        # #3899: the same dedup rules for every tenant, a tenant set to `disable`
+        # in their `tenant!~` list — the change belongs to the tenants that list
         # gained or lost, not to the platform.
         for tenant in sorted(_excluded_tenants(old) ^ _excluded_tenants(new)):
             out.append(InhibitChange(tenant, "removed", old))

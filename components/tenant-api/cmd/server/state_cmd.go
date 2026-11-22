@@ -15,6 +15,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
+	"github.com/vencil/tenant-api/internal/federation/logvis"
 	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/staterestore"
@@ -294,6 +295,10 @@ func parseStateRecord(key string, data []byte) (rec any, ok bool, err error) {
 	default:
 		if !staterestore.ValidKey(key) {
 			return nil, false, nil
+		}
+		if _, isLogVis := statestore.LogVisibilityTenant(key); isLogVis {
+			rec, err = logvis.Parse(data)
+			break
 		}
 		rec, err = fedpolicy.ParseSubset(data)
 	}

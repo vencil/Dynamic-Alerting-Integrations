@@ -338,13 +338,20 @@ class TestGenerateInhibitRules:
         assert warnings == []
 
     def test_enabled_tenant_rule_structure(self):
-        """#3899：一條全域規則——tenant 與 metric_group 兩側都 gate、都進 equal。"""
+        """#3899／#4097：兩條全域規則——tenant 與 metric_group 兩側都 gate、都進 equal；
+        第一條兩側都帶 da_cluster 且 da_cluster 進 equal，第二條兩側都不帶。"""
         rules, _ = generate_inhibit_rules({"db-a": "enable"})
         assert rules == [{
             "source_matchers": ['severity="critical"', 'metric_group=~".+"',
-                                'tenant=~".+"'],
+                                'tenant=~".+"', 'da_cluster=~".+"'],
             "target_matchers": ['severity="warning"', 'metric_group=~".+"',
-                                'tenant=~".+"'],
+                                'tenant=~".+"', 'da_cluster=~".+"'],
+            "equal": ["tenant", "metric_group", "da_cluster"],
+        }, {
+            "source_matchers": ['severity="critical"', 'metric_group=~".+"',
+                                'tenant=~".+"', 'da_cluster=""'],
+            "target_matchers": ['severity="warning"', 'metric_group=~".+"',
+                                'tenant=~".+"', 'da_cluster=""'],
             "equal": ["tenant", "metric_group"],
         }]
 
@@ -352,29 +359,35 @@ class TestGenerateInhibitRules:
         """disable 的租戶進 target 的排除清單；enable 的不出現在規則裡。"""
         rules, warnings = generate_inhibit_rules(
             {"db-a": "enable", "db-b": "disable", "db-c": "enable"})
-        assert len(rules) == 1
-        assert rules[0]["target_matchers"][-1] == 'tenant!~"db-b"'
-        assert len(rules[0]["target_matchers"]) == 4
-        assert rules[0]["source_matchers"] == [
-            'severity="critical"', 'metric_group=~".+"', 'tenant=~".+"']
+        assert len(rules) == 2
+        for rule, cluster in zip(rules, ('da_cluster=~".+"', 'da_cluster=""')):
+            assert rule["target_matchers"][-1] == 'tenant!~"db-b"'
+            assert len(rule["target_matchers"]) == 5
+            assert rule["source_matchers"] == [
+                'severity="critical"', 'metric_group=~".+"', 'tenant=~".+"',
+                cluster]
         assert [w.tenant for w in warnings] == ["db-b"]
 
     def test_rule_count_does_not_grow_with_tenants(self):
         """規則數與租戶數無關（#3899 的出發點）。"""
         many = {f"t{i}": "enable" for i in range(200)}
         rules, _ = generate_inhibit_rules(many)
-        assert len(rules) == 1
+        assert len(rules) == 2  # #4097：帶／不帶 da_cluster 各一條
 
     def test_exclusion_list_sorted_and_escaped(self):
         """排除清單排序；每個名字以 regex 字面值寫入（`-` 不必 escape，`.` 要）。"""
         rules, _ = generate_inhibit_rules(
             {"tz": "disable", "t-b": "disable", "a.b": None, "ok": "enable"})
-        assert rules[0]["target_matchers"][-1] == 'tenant!~"a\\\\.b|t-b|tz"'
+        assert len(rules) == 2
+        for rule in rules:
+            assert rule["target_matchers"][-1] == 'tenant!~"a\\\\.b|t-b|tz"'
 
     def test_none_mode_is_excluded_without_a_note(self):
         """#3621：mode 為 None（樹被拒、沒讀到）→ 排除、不印 INFO（拒收本身就是訊息）。"""
         rules, warnings = generate_inhibit_rules({"db-a": "enable", "db-b": None})
-        assert rules[0]["target_matchers"][-1] == 'tenant!~"db-b"'
+        assert len(rules) == 2
+        for rule in rules:
+            assert rule["target_matchers"][-1] == 'tenant!~"db-b"'
         assert warnings == []
 
     def test_no_enabled_tenant_lists_no_rule(self):
@@ -1510,7 +1523,7 @@ tenants:
         routing, dedup = tree.routing_configs, tree.dedup_configs
         assert len(routing) == 0
         rules, _ = generate_inhibit_rules(dedup)
-        assert len(rules) == 1
+        assert len(rules) == 2  # #4097：帶／不帶 da_cluster 各一條
 
     def test_old_string_receiver_rejected(self):
         """v1.2.0 舊格式 (receiver: URL string) 在 generate_routes 應被跳過。"""

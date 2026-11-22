@@ -369,6 +369,16 @@ definitions:
       metric:
         type: string
     type: object
+  github_com_vencil_tenant-api_internal_federation_logvis.Selection:
+    properties:
+      fields:
+        items:
+          type: string
+        type: array
+        x-nullable: true
+    required:
+    - fields
+    type: object
   github_com_vencil_tenant-api_internal_generator.Finding:
     properties:
       blocks:
@@ -1775,6 +1785,38 @@ definitions:
       tenant_id:
         type: string
       token_id:
+        type: string
+    type: object
+  internal_handler_federation.LogVisibilityResponse:
+    properties:
+      always_visible_fields:
+        description: AlwaysVisibleFields are kept whatever the selection.
+        items:
+          type: string
+        type: array
+      fields:
+        description: |-
+          Fields is the tenant's selection; null means no selection — the
+          platform default, every curated field (including ones added later).
+        items:
+          type: string
+        type: array
+        x-nullable: true
+      selectable_fields:
+        description: SelectableFields are the fields a selection may name.
+        items:
+          type: string
+        type: array
+      selected_visible_fields:
+        description: |-
+          SelectedVisibleFields is every field a projected row would keep under
+          Fields once the platform applies this selection to Vector's tenant
+          projection. tenant-api does not track whether it has been applied, so
+          this is the selection's meaning, not what the tenant's rows carry now.
+        items:
+          type: string
+        type: array
+      tenant_id:
         type: string
     type: object
   internal_handler_federation.PutFederationPolicyRequest:
@@ -3220,6 +3262,89 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Replace a tenant's federation metric subset
+      tags:
+      - federation
+  /api/v1/tenants/{id}/federation/log-visibility:
+    get:
+      description: |-
+        The selection is applied by Vector's tenant log projection, at
+        write time, once the platform copies it into the tenant's
+        projection entry; it only ever narrows the platform-curated fields.
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler_federation.LogVisibilityResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Get a tenant's log visibility selection
+      tags:
+      - federation
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Fields to keep; null returns to the platform default
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_federation_logvis.Selection'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler_federation.LogVisibilityResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "507":
+          description: Insufficient Storage
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Replace a tenant's log visibility selection
       tags:
       - federation
   /api/v1/tenants/{id}/metrics:

@@ -50,10 +50,11 @@ function computeCapacityEstimates({ packs, tenantCount, instancesPerTenant, scra
   // Alertmanager inhibit rules do not grow with tenants or alerts (#3899): the
   // reference base (k8s/03-monitoring/configmap-alertmanager.yaml) carries three
   // fixed ones (Silent Mode warning / critical, CustomRecipeSilent — each scoped
-  // by `equal: [tenant, ...]`), and the route generator adds ONE severity dedup
-  // rule for every tenant (with the `_severity_dedup: disable` tenants in its
-  // exclusion list), none when there is no tenant.
-  const amInhibits = BASE_INHIBIT_RULES + (tenantCount > 0 ? 1 : 0);
+  // by `equal: [tenant, ...]`), and the route generator adds TWO severity dedup
+  // rules for every tenant (#4097: one for alerts that carry `da_cluster`, one
+  // for alerts that do not; the `_severity_dedup: disable` tenants are in the
+  // exclusion list of both), none when there is no tenant.
+  const amInhibits = BASE_INHIBIT_RULES + (tenantCount > 0 ? 2 : 0);
 
   // Reload time estimate (ms)
   const reloadMs = 50 + tenantCount * 5 + totalSeries * 0.01;

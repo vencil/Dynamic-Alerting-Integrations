@@ -32,6 +32,12 @@ func readLimitedBody(w http.ResponseWriter, r *http.Request, d *Deps) ([]byte, b
 	})
 }
 
+// ReadLimitedBody is readLimitedBody for handler sub-packages (federation):
+// the same 413-on-over-cap read, so a body is never silently truncated.
+func ReadLimitedBody(w http.ResponseWriter, r *http.Request, d *Deps) ([]byte, bool) {
+	return readLimitedBody(w, r, d)
+}
+
 // readBodyWithin reads r.Body under an EXPLICIT byte limit and reports going
 // over it with a 413 that explains the batch endpoints' cost. It is the batch
 // endpoints' reader; readLimitedBody is every other write handler's. Both

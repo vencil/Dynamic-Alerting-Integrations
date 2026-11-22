@@ -353,9 +353,13 @@ def is_generated_dedup_rule(rule: object) -> bool:
     writes (#3899) — the one definition is the generator, so it is rebuilt
     and compared, not described:
 
-    * ``_grar_routes.build_dedup_inhibit_rule(excluded)`` for some exclusion
-      list (none: no ``tenant!~`` matcher) — the list is read back from the
-      rule's ``tenant!~`` value and the rule rebuilt from it;
+    * either of ``_grar_routes.build_dedup_inhibit_rules(excluded)`` (the
+      per-cluster rule and the one for alerts without a cluster label, #4097)
+      for some exclusion list (none: no ``tenant!~`` matcher) — the list is
+      read back from the rule's ``tenant!~`` value and the rules rebuilt
+      from it;
+    * ``_grar_routes.pre4097_dedup_inhibit_rule(excluded)``, the one rule
+      written before clusters were told apart (#4097), the same way;
     * ``_grar_routes.pre3899_dedup_inhibit_rule(t)``, the per-tenant shape
       the generator wrote before #3899 (v2.9.0), for the tenant it pins.
 
@@ -366,7 +370,8 @@ def is_generated_dedup_rule(rule: object) -> bool:
     here and is kept as written.
     """
     from _grar_routes import (  # noqa: PLC0415  (_grar_routes imports this module)
-        build_dedup_inhibit_rule, pre3899_dedup_inhibit_rule)
+        build_dedup_inhibit_rules, pre3899_dedup_inhibit_rule,
+        pre4097_dedup_inhibit_rule)
 
     got = _normalised_rule(rule)
     if got is None:
@@ -379,7 +384,9 @@ def is_generated_dedup_rule(rule: object) -> bool:
         # An empty member (`tenant!~""`, `tenant!~"ta|"`) is no tenant id:
         # the generator never lists one, though rebuilding would echo it.
         if ("" not in excluded
-                and _normalised_rule(build_dedup_inhibit_rule(excluded)) == got):
+                and got in [_normalised_rule(r) for r in (
+                    *build_dedup_inhibit_rules(excluded),
+                    pre4097_dedup_inhibit_rule(excluded))]):
             return True
     pinned = [a[2] for a in src if a[0] == "tenant" and a[1] == "="]
     return (len(pinned) == 1

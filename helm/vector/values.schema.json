@@ -68,6 +68,12 @@
             "minimum": 1000,
             "maximum": 4294967295,
             "description": "The tenant's monotonic uint32 AccountID from _account_registry.yaml. >=1000 (0=platform, 1-999 reserved); must be quoted-free (a string makes the VRL route never match → silent empty partition)."
+          },
+          "visibleFields": {
+            "type": ["array", "null"],
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true,
+            "description": "ADR-021 tenant-selected visibility: the fields of tenantProjectionKeepFields this tenant keeps, copied from tenant-api's log-visibility selection. Absent or null = every allowlisted field. Can only narrow — an entry outside tenantProjectionKeepFields fails the render ({{ fail }} in templates/configmap.yaml), and tenantProjectionAlwaysVisibleFields are kept regardless."
           }
         },
         "additionalProperties": false
