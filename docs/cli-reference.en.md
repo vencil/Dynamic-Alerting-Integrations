@@ -3404,7 +3404,7 @@ An entry the exporter does not serve gets no rule; each one is named on stderr a
 |---|---|---|
 | `--config-dir <DIR>` | — | The conf.d to compile. Required outside this repository |
 | `--out <FILE>` | — | The rule pack to write; required to write. With `--check` it is what is compared; outside this repository `--check` needs it too. `-` and an empty string are refused |
-| `--check` | false | Recompile in memory and compare semantically with the pack at `--out`; writes nothing |
+| `--check` | false | Recompile in memory and compare with the pack at `--out`; writes nothing. Besides the semantic comparison it compares byte for byte, so a pack a formatter (yamlfmt, prettier, …) has rewritten is always reported as drift — keep formatters off this file |
 | `--allow-empty` | false | Allow a pack with no rules to replace one that has rules (refused by default; only when removing the last recipe is intended) |
 
 **Exit codes**
@@ -3412,8 +3412,8 @@ An entry the exporter does not serve gets no rule; each one is named on stderr a
 | Code | Meaning |
 |---|---|
 | 0 | Written; or `--check` in sync |
-| 1 | `--check` drift; or the write would empty a pack that has rules, refused (see `--allow-empty`) |
-| 2 | No `--out` (outside this repository, no `--config-dir` either), an unusable path, no da-guard, a tree the exporter rejects as a whole or whose `/metrics` cannot be gathered, two shapes on one `recipe_id`, … |
+| 1 | `--check` drift; or the write would empty a pack that has rules, refused (see `--allow-empty`); or `--allow-empty` is given while declarations the exporter does not serve remain, also refused |
+| 2 | Outside this repository, either `--config-dir` or `--out` missing (inside it, a write without `--out`), an unusable path, no da-guard, a tree the exporter rejects as a whole or whose `/metrics` cannot be gathered, two shapes on one `recipe_id`, … |
 
 ---
 

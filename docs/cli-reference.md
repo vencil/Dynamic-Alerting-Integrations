@@ -3387,7 +3387,7 @@ exporter 不送出的條目不會產生規則，每一條都在 stderr 點名，
 |---|---|---|
 | `--config-dir <DIR>` | — | 要編譯的 conf.d。在本 repo 之外必填 |
 | `--out <FILE>` | — | 寫入的規則包路徑，寫入時必填。`--check` 時是比對對象；在本 repo 之外 `--check` 也必填。`-` 與空字串拒收 |
-| `--check` | false | 在記憶體重新編譯，與 `--out` 的規則包做語意比對，不寫入 |
+| `--check` | false | 在記憶體重新編譯，與 `--out` 的規則包比對，不寫入。除了語意比對，也逐位元組比對：格式化工具（yamlfmt、prettier 等）重排過的規則包會一直判為漂移，不要讓它們改這個檔 |
 | `--allow-empty` | false | 允許寫出沒有規則的規則包去覆蓋有規則的規則包（預設拒絕，只在確實要移除最後一條 recipe 時用） |
 
 **Exit codes**
@@ -3395,8 +3395,8 @@ exporter 不送出的條目不會產生規則，每一條都在 stderr 點名，
 | Code | 意義 |
 |---|---|
 | 0 | 已寫入；或 `--check` 同步 |
-| 1 | `--check` 漂移；或寫入會把有規則的規則包清空，被拒（見 `--allow-empty`） |
-| 2 | 缺 `--out`（在本 repo 之外，連 `--config-dir` 也缺）、路徑不能用、沒有 da-guard、整棵樹被 exporter 拒收或 `/metrics` 收集不到、兩個 shape 撞同一個 `recipe_id` 等 |
+| 1 | `--check` 漂移；或寫入會把有規則的規則包清空，被拒（見 `--allow-empty`）；或帶了 `--allow-empty`，但仍有 exporter 沒送出的宣告，同樣拒寫 |
+| 2 | 在本 repo 之外缺 `--config-dir` 或 `--out` 任一個（在本 repo 內則是寫入時缺 `--out`）、路徑不能用、沒有 da-guard、整棵樹被 exporter 拒收或 `/metrics` 收集不到、兩個 shape 撞同一個 `recipe_id` 等 |
 
 ---
 

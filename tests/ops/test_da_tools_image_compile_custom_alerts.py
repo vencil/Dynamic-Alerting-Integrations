@@ -13,7 +13,12 @@ with PYTHONPATH dropped, on a copy of the recipe example tree:
 
   * the command dispatches and writes a pack Prometheus' own rule loader
     (promtool) accepts;
-  * `--check` is 0 on that pack and 1 once the pack drifts from the tree;
+  * `--check` is 0 on that pack and 1 once the pack drifts from the tree —
+    the customer adding a recipe as much as the pack being edited;
+  * every command it prints for the reader to run (the drift remedy, the
+    pack's header) is the image's `da-tools compile-custom-alerts`, never a
+    repository path that does not exist there; `--help` says both flags are
+    required, as they are;
   * outside the repository there is no default to fall back on, so a run
     without --out is a named 2, never a write into the image.
 """
@@ -101,3 +106,60 @@ def test_outside_the_repository_out_is_required(image, work, args):
     assert "Pass both --config-dir and --out" in done.stderr
     assert sorted(p.name for p in image.iterdir() if p.name != "__pycache__") == [
         n for n in before if n != "__pycache__"]
+
+
+_NEW_SHAPE = """tenants:
+  shop-z:
+    _custom_alerts:
+      - recipe: threshold
+        name: backlog_high
+        metric: shop_z_backlog_depth
+        op: ">"
+        window: 5m
+        threshold: "50:warning"
+"""
+
+
+def test_check_turns_red_when_the_customer_adds_a_recipe(image, work):
+    assert _da_tools(image, work, "--config-dir", "conf.d", "--out", "pack.yaml").returncode == 0
+    (work / "conf.d" / "shop-z.yaml").write_text(_NEW_SHAPE, encoding="utf-8")
+    drifted = _da_tools(image, work, "--config-dir", "conf.d", "--out", "pack.yaml", "--check")
+    assert drifted.returncode == 1, drifted.stdout + drifted.stderr
+    said = drifted.stdout + drifted.stderr
+    assert "da-tools compile-custom-alerts --config-dir" in said, said
+    assert "scripts/" not in said and "with_da_guard" not in said, said
+
+
+def test_the_pack_header_names_the_image_command(image, work):
+    assert _da_tools(image, work, "--config-dir", "conf.d", "--out", "pack.yaml").returncode == 0
+    head = (work / "pack.yaml").read_text(encoding="utf-8").split("groups:", 1)[0]
+    assert "da-tools compile-custom-alerts --config-dir <tree> --out <this file>" in head, head
+
+
+def test_help_in_the_image_says_both_flags_are_required(image, work):
+    done = _da_tools(image, work, "--help")
+    assert done.returncode == 0, done.stderr
+    assert "required here" in done.stdout and "default: components/" not in done.stdout
+
+
+def test_the_disk_prerequisite_names_the_image_byo_check(image, work):
+    """The example tree has a disk-fill recipe: the notice names the command
+    the image has, not the repository script."""
+    done = _da_tools(image, work, "--config-dir", "conf.d", "--out", "pack.yaml")
+    assert done.returncode == 0, done.stderr
+    assert "`da-tools byo-check prometheus`" in done.stderr, done.stderr
+    assert "byo_check.py" not in done.stderr
+
+
+def test_refusing_to_empty_a_pack_offers_the_image_command(image, work, tmp_path):
+    assert _da_tools(image, work, "--config-dir", "conf.d", "--out", "pack.yaml").returncode == 0
+    bare = work / "bare"
+    bare.mkdir()
+    (bare / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_connection_usage_percent: \"80\"\n", encoding="utf-8")
+    (bare / "ta.yaml").write_text(
+        "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n", encoding="utf-8")
+    refused = _da_tools(image, work, "--config-dir", "bare", "--out", "pack.yaml")
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    said = refused.stdout + refused.stderr
+    assert "da-tools compile-custom-alerts --config-dir bare --out pack.yaml --allow-empty" in said, said

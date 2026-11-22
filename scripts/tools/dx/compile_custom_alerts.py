@@ -99,6 +99,11 @@ DEFAULT_CONFIG_REL = "components/threshold-exporter/config/conf.d"
 OUT_REL = "rule-packs/rule-pack-custom-alerts.yaml"
 
 
+#: #4225: outside a scripts/tools tree — the da-tools image — the command a
+#: reader can paste is the image's, never a repository path.
+IMAGE_COMMAND = "da-tools compile-custom-alerts"
+
+
 def _repo_root() -> "Path | None":
     """This tree's root, never an enclosing project's (#2852).
 
@@ -327,7 +332,8 @@ def _rerun_command(args) -> str:
     # Microsoft Store stub on a stock Windows host (exit 49, no output), every caller
     # in this repo says `python3`, and a repo-relative script path only works from the
     # repo root. Measured on all three: the printed line failed rc=2 or 49.
-    parts = [_shell_quote(sys.executable), _shell_quote(Path(__file__).resolve())]
+    parts = ([IMAGE_COMMAND] if _repo_root() is None
+             else [_shell_quote(sys.executable), _shell_quote(Path(__file__).resolve())])
     if args.config_dir:
         parts.append(f"--config-dir {_shell_quote(args.config_dir)}")
     # ⛔ THE TARGET IS ECHOED, NEVER INVENTED (#1582). Three cases, and the third is
@@ -398,6 +404,9 @@ def _regenerate_command(out_path: Path, config_dir: Path, repo: "Path | None") -
 
     if repo is not None and shown(out_path) == OUT_REL:
         return "make custom-alerts-compile"
+    if repo is None:
+        return (f"{IMAGE_COMMAND} --config-dir {_shell_quote(shown(config_dir))} "
+                f"--out {_shell_quote(shown(out_path))}")
     return (f"bash scripts/ops/with_da_guard.sh python3 scripts/tools/dx/compile_custom_alerts.py "
             f"--config-dir {_shell_quote(shown(config_dir))} --out {_shell_quote(shown(out_path))}")
 
@@ -412,6 +421,8 @@ def _header_command(out_path: Path, config_dir: Path, repo: "Path | None") -> st
     if repo is not None and all(Path(p).resolve().is_relative_to(repo.resolve())
                                 for p in (out_path, config_dir)):
         return cmd
+    if repo is None:
+        return f"{IMAGE_COMMAND} --config-dir <tree> --out <this file>"
     return "compile_custom_alerts.py --config-dir <tree> --out <this file>"
 
 
@@ -545,14 +556,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Compile custom-alert recipes → rule pack")
     parser.add_argument("--check", action="store_true",
                         help="verify committed pack matches source (semantic); exit 1 on drift")
+    in_image = _repo_root() is None  # #4225: no repository, so no defaults
     parser.add_argument("--config-dir", default=None,
-                        help=f"conf.d tree with _custom_alerts (default: {DEFAULT_CONFIG_REL})")
+                        help="conf.d tree with _custom_alerts (required here)" if in_image
+                        else f"conf.d tree with _custom_alerts (default: {DEFAULT_CONFIG_REL})")
     # #3982 (owner 2026-11-18): an artifact — a tracked pack Prometheus loads
     # and this tool reads back (the erase guard, --check): replaced whole, so
     # a failed write leaves the previous pack; `-` and "" are refused.
     parser.add_argument("--out", default=None, type=artifact_file_type(then=Path),
-                        help=f"output rule pack path — REQUIRED to write. Optional "
-                             f"for --check, which compares against {OUT_REL} (#1582)")
+                        help=("output rule pack path — required here, also for --check, "
+                              "which compares against it") if in_image
+                        else (f"output rule pack path — REQUIRED to write. Optional "
+                              f"for --check, which compares against {OUT_REL} (#1582)"))
     parser.add_argument("--allow-empty", action="store_true",
                         help="write a pack with no rules over one that has rules "
                              "(refused by default; only when removing the last recipe is intended)")
@@ -657,12 +672,14 @@ def main() -> int:
     # namespace→tenant relabel (ADR-006 §Addendum). Surface it at author-time so the
     # GitOps author wires it (honest: we INFORM, we do not assert the prereq is met).
     # byo_check.py verifies the live flow; CustomRecipeDiskInert is the runtime backstop.
+    byo_check = ("da-tools byo-check prometheus" if repo is None
+                 else "byo_check.py prometheus")  # #4225: the image's command there
     if any("kubelet_volume_stats_" in r.get("expr", "")
            for g in groups for r in g.get("rules", [])):
         print("  ⚠ disk-recipe prerequisite: a disk-fill recipe (kubelet_volume_stats_*) "
               "compiled — it only fires if the cluster has CSI NodeGetVolumeStats, a kubelet "
               "volume-stats scrape job, and a namespace→tenant relabel. Verify the live flow "
-              "with `byo_check.py prometheus`.", file=sys.stderr)
+              f"with `{byo_check}`.", file=sys.stderr)
 
     # Prerequisite notice (#692 P0④): disk-IOPS recipes (container_fs_*) depend on a
     # cadvisor container_fs scrape + namespace→tenant relabel AND on the storage exposing
@@ -674,8 +691,8 @@ def main() -> int:
         print("  ⚠ disk-IOPS-recipe prerequisite: a disk-IOPS recipe (container_fs_*) compiled "
               "— it only fires if cadvisor scrapes container_fs with a namespace→tenant relabel "
               "AND the storage exposes I/O to cgroup blkio (network volumes like NFS/EFS bypass "
-              "it → 0). Per-CONTAINER, not per-PVC. Verify the live flow with `byo_check.py "
-              "prometheus` after a representative load test.", file=sys.stderr)
+              f"it → 0). Per-CONTAINER, not per-PVC. Verify the live flow with `{byo_check}` "
+              "after a representative load test.", file=sys.stderr)
 
     produced = sync._extract(groups)
     cr = sync._consumer_read()
