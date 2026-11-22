@@ -232,9 +232,10 @@ The lint tool's built-in policy **is** the file below (`.github/custom-rule-poli
 > Prometheus' and Alertmanager's own metrics carry no tenant, so reading one directly drops it (copy it from the
 > namespace with `label_replace(…, "tenant", "$1", "namespace", "(.+)")` for KSM); series every scrape target has
 > — `up`, `scrape_*`, `go_*`, `process_*` — carry it only with `job="tenant-exporters"`, drop it for another job
-> or none, and cannot be proven with a regex or negative `job`; `ALERTS` cannot be proven. A selector whose own
-> tenant matcher does not match the empty string (`tenant="db-a"`, `tenant=~".+"`, `tenant!=""`) keeps it,
-> whatever the metric.
+> or none, and cannot be proven with a regex or negative `job`; `ALERTS` cannot be proven. A selector of a raw
+> metric whose own tenant matcher does not match the empty string (`tenant="db-a"`, `tenant=~".+"`,
+> `tenant!=""`) keeps it, and `tenant=""` drops it; a recording rule's reference is still judged by its
+> expression.
 >
 > ⚠️ What it cannot see: any other raw metric is taken to carry tenant (a tenant exporter scraped by the
 > tenant-exporters job always does); whether a platform component's own metrics (threshold-exporter,

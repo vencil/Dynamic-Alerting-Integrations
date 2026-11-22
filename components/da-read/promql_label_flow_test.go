@@ -379,8 +379,18 @@ func TestScrapeFactsMatchTheEngine(t *testing.T) {
 		// One that matches "" selects series without it too.
 		{`up{tenant=~".*"} == 0`, flowDropped, false},
 		{`ksm{tenant=""}`, flowDropped, false},
+		// …and selects only series without it, whatever the metric (#4137
+		// review: it read kept).
+		{`m{tenant=""}`, flowDropped, true},
+		{`up{job="tex", tenant=""}`, flowDropped, true},
+		{`up{tenant=""} == 0`, flowDropped, false},
+		// A record's kept is where its value came from: a non-empty matcher
+		// on its reference proves presence, not that (#4137 review).
+		{`r:podcopy{tenant!=""}`, flowUnknown, false},
+		{`r:literal{tenant="db-a"}`, flowUnknown, false},
 	} {
-		f := newFlow(map[string]string{"r:ksm": `ksm`})
+		f := newFlow(map[string]string{"r:ksm": `ksm`, "r:podcopy": `label_replace(m, "tenant", "$1", "pod", "(.*)")`})
+		f.records["r:literal"] = []recordDef{{expr: mustParse(t, `m`), labels: map[string]string{"tenant": "db-a"}}}
 		f.metrics = map[string]string{"ksm": metricWithout, "up": metricByJob, "huh": metricUnknown}
 		f.jobs = map[string]bool{"tex": true}
 		if got := f.carries(mustParse(t, c.expr)); got != c.want {
@@ -444,6 +454,7 @@ func TestScrapeFactsAreTheRequestLabelsOnly(t *testing.T) {
 		`{"expressions": ["up"], "jobs": "tex"}`,
 		`{"expressions": ["up"], "jobs": ["tex", null]}`,
 		`{"expressions": ["up"], "jobs": null}`,
+		`{"expressions": ["up"], "metrics": null}`,
 	} {
 		stdout.Reset()
 		if rc := run([]string{"promql-label-flow", "tenant", "-"}, strings.NewReader(bad), &stdout, &stderr); rc != exitCallerErr || stdout.Len() != 0 {

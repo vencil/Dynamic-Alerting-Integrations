@@ -253,8 +253,9 @@ lint 工具的內建政策**就是**下面這份檔（`.github/custom-rule-polic
 > kube-state-metrics、Prometheus、Alertmanager 自己的指標不帶 tenant，直接讀就是丟掉（KSM 要用
 > `label_replace(…, "tenant", "$1", "namespace", "(.+)")` 從 namespace 補）；`up`、`scrape_*`、`go_*`、`process_*`
 > 這類每個抓取目標都有的 series，只有 `job="tenant-exporters"` 時帶 tenant，寫別的 job 或沒寫 job 是丟掉，
-> `job` 用正規式或不等式是無法證明；`ALERTS` 是無法證明。selector 自己帶有不比對空字串的 tenant matcher
-> （`tenant="db-a"`、`tenant=~".+"`、`tenant!=""`）時，不論指標都算保留。
+> `job` 用正規式或不等式是無法證明；`ALERTS` 是無法證明。讀原始指標的 selector 自己帶有不比對空字串的
+> tenant matcher（`tenant="db-a"`、`tenant=~".+"`、`tenant!=""`）時算保留，`tenant=""` 則是丟掉；
+> recording rule 的引用不適用這條，照樣追進它的運算式判定。
 >
 > ⚠️ 判定不到的事：上述以外的原始指標一律當作帶 tenant（租戶 exporter 經 tenant-exporters job 抓取時都會帶）；
 > 平台元件自己吐的指標（threshold-exporter、tenant-api、Vector 等）帶不帶 tenant 依指標而定，同樣當作帶。

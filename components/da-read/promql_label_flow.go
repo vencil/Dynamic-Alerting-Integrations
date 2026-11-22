@@ -160,9 +160,9 @@ func labelFlowFraming(data []byte) ([]string, error) {
 		Records     map[string][]struct {
 			Expr json.RawMessage `json:"expr"`
 		} `json:"records"`
-		Aliases json.RawMessage            `json:"aliases"`
-		Metrics map[string]json.RawMessage `json:"metrics"`
-		Jobs    json.RawMessage            `json:"jobs"`
+		Aliases json.RawMessage `json:"aliases"`
+		Metrics json.RawMessage `json:"metrics"`
+		Jobs    json.RawMessage `json:"jobs"`
 	}
 	if err := json.Unmarshal(data, &framing); err != nil {
 		return nil, err
@@ -183,7 +183,15 @@ func labelFlowFraming(data []byte) ([]string, error) {
 			return nil, fmt.Errorf("aliases: %w", err)
 		}
 	}
-	for name, raw := range framing.Metrics {
+	var metrics map[string]json.RawMessage
+	if framing.Metrics != nil {
+		// null decodes to a nil map: no facts, every raw metric taken to
+		// carry the label — the caller's framing error, not an answer.
+		if err := json.Unmarshal(framing.Metrics, &metrics); err != nil || metrics == nil {
+			return nil, fmt.Errorf("metrics: not an object: %s", framing.Metrics)
+		}
+	}
+	for name, raw := range metrics {
 		v, err := jsonString(raw)
 		if err == nil && v != metricWithout && v != metricByJob && v != metricUnknown {
 			err = fmt.Errorf("%q is none of %q, %q, %q", v, metricWithout, metricByJob, metricUnknown)
@@ -479,13 +487,6 @@ func both(a, b flow) flow {
 // an equality matcher could read a record unseen — given or not (#4098
 // review) — so it proves nothing.
 func (f *flowReader) selectorCarries(vs *parser.VectorSelector) flow {
-	for _, m := range vs.LabelMatchers {
-		// A matcher that does not match "" selects only series that have
-		// the label (labels.Matcher: an absent label reads as "").
-		if m.Name == f.label && !m.Matches("") {
-			return flowKept
-		}
-	}
 	name := ""
 	for _, m := range vs.LabelMatchers {
 		if m.Name == model.MetricNameLabel {
@@ -533,7 +534,24 @@ func (f *flowReader) selectorCarries(vs *parser.VectorSelector) flow {
 
 // rawCarries: whether the series a selector of the raw metric *name* reads
 // carry the label, by what the request says of it (#4137).
+//
+// The selector's own matchers on the label come first, whatever the metric
+// (labels.Matcher: an absent label reads as ""): one that does not match ""
+// selects only series that have it; `=""` / `=~""` select only series that
+// do not. Only for a raw metric: a record's "kept" is a claim about where
+// the value came from (a non-alias copy or a literal in its labels is not
+// kept, #4098 review), which a non-empty matcher does not make (#4137 review).
 func (f *flowReader) rawCarries(name string, vs *parser.VectorSelector) flow {
+	for _, m := range vs.LabelMatchers {
+		if m.Name == f.label && !m.Matches("") {
+			return flowKept
+		}
+	}
+	for _, m := range vs.LabelMatchers {
+		if m.Name == f.label && m.Value == "" && (m.Type == labels.MatchEqual || m.Type == labels.MatchRegexp) {
+			return flowDropped
+		}
+	}
 	switch f.metrics[name] {
 	case metricWithout:
 		return flowDropped
