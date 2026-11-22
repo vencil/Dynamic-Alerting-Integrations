@@ -277,10 +277,10 @@ lint 工具的內建政策**就是**下面這份檔（`.github/custom-rule-polic
 >   不等式、沒寫 matcher 都會讀到每個租戶的 series；寫成別的租戶就是讀別人的。KSM 這類只有 namespace
 >   的指標寫 `namespace="<租戶>", tenant=""`（只寫 namespace 時，同時帶兩個 label 而值不同的 series 也會被選到）。
 >   讀 pack 的 record 也要寫，例如 `tenant:mysql_up:max{tenant="db-a"}`。
-> - alert、recording rule 與 group 的 `labels:` 把 `tenant` 寫成該租戶以外的值；只能寫該租戶，或照抄 series 的
->   `{{ $labels.tenant }}`。
-> - 從別處寫入 tenant：`label_replace`／`label_join` 寫入 `tenant`、`count_values("tenant", …)`、
->   `group_left(tenant)`／`group_right(tenant)`。
+> - alert、recording rule 與 group 的 `labels:` 把 `tenant`（或 `namespace`）寫成該租戶以外的值。alert 可以寫該租戶，
+>   或照抄 series 的 `{{ $labels.tenant }}`；recording rule 的 labels 不展開模板（Prometheus 照字面寫入），只能寫該租戶。
+> - 從別處寫入 `tenant` 或 `namespace`：`label_replace`／`label_join` 寫入、`count_values("tenant", …)`、
+>   `group_left(tenant)`／`group_right(tenant)`。寫入 `namespace` 也算，因為別的租戶以 `namespace="<租戶>", tenant=""` 讀它。
 >
 > recording rule 的結果不帶 tenant 時是 WARN：釘住租戶的引用選不到任何 series，讀它的 alert 永遠不會響。
 > 跨租戶的規則不收：依 §2.3，Tier 3 是單一租戶的例外，跨租戶的需求應升級成 Tier 2。`--rule-pack-dir`

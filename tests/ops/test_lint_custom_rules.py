@@ -1688,6 +1688,20 @@ def _alert(expr, tenant="db-a"):
     ('label_join(mysql_up{tenant="db-a"}, "tenant", "", "pod")', "writes tenant"),
     ('count_values("tenant", mysql_up{tenant="db-a"})', "writes tenant"),
     ('mysql_up{tenant="db-a"} * on(job) group_left(tenant) mysql_up{tenant="db-a"}', "writes tenant"),
+    # Prometheus strips the parentheses around a call's argument and an
+    # aggregation's parameter, so the string still names the label (#4136 review)
+    ('label_replace(mysql_up{tenant="db-a"}, ("tenant"), "db-b", "", "")', "writes tenant"),
+    ('count_values((("tenant")), mysql_up{tenant="db-a"})', "writes tenant"),
+    # the alias the pin accepts is guarded too: written, it reaches the
+    # tenant who pins it (#4136 review)
+    ('label_replace(kube_pod_info{namespace="db-a", tenant=""}, "namespace", "db-b", "", "")',
+     "writes namespace"),
+    ('mysql_up{tenant="db-a"} * on(tenant) group_left(namespace) kube_pod_info{namespace="db-a", tenant=""}',
+     "writes namespace"),
+    # a selector in an aggregation's parameter, a subquery, a unary minus
+    ('quantile(scalar(max(y{tenant=~".*"})), mysql_up{tenant="db-a"})', "can read every tenant's series"),
+    ('max_over_time(mysql_up[1h:5m]) == 0', "can read every tenant's series"),
+    ('-mysql_up < 0', "can read every tenant's series"),
 ])
 def test_a_rule_that_can_reach_another_tenant_is_an_error(tmp_path, expr, said):
     found = _isolation(tmp_path, [_alert(expr)])
@@ -1706,16 +1720,25 @@ def test_a_rule_that_reads_only_its_tenant_passes(tmp_path, expr):
     assert _isolation(tmp_path, [_alert(expr)]) == []
 
 
-@pytest.mark.parametrize("value, ok", [
-    ("db-a", True), ("{{ $labels.tenant }}", True), ("db-b", False), ("", False),
-    ("{{ $labels.namespace }}", False),
+@pytest.mark.parametrize("value, alert_ok, record_ok", [
+    ("db-a", True, True), ("db-b", False, False), ("", False, False),
+    ("{{ $labels.namespace }}", False, False),
+    # a recording rule's labels are no template: Prometheus writes the text
+    # (rules/recording.go), so the copy is literal "{{ $labels.tenant }}"
+    ("{{ $labels.tenant }}", True, False),
 ])
-def test_what_a_rule_writes_as_tenant_must_be_its_tenant(tmp_path, value, ok):
+def test_what_a_rule_writes_as_tenant_must_be_its_tenant(tmp_path, value, alert_ok, record_ok):
     alert = _alert('mysql_up{tenant="db-a"} == 0', tenant=value)
     record = {"record": "custom:x:up", "expr": 'mysql_up{tenant="db-a"}', "labels": {"tenant": value}}
-    for rule in (alert, record):
+    for rule, ok in ((alert, alert_ok), (record, record_ok)):
         found = [m for m in _isolation(tmp_path, [rule]) if "in db-a's rule file" in m]
         assert (found == []) == ok, (rule, found)
+
+
+def test_an_alias_written_in_labels_must_be_its_tenant(tmp_path):
+    record = {"record": "custom:x:up", "expr": 'kube_pod_info{namespace="db-a", tenant=""}',
+              "labels": {"namespace": "db-b"}}
+    assert any("label namespace is db-b in db-a's rule file" in m for m in _isolation(tmp_path, [record]))
 
 
 def test_the_groups_labels_are_what_prometheus_writes(tmp_path):
@@ -1734,6 +1757,9 @@ def test_a_record_that_aggregated_tenant_away_warns(tmp_path):
     assert any(m.startswith("WARN") and "carry no tenant" in m for m in found), found
     assert _isolation(tmp_path, [{"record": "custom:x:sum",
                                   "expr": 'sum by (tenant) (mysql_up{tenant="db-a"})'}]) == []
+    # its own labels set tenant: its series carry it (#4136 review)
+    assert _isolation(tmp_path, [{"record": "custom:x:sum", "expr": 'sum(mysql_up{tenant="db-a"})',
+                                  "labels": {"tenant": "db-a"}}]) == []
 
 
 def test_a_declared_rule_pack_is_not_a_tenants(tmp_path):
@@ -1764,6 +1790,12 @@ def test_where_a_file_sits_names_its_tenant(tmp_path):
     assert "is no tenant id" in at(str(bad), [str(tmp_path)])[1]
     # the target that holds the file decides, not the first one given
     assert at(str(a), [str(tmp_path / "Not_A_Tenant"), str(tmp_path)]) == ("db-a", None)
+    # overlapping targets: the deepest one holding the file, in any order
+    # (#4136 review: the verdict hung on the order)
+    assert at(str(deep), [str(tmp_path / "db-a"), str(tmp_path)]) == ("team", None)
+    assert at(str(deep), [str(tmp_path), str(tmp_path / "db-a")]) == ("team", None)
+    assert at(str(a), [str(tmp_path / "db-a"), str(tmp_path)])[0] is None
+    assert at(str(a), [str(tmp_path), str(tmp_path / "db-a")])[0] is None
 
 
 def test_the_scan_paths_files_are_judged_as_their_tenants(tmp_path, monkeypatch, capsys):

@@ -261,10 +261,12 @@ The lint tool's built-in policy **is** the file below (`.github/custom-rule-poli
 >   theirs. A metric with only a namespace, such as kube-state-metrics', is written
 >   `namespace="<tenant>", tenant=""` (namespace alone also selects a series carrying both labels with
 >   different values). A pack's record needs it too, such as `tenant:mysql_up:max{tenant="db-a"}`.
-> - `tenant` in the `labels:` of an alert, a recording rule or the group written as anything but that tenant or
->   the series' own `{{ $labels.tenant }}`.
-> - writing tenant from anything else: `label_replace` / `label_join` into `tenant`,
->   `count_values("tenant", …)`, `group_left(tenant)` / `group_right(tenant)`.
+> - `tenant` (or `namespace`) in the `labels:` of an alert, a recording rule or the group written as anything
+>   but that tenant. An alert may also write the series' own `{{ $labels.tenant }}`; a recording rule's labels are
+>   no template (Prometheus writes the text), so only the tenant.
+> - writing `tenant` or `namespace` from anything else: `label_replace` / `label_join` into it,
+>   `count_values("tenant", …)`, `group_left(tenant)` / `group_right(tenant)`. `namespace` counts because another
+>   tenant reads it with `namespace="<tenant>", tenant=""`.
 >
 > A recording rule whose result carries no tenant is a WARN: a reference pinned to the tenant selects nothing,
 > so an alert reading it never fires. Rules across tenants are not taken: by §2.3, Tier 3 is a single tenant's

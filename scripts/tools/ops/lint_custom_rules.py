@@ -430,26 +430,31 @@ def author_tenant(filepath, targets):
     directory is the only identity: the lint does not know who wrote a file,
     so the directory says whose series it may read and whom it may alert."""
     real = os.path.realpath(filepath)
+    # The deepest target holding the file decides (#4136 review): with
+    # overlapping targets the verdict must not hang on their order.
+    holding = []
     for target in targets:
         root = os.path.realpath(target)
-        if os.path.isdir(root):
+        if real == root:
+            holding.append((len(root), target, None))
+        elif os.path.isdir(root):
             rel = os.path.relpath(real, root)
-            if rel == os.curdir or rel.split(os.sep)[0] == os.pardir:
-                continue
-            parts = Path(rel).parts
-            if len(parts) < 2:
-                return None, (f"sits directly in {safe_label(target)}: a tenant's rule file goes in "
-                              f"{TENANT_LAYOUT}, the directory naming the tenant whose series it reads")
-            tenant = parts[0]
-        elif real == root:
-            tenant = Path(real).parent.name
-        else:
-            continue
-        if not is_valid_tenant_id(tenant):
-            return None, (f"its tenant directory {safe_label(tenant)} is no tenant id: a tenant's rule "
-                          f"file goes in {TENANT_LAYOUT}")
-        return tenant, None
-    return None, f"is under none of the scan paths ({TENANT_LAYOUT})"
+            if rel != os.curdir and rel.split(os.sep)[0] != os.pardir:
+                holding.append((len(root), target, Path(rel).parts))
+    if not holding:
+        return None, f"is under none of the scan paths ({TENANT_LAYOUT})"
+    _, target, parts = max(holding, key=lambda h: h[0])
+    if parts is None:
+        tenant = Path(real).parent.name
+    elif len(parts) < 2:
+        return None, (f"sits directly in {safe_label(target)}: a tenant's rule file goes in "
+                      f"{TENANT_LAYOUT}, the directory naming the tenant whose series it reads")
+    else:
+        tenant = parts[0]
+    if not is_valid_tenant_id(tenant):
+        return None, (f"its tenant directory {safe_label(tenant)} is no tenant id: a tenant's rule "
+                      f"file goes in {TENANT_LAYOUT}")
+    return tenant, None
 
 
 def _pin(matchers, label, aliases, tenant):
@@ -466,6 +471,15 @@ def _pin(matchers, label, aliases, tenant):
     return any((a, tenant) in eq for a in aliases) and (label, "") in eq, None
 
 
+def _string_of(node):
+    """The value of a string operand, through the parentheses Prometheus
+    strips from a call's arguments and an aggregation's parameter
+    (`label_replace(x, ("tenant"), …)`, #4136 review); None for anything else."""
+    while isinstance(node, dict) and node.get("kind") == "paren":
+        node = node.get("expr")
+    return node.get("value") if isinstance(node, dict) and node.get("kind") == "string" else None
+
+
 def isolation_problems(rules, tenant, label, filepath, shapes_of=None, flow_of=None):
     """ERRORs (and WARNs) for the rules of *tenant*'s rule file (#4136):
     *rules* are ``(rule_name, is_record, expr, labels)`` — labels as
@@ -475,19 +489,24 @@ def isolation_problems(rules, tenant, label, filepath, shapes_of=None, flow_of=N
     * every selector matches *label* (or a ``LABEL_ALIASES`` alias with
       *label* ``=""``) to *tenant* by equality — a regex, a negation or no
       matcher read every tenant's series;
-    * *label* written as a literal is *tenant*; a template copies the
-      series' own;
-    * nothing writes *label* from anything else (``label_replace`` /
-      ``label_join`` into it, ``count_values`` into it, ``group_left`` /
-      ``group_right`` copying it);
-    * a WARN for a record whose series carry no *label*: a pinned reference
-      to it selects nothing, so the alert reading it never fires.
+    * *label* (and each alias the pin accepts) written in ``labels:`` is
+      *tenant*, or, on an alert, the template copying the series' own — a
+      recording rule's labels are no template (Prometheus writes the text);
+    * nothing writes *label* or an alias from anything else
+      (``label_replace`` / ``label_join`` into it, ``count_values`` into it,
+      ``group_left`` / ``group_right`` copying it) — an alias written so would
+      reach the tenant who pins it;
+    * a WARN for a record whose series carry no *label* (its own ``labels:``
+      do not set it): a pinned reference to it selects nothing, so the rule
+      reading it never fires.
 
     Read on Prometheus' parse tree (``promql_shape``, *shapes_of*), records
     by ``_lib_metric_sources.label_flow`` (*flow_of*)."""
     shapes_of = shapes_of or _lib_consumer_read.promql_shape
     flow_of = flow_of or _lib_metric_sources.label_flow
     aliases = _lib_consumer_read.LABEL_ALIASES.get(label, ())
+    guarded = (label, *aliases)
+    whose = f"{safe_label(tenant)}'s rule file (the tenant its directory names)"
     results = []
     judged = [r for r in rules if r[2]]
     trees = shapes_of([e for _, _, e, _ in judged]) if judged else []
@@ -499,30 +518,39 @@ def isolation_problems(rules, tenant, label, filepath, shapes_of=None, flow_of=N
                 spelled = expr.encode("utf-8")[node["start"]:node["end"]].decode("utf-8", "replace")
                 if other is not None:
                     results.append(LintResult(filepath, name, None, "ERROR",
-                        f"selector {spelled} reads {label} {safe_label(other)}'s series in "
-                        f"{safe_label(tenant)}'s rule file"))
+                        f"selector {spelled} reads {label} {safe_label(other)}'s series in {whose}"))
                 elif not pinned:
                     results.append(LintResult(filepath, name, None, "ERROR",
                         f"selector {spelled} can read every {label}'s series: match "
                         f"{label}=\"{tenant}\" by equality (or "
                         f"{'/'.join(aliases) or 'an alias'}=\"{tenant}\" with {label}=\"\")"))
-            elif ((kind == "call" and node["name"] in ("label_replace", "label_join")
-                   and len(node["args"]) > 1 and node["args"][1].get("value") == label)
-                  or (kind == "aggregate" and node["op"] == "count_values"
-                      and (node["param"] or {}).get("value") == label)
-                  or (kind == "binary" and node["matching"] is not None
-                      and label in node["matching"]["include"])):
+                continue
+            written = []
+            if kind == "call" and node["name"] in ("label_replace", "label_join") and len(node["args"]) > 1:
+                written = [_string_of(node["args"][1])]
+            elif kind == "aggregate" and node["op"] == "count_values":
+                written = [_string_of(node["param"])]
+            elif kind == "binary" and node["matching"] is not None:
+                written = node["matching"]["include"]
+            for w in sorted(set(written) & set(guarded)):
                 what = node.get("name") or node.get("op") or "the join"
                 results.append(LintResult(filepath, name, None, "ERROR",
-                    f"{what} writes {label} from something other than the series read: "
-                    f"a {safe_label(tenant)} rule keeps the {label} of the series it selects"))
-        value = (labels or {}).get(label)
-        if value is not None and value != tenant and not (
-                isinstance(value, str) and _copies_own_value(value, label)):
+                    f"{what} writes {w} from something other than the series read: "
+                    f"{whose} keeps the {w} of the series it selects"))
+    for name, is_record, _, labels in judged:
+        for key in guarded:
+            value = (labels or {}).get(key)
+            if value is None or value == tenant or (
+                    not is_record and isinstance(value, str) and _copies_own_value(value, key)):
+                continue
+            remedy = (f"write {tenant}" if is_record else
+                      f"write {tenant} or {{{{ $labels.{key} }}}}")
             results.append(LintResult(filepath, name, None, "ERROR",
-                f"label {label} is {safe_label(str(value))} in {safe_label(tenant)}'s rule file: "
-                f"write {tenant} or {{{{ $labels.{label} }}}}"))
-    records = [(n, e) for n, is_record, e, _ in judged if is_record]
+                f"label {key} is {safe_label(str(value))} in {whose}: {remedy}"
+                + (" (a recording rule's labels are written as text, not a template)"
+                   if is_record and isinstance(value, str) and "{{" in value else "")))
+    records = [(n, e) for n, is_record, e, lbls in judged
+               if is_record and label not in (lbls or {})]
     if records:
         for (name, _), v in zip(records, flow_of(label, [e for _, e in records], None)):
             if v["result"] == "dropped":
