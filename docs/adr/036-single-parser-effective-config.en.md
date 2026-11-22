@@ -42,6 +42,7 @@ lang: en
 - **Revised 2026-11-15**: da-read and da-crdecode print a refusal document of a fixed shape on stdout when they refuse their input; exit 2 without that document (a usage error, a file that cannot be opened, standard input or output that cannot be read or written, a Go crash, an older program) is a program that did not run, no longer a refusal (§3).
 - **Revised 2026-11-15**: the generator container's answer to `POST /v1/validate` carries no free text: `message` and `stderr_tail` are removed, leaving the closed `error` / `reason` and the structured fields (`result`, `rc`, `findings`, `validated`, `cache`, `key_verdict`; a 503 `tool_fault` also carries the structured `tool_fault`, shaped as in `GET /v1/status`); what the container knows beyond that goes to its own log. The answer is encoded as ASCII, so any value encodes. tenant-api already builds every text it shows a caller from the reason (§3, §5).
 - **Revised 2026-11-15**: the generator container reports ready only once the self-checks built into da-guard, da-read and da-crdecode have all passed; a tool fault of a judgement or a warming run is cleared only by a passing self-check, no longer by a judgement that runs through (§3).
+- **Revised 2026-11-21**: §12's second boundary becomes one reading only: Python reads YAML strictly everywhere, with no list of exceptions that mirror a consumer's reading, and a repeated key in a customer's file is an error reported to the customer; the lint covers every Python file in the repo (tests excepted) and Python embedded in other files. Principle 6, the decision table and the opening of §12 are narrowed to match: a consumer's reading is used when its reader can be called, otherwise the specification's, strictly.
 - **Revised 2026-11-15**: §6 gains a version skew that lets a config through: with the thresholds the platform ships armed built into the readers, a checker newer than the running exporter passes a tree that relies on built-in values while the exporter does not serve those rows; the decision is unchanged.
 
 ## Summary
@@ -55,7 +56,7 @@ lang: en
 3. **conf.d also has one writer.** Rewriting existing files and creating new ones is done by da-guard; the Python tools only send "what to change" (§2).
 4. **Each semantic area has one implementation.** Routing, domain-policy and tenant-list semantics are judged only by the generator (Python); thresholds and the values the exporter serves only by the exporter (Go).
 5. The tenant-api pod gains a container that runs the generator, and every write that changes file content asks it first. tenant-api no longer judges routing and policy itself.
-6. **YAML outside conf.d follows its consumer.** When Go or another program reads a file and acts on it, the Python side gets the content the way that consumer reads it, not with PyYAML of its own (§12).
+6. **YAML outside conf.d: its consumer's reader when that can be called, otherwise the YAML specification, strictly.** When the repo's own Go programs, or a program with a subcommand to ask (tenant-api, say), read a file and act on it, the Python side calls that reader for the content, not PyYAML of its own. A file with no reader to call (a customer's `.gitlab-ci.yml`, a GitHub workflow, the repo's own data files) is read with `_lib_yaml_strict` by the specification: a repeated key refuses the file, and where a consumer is looser than the specification it is not imitated (§12).
 7. **Merged in order on main, main releasable after every step.** The order is in §7: tenant-api first asks the generator container, then da-guard stops judging routing and policy, then the Go imitation code is deleted, then the generator and the Python tools read the JSON, so whichever commit is released there is no release where the generator already reads with yaml.v3 while Go still imitates PyYAML; after that the Go readers go through the shared judgement, writing moves to Go, and YAML outside conf.d follows its consumer. There is no side-by-side period and no switch.
 
 **Impact on users and operators** (all breaking changes):
@@ -144,7 +145,7 @@ With the generator and the Python tools that read conf.d reading `parse-tree`'s 
 | Writing conf.d: rewriting existing files, creating new ones | Go (da-guard's `write`) | the Python tools send "what to change" |
 | Semantics of routing (`_routing_defaults`, `routing_profiles`, a tenant's `_routing`), domain policy and the tenant list | the route generator (Python) | read the generator's findings (each problem the generator reports, see §4) and its status endpoint (§5) |
 | Thresholds and the values the exporter actually serves | the exporter (Go) | unchanged: read the JSON of `da-guard served-values` / `effective` |
-| YAML outside conf.d that another program reads | that consumer | read the way the consumer reads it (§12) |
+| YAML outside conf.d that another program reads | that consumer | read the way the consumer reads it when its reader can be called; otherwise read strictly by the YAML specification (§12) |
 
 The "thresholds" row is the existing precedent: thresholds already follow "one implementation, other tools read its output". This ADR applies the same approach to the YAML syntax layer, the file-name rules, writing, and routing and policy semantics.
 
@@ -585,9 +586,9 @@ The order of the items is in §7; the code for each is in the appendix. CI's dec
 
 Duplicate keys, more than one document, tags outside the allow-list: the generator's loader and the Go imitation package used to block these (some Python tools deliberately read only the first document). Before the Go checks are deleted, `parse-tree` must already treat these as unreadable (§2), confirmed by the fixed corpus; that is why `parse-tree` ships first (§7).
 
-### 12. YAML outside conf.d: its consumer decides
+### 12. YAML outside conf.d: ask its consumer when you can, otherwise read strictly by the specification
 
-What a YAML file means is decided by the program that reads it and acts on it. When a Python tool needs the content of such a file, it asks for that consumer's reading instead of reading it with PyYAML of its own; neither PyYAML nor yaml.v3 is the authoritative reader of these files.
+What a YAML file means is decided by the program that reads it and acts on it. When that consumer's reader can be called (the repo's own Go programs, tenant-api's subcommands), a Python tool asks it instead of reading the file with PyYAML of its own; neither PyYAML nor yaml.v3 is the authoritative reader of these files. A file with no reader to call is read by Python strictly, by the YAML specification (the second boundary in this section): those are the specification's semantics, not any consumer's, and where a consumer is looser than the specification (keeping the last of a repeated key, say) it is not imitated.
 
 | File | Authoritative reader | How the Python side gets it |
 |---|---|---|
@@ -639,7 +640,7 @@ $ da-crdecode --any-shape values.yaml
 
 **The boundary and how it is held**: if a file has a Go consumer, Python must not read it with PyYAML. CI runs an AST lint (parsing the Python source's syntax tree to find where a YAML parser is called) that lists every call site; the file holding a call site must be on an allow-list (or on the ratchet baseline below), each allow-list entry with its reason (for example "reads only GitHub workflows; no Go consumer"). The allow-list takes only readers with no Go consumer. A call site whose file has a Go consumer but which has not migrated yet is not on the allow-list but on a separate ratchet baseline: a new call site fails CI, and a migrated call site still in the baseline fails CI too, so the baseline only shrinks and is empty once the migration is done.
 
-The same lint holds a second boundary, independent of the first: **Python reads YAML through one strict reading** (`_lib_yaml_strict`: a key repeated in one mapping refuses the file, keys compared as yaml.v3 compares them). PyYAML by default keeps the last of a repeated key without a word, and the first one is gone. The lint derives from the syntax tree whether each call site goes through a shared reader or calls PyYAML itself; the modules holding the shared readers may touch PyYAML only at the strict reading's base, so everything read through them is read strictly. A call site that calls PyYAML itself must be on a separate list, each entry naming the consumer whose reading it mirrors. Only a file whose consumer itself keeps the last value gets there — the customer's `.gitlab-ci.yml`, for one: GitLab reads it with Ruby's Psych, which keeps the last of a repeated key and merges every `<<`, and init reads the customer's file that way to judge it. A file the repo writes is never on it: a repeated key there can only be a mistake, and the strict reading is its lint.
+A second boundary, independent of the first: **Python reads YAML one way only, the way the YAML specification does** — keys in one mapping must be unique. The reading lives in one place (`_lib_yaml_strict`: a repeated key refuses the file, keys compared as yaml.v3 compares them). PyYAML by default keeps the last of a repeated key without a word, and the first one is gone. A second AST lint (`tests/shared/test_yaml_strict_only.py`) scans every tracked Python file in the repo (tests excepted) and fails on any reference, outside `_lib_yaml_strict`, to a PyYAML or ruamel.yaml reading entry (`safe_load`, `load`, `compose`, the Loader classes and so on) or to `construct_object`; Python embedded in other files (a workflow's `python3 -c`, a shell heredoc, a doc snippet) is held by the same test with a token match, and only prose that names the call may be on its allow-list, each entry with its reason; there is no exception list and no debt list that only shrinks. A customer's file is no exception: even when its consumer itself keeps the last value (GitLab reading `.gitlab-ci.yml`, say), a repeated key is an error to report to the customer, not a file to read the consumer's way — init names the key and its line, says GitLab silently keeps the last one, hands over no wiring snippet, and asks the customer to fix it and re-run. Tests are not scanned: a test reads fixtures it wrote, and the strict reading's own tests need the lax reading as their control.
 
 Example:
 
@@ -651,7 +652,7 @@ files:
   ci/b.yml: h2
 ```
 
-Read the PyYAML default way, the first `files:` is gone and init takes `ci/a.yml`, which it wrote, for a file that is not its own; the strict reading refuses the file, init reads it as unreadable, and deletes nothing.
+Read the PyYAML default way, the first `files:` is gone and init takes `ci/a.yml`, which it wrote, for a file that is not its own; the strict reading refuses the file, init names the repeated `files` (line 4, first defined at line 2), treats the ledger as unreadable, and deletes nothing.
 
 Scope: the order of this section's work is in §7. The portal's js-yaml previews stay as §2's scope note says and are not covered here.
 

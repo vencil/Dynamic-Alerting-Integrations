@@ -12,7 +12,8 @@
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   oracle_sessions_active: 200   # count — Active sessions warning
 #       ⚠ 參考庫實測反例（#1176）：健康的日夜週期尖峰會到 240 個 active session —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-#       未啟用（待改比值）：絕對 session 數跨部署沒有意義（#1176 量到良性尖峰 240）；可攜的形式是佔 SESSIONS 上限的比例，待 #1320
+#       未啟用（依部署而定）：正常的 active session 數取決於工作負載與資料庫前面的連線池大小（#1176 量到良性尖峰 240）。佔 SESSIONS
+#       上限的比例另有一條不必填值的告警 OracleHighSessionUtilization（85%）
 #   oracle_tablespace_used_percent: 85   [chart-default]   # % — Tablespace usage warning
 #   oracle_process_usage_percent: 85   [chart-default]
 #       % of PROCESSES — Process usage warning: v$process rows as a share of the PROCESSES

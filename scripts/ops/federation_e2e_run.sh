@@ -108,16 +108,18 @@ helm template fed "$GATEWAY_CHART" \
     --set auditLog.enabled=true \
     > /tmp/fed-e2e-cm-audit-metrics.yaml
 
-"$PY" - "$RENDERED" <<'PYEOF'
+"$PY" - "$RENDERED" "$REPO_ROOT/scripts/tools" <<'PYEOF'
 import sys
-import yaml
+
+sys.path.insert(0, sys.argv[2])  # #4111: the one YAML reading
+from _lib_yaml_strict import strict_safe_load  # noqa: E402
 
 rendered = sys.argv[1]
-cm = yaml.safe_load(open("/tmp/fed-e2e-cm-envoy.yaml"))
+cm = strict_safe_load(open("/tmp/fed-e2e-cm-envoy.yaml"))
 for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua", "inflight_limit.lua"):
     with open(f"{rendered}/{key}", "w", newline="\n") as fh:
         fh.write(cm["data"][key])
-am = yaml.safe_load(open("/tmp/fed-e2e-cm-audit-metrics.yaml"))
+am = strict_safe_load(open("/tmp/fed-e2e-cm-audit-metrics.yaml"))
 with open(f"{rendered}/audit-metrics.yaml", "w", newline="\n") as fh:
     fh.write(am["data"]["audit-metrics.yaml"])
 print("[fed-e2e] rendered envoy.yaml + revoked_check.lua + "
@@ -163,12 +165,14 @@ helm template fedlogs "$GATEWAY_CHART" \
     --set concurrency=1 \
     > /tmp/fed-e2e-cm-envoy-vl.yaml
 
-"$PY" - "$RENDERED/victorialogs" <<'PYEOF'
+"$PY" - "$RENDERED/victorialogs" "$REPO_ROOT/scripts/tools" <<'PYEOF'
 import sys
-import yaml
+
+sys.path.insert(0, sys.argv[2])  # #4111: the one YAML reading
+from _lib_yaml_strict import strict_safe_load  # noqa: E402
 
 rendered = sys.argv[1]
-cm = yaml.safe_load(open("/tmp/fed-e2e-cm-envoy-vl.yaml"))
+cm = strict_safe_load(open("/tmp/fed-e2e-cm-envoy-vl.yaml"))
 for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua", "inflight_limit.lua"):
     with open(f"{rendered}/{key}", "w", newline="\n") as fh:
         fh.write(cm["data"][key])
