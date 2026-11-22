@@ -392,11 +392,13 @@ tools:
 
 §S 管程式碼風格、§T 管工具生命週期，§P 管**寫進 commit 的人類流程紀律**。規則的「why」敘述放這裡，攔截則由 hook 做。
 
-### P1. Commit trailer 必含 `Resolves <ID>`（追蹤項目修復時）
+### P1. 修復舊編號追蹤項目時 commit 必含 `Resolves <ID>`
 
-修復已登錄的追蹤項目（`TRK-NNN` 統一 namespace；或 `windows-mcp-playbook.md` 的 `Trap #N`）時，commit message 必須含 trailer：`Resolves: TRK-205` / `Fixes: Trap #12` / `Closes: TRK-103`（動詞大小寫不敏感；⛔ 冒號不可省——無冒號的裸行會讓 git 把整個 trailer 段落當散文丟掉，見 [`commit-convention.md` §Trailer block traps](commit-convention.md#trailer-block-traps)）。
+修復**舊編號**的追蹤項目（三位數 `TRK-NNN`，含從 TD／HA／REG 換過來的；或 `windows-mcp-playbook.md` 的 `Trap #N`）時，commit message 必須含 trailer：`Resolves: TRK-205` / `Fixes: Trap #12` / `Closes: TRK-103`（動詞大小寫不敏感；⛔ 冒號不可省——無冒號的裸行會讓 git 把整個 trailer 段落當散文丟掉，見 [`commit-convention.md` §Trailer block traps](commit-convention.md#trailer-block-traps)）。
 
-**原因**：沒有 trailer 時 backlog frontmatter 的 `status:` 與 git log 失聯，下次 session 會把已修項目當新項目再 audit 一次。⛔ **但在 merge 後的 main 上考古要用 `git log --grep`，不要用 `%(trailers:key=...)`**——squash merge 會在空行後附加 `Co-authored-by:`，把整段 trailer 推出 block（[#1741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1741)）；字面文字完好，兩道 gate 都跑在 merge 前的 `<base>..HEAD` 上、不受影響。
+**原因**：舊編號不是 issue 號，沒有 trailer 時 backlog frontmatter 的 `status:` 與 git log 失聯，下次 session 會把已修項目當新項目再 audit 一次；而且舊編號條目沒有定期掃描，trailer 觸發的同步檢查是它唯一的偵測（[ADR-019](../adr/019-planning-ssot.md) 已知限制）。
+
+**新式 `TRK-<issue 號>` 條目可省略 `Resolves:`**：編號就是追蹤 issue，`Refs: #<issue 號>` 已經把 commit 連到同一張票，再寫 `Resolves: TRK-<同一號>` 是重複；工作做完與否以 issue 的開關為準（ADR-019 第三層）。寫了也照樣觸發同步檢查，並不禁止。⛔ **但在 merge 後的 main 上考古要用 `git log --grep`，不要用 `%(trailers:key=...)`**——squash merge 會在空行後附加 `Co-authored-by:`，把整段 trailer 推出 block（[#1741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1741)）；字面文字完好，兩道 gate 都跑在 merge 前的 `<base>..HEAD` 上、不受影響。
 
 **Namespace + frontmatter（v2.8.1）**：原 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NNN` 統一為 `TRK-NNN`（[ADR-019](../adr/019-planning-ssot.md)；對映見 [`planning-id-mapping.md`](planning-id-mapping.md)）；舊前綴的 ID 不再被同步檢查辨識，要先查對照表換成 TRK。新 planning entry 必填 frontmatter `id: TRK-<追蹤 issue 號>` / `tracking_kind` / `status`，done 後補 `pr_ref:`（完整 schema 見 [ADR-019 §第一層](../adr/019-planning-ssot.md#第一層frontmatter-契約)，三種前綴並存的政策見 [ADR-019 §編號政策](../adr/019-planning-ssot.md#編號政策三種前綴並存)）；`generate_planning_index.py` 掃 frontmatter 產生 `planning-index.md`。追蹤項目 status sync 由 `check_planning_status_sync.py`（ADR-019 §第三層）檢查，只警告、不擋 merge。純文件 / 純 refactor / 跨多項目批次清理可不寫 trailer，改在 body 用 prose 列 IDs。
 
