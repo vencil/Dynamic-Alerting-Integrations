@@ -235,7 +235,7 @@ max by(tenant, da_cluster, instance) (db_up == 1)
 - **加總是逐叢集的。** 「該租戶所有實例加總」的規則（例如鎖等待、deadlock 次數）在每個叢集各自加總、各自比對閾值。
 - **維護模式是整個租戶。** 無法只對一個叢集進維護。
 - **各叢集不能有不同的閾值。** 同一個租戶在所有叢集用同一組閾值。
-- **通知預設不按叢集拆。** 平台不附通知模板，看到的是 Alertmanager 內建模板的輸出。兩個叢集同時觸發時，email 內文、PagerDuty 的 details、webhook payload 逐條列出告警與它的 `da_cluster`；單行標題是 `[FIRING:2] <告警名> <租戶> (<其他共同 label>)`，沒有叢集（只有一個叢集觸發時，標題會帶出叢集，因為那時它是整組共同的 label）。內建的 Slack 模板只有標題、沒有內文，兩個叢集同時觸發時看不出是哪兩個，要用逐條列出告警的自訂模板。PagerDuty 一組是一個 incident，所有叢集都恢復後才 resolve。預設不改的原因：部署的 `_routing_defaults`、routing profile 或租戶自己的 `_routing` 給了 `group_by` 的租戶，route 上就帶著它（工具產生的 `_defaults.yaml` 有給）；只有都沒給的租戶才沿用根 route 的分組，所以改平台預設值只會影響到這一部分租戶，不是全部；另一個原因是下面的第一項代價。
+- **通知預設不按叢集拆。** 平台不附通知模板，看到的是 Alertmanager 內建模板的輸出。兩個叢集同時觸發時，email 內文、PagerDuty 的 details、webhook payload 逐條列出告警與它的 `da_cluster`；單行標題是 `[FIRING:2] <告警名> <租戶> (<其他共同 label>)`，沒有叢集（只有一個叢集觸發時，標題會帶出叢集，因為那時它是整組共同的 label）。內建的 Slack 模板只有標題、沒有內文，兩個叢集同時觸發時看不出是哪兩個，要用逐條列出告警的自訂模板。PagerDuty 一組是一個 incident，所有叢集都恢復後才 resolve。預設不改的原因：租戶的 route 帶不帶 `group_by`，看部署的 `_routing_defaults`、routing profile 與租戶自己的 `_routing` 合起來最後有沒有值（工具產生的 `_defaults.yaml` 有給）；最後沒有值的租戶——哪一層都沒給，或租戶把它寫成 `null` 或空列表蓋掉——才沿用根 route 的分組，所以改平台預設值只會影響到這一部分租戶，不是全部；另一個原因是下面的第一項代價。
 - **把 `da_cluster` 加進 `group_by` 有兩項代價。** 一、講整個租戶的告警（第 5 點後半）帶的是評估它的那台 Prometheus 的叢集，幾台 Prometheus 評估同一批規則時會變成每台各一則。二、在運作中的 Alertmanager 上改一條 route 的 `group_by`，該 route 當下觸發中的每一組都會再通知一次（分組的 key 變了），以分組為 key 的接收端（PagerDuty）會開新的 incident；舊的 incident Alertmanager 不會替它 resolve（恢復通知送到的是新的 key），要手動關閉。設定寫法見 [BYO Alertmanager 整合指南](../integration/byo-alertmanager-integration.md)。
 
 ### 考慮過的替代方案
