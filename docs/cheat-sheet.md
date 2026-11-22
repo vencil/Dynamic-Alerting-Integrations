@@ -69,6 +69,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `guard` | Dangling Defaults Guard（v2.8.0），shell-out 至 `da-guard` Go binary 驗 conf.d/ schema + cardinality（路由交給 `generate-routes`，樹上有路由時 exit 4） | defaults-impact 子命令 + --config-dir <PATH>, --scope, --required-fields, --cardinality-limit, --format md\|json | `da-tools guard --help` |
 | `parser` | PromRule parser（v2.8.0），shell-out 至 `da-parser` Go binary 解析 PrometheusRule YAML + dialect / VM-only / strict-PromQL 相容性分類 | import\|allowlist 子命令 + --input, --output, --validate-strict-prom, --fail-on-non-portable, --fail-on-ambiguous | `da-tools parser --help` |
 | `tenant-verify` | 印 tenant effective config + merged_hash（v2.8.0；incremental migration playbook rollback checklist item 6） | <tenant-id>, --conf-d <PATH>, --expect-merged-hash <H>, --all, --json | `da-tools tenant-verify --help` |
+| `compile-custom-alerts` | 把 conf.d 的 `_custom_alerts` 編譯成規則包（ADR-024 能力 B；見 [compile-custom-alerts](cli-reference.md#compile-custom-alerts)） | --config-dir <DIR>, --out <FILE>, --check, --allow-empty | `da-tools compile-custom-alerts --help` |
 
 ## 快速提示
 
