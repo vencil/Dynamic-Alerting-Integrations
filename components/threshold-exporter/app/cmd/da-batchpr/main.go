@@ -10,8 +10,10 @@
 // Subcommands
 // -----------
 //
-//	apply           Open or update tenant chunk PRs from a Plan
-//	                produced by C-9 emit + C-10 BuildPlan.
+//	apply           Open or update tenant chunk PRs from a Plan and an
+//	                emit directory. Experimental: no shipped tool produces
+//	                either (Profile Builder / BuildPlan are wired to no CLI;
+//	                docs/cli-reference.md#batch-pr).
 //	refresh         After Base PR merges, rebase tenant branches
 //	                onto the merged main HEAD (PR-3 mode).
 //	refresh-source  Re-apply data-layer hot-fix files into existing

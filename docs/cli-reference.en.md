@@ -3217,7 +3217,7 @@ da-tools guard effective --config-dir conf.d/
 
 Migration Batch PR Pipeline (v2.8.0). Python wrapper that shells out to the `da-batchpr` Go binary; designed to take a customer's PromRule corpus through the full "emit → open PRs → review → Base merge → tenant rebase → optional data-layer hot-fix" loop.
 
-> ⚠️ **Experimental: no shipped tool produces either of `apply`'s two required inputs.** The Plan JSON (`--plan`) and the emit output (`--emit-dir`) were meant to come from the Profile Builder (`BuildProposals` / `EmitProposals`) and `BuildPlan`, but neither is wired to any CLI. The Profile Builder's output is also one directory per cluster, so a tenant present in two clusters makes da-guard refuse the tree as a duplicate tenant. To import customer rules, use the per-tenant [`migrate`](#migrate). The technology choice for bulk import is being redone in [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211); the whole group may be retired (breaking).
+> ⚠️ **Experimental: no shipped tool produces either of `apply`'s two required inputs.** The Plan JSON (`--plan`) and the emit output (`--emit-dir`) were meant to come from the Profile Builder (`BuildProposals` / `EmitProposals`) and `BuildPlan`, but neither is wired to any CLI. The Profile Builder's output is also one directory per rule cluster, so a tenant present in two clusters makes da-guard refuse the tree as a duplicate tenant. To import customer rules, use the per-tenant [`migrate`](#migrate). The technology choice for bulk import is being redone in [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211); the whole group may be retired (breaking).
 
 **Usage**
 

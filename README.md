@@ -219,7 +219,7 @@ O(M) 複雜度（`group_left` 向量匹配）· 各 Rule Pack 以 Projected Volu
 
 ### 工具鏈（da-tools CLI）
 
-涵蓋租戶**生命週期**（scaffold / onboard / migrate-rule / cutover / offboard）、**日常運維**（diagnose / patch-config / explain-route）、**品質治理**（validate-config / alert-quality / Policy-as-Code）、與**客戶導入管線**（da-parser → Profile Builder（library）→ da-batchpr → da-guard；Profile Builder 為 library、無獨立 `da-tools profile build` CLI）。全部封裝在 `ghcr.io/vencil/da-tools` 容器。
+涵蓋租戶**生命週期**（scaffold / onboard / migrate-rule / cutover / offboard）、**日常運維**（diagnose / patch-config / explain-route）、**品質治理**（validate-config / alert-quality / Policy-as-Code）、與**客戶導入管線**（da-parser → Profile Builder（library）→ da-batchpr → da-guard；Profile Builder 為 library、無獨立 `da-tools profile build` CLI；Profile Builder → da-batchpr 一段尚未接通，`batch-pr` 為 experimental，見 [`batch-pr`](docs/cli-reference.md#batch-pr)）。全部封裝在 `ghcr.io/vencil/da-tools` 容器。
 
 完整命令、旗標與範例 → [CLI 參考](docs/cli-reference.md) · [速查表](docs/cheat-sheet.md) · [互動工具索引](docs/interactive-tools.md)
 

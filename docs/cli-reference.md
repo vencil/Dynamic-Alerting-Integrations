@@ -3200,7 +3200,7 @@ da-tools guard effective --config-dir conf.d/
 
 Migration Batch PR Pipeline（v2.8.0）。Python 包裝 shell-out 到 `da-batchpr` Go binary，設計目標是把 customer 的 PromRule corpus 走完「emit → 開 PR → review → Base merge → tenant rebase → 必要時 data-layer hot-fix」整套流程。
 
-> ⚠️ **experimental：目前沒有任何出貨的工具產生 `apply` 的兩個必填輸入。** `--plan` 的 Plan JSON 與 `--emit-dir` 的 emit 輸出原本應由 Profile Builder（`BuildProposals`／`EmitProposals`）與 `BuildPlan` 產生，但這兩者都沒有接到任何 CLI；而且 Profile Builder 輸出的目錄是「一個 cluster 一個目錄」，同一個租戶出現在兩個 cluster 時，那棵樹會被 da-guard 以重複租戶拒收。要導入客戶規則，請用逐租戶的 [`migrate`](#migrate)。大量導入的技術選型在 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211) 重做，可能整組退役（breaking）。
+> ⚠️ **experimental：目前沒有任何出貨的工具產生 `apply` 的兩個必填輸入。** `--plan` 的 Plan JSON 與 `--emit-dir` 的 emit 輸出原本應由 Profile Builder（`BuildProposals`／`EmitProposals`）與 `BuildPlan` 產生，但這兩者都沒有接到任何 CLI；而且 Profile Builder 輸出的目錄是「一個規則群組（cluster）一個目錄」，同一個租戶出現在兩個群組時，那棵樹會被 da-guard 以重複租戶拒收。要導入客戶規則，請用逐租戶的 [`migrate`](#migrate)。大量導入的技術選型在 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211) 重做，可能整組退役（breaking）。
 
 **用法**
 

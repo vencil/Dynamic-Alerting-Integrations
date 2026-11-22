@@ -226,7 +226,7 @@ Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Fou
 
 ### Toolchain (da-tools CLI)
 
-Covers tenant **lifecycle** (scaffold / onboard / migrate-rule / cutover / offboard), **day-to-day ops** (diagnose / patch-config / explain-route), **quality governance** (validate-config / alert-quality / Policy-as-Code), and the **customer onboarding pipeline** (da-parser → Profile Builder (library) → da-batchpr → da-guard; Profile Builder is a library — there is no standalone `da-tools profile build` CLI). All packaged in the `ghcr.io/vencil/da-tools` container.
+Covers tenant **lifecycle** (scaffold / onboard / migrate-rule / cutover / offboard), **day-to-day ops** (diagnose / patch-config / explain-route), **quality governance** (validate-config / alert-quality / Policy-as-Code), and the **customer onboarding pipeline** (da-parser → Profile Builder (library) → da-batchpr → da-guard; Profile Builder is a library — there is no standalone `da-tools profile build` CLI; the Profile Builder → da-batchpr step is not wired and `batch-pr` is experimental, see [`batch-pr`](docs/cli-reference.en.md#batch-pr)). All packaged in the `ghcr.io/vencil/da-tools` container.
 
 Full commands, flags & examples → [CLI Reference](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md) · [Interactive Tools Index](docs/interactive-tools.md)
 

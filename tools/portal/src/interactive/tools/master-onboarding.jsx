@@ -17,6 +17,7 @@ const docUrl = (relative) => `${REPO_BASE}/${relative}`;
  * Two onboarding entry points per planning §C-3:
  *   - Import Journey (existing assets): Migration Toolkit → C-8 parser →
  *     C-9 profile builder → C-10 batch PR → C-12 dangling-defaults guard
+ *     (C-9 and C-10 are not wired today: batch-pr is experimental, issue 4211)
  *   - Wizard Journey (greenfield): CI/CD Setup Wizard → Deployment Wizard
  *     → [alert-builder, routing-trace TBD v2.8.x]
  *
@@ -60,7 +61,7 @@ const IMPORT_STEPS = [
     ),
     cta: () => t('ADR-018', 'ADR-018'),
     href: docUrl('docs/adr/018-profile-as-directory-default.md'),
-    cmd: '# Profile Builder is a LIBRARY only (BuildProposals / EmitProposals),\n# wired to no CLI. Import customer rules per tenant instead:\nda-tools migrate legacy-rules.yml --tenant <tenant-id>',
+    cmd: '# Profile Builder is a LIBRARY only (BuildProposals / EmitProposals),\n# wired to no CLI. Import customer rules per tenant instead:\nda-tools migrate legacy-rules.yml --tenant tenant-a',
   },
   {
     id: 'batchpr',
@@ -71,7 +72,7 @@ const IMPORT_STEPS = [
     ),
     cta: () => t('Migration Playbook', 'Migration Playbook'),
     href: docUrl('docs/scenarios/incremental-migration-playbook.md'),
-    cmd: 'da-tools batch-pr apply \\\n  --plan plan.json --emit-dir ./emit/ \\\n  --repo <owner/name> --workdir ./customer-repo \\\n  --dry-run',
+    cmd: 'da-tools batch-pr apply \\\n  --plan plan.json --emit-dir ./emit/ \\\n  --repo vencil/customer --workdir ./customer-repo \\\n  --dry-run',
   },
   {
     id: 'guard',
@@ -242,7 +243,7 @@ export default function MasterOnboarding() {
             )}
             bullets={[
               t('安裝 Migration Toolkit (binary / Docker / air-gapped tar)', 'Install Migration Toolkit (binary / Docker / air-gapped tar)'),
-              t('Parser → Profile → Batch PR → Guard 五步管線', 'Parser → Profile → Batch PR → Guard 5-step pipeline'),
+              t('Parser → Profile → Batch PR → Guard 五步管線（Profile、Batch PR 兩步尚未接通，目前逐租戶用 migrate）', 'Parser → Profile → Batch PR → Guard 5-step pipeline (the Profile and Batch PR steps are not wired yet; use migrate per tenant for now)'),
               t('適合：巨型客戶、有既有資產、conf.d/ 大批次', 'For: large customers with existing assets, big-batch conf.d/'),
             ]}
             ctaLabel={t('開始 Import 路徑', 'Start Import Path')}
