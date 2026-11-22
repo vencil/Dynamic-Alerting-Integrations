@@ -1,8 +1,8 @@
 """test_optional_overrides_render.py — #1310 chart-face render tripwire
 
-`thresholdConfig.optional_overrides` is the runtime half of the registry's
-`tier: optional_overrides`: a LIST of key names the exporter RECOGNISES but
-asserts no value for (`ThresholdConfig.OptionalOverrides []string`). Ship the
+`thresholdConfig.optional_overrides` is a LIST of key names the exporter
+RECOGNISES but asserts no value for (`ThresholdConfig.OptionalOverrides
+[]string`); since #4163 only keys outside the threshold registry need it. Ship the
 list and a tenant can set those keys in its own conf.d and have them fire
 (`resolveDeclaredRows`, PR-C #1314); omit it and the same keys are unwritable.
 

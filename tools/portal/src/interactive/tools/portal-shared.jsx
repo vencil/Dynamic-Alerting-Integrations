@@ -31,6 +31,7 @@ const t = window.__t || ((zh, en) => en);
 import {
   RULE_PACK_DATA,
   CATEGORY_LABELS,
+  getPackThresholds,
 } from './_common/data/rule-packs.js';
 
 /* ── Metric key autocomplete dropdown ── */
@@ -139,9 +140,12 @@ function RulePackSelector({ selected, onChange }) {
                   {isSelected && !isRequired && <span className="mr-1">&#10003;</span>}
                   {isRequired && <span className="mr-1">&#128274;</span>}
                   {p.label}
-                  {p.defaults && Object.keys(p.defaults).length > 0 && (
-                    <span className="ml-1 text-gray-400">({Object.keys(p.defaults).length})</span>
-                  )}
+                  {(() => {
+                    // every threshold key of the pack, platform value or
+                    // declared (#4195: most have no platform value)
+                    const n = Object.keys(getPackThresholds(p.id)).length;
+                    return n > 0 && <span className="ml-1 text-gray-400">({n})</span>;
+                  })()}
                 </button>
               );
             })}

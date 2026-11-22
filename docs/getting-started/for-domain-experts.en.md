@@ -139,7 +139,7 @@ A new alert needs all three parts plus a declaration of its threshold key:
 1. **Normalization recording rule**: add a `tenant:<metric>:<function>` rule to the `<db>-normalization` group.
 2. **Threshold-normalization recording rule**: add `tenant:alert_threshold:<key>` to the `<db>-threshold-normalization` group, with a selector on the split `component` and `metric` (see Part 2 above). For a critical tier, add a `<key>_critical` rule with `severity="critical"`.
 3. **Alert rule**: follow the shape of Part 3, keeping both the `unless … maintenance` and the `tenant_metadata_info` parts.
-4. **Declare the threshold key**: add an entry under `keys:` in `rule-packs/threshold-registry.yaml`, with `tier` set to `defaults` (a platform-shipped default) or `optional_overrides` (declared only; tenants supply the value); a new pack is also registered under `packs:` in the same file. Then regenerate (`scaffold_tenant.RULE_PACKS` and every generated block follow):
+4. **Declare the threshold key**: add an entry under `keys:` in `rule-packs/threshold-registry.yaml`, with `arming` set to `default` (a platform value, built into the readers) or `operator` (no platform value; the deployment or tenant supplies it); a new pack is also registered under `packs:` in the same file. Then regenerate (`scaffold_tenant.RULE_PACKS` and every generated block follow):
 
 ```bash
 python3 scripts/tools/lint/check_threshold_registry.py --regen

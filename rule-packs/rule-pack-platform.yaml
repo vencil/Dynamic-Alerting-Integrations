@@ -2392,6 +2392,15 @@ groups:
       # a leaked/expired logs token, OR the victorialogs-mode guards
       # firing (default-deny endpoint catch-all, null/<1000 account_id
       # Lua reject, non-GET/POST on an allowlisted path).
+      #
+      # bad_request (every 4xx except 401/403/429/499, see
+      # helm/federation-gateway/files/audit-metrics.vector.yaml) also takes
+      # the gateway's `limit` check: on /select/logsql/query a missing,
+      # invalid or over-max `limit` (400); on /query, field_values and
+      # stream_field_values an invalid, over-max or duplicated one (400);
+      # and a POST body the gateway cannot read (415). Right after a gateway
+      # upgrade that introduces the check, a client that never sent `limit`
+      # to /query is the likeliest cause.
       - alert: TenantLogQueryRejectionRateAnomaly
         expr: |
           (
@@ -2417,7 +2426,12 @@ groups:
             auth-failed / bad-request) for 15m. Check the
             tenant-log-query dashboard — likely a REVOKED token (Lua
             403), a tenant exceeding its rate limit, or a client hitting
-            the victorialogs-mode endpoint allowlist. NOTE: this counts
+            the victorialogs-mode endpoint allowlist. A bad_request surge
+            right after a gateway upgrade is most likely
+            /select/logsql/query calls without a valid `limit`, or
+            query / field_values / stream_field_values calls over the
+            limit cap (400), or a non-form POST body (415). NOTE: this
+            counts
             POST-JWT rejections only — an EXPIRED / bad-signature / wrong-
             audience token 401s at jwt_authn BEFORE account_id is stamped,
             so it is NOT counted here (attack noise; see jwt_authn stats,
@@ -2811,12 +2825,13 @@ groups:
       # when the matcher was broadened — "enforce" was a misnomer once image-level
       # wedges (which hit degrade mode too) were included.
       #
-      # Signal: kube_pod_init_container_status_waiting_reason{container="projection-gate",
-      # reason=~...}=1 (KSM job, default metric set — confirmed emitted, no
+      # Signal: kube_pod_init_container_status_waiting_reason{container=~"projection-gate|projection-gate-registry",
+      # reason=~...}=1 (#4164: the registry reader runs first, tenant-api's
+      # image; it always exits 0, so it wedges only on its image or config) (KSM job, default metric set — confirmed emitted, no
       # --metric-allowlist filter). `max by (namespace)` collapses the per-node
       # DaemonSet pods (and the reason fan-out) to one series and keeps `namespace`
       # on the page (Vector may be installed outside `monitoring`); the stable
-      # container name `projection-gate` scopes it. `max_over_time(...[5m])` is the
+      # container names of the two gate init-containers scope it. `max_over_time(...[5m])` is the
       # kube-prometheus KubePodCrashLooping idiom: a CrashLoopBackOff series briefly
       # drops to absent while kubelet re-runs the container between backoffs (and
       # ErrImagePull/ImagePullBackOff alternate), and real Prometheus injects a
@@ -2831,7 +2846,7 @@ groups:
         expr: |
           max by (namespace, da_cluster) (
             max_over_time(
-              kube_pod_init_container_status_waiting_reason{container="projection-gate", reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError"}[5m]
+              kube_pod_init_container_status_waiting_reason{container=~"projection-gate|projection-gate-registry", reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError"}[5m]
             )
           ) > 0
         for: 5m
@@ -2851,7 +2866,8 @@ groups:
             only one. Causes: `tenantProjectionGate: enforce` + a config-bug
             mismatch (fail-closed working as designed — REVERT the bad
             `tenantProjections` change); a wrong/garbled gate image or args
-            (any mode — fix `projectionGate.image` / the init spec); a
+            (any mode — fix `projectionGate.image`, the registry reader's
+            `projectionGate.registryReader.image` / the init spec); a
             missing staging ConfigMap. Inspect `kubectl describe pod` for
             the waiting reason and `kubectl logs <vector-pod> -c
             projection-gate --previous` for crash output. Consider `degrade`

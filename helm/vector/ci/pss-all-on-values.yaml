@@ -10,6 +10,10 @@ tenantProjections:
 projectionGate:
   image:
     digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  # #4164: the registry reader init container's image digest branch.
+  registryReader:
+    image:
+      digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   registry:
     configMapName: pss-gate-account-registry
 extraEnv:

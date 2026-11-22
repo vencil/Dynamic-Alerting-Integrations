@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -102,10 +103,24 @@ func loadDir(dir string) (Backup, error) {
 	bak := Backup{}
 	for _, e := range ents {
 		n := e.Name()
-		if !e.Type().IsRegular() || strings.HasPrefix(n, ".") {
-			continue // the store's own lock and temp files
+		if strings.HasPrefix(n, ".") {
+			continue // the store's own lock and temp files; a mount's ..data
 		}
-		b, err := os.ReadFile(filepath.Join(dir, n))
+		p := filepath.Join(dir, n)
+		if !e.Type().IsRegular() {
+			// A ConfigMap volume holds every key as a symlink into ..data
+			// (key -> ..data/key): a key is a file reached through one
+			// (#4164: the projection gate reads the mounted registry). A
+			// directory, or a link to anything but a file, is no record.
+			if e.Type()&fs.ModeSymlink == 0 {
+				continue
+			}
+			fi, err := os.Stat(p)
+			if err != nil || !fi.Mode().IsRegular() {
+				continue
+			}
+		}
+		b, err := os.ReadFile(p)
 		if err != nil {
 			return nil, fmt.Errorf("read backup directory: %w", err)
 		}

@@ -822,7 +822,7 @@ _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
     "scripts/tools/dx/generate_tenant_fixture.py":
         "writes bench/test fixture trees from caller-supplied `--extra-defaults`; "
         "nothing it writes is shipped, and it refuses a `_critical` or "
-        "dimensional key at that boundary (`_registry_lib.is_shipped_optional_key`); "
+        "dimensional key at that boundary (`_registry_lib.is_flat_key`); "
         "pinned by tests/dx/test_generate_tenant_fixture.py",
     "scripts/ops/inject_default_key.py":
         "injects one key into a bench-fixture tree; nothing it writes is shipped, "
@@ -848,10 +848,6 @@ _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
         "writes a TemporaryDirectory that `_served_written` removes after one "
         "`da-guard served-values` run (`_written_tree`, #3140 `--tenant`), so no "
         "conf.d it writes is shipped or read again",
-    "scripts/tools/ops/_rule_packs_generated.py":
-        "PROJECTS rule-packs/threshold-registry.yaml (written only by "
-        "`check_threshold_registry.py --regen`, byte-checked by that gate) into "
-        "scaffold_tenant.RULE_PACKS; data, not a conf.d writer",
     "scripts/tools/ops/config_diff.py":
         "READS `_` files (through `da-guard parse-tree`) and writes no conf.d; "
         "the census hit is RENDERED_CARRIERS, the table mapping the top-level "

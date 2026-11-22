@@ -22,8 +22,13 @@ even guaranteed a PR review.
 This gate closes exactly that hole: it compares the deployed `tenantProjections`
 against the live registry and FAILS CLOSED on any mismatch. It is meant to run as
 a Vector init-container (the only un-bypassable enforcement point: Vector cannot
-load its config without the init-container having run), reading the registry
-read-only from the same conf.d mount the threshold-exporter already uses.
+load its config without the init-container having run). It reads the registry
+as tenant-api itself reads it: the init-container before it runs `tenant-api
+state show` on the mounted registry and leaves its JSON, exit code and stderr
+in a shared emptyDir (#4164). Every judgement of the registry — schema,
+next_account_id, the id range, two tenants on one id — is that Go reader's
+(components/tenant-api/internal/federation/account/registry.go); this gate
+only compares the projections with what it decoded.
 
 THE INVARIANT (MVP — needs only the registry)
 ---------------------------------------------
@@ -80,25 +85,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-try:  # PyYAML is the only third-party dep; the init-container image bakes it in.
-    import yaml
-except ImportError:  # pragma: no cover - exercised only in a misbuilt image
-    yaml = None
-try:
-    # #4111: the repo's one strict reading (a duplicate key refuses the file, as
-    # the Go reader, yaml.v3, does). A byte-identical copy of
-    # scripts/tools/_lib_yaml_strict.py, COPYed beside this script (the build
-    # context is this directory); tests/shared/test_tenant_projection_gate.py
-    # pins the two equal.
-    from _lib_yaml_strict import strict_safe_load
-except ImportError:  # pragma: no cover - exercised only in a misbuilt image
-    strict_safe_load = None
+import json
 
-# Mirror the Go SSOT (components/tenant-api/internal/federation/account/registry.go):
-# the on-disk registry is schema v1; tenant ids start at 1000 (0 = platform default
-# partition, 1..999 reserved). Keep in lockstep with FirstTenantAccountID there.
-_SCHEMA_VERSION = "v1"
-_FIRST_TENANT_ACCOUNT_ID = 1000
+# What `tenant-api state show` prints (components/tenant-api/cmd/server/state_cmd.go,
+# ADR-036 §12) and the record of it this gate reads (#4164). A document of
+# another schema is a reader this gate does not know: unreadable, never trusted.
+STATE_SHOW_SCHEMA = "tenant-api.state-show/v1"
+REGISTRY_KEY = "_account_registry.yaml"
+# The files the registry-reader init-container leaves in the shared emptyDir.
+STATE_JSON, STATE_RC, STATE_ERR = "state.json", "state.rc", "state.err"
 
 # Verdict categories. A config-bug (mismatch) and an infra problem
 # (registry_unreadable) are DISTINCT so the alert can carry the right reason label
@@ -121,45 +116,31 @@ class Verdict:
 def evaluate(registry: dict[str, Any], projections: list[dict[str, Any]]) -> Verdict:
     """Pure core. Validate the anti-leak invariant against an already-parsed
     registry and projection list. Returns a Verdict; does not raise on data
-    content. A structurally untrustworthy registry (unknown schema, malformed
-    allocations) yields CAT_REGISTRY_UNREADABLE — fail-closed, never "assume ok".
+    content. *registry* is tenant-api's own decoding of it (``load_registry``):
+    the registry's rules are judged there, once. Allocations of another shape
+    than tenant → int (a reader this gate does not know) yield
+    CAT_REGISTRY_UNREADABLE — fail-closed, never "assume ok".
     """
-    # Refuse a newer/unknown registry rather than silently validating against a
-    # shape this binary does not understand (mirrors Go account.Parse fail-closed).
-    sv = registry.get("schema_version")
-    if sv not in (None, "", _SCHEMA_VERSION):
-        return Verdict(
-            CAT_REGISTRY_UNREADABLE,
-            [f"registry schema_version {sv!r} is newer/unknown (want {_SCHEMA_VERSION!r}); refusing to validate"],
-        )
-
     allocations = registry.get("allocations")
-    if allocations is None:
-        allocations = {}
     if not isinstance(allocations, dict):
         return Verdict(
             CAT_REGISTRY_UNREADABLE,
             [f"registry `allocations` is {type(allocations).__name__}, want a mapping"],
         )
 
-    # A registry whose ENTRIES are malformed (non-str tenant, or a non-int / bool
-    # / sub-floor accountId) is a corrupt/untrustworthy registry, NOT a config
-    # mismatch: comparing a projection's int accountId against e.g. a string
-    # "1000" would otherwise mis-fire as CAT_MISMATCH and hard-fail the pod in
-    # enforce mode, violating fail-available. Treat it as registry_unreadable →
-    # degrade (mirrors the Go account.Parse fail-closed-on-corrupt posture).
+    # Entries of another shape (a non-int or bool id) are no decoding of this
+    # reader's: comparing a projection's int accountId against them would
+    # mis-fire as CAT_MISMATCH and hard-fail the pod in enforce mode, violating
+    # fail-available. The id's range is the Go reader's to judge, not this one's.
     malformed = [
         f"{tenant_id!r}: {account_id!r}"
         for tenant_id, account_id in allocations.items()
-        if not isinstance(tenant_id, str)
-        or not isinstance(account_id, int)
-        or isinstance(account_id, bool)
-        or account_id < _FIRST_TENANT_ACCOUNT_ID
+        if not isinstance(account_id, int) or isinstance(account_id, bool)
     ]
     if malformed:
         return Verdict(
             CAT_REGISTRY_UNREADABLE,
-            [f"registry `allocations` has malformed entries (want str→int>={_FIRST_TENANT_ACCOUNT_ID}): {', '.join(malformed)}"],
+            [f"registry `allocations` has entries that are not tenant → id: {', '.join(malformed)}"],
         )
 
     violations: list[str] = []
@@ -189,41 +170,47 @@ def evaluate(registry: dict[str, Any], projections: list[dict[str, Any]]) -> Ver
     return Verdict(CAT_MISMATCH if violations else CAT_OK, violations)
 
 
-def load_yaml(path: Path) -> Any:
-    """Load a YAML document, raising a clear error the caller maps to a verdict."""
-    if yaml is None:
-        raise RuntimeError("PyYAML is not installed in the init-container image")
-    if strict_safe_load is None:
-        raise RuntimeError("_lib_yaml_strict.py is missing beside the gate in the init-container image")
-    text = path.read_text(encoding="utf-8")
-    # ⛔ Strict (#4111): the lax reading kept the LAST of a repeated key, so a
-    # registry naming a tenant twice was read as its second account id — the
-    # Go reader refuses that file, and this gate passed a projection the
-    # platform never allocated. A refusal here is the registry_unreadable /
-    # mismatch path: degrade to the platform-only config.
-    return strict_safe_load(text)
-
-
-def load_registry(path: Path) -> dict[str, Any]:
-    """Parse `_account_registry.yaml`. A blank file (GitOps has not written it yet)
-    parses to an empty registry at the reserved floor — NOT an error, matching the
-    Go reader — so a brand-new cluster with no allocations and no projections is OK.
-    """
-    doc = load_yaml(path)
-    if doc is None:  # blank/whitespace file
-        return {"schema_version": _SCHEMA_VERSION, "next_account_id": _FIRST_TENANT_ACCOUNT_ID, "allocations": {}}
-    if not isinstance(doc, dict):
-        raise ValueError(f"registry root is {type(doc).__name__}, want a mapping")
-    return doc
+def load_registry(state_dir: Path) -> dict[str, Any]:
+    """The registry as tenant-api decodes it (#4164): what the registry-reader
+    init-container left in *state_dir* — ``tenant-api state show``'s JSON,
+    exit code and stderr. Raises (→ CAT_REGISTRY_UNREADABLE) unless the reader
+    ran, exited 0, printed a document of ``STATE_SHOW_SCHEMA`` and decoded the
+    ``REGISTRY_KEY`` record without a problem. ⛔ A record tenant-api refuses
+    (two tenants on one id, an id at or above next_account_id, a newer
+    schema) is its verdict, not this gate's to second-guess; an absent
+    registry ConfigMap reads as no records (rc 1), the same degrade as before."""
+    rc_file = state_dir / STATE_RC
+    if not rc_file.is_file():
+        raise RuntimeError(f"the registry reader left no {STATE_RC} in {state_dir}: it did not run")
+    rc = rc_file.read_text(encoding="utf-8").strip()
+    if rc != "0":
+        err_file = state_dir / STATE_ERR
+        why = err_file.read_text(encoding="utf-8", errors="replace").strip() if err_file.is_file() else ""
+        raise RuntimeError(f"tenant-api state show exited {rc}: {why or 'no stderr'}")
+    doc = json.loads((state_dir / STATE_JSON).read_text(encoding="utf-8"))
+    if not isinstance(doc, dict) or doc.get("schema") != STATE_SHOW_SCHEMA:
+        raise RuntimeError(f"tenant-api state show printed no {STATE_SHOW_SCHEMA} document")
+    records = [r for r in doc.get("records") or [] if isinstance(r, dict) and r.get("key") == REGISTRY_KEY]
+    if len(records) != 1:
+        raise RuntimeError(f"tenant-api state show holds {len(records)} {REGISTRY_KEY} records, want one")
+    problem, record = records[0].get("problem"), records[0].get("record")
+    if problem is not None:
+        kind = problem.get("kind") if isinstance(problem, dict) else None
+        message = problem.get("message") if isinstance(problem, dict) else problem
+        raise RuntimeError(f"tenant-api refuses the registry ({kind}): {message}")
+    if not isinstance(record, dict):
+        raise RuntimeError(f"tenant-api state show decoded {REGISTRY_KEY} as {type(record).__name__}, want a mapping")
+    return record
 
 
 def load_projections(path: Path) -> list[dict[str, Any]]:
-    """Parse the deployed tenantProjections (a YAML/JSON list the chart renders to a
-    mounted file). A blank/absent projection set is an empty list — the all-0:0
-    baseline, trivially valid."""
-    doc = load_yaml(path)
-    if doc is None:
+    """The deployed tenantProjections: the JSON list the chart renders
+    (``toJson``) into a mounted file. A blank file is an empty list — the
+    all-0:0 baseline, trivially valid."""
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
         return []
+    doc = json.loads(text)
     if not isinstance(doc, list):
         raise ValueError(f"projections root is {type(doc).__name__}, want a list")
     return doc
@@ -246,7 +233,9 @@ def render_metric(verdict: Verdict, mode: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Fail-closed tenantProjections-vs-registry gate (#908).")
-    ap.add_argument("--registry", required=True, type=Path, help="path to _account_registry.yaml (conf.d, read-only)")
+    ap.add_argument("--registry-state", required=True, type=Path,
+                    help="directory the registry-reader init-container wrote tenant-api state show's "
+                         f"{STATE_JSON} / {STATE_RC} / {STATE_ERR} to")
     ap.add_argument("--projections", required=True, type=Path, help="path to the rendered tenantProjections list")
     ap.add_argument("--mode", choices=("degrade", "enforce"), default="degrade",
                     help="degrade (default): mismatch -> drop tenant projection, stay up. enforce: mismatch -> fail pod.")
@@ -263,9 +252,9 @@ def main(argv: list[str] | None = None) -> int:
     # Load + evaluate. A load failure on the REGISTRY is fail-available (degrade);
     # a load failure on the PROJECTIONS is a config bug (treat as mismatch).
     try:
-        registry = load_registry(args.registry)
+        registry = load_registry(args.registry_state)
     except Exception as e:  # noqa: BLE001 - any read/parse failure is the infra path
-        verdict = Verdict(CAT_REGISTRY_UNREADABLE, [f"cannot read registry {args.registry}: {e}"])
+        verdict = Verdict(CAT_REGISTRY_UNREADABLE, [f"cannot read registry from {args.registry_state}: {e}"])
     else:
         try:
             projections = load_projections(args.projections)

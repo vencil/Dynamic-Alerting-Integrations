@@ -38,9 +38,8 @@ class Reading(enum.Enum):
     D = "da-crdecode"                # Kubernetes manifests, Helm values / charts
     E = "da-guard parse-tree"        # conf.d-shaped text
     # #4111: tenant-api's account registry (internal/federation/account).
-    # `tenant-api state show` reads it, but the projection gate's
-    # init-container image has no tenant-api; the gate reads it strictly
-    # (the duplicate rule is yaml.v3's) until it asks that reading (#4164).
+    # Cleared by #4164: the projection gate reads `tenant-api state show`'s
+    # JSON, which an init-container of tenant-api's image prints.
     F = "tenant-api account registry"
 
 
@@ -237,7 +236,4 @@ ALLOWED = {
         (1, "an amtool silence dump (--silences-file), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
 }
 
-DEBT: dict = {
-    ('helm/vector/projection-gate/verify_tenant_projections.py', 'load_yaml'):
-        (2, Reading.F),
-}
+DEBT: dict = {}

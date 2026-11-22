@@ -135,6 +135,10 @@ def build_fallback(data: dict) -> dict:
         "packOrder": list(order),
         # Offline arm of the wizard's ALERT_COUNT (#4012).
         "tenantAlertRules": data["totals"]["tenantAlertRules"],
+        # Offline arm of rule-packs.js DECLARED_KEYS (#4195: it was a
+        # hand-typed mirror inside rule-packs.js; generated here, so the
+        # membership change of #4195 could not leave it stale).
+        "declaredKeys": data.get("declaredKeys") or {},
         "rulePacks": {
             pack_id: {
                 field: (packs[pack_id].get(field)
@@ -669,13 +673,23 @@ def carried_wizard_charts() -> dict:
     return {name: charts[name] for name in WIZARD_CHARTS}
 
 
+def _builtin_default_keys() -> frozenset:
+    """The keys the readers build in WITH a platform value (`arming: default`),
+    as the generated RULE_PACKS module carries them (#3832). Every other
+    registry key is built in as off (#4163)."""
+    sys.path.insert(0, str(SCAFFOLD_PATH.parent))
+    from _rule_packs_generated import BUILTIN_DEFAULT_KEYS  # noqa: E402
+    return BUILTIN_DEFAULT_KEYS
+
+
 def build_declared_keys(scaffold_packs: dict) -> dict:
     """Top-level `declaredKeys`: keys the platform RECOGNISES but gives no value.
 
-    Registry tier `optional_overrides`, flat spellings only — membership comes
-    from `_registry_lib.is_shipped_optional_key`, the SAME predicate that builds
-    the shipped `optional_overrides:` list and the two onboarding generators'
-    output. No second spelling of the rule, no hand-copied key list.
+    Every flat registry key without a platform value (`arming: operator`,
+    built in as off since #4163) — membership is `_registry_lib.is_flat_key`
+    minus `BUILTIN_DEFAULT_KEYS`, both read from the generated module, so
+    there is no second spelling of the rule and no hand-copied key list
+    (#4195: the registry has no `tier` to read any more).
 
     ⛔ Deliberately NOT nested under `rulePacks[*]` — but not for the reason it
     first looks like. `rule-packs-fallback-drift.test.ts` does NOT gate a new
@@ -695,27 +709,30 @@ def build_declared_keys(scaffold_packs: dict) -> dict:
     keys carry no platform value. Never pre-fill one for a tenant.
     """
     sys.path.insert(0, str(SCAFFOLD_PATH.parent))
-    from _registry_lib import is_shipped_optional_key  # noqa: E402
+    from _registry_lib import is_flat_key  # noqa: E402
 
+    builtin = _builtin_default_keys()
     declared: dict = {}
     for pack_id in PACK_ORDER:
-        entries = (scaffold_packs.get(pack_id) or {}).get("optional_overrides") or {}
+        entries = (scaffold_packs.get(pack_id) or {}).get("thresholds") or {}
         rows = [
             {
                 "key": k,
                 "value": v["value"],
                 "unit": v.get("unit", ""),
                 "desc": v.get("desc", ""),
-                # ⛔ This tier needs the counter-example MORE than defaults does,
-                # not less: these are the keys #1320 D1 says a tenant can fill in
-                # today, so the reference number here is the one most likely to be
-                # copied. Carrying it only on `defaults` left the three
-                # most-likely-to-be-used numbers bare on every portal surface.
+                # metric_class (saturation) for the portal's `_critical` hint:
+                # since #4195 most saturation keys sit here, not in `defaults`.
+                **({"metricClass": v["metric_class"]}
+                   if "metric_class" in v else {}),
+                # ⛔ These keys need the counter-example MORE than the platform
+                # values do, not less: a tenant fills them in itself, so the
+                # reference number here is the one most likely to be copied.
                 **({"valueCounterexample": v["value_counterexample"]}
                    if "value_counterexample" in v else {}),
             }
             for k, v in entries.items()
-            if is_shipped_optional_key(k)
+            if is_flat_key(k) and k not in builtin
         ]
         if rows:
             declared[pack_id] = rows
@@ -749,8 +766,11 @@ def build_platform_data(at: str | None = None, release_charts: bool = False) -> 
             pack_data["display"] = scaffold.get("display", pack_data["label"])
             pack_data["exporterFull"] = scaffold.get("exporter", pack_data["exporter"])
 
-            # Extract default threshold keys
-            defaults = scaffold.get("defaults", {})
+            # The keys the platform gives a value (`arming: default`, built
+            # into the readers); the rest of the pack is `declaredKeys`.
+            builtin = _builtin_default_keys()
+            defaults = {k: v for k, v in (scaffold.get("thresholds") or {}).items()
+                        if k in builtin}
             if defaults:
                 pack_data["defaults"] = {
                     k: {
@@ -762,9 +782,9 @@ def build_platform_data(at: str | None = None, release_charts: bool = False) -> 
                         **({"metricClass": v["metric_class"]}
                            if "metric_class" in v else {}),
                         # value_counterexample（#1176）同樣僅 present 時透傳。
-                        # ⛔ 這一格是 defaults tier——portal 的 generateSampleYaml
-                        # 會把它當「活值」寫進使用者可複製的起手 YAML，所以它是
-                        # 全平台唯一「把已測到反例的數字直接交到人手上」的面。
+                        # ⛔ 這一格是平台值——portal 的 generateSampleYaml 會把它當
+                        # 「活值」寫進使用者可複製的起手 YAML。（平台值的閘門擋掉帶
+                        # 反例的鍵，所以目前這裡不會出現；留著是防線。）
                         **({"valueCounterexample": v["value_counterexample"]}
                            if "value_counterexample" in v else {}),
                     }

@@ -55,12 +55,42 @@ spec:
       # Vector cannot load a config the gate did not place. enforce mode hard-fails
       # the pod on a config-bug mismatch instead.
       initContainers:
+        # The registry as tenant-api reads it (#4164): `state show` prints it as
+        # JSON — or the reason tenant-api refuses it — into the registry-state
+        # emptyDir, with its exit code and stderr. It always exits 0: an
+        # unreadable registry is the gate's verdict (registry_unreadable →
+        # degrade), never a wedged pod. No env: tenant-api refuses an unknown
+        # TA_* variable (rc 2), and `--from` reads no store settings.
+        - name: projection-gate-registry
+          image: "{{ .Values.projectionGate.registryReader.image.repository }}:{{ .Values.projectionGate.registryReader.image.tag }}{{ with .Values.projectionGate.registryReader.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.projectionGate.registryReader.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              tenant-api state show --from /conf.d >/registry-state/state.json 2>/registry-state/state.err;
+              echo $? >/registry-state/state.rc
+          securityContext:
+            {{- toYaml (required "projectionGate.securityContext is required when tenantProjections is set (nil = the least-privilege hardening silently not applied — supply it, or upgrade without --reuse-values so chart defaults apply)" .Values.projectionGate.securityContext) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.projectionGate.resources | nindent 12 }}
+          volumeMounts:
+            # subPath: the registry key as a regular file. A ConfigMap volume
+            # holds each key as a symlink into ..data, which tenant-api before
+            # #4164 skips (a directory of no records); the directory holds
+            # nothing else, which `state show` would refuse. An absent key
+            # mounts as an empty directory: no records, rc 1, degrade.
+            - name: registry
+              mountPath: /conf.d/_account_registry.yaml
+              subPath: _account_registry.yaml
+              readOnly: true
+            - name: registry-state
+              mountPath: /registry-state
         - name: projection-gate
           image: "{{ .Values.projectionGate.image.repository }}:{{ .Values.projectionGate.image.tag }}{{ with .Values.projectionGate.image.digest }}@{{ . }}{{ end }}"
           imagePullPolicy: {{ .Values.projectionGate.image.pullPolicy }}
           args:
-            - "--registry"
-            - "/conf.d/_account_registry.yaml"
+            - "--registry-state"
+            - "/registry-state"
             - "--projections"
             - "/staging/tenant-projections.json"
             - "--base-config"
@@ -91,9 +121,9 @@ spec:
             - name: staging
               mountPath: /staging
               readOnly: true
-            # The conf.d registry (operator-provided ConfigMap), read-only.
-            - name: registry
-              mountPath: /conf.d
+            # tenant-api's reading of the registry (the init-container above).
+            - name: registry-state
+              mountPath: /registry-state
               readOnly: true
             # The config-dir Vector loads — the gate WRITES the chosen files here.
             - name: config
@@ -268,6 +298,9 @@ spec:
           configMap:
             name: {{ required "projectionGate.registry.configMapName is required when tenantProjections is set (the conf.d _account_registry.yaml ConfigMap)" .Values.projectionGate.registry.configMapName }}
             optional: true
+        # tenant-api's reading of the registry, for the gate (#4164).
+        - name: registry-state
+          emptyDir: {}
         # Shared verdict textfile: the init-container WRITES gate.prom here, the
         # metrics-exposer sidecar READs it (#908 PR-3a). Pod-local so the series
         # goes absent when the pod dies (a crash must not stale-"ok").

@@ -185,6 +185,37 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// TestLoad_ConfigMapVolume: a mounted ConfigMap holds each key as a symlink
+// into ..data (#4164: the projection gate runs `state show --from` on the
+// mounted registry, and read nothing — "holds no records").
+func TestLoad_ConfigMapVolume(t *testing.T) {
+	dir := t.TempDir()
+	ts := filepath.Join(dir, "..2026_11_22_00_00_00.1")
+	if err := os.MkdirAll(ts, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ts, "_account_registry.yaml"), []byte("schema_version: v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(ts), filepath.Join(dir, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("..data/_account_registry.yaml", filepath.Join(dir, "_account_registry.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	// a link to a directory and a dangling link are no records
+	if err := os.Symlink("..data", filepath.Join(dir, "subdir")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("..data/gone.yaml", filepath.Join(dir, "_groups.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir, nil)
+	if err != nil || len(b) != 1 || string(b["_account_registry.yaml"]) != "schema_version: v1\n" {
+		t.Fatalf("mounted ConfigMap: %v %q", err, b)
+	}
+}
+
 // A file or directory that is not a tenant-api state backup is refused, not
 // restored as nothing (exit 0 would read as "restored").
 func TestLoad_RefusesNonStateBackups(t *testing.T) {

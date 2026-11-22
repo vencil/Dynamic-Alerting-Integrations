@@ -32,12 +32,13 @@ from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() 
 
 
 def _registry(**keys) -> dict:
-    """Build a registry doc shaped like the real one (packs → key → spec)."""
-    return {"version": 1, "packs": {"t": {k: v for k, v in keys.items()}}}
+    """Build a registry doc shaped like the real one (a flat `keys:` map)."""
+    return {"version": 1, "packs": {"t": {}},
+            "keys": {k: {"pack": "t", **v} for k, v in keys.items()}}
 
 
-def _spec(value, unit, tier="defaults", **extra) -> dict:
-    return {"value": value, "unit": unit, "tier": tier, **extra}
+def _spec(value, unit, **extra) -> dict:
+    return {"value": value, "unit": unit, **extra}
 
 
 def _write(root, rel, text):
@@ -477,7 +478,7 @@ def test_tier_inversion_is_flagged(tmp_path):
     _conf_d(tmp_path, {"defaults": {"k": 90, "k_critical": 80}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert any("TIER-INVERSION" in e for e in errs), errs
 
@@ -486,7 +487,7 @@ def test_equal_tiers_are_flagged(tmp_path):
     _conf_d(tmp_path, {"defaults": {"k": 80, "k_critical": 80}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert any("TIER-INVERSION" in e for e in errs), errs
 
@@ -499,7 +500,7 @@ def test_dimensional_spellings_are_no_tier_pair(tmp_path):
                                          'k_critical{version="v3"}': "98"}}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert not any("TIER-INVERSION" in e for e in errs), errs
 
@@ -511,7 +512,7 @@ def test_a_dimensional_spelling_does_not_mask_the_plain_pair(tmp_path):
                                          'k{pod="zzz"}': "50"}}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert any("TIER-INVERSION" in e for e in errs), errs
 
@@ -523,7 +524,7 @@ def test_a_dimensional_warning_is_held_to_the_plain_critical(tmp_path):
                                          'k{version="v2"}': "99"}}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert any("TIER-INVERSION" in e and "dimensional warning" in e for e in errs), errs
 
@@ -535,7 +536,7 @@ def test_a_dimensional_critical_value_is_no_warning(tmp_path):
                                          'k{instance="x"}': "500:critical"}}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert not any("TIER-INVERSION" in e for e in errs), errs
 
@@ -550,7 +551,7 @@ def test_percentiles_do_not_feed_tier_ordering(tmp_path):
                            "unit": "count"}}}))
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert errs == [], errs
 
@@ -561,7 +562,7 @@ def test_tier_ordering_is_per_surface(tmp_path):
     _conf_d(tmp_path, {"tenants": {"t": {"k": 200}}})
     errs = _errors(_registry(
         k=_spec(80, "count"),
-        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+        k_critical=_spec(120, "count", critical_of="k"),
     ), tmp_path)
     assert errs == [], errs
 
@@ -722,7 +723,7 @@ def test_registry_metadata_numbers_are_not_read_as_thresholds(monkeypatch):
     # recognises the key (monkeypatch restores it, keeping this hermetic).
     monkeypatch.setattr(gate, "_REGISTRY_KEYS", {"oracle_pga_allocated_bytes"})
     entry = {
-        "pack": "p", "tier": "defaults", "unit": "bytes (4GB)",
+        "pack": "p", "unit": "bytes (4GB)",
         "desc": "d", "metric_class": "capacity",
         "value": 4294967296,
         "value_counterexample": {
@@ -866,7 +867,7 @@ def test_a_registry_value_that_is_no_number_is_reported(tmp_path, written, shown
     too — is reported. (PyYAML reads `1_000` as the int 1000; the registry's
     loader is PyYAML, so that one is judged as 1000.)"""
     _write(tmp_path, _REGISTRY_FILE,
-           f'version: 1\npacks:\n  t:\n    pct: {{value: {written}, unit: "%", tier: defaults}}\n')
+           f'version: 1\npacks:\n  t:\n    pct: {{value: {written}, unit: "%"}}\n')
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
     if written == "1_000":
         assert len(errs) == 1 and errs[0].startswith(f"OUT-OF-DOMAIN: {_REGISTRY_FILE}: pct = 1000"), errs
@@ -876,10 +877,10 @@ def test_a_registry_value_that_is_no_number_is_reported(tmp_path, written, shown
 
 
 def test_a_registry_value_that_is_a_number_is_judged(tmp_path):
-    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 300, unit: "%", tier: defaults}\n')
+    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 300, unit: "%"}\n')
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
     assert len(errs) == 1 and errs[0].startswith(f"OUT-OF-DOMAIN: {_REGISTRY_FILE}: pct = 300"), errs
-    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 80, unit: "%", tier: defaults}\n')
+    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 80, unit: "%"}\n')
     assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
 
 

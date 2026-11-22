@@ -44,7 +44,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.par
 # path insert is explicit.
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "tools" / "ops"))
-from _registry_lib import is_shipped_optional_key  # noqa: E402
+from _registry_lib import is_flat_key  # noqa: E402
 from _lib_validation import threshold_number, threshold_trim  # noqa: E402  (#3457)
 
 
@@ -65,7 +65,7 @@ def inject(path: Path, key: str, value: str) -> int:
     # no series (#1218 / #1412). A dimensional `key{…}` CAN be a root default
     # (#2031), but only once `dimensions:` declares its labels (#3475), which
     # this tool does not write — so it is refused too (#3478).
-    if not is_shipped_optional_key(key):
+    if not is_flat_key(key):
         print(
             f"[inject_default_key] ERROR: key {key!r} cannot live under "
             f"`defaults:` via this tool: a `_critical` suffix is inert there and "

@@ -162,13 +162,17 @@ DEFAULT_METRICS = {
 
 def platform_default(key):
     """平台對 ``key`` 的預設值，取自 scaffold_tenant.RULE_PACKS（registry 由它生成；
-    映像與 repo 佈局都有這支）。讀不到回 None。"""
+    映像與 repo 佈局都有這支）。只有讀取端內建平台值的鍵（``arming: default``）
+    才有；其餘的鍵內建為 off（#4163），回 None，讀不到也回 None。"""
     try:
         import scaffold_tenant
+        from _rule_packs_generated import BUILTIN_DEFAULT_KEYS
     except ImportError:
         return None
+    if key not in BUILTIN_DEFAULT_KEYS:
+        return None
     for pack in scaffold_tenant.RULE_PACKS.values():
-        entry = (pack.get("defaults") or {}).get(key)
+        entry = (pack.get("thresholds") or {}).get(key)
         if isinstance(entry, dict) and "value" in entry:
             return entry["value"]
     return None

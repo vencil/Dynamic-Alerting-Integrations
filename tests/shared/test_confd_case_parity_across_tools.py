@@ -1469,9 +1469,8 @@ def test_unit_sanity_gate_reads_both_casings(tmp_path: pathlib.Path) -> None:
     """
     import yaml as _yaml  # noqa: PLC0415
     gate = _import_tool("lint", "check_threshold_unit_sanity")
-    registry = {"version": 1,
-                "packs": {"t": {"k": {"value": 50, "unit": "%",
-                                      "tier": "defaults"}}}}
+    registry = {"version": 1, "packs": {"t": {}},
+                "keys": {"k": {"pack": "t", "value": 50, "unit": "%"}}}
     body = _yaml.safe_dump({"defaults": {"k": 300}}, allow_unicode=True)
     counts = {}
     for arm, fname in _CASE_ARMS:

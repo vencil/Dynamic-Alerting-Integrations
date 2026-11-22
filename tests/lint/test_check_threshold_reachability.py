@@ -706,7 +706,7 @@ def test_the_two_exempted_writers_really_do_refuse_the_inert_shapes():
         assert spec is not None and spec.loader is not None
         mod = _ilu.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        assert not mod.is_shipped_optional_key(bad_key), (
+        assert not mod.is_flat_key(bad_key), (
             f"{rel} binds a predicate that ACCEPTS {bad_key!r} — the refusal "
             f"the census exemption names would then let the shape through"
         )

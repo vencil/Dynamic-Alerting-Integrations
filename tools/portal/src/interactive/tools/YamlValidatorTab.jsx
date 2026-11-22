@@ -10,7 +10,7 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 // load time: no module in the graph imported portal-shared.jsx, so
 // the producer never ran.
 import {
-  getAllMetricKeys, getValueCounterexample, counterexampleComment,
+  getAllMetricKeys, getDeclaredKeys, getValueCounterexample, counterexampleComment,
 } from './_common/data/rule-packs.js';
 import { parseTenantYaml } from './_common/validation/yaml-parser.js';
 import { generateSampleYaml, validateConfig } from './_common/sim/alert-engine.js';
@@ -66,13 +66,18 @@ function YamlValidatorTab() {
   }, []);
 
   const allMetrics = useMemo(() => getAllMetricKeys(selectedPacks), [selectedPacks]);
+  const insertableMetrics = useMemo(
+    () => [...allMetrics, ...getDeclaredKeys(selectedPacks)], [allMetrics, selectedPacks]);
 
   // Saturation `_critical` educational hint (display-only, never blocks
   // validation): scan the textarea for `<base>_critical:` keys whose base
-  // metric is classed `saturation` in platform-data / fallback catalog.
+  // metric is classed `saturation` in platform-data / fallback catalog —
+  // keys with a platform value and declared ones alike (#4195: most
+  // saturation keys have no platform value).
   const saturationCriticalHits = useMemo(() => {
     const saturationKeys = new Set(
-      allMetrics.filter((m) => m.metricClass === 'saturation').map((m) => m.key));
+      [...allMetrics, ...getDeclaredKeys(selectedPacks)]
+        .filter((m) => m.metricClass === 'saturation').map((m) => m.key));
     if (saturationKeys.size === 0) return [];
     const hits = [];
     const seen = new Set();
@@ -85,7 +90,7 @@ function YamlValidatorTab() {
       }
     }
     return hits;
-  }, [allMetrics, yaml]);
+  }, [allMetrics, selectedPacks, yaml]);
 
   const validate = useCallback(() => {
     // parseTenantYaml, not parseYaml: thresholds are read from the text that
@@ -134,7 +139,9 @@ function YamlValidatorTab() {
         <div className="text-sm font-medium text-gray-700 mb-1">
           {t('插入 Metric Key', 'Insert Metric Key')}
         </div>
-        <MetricAutocomplete allMetrics={allMetrics} onInsert={handleInsertMetric} />
+        {/* platform values and declared keys alike (#4195); an inserted
+            declared key carries its reference value and any measured caveat */}
+        <MetricAutocomplete allMetrics={insertableMetrics} onInsert={handleInsertMetric} />
       </div>
 
       {/* Quick actions */}

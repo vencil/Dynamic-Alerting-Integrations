@@ -361,7 +361,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict, *,
                   "only _defaults.yaml / _defaults.yml is)", file=sys.stderr)
 
     # #1189 / TRK-337: keys the platform RECOGNISES but supplies no value for
-    # (the runtime half of the registry's `tier: optional_overrides`). They
+    # (since #4163 only keys outside the threshold registry need listing). They
     # widen the platform's key surface, which is precisely why they are
     # honoured ONLY from _ prefixed files: a tenant naming its own keys here
     # would be self-authorising; Go strips it from tenant-owned files for the

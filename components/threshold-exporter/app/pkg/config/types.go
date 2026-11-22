@@ -239,10 +239,9 @@ const DefaultMaxMetricsPerTenant = 500
 type ThresholdConfig struct {
 	Defaults map[string]float64 `yaml:"defaults"`
 	// OptionalOverrides names keys the platform RECOGNISES but asserts no value
-	// for — the runtime half of the registry's `tier: optional_overrides`
-	// (docs/schemas/threshold-registry.schema.json calls tier "a load-bearing
-	// field, not decoration" and the tier itself "documented-but-dormant until
-	// wired"; this is that wiring).
+	// for. Every threshold-registry key is built into the readers since #4163
+	// (and the registry has no `tier` since #4195), so this list now only
+	// matters for keys outside the registry — an operator's own rules.
 	//
 	// The config model used to have exactly two expressible states: a key is in
 	// Defaults (⇒ resolveBaseRows emits a platform value for EVERY tenant), or

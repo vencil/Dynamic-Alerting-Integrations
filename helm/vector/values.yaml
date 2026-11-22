@@ -453,13 +453,30 @@ projectionGate:
     # ⛔ Bump this tag whenever the image's BUILD changes (Dockerfile
     # instructions or a COPY'd script) — 0.1.0 -> 0.1.1 was the #1278 runtime
     # base move to alpine 3.23.6, 0.1.1 -> 0.1.2 the #3715 move to 3.24.4,
-    # 0.1.2 -> 0.1.3 the #4111 strict YAML reading (_lib_yaml_strict.py COPYed).
+    # 0.1.2 -> 0.1.3 the #4111 strict YAML reading (_lib_yaml_strict.py COPYed),
+    # 0.1.3 -> 0.1.4 the #4164 move to tenant-api's reading (no PyYAML, no copy).
     # With `digest: ""` and `IfNotPresent`, an unchanged tag renders a byte-identical pod spec: no rollout, and every
     # node keeps the image it already pulled. Pinned by
     # tests/shared/test_vector_projection_gate_image_tag.py.
-    tag: "0.1.3"
+    tag: "0.1.4"
     digest: ""
     pullPolicy: IfNotPresent
+  # ── Registry reader (#4164) ────────────────────────────────────────────────
+  # An init-container that runs BEFORE the gate: tenant-api's own binary prints
+  # the mounted registry as tenant-api reads it (`tenant-api state show`), so the
+  # registry is judged by its one reader (schema, next_account_id, the id range,
+  # two tenants on one id) and the gate only compares projections against it.
+  # ⛔ The tag is tenant-api's release: `v<helm/tenant-api Chart appVersion>`,
+  # pinned equal by tests/shared/test_vector_projection_gate_image_tag.py —
+  # bump it (and the chart version) by hand with each tenant-api release
+  # (#4212 retires the pin). The registry key is mounted alone, by subPath,
+  # as a regular file.
+  registryReader:
+    image:
+      repository: ghcr.io/vencil/tenant-api
+      tag: "v2.9.25"
+      digest: ""
+      pullPolicy: IfNotPresent
   registry:
     # ConfigMap in THIS release's namespace exposing the key
     # `_account_registry.yaml` (read-only — the gate never writes it). tenant-api
