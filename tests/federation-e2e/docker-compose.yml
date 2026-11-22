@@ -105,6 +105,7 @@ services:
       - ./rendered/envoy.yaml:/etc/envoy/envoy.yaml:ro
       - ./rendered/revoked_check.lua:/etc/envoy/revoked_check.lua:ro
       - ./rendered/audit_extract.lua:/etc/envoy/audit_extract.lua:ro
+      - ./rendered/inflight_limit.lua:/etc/envoy/inflight_limit.lua:ro
       - ./rendered/jwks.json:/etc/jwks/jwks.json:ro
       # NOT read-only: the S4 revocation scenario rewrites this in place.
       - ./rendered/revoked.txt:/etc/revoked/revoked.txt

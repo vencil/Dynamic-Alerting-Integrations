@@ -188,6 +188,7 @@ metrics:
 | 碼 | 意義 | 怎麼辦 |
 |---|---|---|
 | `429` | 撞到 per-token 速率上限（chart 預設 15 req/min，平台可調 15–60）| **走 `/federate` scrape**：Prometheus **不讀** rate-limit header，會照 `scrape_interval` 繼續撞牆 —— 調大 `scrape_interval`（15s → 30s/60s）、或別讓多個 scrape job 共用一把 token。**走 script / Grafana**：照回應的 `x-ratelimit-reset` header 退避。兩種情況都可多簽 token 分流 |
+| `429`（body 為 `too many concurrent queries for this token`）| 撞到 per-token **並發**上限。chart 預設是每個 gateway 實例 4 個，但計數在 gateway 的每個 worker 各自進行（預設 2 個 worker、各 2 個），所以實際能同時跑幾個，看你的連線落在哪些 worker：**同一條連線上（例如 HTTP/2 client 把所有查詢多工在一條連線上）在預設設定下只有 2 個**，分散在多條連線最多 4 個（平台調整 worker 數時，這兩個數字也會變）。一個多面板的 Grafana 看板同時發出的查詢，超過的部分會收到這個 `429`。這個回應帶的 `x-ratelimit-*` header 是速率限流的剩餘配額，與並發無關（`remaining` 通常大於 0），**不要**拿 `x-ratelimit-reset` 退避；以 body 區分兩種 `429` | 等手上的查詢跑完再送，或讓並行的查詢來源（Grafana、告警評估、腳本）各用一把 token。Grafana 剛取消一批查詢後短暫收到這個碼是正常的：被取消的查詢最多佔用名額 35 秒 |
 | `422` | 查詢觸發 storage 的查詢資源上限（`--query.max-samples`）| 你的查詢掃了太多 series / sample。縮小時間範圍、加細 label selector、或分段查詢（見 §7.2）|
 | `413` | 請求 body 超過 1 MiB | PromQL 選擇器太長。拆成多個較小的查詢 |
 | `403` | token 已撤銷 / 已過期、或打到 `remote_read` | 重新簽發 token；remote_read 改用 query API |
