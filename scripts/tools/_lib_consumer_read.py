@@ -826,7 +826,8 @@ def _is_label_flow(entry) -> bool:
 
 
 def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[dict]] | None" = None,
-                      binary: str | None = None) -> "list[dict]":
+                      binary: str | None = None, *, metrics: "dict[str, str]",
+                      jobs: "Iterable[str]") -> "list[dict]":
     """Per expression of *exprs*, whether the series it yields keep *label*,
     and every ``and`` / ``unless`` that matches ``on(… label …)`` with whether
     its left side keeps it — read on Prometheus' parse tree (``da-read
@@ -838,11 +839,17 @@ def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[d
     ``LABEL_ALIASES``'. Each entry is ``{"result": V, "set_matches": [{"op":
     "and"|"unless", "start": int, "end": int, "lhs": V}, …]}``, V one of
     ``"kept"`` / ``"dropped"`` / ``"unknown"`` (byte offsets into the UTF-8
-    encoding). ⛔ The series a raw metric's selector reads are TAKEN to carry
-    *label*: whether the metric has it is the scrape's business."""
+    encoding). *metrics* ({raw metric name: "without"|"by-job"|"unknown"})
+    and *jobs* (the scrape jobs every target of which carries *label*) are
+    what the scrape says about it (#4137); a raw metric not in *metrics* is
+    TAKEN to carry *label*. Both are required: ⛔ a caller that leaves them
+    out takes every raw metric to carry it — the fail-open #4137 closed —
+    so the one place that knows them, ``_lib_metric_sources.label_flow``,
+    is the caller for a label the scrape writes."""
     resolved = da_read_binary(binary)
     data = json.dumps({"expressions": list(exprs), "records": dict(records or {}),
-                       "aliases": list(LABEL_ALIASES.get(label, ()))}).encode("utf-8")
+                       "aliases": list(LABEL_ALIASES.get(label, ())),
+                       "metrics": dict(metrics), "jobs": list(jobs)}).encode("utf-8")
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                ["promql-label-flow", label, "-"], data)
     docs = out["documents"]
@@ -888,6 +895,10 @@ def _is_reads(entry) -> bool:
                     and all(isinstance(s.get(k), str) for k in ("selector", "range", "window"))
                     and isinstance(s.get("subqueries_ms"), list)
                     and isinstance(s.get("subqueries"), list)
+                    and isinstance(s.get("matchers"), list)
+                    and all(isinstance(m, dict) and m.get("op") in ("=", "!=", "=~", "!~")
+                            and all(isinstance(m.get(k), str) for k in ("name", "value"))
+                            for m in s["matchers"])
                     for s in entry["selectors"])
             and all(isinstance(c, dict) and isinstance(c.get("name"), str)
                     for c in entry["calls"]))
@@ -906,7 +917,9 @@ def promql_reads(exprs: "list[str]", binary: str | None = None) -> "list[dict]":
       such as ``[(30d)]`` at its value, ``offset`` and the lookback delta
       not counted), ``"range_ms"`` and ``"subqueries_ms"`` (its parts);
       ``"window"``, ``"range"`` and ``"subqueries"`` are the same as
-      Prometheus spells a duration;
+      Prometheus spells a duration; ``"matchers"`` (``[{"name", "op":
+      "="|"!="|"=~"|"!~", "value"}]``, the metric name as ``__name__``) the
+      label matchers as the parser holds them (#4137);
     * ``calls``: every function and aggregation, ``{"name", "kind":
       "function"|"aggregation", "start", "end"}`` — read off the parse, so a
       name in a label value is none and ``topk by (a) (…)`` is ``topk``;

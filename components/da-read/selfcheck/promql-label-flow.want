@@ -1,1 +1,1 @@
-{"documents":[[{"result":"kept","set_matches":[{"op":"and","start":0,"end":18,"lhs":"kept"}]},{"result":"dropped","set_matches":[{"op":"unless","start":0,"end":36,"lhs":"dropped"}]}]]}
+{"documents":[[{"result":"kept","set_matches":[{"op":"and","start":0,"end":18,"lhs":"kept"}]},{"result":"dropped","set_matches":[{"op":"unless","start":0,"end":36,"lhs":"dropped"}]},{"result":"dropped","set_matches":[]},{"result":"kept","set_matches":[]},{"result":"dropped","set_matches":[]},{"result":"kept","set_matches":[]}]]}

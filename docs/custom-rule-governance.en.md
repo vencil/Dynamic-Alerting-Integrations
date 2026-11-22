@@ -227,9 +227,19 @@ The lint tool's built-in policy **is** the file below (`.github/custom-rule-poli
 > with no tenant on purpose) sets the value whatever the result holds and is not judged; any other template
 > (such as `{{ $labels.namespace }}`) is an ERROR.
 >
-> ⚠️ What it cannot see: whether a raw metric has `tenant` at all is the scrape's business, and it is taken
-> to have it (a rule reading a platform metric such as `up{job="…"}` passes, with no tenant on the alert);
-> whether a rule reads other tenants' series (`x{tenant=~".*"}`) is not this check's either. It judges by
+> Whether a raw metric has `tenant` is the scrape's business, and it is judged by the platform's scrape
+> config ([#4137](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4137)): kube-state-metrics',
+> Prometheus' and Alertmanager's own metrics carry no tenant, so reading one directly drops it (copy it from the
+> namespace with `label_replace(…, "tenant", "$1", "namespace", "(.+)")` for KSM); series every scrape target has
+> — `up`, `scrape_*`, `go_*`, `process_*` — carry it only with `job="tenant-exporters"`, drop it for another job
+> or none, and cannot be proven with a regex or negative `job`; `ALERTS` cannot be proven. A selector whose own
+> tenant matcher does not match the empty string (`tenant="db-a"`, `tenant=~".+"`, `tenant!=""`) keeps it,
+> whatever the metric.
+>
+> ⚠️ What it cannot see: any other raw metric is taken to carry tenant (a tenant exporter scraped by the
+> tenant-exporters job always does); whether a platform component's own metrics (threshold-exporter,
+> tenant-api, Vector …) carry it depends on the metric, and they are taken to carry it too. Whether a rule
+> reads other tenants' series (`x{tenant=~".*"}`) is not this check's either. It judges by
 > Prometheus' semantics; vmalert's behaviour is not verified separately. A recording rule whose name has no
 > colon and that is outside the records followed is taken for a raw metric (Prometheus does not require a
 > colon in a record's name): a rule reading a record of its own needs the file defining it among the paths.
