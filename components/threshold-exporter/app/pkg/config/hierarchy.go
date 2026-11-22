@@ -654,7 +654,7 @@ func computeEffectiveConfigBytesDetailed(
 // implementation: the byte form above only parses and calls it.
 //
 // It does not know which chain entry is the conf.d root's `_defaults.yaml`,
-// so its mergedDefaults keeps a root-only `_critical` key (#2544; see
+// so its mergedDefaults keeps a root-only reserved key (#3250; see
 // computeEffectiveConfigDocAt); only
 // ResolveEffective, which knows the chain's paths, hands da-guard a
 // mergedDefaults without them.
@@ -682,13 +682,11 @@ func computeEffectiveConfigDocDetailed(
 // fallback da-guard compares against, takes the built-in value instead, as
 // /metrics serves it.
 //
-// ⛔ #2544: a `<metric>_critical` key (either #1231 spelling) that only the
-// root level writes is the same shape. The root's key is served as a row of
-// its own (metric `connections_critical`, severity=warning), while the
-// metric's severity=critical row comes only from the tenant's override map
-// (resolveCriticalRows), which a subtree level fills and the root level does
-// not. Measured before the fix: root and tenant both at 60, da-guard called
-// the tenant's key redundant, and deleting it removed the critical row.
+// #4173: a `<metric>_critical` key (either #1231 spelling) the root level
+// writes is every tenant's critical default (resolveCriticalRows), so it is a
+// fallback like any root threshold: a tenant writing the same value is
+// redundant, and deleting it keeps the critical row. (Before, the root's key
+// was served as a row of its own and was no fallback, #2544.)
 func computeEffectiveConfigDocAt(
 	tenantDoc *TenantDoc,
 	tenantID string,
@@ -704,7 +702,7 @@ func computeEffectiveConfigDocAt(
 	// reads sit in a stack buffer for a chain of usual depth.
 	var err error
 	var writers map[string]int      // #2414: deepest chain level per aliased spelling
-	var subtreeDims map[string]bool // #2544: tenant-map-only keys a non-root level writes
+	var subtreeDims map[string]bool // #3250: tenant-map-only keys a non-root level writes
 	var rootRefused map[string]bool // #3250: root thresholds the root decode refuses
 	var buf [8]ChainDefaults
 	parsed := buf[:0]
@@ -766,9 +764,8 @@ func computeEffectiveConfigDocAt(
 	// subtree level's value down over any other spelling a shallower level
 	// set, so that shallower spelling is no fallback either.
 	//
-	// And a `_critical` key only the root level writes is dropped (#2544,
-	// dropRootOnlyTenantMapKeys): no critical row falls back to it. So is a
-	// `_` key only the root level writes (#3250, RootDefaultsReservedKey): the
+	// And a `_` key only the root level writes is dropped (#3250,
+	// dropRootOnlyTenantMapKeys, RootDefaultsReservedKey): the
 	// root decode hands no tenant a reserved key, so deleting the tenant's
 	// own falls back to nothing from there. The
 	// platform entry and the profile layered on below DO reach the tenant's
@@ -843,20 +840,12 @@ func isDimensionalKey(k string) bool {
 	return strings.Contains(k, "{") && !reservedShapeWins(k)
 }
 
-// isCriticalRowKey is the shape resolveCriticalRows takes a key in: a
-// `<metric>_critical` key, in either #1231 spelling, that is not a `_state_`
-// / `_silent_` key. Whether the row is then served also needs the base's
-// root value (criticalBaseValued, which the subtree overlay asks, #3378).
-func isCriticalRowKey(k string) bool {
-	return strings.HasSuffix(k, criticalKeySuffix) &&
-		!strings.HasPrefix(k, "_state_") && !strings.HasPrefix(k, "_silent_")
-}
-
 // tenantMapOnlyKey is a key whose value reaches a tenant only through its
-// override map, which the root level does not fill: a `_critical` key
-// (isCriticalRowKey, #2544) or a reserved one (RootDefaultsReservedKey,
-// #3250).
-func tenantMapOnlyKey(k string) bool { return isCriticalRowKey(k) || RootDefaultsReservedKey(k) }
+// override map, which the root level does not fill: a reserved one
+// (RootDefaultsReservedKey, #3250). A `_critical` key is no longer one
+// (#4173): the root's value of it is every tenant's critical default
+// (resolveCriticalRows), a fallback like any root threshold.
+func tenantMapOnlyKey(k string) bool { return RootDefaultsReservedKey(k) }
 
 // refusedRootThresholds is the threshold keys (not baseRowsSkipKey) of the
 // root level's block whose value the root decode refuses (#3250): text
@@ -907,7 +896,7 @@ func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any, rootRefus
 
 // dropRootOnlyTenantMapKeys is the merged chain without the
 // tenantMapOnlyKey keys, and the rootRefused ones, no non-root level writes
-// (#2544, #3250: their value comes only from the tenant's override map,
+// (#3250: their value comes only from the tenant's override map,
 // which the root does not fill, or from no layer at all; see
 // computeEffectiveConfigDocAt). With rootLevel < 0 nothing is dropped.
 // Returns m itself when nothing is dropped.

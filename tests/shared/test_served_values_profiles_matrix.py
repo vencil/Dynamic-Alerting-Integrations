@@ -201,8 +201,8 @@ def test_flat_file_reaches_json_and_is_warned_once_with_policy_dsl(tmp_path):
 # ── F2：profiles 列只跑 effective；served-values 拒收的樹（/metrics 的事）不關它 ──
 
 def test_root_and_tenant_critical_tree_passes_like_main(tmp_path):
-    """根層與租戶都寫 `X_critical`：served-values rc 2（同一 key 兩列不同值），effective
-    rc 0。profiles 列只需要 effective，main（33d56451）上這棵樹 PASS，現在也要 PASS。"""
+    """根層與租戶都寫 `X_critical`：#4173 起根層的是 critical 預設值、租戶的蓋過它，
+    served-values 照答（之前 rc 2）；profiles 列只需要 effective，這棵樹照舊 PASS。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": ("defaults:\n  mysql_connections: 80\n"
                            "  mysql_connections_critical: 95\n"),
@@ -210,8 +210,7 @@ def test_root_and_tenant_critical_tree_passes_like_main(tmp_path):
         "t1.yaml": ("tenants:\n  t1:\n    _profile: gold\n    mysql_connections: 70\n"
                     "    mysql_connections_critical: 90\n"),
     })
-    with pytest.raises(tv.ServedValuesError):   # 前提：served-values 拒收這棵樹
-        tv.load_served_tree(conf_d)
+    assert tv.load_served_values(conf_d)["t1"].values["mysql_connections_critical"] == 90.0
     assert tv.load_effective(conf_d)["t1"].profile == "gold"   # 前提：effective 照答
     row = vc.check_profiles(str(conf_d))
     assert row["status"] == vc.PASS, row

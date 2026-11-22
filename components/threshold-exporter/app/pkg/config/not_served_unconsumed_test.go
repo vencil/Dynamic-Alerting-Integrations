@@ -54,10 +54,12 @@ var unconsumedCases = []struct {
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
 		"tx.yaml":        "tenants:\n  tx:\n    mysql_connections_critical: \"95\"\n",
 	}},
-	{name: "a _critical key the root values itself: resolveBaseRows reads it", files: map[string]string{
+	// #4173: a root `_critical` is the critical phase's default, read only
+	// over a valued base; resolveBaseRows no longer walks it.
+	{name: "a _critical key the root values itself, no base: unconsumed", files: map[string]string{
 		"_defaults.yaml": "defaults:\n  redis_queue_length_critical: 9\n",
 		"tx.yaml":        "tenants:\n  tx:\n    redis_queue_length_critical: \"5\"\n",
-	}},
+	}, want: map[string]NotServedKey{"redis_queue_length_critical": {Reason: NotServedUnconsumed, File: "tx.yaml"}}},
 	// ADR-038 §11 (#3475): a dimensional key is served only when its label is
 	// declared under `dimensions:` for its base; valuing or declaring the base
 	// is not enough.

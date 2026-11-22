@@ -194,7 +194,7 @@ func scheduledTexts(sv ScheduledValue) []string {
 // NonFiniteThresholdWrites does not (#3267): `abc`, `70:high`,
 // `disable:critical`, a text outside the grammar of a threshold number
 // (`1_000`, `0x1p4`, #3457), a number out of range (`1e999`), "" and, on a `<key>_critical` that resolveCriticalRows reads,
-// any severity suffix. Judged by refusedThresholdTextIn, the classifier
+// any severity suffix. Judged by refusedThresholdTextWhole, the classifier
 // RefusedValueAt (da-guard's value_not_served) is.
 type thresholdRefusal struct {
 	// Key is the key; Value the first refused value as written.
@@ -213,8 +213,8 @@ func (r thresholdRefusal) notice(tenant string) string {
 }
 
 // thresholdRefusalIn is the thresholdRefusal of sv, the value of threshold
-// key key (canonical spelling), in a tree whose root `defaults:` (canonical)
-// is defaults — or false. A value NonFiniteThresholdWrites reports is not
+// key key (canonical spelling) — or false. The tree is not asked: since
+// #4173 how a key's value is read depends on the key alone. A value NonFiniteThresholdWrites reports is not
 // one: the two never report the same value. One value at a time, no
 // allocation for a value the resolvers read: it runs for every threshold key
 // of every tenant ValidateTenantKeys judges.
@@ -227,7 +227,7 @@ func (r thresholdRefusal) notice(tenant string) string {
 // exporter never reads the value, so refusing it as well would name a second
 // problem that is not the one to fix. Asked only for a refused value: the
 // entries the resolvers read cost nothing more.
-func thresholdRefusalIn(defaults map[string]float64, key string, sv ScheduledValue) (thresholdRefusal, bool) {
+func thresholdRefusalIn(key string, sv ScheduledValue) (thresholdRefusal, bool) {
 	// The dead entries are read once, and only once a value is refused.
 	var des []DeadEntry
 	read := false
@@ -237,11 +237,11 @@ func thresholdRefusalIn(defaults map[string]float64, key string, sv ScheduledVal
 		}
 		return entryIn(des, entry)
 	}
-	if r, ok := thresholdValueRefusal(defaults, key, sv.Default); ok && !dead("default") {
+	if r, ok := thresholdValueRefusal(key, sv.Default); ok && !dead("default") {
 		return r, true
 	}
 	for i, o := range sv.Overrides {
-		r, ok := thresholdValueRefusal(defaults, key, o.Value)
+		r, ok := thresholdValueRefusal(key, o.Value)
 		if !ok {
 			continue
 		}
@@ -286,8 +286,8 @@ func entryIn(des []DeadEntry, entry string) bool {
 	return false
 }
 
-func thresholdValueRefusal(defaults map[string]float64, key, raw string) (thresholdRefusal, bool) {
-	refused, whole := refusedThresholdTextIn(defaults, key, raw)
+func thresholdValueRefusal(key, raw string) (thresholdRefusal, bool) {
+	refused, whole := refusedThresholdTextWhole(key, raw)
 	if refused == "" || nonFiniteThresholdText(raw) {
 		return thresholdRefusal{}, false
 	}
@@ -295,17 +295,16 @@ func thresholdValueRefusal(defaults map[string]float64, key, raw string) (thresh
 }
 
 // refusedThresholdWrites is, sorted by key, the thresholdRefusal of every
-// threshold key of overrides (not `_`-prefixed) that has one, in a tree whose
-// root `defaults:` is defaults (nil: none). For tests: ValidateTenantKeys
+// threshold key of overrides (not `_`-prefixed) that has one. For tests: ValidateTenantKeys
 // asks thresholdRefusalIn key by key.
-func refusedThresholdWrites(defaults map[string]float64, overrides map[string]ScheduledValue) []thresholdRefusal {
+func refusedThresholdWrites(overrides map[string]ScheduledValue) []thresholdRefusal {
 	var out []thresholdRefusal
 	for key, sv := range overrides {
 		if baseRowsSkipKey(key) {
 			continue
 		}
 		canon, _ := CanonicalKeyFor(key)
-		if r, ok := thresholdRefusalIn(defaults, canon, sv); ok {
+		if r, ok := thresholdRefusalIn(canon, sv); ok {
 			out = append(out, r)
 		}
 	}
@@ -465,37 +464,28 @@ func RefusedValueAt(key string, sv ScheduledValue, now time.Time) string {
 }
 
 // refusedThresholdText is RefusedValueAt on one value as written, raw, with
-// no schedule to resolve and no tree: refusedThresholdTextIn with no root
-// `defaults:`, which reads a `<key>_critical` by resolveCriticalRows' whole
-// value. da-guard asks it only of a key the resolver recorded refusing.
+// no schedule to resolve and no tree (refusedThresholdTextWhole). da-guard
+// asks it only of a key the resolver recorded refusing.
 func refusedThresholdText(key, raw string) string {
-	r, _ := refusedThresholdTextIn(nil, key, raw)
+	r, _ := refusedThresholdTextWhole(key, raw)
 	return r
 }
 
-// refusedThresholdTextIn is why the row resolvers of a tree whose root
-// `defaults:` (canonical) is defaults refuse raw, the value of threshold key
-// key (canonical): RefusedNonFinite, RefusedUnparsed or "" — the one
+// refusedThresholdTextWhole is why the row resolvers refuse raw, the value of
+// threshold key key (canonical): RefusedNonFinite, RefusedUnparsed or "" — the one
 // classifier of a threshold key's value, which RefusedValueAt (da-guard)
 // and the write gate's threshold value finding (ValidateTenantKeys, #3267)
 // both are. whole reports that resolveCriticalRows' whole-value reading is
 // the one that refused it.
 //
-// A `<key>_critical` is read by whichever resolvers read it in the tree:
-// resolveCriticalRows (the whole value is the number) when the tree values
-// its base, or when it values neither — the key's own reading, as da-guard
-// asks it; resolveBaseRows (the shared `value[:severity]` grammar) when the
-// root `defaults:` values the `_critical` key itself (#3267 review: `90:
-// critical` is then served). Refused when any of them refuses it. Every
-// other key is read by the shared grammar.
-func refusedThresholdTextIn(defaults map[string]float64, key, raw string) (refused string, whole bool) {
-	base, critical := criticalRowBase(key)
-	wholeReads, sharedReads := false, true
-	if critical {
-		_, valued := defaults[key]
-		_, baseValued := defaults[base]
-		wholeReads, sharedReads = !valued || baseValued, valued
-	}
+// A `<key>_critical` is read by resolveCriticalRows alone (the whole value
+// is the number): since #4173 a root `defaults:` that values the `_critical`
+// key itself gives the critical phase its default, and resolveBaseRows no
+// longer walks it as a key of its own — so no tree is asked. Every other key
+// is read by the shared `value[:severity]` grammar.
+func refusedThresholdTextWhole(key, raw string) (refused string, whole bool) {
+	_, critical := criticalRowBase(key)
+	wholeReads, sharedReads := critical, !critical
 	// The common case first, with no allocation: a number every resolver
 	// reading the key reads. A number is never a disable.
 	wholeOK, sharedOK := !wholeReads, !sharedReads

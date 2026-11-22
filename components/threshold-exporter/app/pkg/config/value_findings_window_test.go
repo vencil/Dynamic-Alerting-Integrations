@@ -33,7 +33,6 @@ func thresholdFindingsOf(kv KeyValidation) []ValueFinding {
 
 func TestThresholdRefusalIn_SkipsEntriesNeverServed(t *testing.T) {
 	t.Parallel()
-	defaults := map[string]float64{"mysql_connections": 80}
 	for _, c := range []struct {
 		name    string
 		sv      ScheduledValue
@@ -55,7 +54,7 @@ func TestThresholdRefusalIn_SkipsEntriesNeverServed(t *testing.T) {
 		{"a default the windows leave a minute of", ScheduledValue{Default: "abc", Overrides: []TimeWindowOverride{
 			win("06:00-18:00", "70")}}, "abc"},
 	} {
-		r, ok := thresholdRefusalIn(defaults, "mysql_connections", c.sv)
+		r, ok := thresholdRefusalIn("mysql_connections", c.sv)
 		if got := map[bool]string{true: r.Value}[ok]; got != c.refused {
 			t.Errorf("%s: refused %q (ok %v), want %q", c.name, r.Value, ok, c.refused)
 		}

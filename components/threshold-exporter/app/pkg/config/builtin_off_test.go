@@ -192,3 +192,22 @@ func TestBuiltinOff_ARefusedRootValueStaysARefusal(t *testing.T) {
 		t.Errorf("write check: %q, want the off-key refusal", errs)
 	}
 }
+
+// #4173: a root `_critical` of an off key is every tenant's critical default
+// — the off base is valued, so the critical row is served with no base value
+// — and a tenant's own `_critical` overrides it.
+func TestBuiltinOff_ARootCriticalIsEveryTenantsCriticalDefault(t *testing.T) {
+	t.Parallel()
+	cfg := loadTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  redis_connected_clients_critical: 400\n",
+		"t.yaml":         "tenants:\n  none: {}\n  own:\n    redis_connected_clients_critical: \"500\"\n",
+	})
+	for tenant, want := range map[string]string{
+		"none": "redis_connected_clients critical 400",
+		"own":  "redis_connected_clients critical 500",
+	} {
+		if got := offRows(cfg, tenant, "redis", fixedNow); strings.Join(got, "|") != want {
+			t.Errorf("%s: rows %v, want %s", tenant, got, want)
+		}
+	}
+}

@@ -40,8 +40,8 @@ DSL 運算子：
   `_routing` — 路由產生器解析後的結果（`_routing_defaults` 逐層、routing profile、
       租戶 `_routing` 合併後，`{{tenant}}` 已代換）；只在有規則讀到它時才載入。
 
-exporter 丟掉或讀不到的檔、da-guard 拒收的樹（例如根 `defaults:` 與租戶都寫 `X_critical`，
-#2115 F0）、路由產生器拒收的樹，一律 exit 2，不評估任何規則。
+exporter 丟掉或讀不到的檔、da-guard 拒收的樹、路由產生器拒收的樹，一律 exit 2，
+不評估任何規則。
 """
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 ---
-section: Fixed
+section: Changed
 topic: confd-family
-issues: [2544]
+issues: [2544, 4173]
 created: 2026-10-02T15:00:00+00:00
 ---
-- **da-guard 不再以根 `_defaults.yaml` 的 `<key>_critical` 判定租戶的同名鍵多餘，並新增 `root_defaults_critical_key` 警告（[#2544](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2544)）**：根 `defaults:` 的 `_critical` 鍵送成一條獨立的 series（severity=warning），不會變成 `<key>` 的 critical row；先前根層與租戶寫同值時，da-guard 判租戶那行 `redundant_override`，照建議刪掉後 `/metrics` 就少了 critical row。新舊兩種拼法都已修正。子目錄 `_defaults.yaml`、根平台檔 `tenants:` 與 profile 寫的 `_critical` 仍算繼承值。根層 `_critical` 的送出方式不變，da-guard 另對每個這種鍵報一條 warn（不擋 merge；`_state_`、`_silent_` 開頭的鍵不報）。
+- **⚠️ breaking：根 `_defaults.yaml` 的 `<key>_critical` 成為每個租戶的 critical 預設值（exporter、da-guard、tenant-api；[#2544](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2544)、[#4173](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4173)）**：先前根 `defaults:` 的 `_critical` 鍵送成一條獨立的 series（`metric="…_critical"`、severity=warning），沒有規則包讀它；租戶同時寫同一個鍵時 `served-values` 以結束碼 2 拒收整棵樹。現在它是 `<key>` 的 critical 列：租戶沒寫就用根的值，租戶寫了蓋過它，`<key>` 沒有值時不送，根層 `<key>: disable` 時跟著關。那條 warning series 消失；有規則或儀表板讀它的要改讀 critical 列。租戶寫同值判 `redundant_override`。`root_defaults_critical_key` 改為只在基底於根目錄與內建層都沒有值時報。新舊兩種拼法相同。

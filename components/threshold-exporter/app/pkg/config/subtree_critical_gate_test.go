@@ -58,13 +58,14 @@ func TestSubtreeCritical_DeliveredOnlyOverAValuedBase(t *testing.T) {
 			"_defaults.yaml":     "defaults:\n  mysql_threads_running: 50\n",
 			"sub/_defaults.yaml": "defaults:\n  " + retiredCPU + "_critical: 90\n", "sub/tx.yaml": "tenants:\n  tx: {}\n",
 		}, key: retiredCPU + "_critical", served: 90},
-		// The other reader of a `_critical` key: a root `defaults:` that
-		// values the key itself (no base) is walked by resolveBaseRows, which
-		// serves the subtree's value of it.
-		{name: "root values the _critical key itself, no base: the subtree's value is served", files: map[string]string{
+		// #4173: a root `defaults:` that values the key itself (no base)
+		// gives the critical phase a default it does not serve — the base has
+		// no value — so the subtree's value of it is undeliverable too.
+		{name: "root values the _critical key itself, no base: undeliverable", files: map[string]string{
 			"_defaults.yaml":     "defaults:\n  redis_memory_critical: 5\n",
 			"sub/_defaults.yaml": sub, "sub/tx.yaml": "tenants:\n  tx: {}\n",
-		}, key: "redis_memory_critical", served: 90},
+		}, key: "redis_memory_critical", undeliverable: true,
+			notServed: map[string]NotServedKey{"redis_memory_critical": {Reason: NotServedUndeliverable, File: "sub/_defaults.yaml"}}},
 		{name: "root values the retired spelling of the _critical key itself", files: map[string]string{
 			"_defaults.yaml":     "defaults:\n  " + retiredCPU + "_critical: 5\n",
 			"sub/_defaults.yaml": "defaults:\n  mysql_threads_running_critical: 90\n", "sub/tx.yaml": "tenants:\n  tx: {}\n",
@@ -77,10 +78,13 @@ func TestSubtreeCritical_DeliveredOnlyOverAValuedBase(t *testing.T) {
 			"sub/_defaults.yaml": sub, "sub/tx.yaml": "tenants:\n  tx: {}\n",
 		}, key: "redis_memory_critical", undeliverable: true,
 			notServed: map[string]NotServedKey{"redis_memory_critical": {Reason: NotServedUndeliverable, File: "sub/_defaults.yaml"}}},
-		{name: "tenant _critical over a root-null base the root values the key of: served, nothing named", files: map[string]string{
+		// #4173: the root's `_critical` value no longer reads the key on its
+		// own, so over a root-null base the tenant's is unconsumed.
+		{name: "tenant _critical over a root-null base the root values the key of: unconsumed", files: map[string]string{
 			"_defaults.yaml": "defaults:\n  redis_memory: null\n  redis_memory_critical: 5\n",
 			"sub/tx.yaml":    "tenants:\n  tx:\n    redis_memory_critical: \"90\"\n",
-		}, key: "redis_memory_critical", served: 90},
+		}, key: "redis_memory_critical",
+			notServed: map[string]NotServedKey{"redis_memory_critical": {Reason: NotServedUnconsumed, File: "sub/tx.yaml"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

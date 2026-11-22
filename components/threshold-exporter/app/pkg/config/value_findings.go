@@ -47,10 +47,9 @@ type ValueFinding struct {
 }
 
 // newThresholdFinding is the finding for sv, the value of threshold key key
-// (canonical spelling), when the row resolvers of a tree whose root
-// `defaults:` (canonical) is defaults refuse it (thresholdRefusalIn).
-func newThresholdFinding(tenant string, defaults map[string]float64, key string, sv ScheduledValue) (ValueFinding, bool) {
-	r, ok := thresholdRefusalIn(defaults, key, sv)
+// (canonical spelling), when the row resolvers refuse it (thresholdRefusalIn).
+func newThresholdFinding(tenant string, key string, sv ScheduledValue) (ValueFinding, bool) {
+	r, ok := thresholdRefusalIn(key, sv)
 	if !ok {
 		return ValueFinding{}, false
 	}
@@ -202,11 +201,9 @@ func deadEntriesJudged(key, canonKey string, sv ScheduledValue, normalized map[s
 			return false
 		}
 	case strings.HasSuffix(canonKey, criticalSuffix):
-		// The critical phase reads it when its base is valued; the base
-		// phase reads it as a plain key when the root `defaults:` values the
-		// `<key>_critical` itself.
-		_, direct := canonDefaults[canonKey]
-		if _, read := criticalRowRead(canonKey, canonDefaults); !read && !direct {
+		// The critical phase reads it when its base is valued (#4173: the
+		// one reader; a root `<key>_critical` is its default).
+		if _, read := criticalRowRead(canonKey, canonDefaults); !read {
 			return false
 		}
 	default:

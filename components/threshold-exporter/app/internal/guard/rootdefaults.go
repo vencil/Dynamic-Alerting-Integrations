@@ -221,10 +221,14 @@ func checkDefaultsWrapper(input CheckInput) []Finding {
 }
 
 // checkRootCriticalKeys reports findingkind.FindingRootDefaultsCriticalKey for the
-// `_critical` keys under the root carrier's `defaults:` mapping. A root with
-// no `defaults:` mapping is root_defaults_unwrapped's (its keys are not
-// served at all); a file in ParseFailed is skipped like checkDefaultsWrapper
-// does.
+// `_critical` keys under the root carrier's `defaults:` mapping whose base
+// has no value at the root — none under any #1231 spelling in that mapping
+// and none from the built-in layer (#4173): such a key is every tenant's
+// critical default, but resolveCriticalRows serves a critical row only over
+// a valued base, so it serves nothing. A `_critical` key over a valued base
+// is the platform's critical value, nothing to report. A root with no
+// `defaults:` mapping is root_defaults_unwrapped's (its keys are not served
+// at all); a file in ParseFailed is skipped like checkDefaultsWrapper does.
 func checkRootCriticalKeys(input CheckInput) []Finding {
 	failed := make(map[string]bool, len(input.ParseFailed))
 	for _, pf := range input.ParseFailed {
@@ -252,17 +256,28 @@ func checkRootCriticalKeys(input CheckInput) []Finding {
 			}
 		}
 		sort.Strings(keys)
+		valued := map[string]bool{}
+		for k, v := range block {
+			if v != nil {
+				canon, _ := config.CanonicalKeyFor(k)
+				valued[canon] = true
+			}
+		}
 		for _, k := range keys {
 			base := strings.TrimSuffix(k, "_critical")
+			canonBase, _ := config.CanonicalKeyFor(base)
+			_, builtin := config.BuiltinDefault(canonBase)
+			if !strings.Contains(k, "{") && (valued[canonBase] || builtin || config.BuiltinOff(canonBase)) {
+				continue // #4173: the platform's critical value over a valued base
+			}
 			// A key with a label segment (`x{a="1"}_critical`) is no row of
 			// its own (#2031): the clauses about its rows do not hold.
 			served, rest := "is not", "."
 			if !strings.Contains(k, "{") {
-				served = "is served as a threshold of its own (severity=warning), not as"
-				rest = fmt.Sprintf(": only a tenant's own `%s` (or one a subtree `_defaults.yaml`, a root platform "+
-					"`tenants:` entry or a profile supplies) produces that row. A tenant deleting its own `%s` falls "+
-					"back to this root value only on that separate warning series, never on the critical row, so the "+
-					"tenant's key is not reported redundant against it.", k, k)
+				served = "serves no tenant"
+				rest = fmt.Sprintf(": it is every tenant's critical default, and a critical row is served only over a "+
+					"valued base — `%s` has no value at the root or from the built-in layer. Give `%s` a value at the "+
+					"root, or delete `%s`.", base, base, k)
 			}
 			out = append(out, Finding{
 				Severity: SeverityWarn,
@@ -408,10 +423,9 @@ func checkRootOptionalBuiltin(input CheckInput) []Finding {
 // value (not null, not a disable word) to `<base>_critical` or a
 // dimensional `<base>{…}` while the same mapping writes base as `disable`
 // (config.RootDisableText, #3832 decision 3). The root contradicts itself
-// either way: a root `<base>{…}` goes off with its base for every tenant
-// that gives base no value of its own, so its value reaches none of them;
-// a root `<base>_critical` is a threshold of its own
-// (root_defaults_critical_key), served while its base is off.
+// either way: a root `<base>{…}` or `<base>_critical` (#4173: every
+// tenant's critical default) goes off with its base for every tenant that
+// gives base no value of its own, so its value reaches none of them.
 // A file in ParseFailed is skipped, as checkRootCriticalKeys does.
 func checkRootDisableFamily(input CheckInput) []Finding {
 	failed := make(map[string]bool, len(input.ParseFailed))
@@ -444,23 +458,17 @@ func checkRootDisableFamily(input CheckInput) []Finding {
 			if text, ok := v.(string); ok && config.IsDisabled(strings.ToLower(strings.TrimSpace(text))) {
 				continue // not a value: root_default_refused names it
 			}
-			base, critical := strings.CutSuffix(k, "_critical")
+			// #4173: a root `<base>_critical` goes off with its base, as a
+			// `<base>{…}` does.
+			base, _ := strings.CutSuffix(k, "_critical")
 			if i := strings.Index(k, "{"); i >= 0 {
-				base, critical = k[:i], false
+				base = k[:i]
 			}
 			if base == k || !off[base] {
 				continue
 			}
 			what := fmt.Sprintf("which switches the `%s` family off for every tenant that gives `%s` no value "+
 				"of its own — `%s` included, so its value here is served to none of them", base, base, k)
-			if critical {
-				// A root `<base>_critical` is a threshold of its own, served
-				// at warning severity whatever its base reads
-				// (root_defaults_critical_key): the opt-out leaves it on.
-				what = fmt.Sprintf("yet `%s` here is a threshold of its own (see root_defaults_critical_key), "+
-					"served to every tenant while `%s` is switched off — the opt-out leaves an alert of the "+
-					"family on", k, base)
-			}
 			out = append(out, Finding{
 				Severity: SeverityError,
 				Kind:     findingkind.FindingRootDisableFamilyValue,

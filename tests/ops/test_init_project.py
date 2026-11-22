@@ -657,22 +657,18 @@ class TestGenTenantYamlDeclaredBlock:
         # bidirectional (blind review, #1218).
         header = tenant_text.split('\ntenants:')[0]
         assert 'lists none of them under `defaults:`' in header, header
-        assert 'the wrong section' not in header, header
+        assert "the platform's critical" not in header, header
 
     def test_critical_paragraph_flips_when_defaults_gains_a_critical_key(self):
         """The renderer's own contract, on synthetic input: a `_critical`
         appearing in `defaults:` must move the claim, not just the count.
 
-        ⛔ And the claim it moves TO must be the true one (#1218). The branch
-        used to read "the critical row fires without you doing anything" — a
-        sentence about a file in which no critical row can exist, rendered into
-        the one file a customer opens. Measured in
-        `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`:
-        the key emits `{component="<prefix>", metric="<rest>_critical",
-        severity="warning"}` (parseMetricKey splits on the first underscore) and
-        nothing else. So this asserts the promise is ABSENT, not just that the
-        wording changed — a rewrite that kept the reassurance would pass a
-        count-only assertion.
+        ⛔ And the claim it moves TO must be the true one. Since #4173 a root
+        `<base>_critical` is every tenant's critical default (measured in
+        `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`):
+        the paragraph says so and how to override or switch it off — before,
+        it was a warning series of its own and the paragraph said no critical
+        row existed.
         """
         from _registry_lib import render_tenant_critical_note_lines
         without = '\n'.join(render_tenant_critical_note_lines(
@@ -683,22 +679,22 @@ class TestGenTenantYamlDeclaredBlock:
         assert 'lists none of them' in without
         assert 'lists none of them' not in with_crit
         assert 'puts 1 of them under `defaults:`' in with_crit
-        assert 'the wrong section' in with_crit
-        assert 'no critical row exists' in with_crit
-        assert 'fires without you doing anything' not in with_crit
+        assert "the platform's critical" in with_crit
+        assert '`<base>_critical: disable`' in with_crit
+        assert 'no critical row exists' not in with_crit
 
     def test_critical_paragraph_is_a_warning_in_both_languages(self):
         """Same claim, both renderings. The zh branch is what a Chinese-locale
-        `scaffold_tenant` run writes, and it carried the identical reassurance
-        ("critical 列本來就會發射，不需要你做任何事"); fixing only the branch the
-        English generator happens to use would leave the other half shipping
-        the sentence this issue is about.
+        `scaffold_tenant` run writes; fixing only the branch the English
+        generator happens to use would leave the other half shipping a
+        sentence about a mechanism that no longer exists (#4173: the old
+        "warning series nothing consumes" wording).
         """
         from _registry_lib import render_tenant_critical_note_lines
         misplaced = {'mysql_connection_usage_percent': 80, 'mysql_connection_usage_percent_critical': 95}
         for lang, ok_marker, banned in (
-            ('en', 'the wrong section', 'fires without you doing anything'),
-            ('zh', '放錯區塊', '本來就會發射'),
+            ('en', "the platform's critical", 'nothing consumes'),
+            ('zh', 'critical 預設值', '無人消費'),
         ):
             text = '\n'.join(render_tenant_critical_note_lines(misplaced, lang=lang))
             assert ok_marker in text, (lang, text)

@@ -181,12 +181,11 @@ func TestDocsDefaultsSamplesDecode(t *testing.T) {
 // cleanly and is still wrong — not reachable by a YAML or JSON-Schema check,
 // only by knowing what resolve.go does with the key.
 //
-//   - `<metric>_critical` in `defaults:` is NOT the critical tier.
-//     resolveBaseRows iterates the defaults map and does not skip the suffix,
-//     so it emits user_threshold{metric="X_critical", severity="warning"} — a
-//     series no rule pack consumes — while the tenant still has no critical
-//     tier. The supported shape is a TENANT override, which resolveCriticalRows
-//     turns into {metric="X", severity="critical"}.
+//   - `<metric>_critical` in `defaults:`. Since #4173 it is every tenant's
+//     critical default ({metric="X", severity="critical"} for each tenant
+//     that writes none), which arms the critical alert platform-wide; the
+//     samples, like the shipped producers, keep the critical tier on the
+//     tenant side (a policy, not a resolver limit; #3924 revisits it).
 //
 // A dimensional key (`metric{label="v"}`) in `defaults:` is NOT pinned here
 // (#3478): since #2031 it is the labelled default of every tenant that does
@@ -200,12 +199,11 @@ func TestDocsDefaultsSamplesHaveNoTenantOnlyKeys(t *testing.T) {
 		}
 		for key := range cfg.Defaults {
 			if strings.HasSuffix(key, criticalSuffix) {
-				component, metric := parseMetricKey(key)
-				t.Errorf("%s:%d — `defaults:` declares %q, which is NOT the critical tier: "+
-					"resolveBaseRows emits {component=%q, metric=%q, severity=\"warning\"} — a series "+
-					"no rule pack consumes — and the tenant still has no critical tier. "+
-					"The critical tier is a TENANT override on the base key %q.",
-					s.file, s.line, key, component, metric, strings.TrimSuffix(key, criticalSuffix))
+				t.Errorf("%s:%d — `defaults:` declares %q: since #4173 that is every tenant's "+
+					"critical default, arming the critical alert for the whole platform. Documentation "+
+					"samples keep the critical tier on the tenant side (an override of %q's tier in "+
+					"`<tenant>.yaml`), as the shipped producers do (check_threshold_reachability).",
+					s.file, s.line, key, strings.TrimSuffix(key, criticalSuffix))
 			}
 		}
 	}

@@ -833,8 +833,10 @@ def _alert_keys(change):
     ⛔ A non-critical row whose `metric_key` itself ends in `_critical` is a
     `<base>_critical` key served on its own (its base is not declared in the
     root `defaults:`): its metric label is `<x>_critical`, which no threshold
-    rule selects, so no alert compares it. A change from `--tenant` is
-    `_written_alert_keys`."""
+    rule selects, so no alert compares it. Since #4173 the exporter serves no
+    such row (a `_critical` key is only ever a critical row, served over a
+    valued base); one comes only from an older da-guard named by
+    `DA_GUARD_BINARY`. A change from `--tenant` is `_written_alert_keys`."""
     if "series" not in change:
         return _written_alert_keys(change)
     out, uncompared = [], []

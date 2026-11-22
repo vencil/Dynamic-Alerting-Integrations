@@ -522,47 +522,36 @@ def test_dimensioned_keys_are_listed_not_backtested(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
     """A dimensioned key (served-values' `dimensions`, #2750) is not narrowed
     by the selector asked: listed, marked, never queried, and counted in the
-    text report. A `_critical` key declared in defaults with no base key is
-    served as a warning row of metric `<x>_critical`, which no threshold rule
-    selects (#3017 review): not backtested either, even with a map entry
-    for the key."""
-    _map_with(monkeypatch, other_critical=_upper("tenant:other_critical:max"))
+    text report."""
     def files(v: int) -> dict[str, str]:
-        return {"_defaults.yaml": _DB_DEFAULTS + "  other_critical: 80\n",
+        return {"_defaults.yaml": _DB_DEFAULTS,
                 "tx.yaml": ("tenants:\n  tx:\n    mysql_connection_usage_percent: 50\n"
-                            f"    other_critical: {v}\n"
                             f"    'mysql_connection_usage_percent{{db=\"a\"}}': {v}\n")}
     b, c = _tree(tmp_path / "base", files(90)), _tree(tmp_path / "cur", files(95))
-    assert tv.load_served_values(c, at=AT)["tx"].severities["other_critical"] == "warning"
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = {r["metric"]: r for r in json.loads(out.out)["changes"]}
-    assert set(rows) == {"other_critical", 'mysql_connection_usage_percent{db="a"}'}, rows
+    assert set(rows) == {'mysql_connection_usage_percent{db="a"}'}, rows
     assert rows['mysql_connection_usage_percent{db="a"}']["backtest"] == "skipped: dimensioned key"
     assert rows['mysql_connection_usage_percent{db="a"}']["status"] == "not_backtested"
-    assert rows["other_critical"]["status"] == "not_backtested"
-    assert rows["other_critical"]["backtest"] == _NO_BASE.format("other_critical")
     assert asked == []
     md = tmp_path / "out.md"
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
-    assert "Not backtested: 1 (dimensioned key), 1 (" + _NO_BASE.format("other_critical")[9:] + ")" in out.out
+    assert "Not backtested: 1 (dimensioned key)" in out.out
     text = md.read_text(encoding="utf-8")
-    assert "**Not backtested:** 1 (" in text and "1 (dimensioned key)" in text
+    assert "**Not backtested:** 1 (dimensioned key)" in text
     # #3002 B: a change no query was sent for has "—" in the Query column.
     assert "| Not backtested: dimensioned key | — |" in text
-
-
-_NO_BASE = ("skipped: served as a non-critical row of {} (its base is not declared in "
-            "the root defaults:), which no alert compares")
 
 
 def test_a_critical_key_without_its_base_is_not_backtested(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
     """`my_own_threshold_critical` with no `my_own_threshold` in the root
-    `defaults:` is served as a warning row of metric
-    `threshold_critical` (da-guard warns it skips the critical
-    row): a `_critical` alert selects the base metric with
-    severity="critical", so nothing compares it — it
-    used to be replayed against the critical alert's series (HIGH, rc 1).
+    `defaults:` serves nothing (#4173: a `_critical` is only ever a critical
+    row, over a valued base; da-guard warns root_defaults_critical_key), so
+    changing the tenant's value changes no row: nothing is listed and
+    nothing is queried. Before #4173 it was a warning row of metric
+    `threshold_critical`, listed as not backtested ("its base is not declared"); before
+    that it was replayed against the critical alert's series (HIGH, rc 1).
     (#3832/#4163: the base must be outside the built-in layer — every
     registry key has a value there, a platform number or off, so a
     registry `_critical` always has its base; `my_own_threshold` is the
@@ -572,11 +561,9 @@ def test_a_critical_key_without_its_base_is_not_backtested(
                 "tx.yaml": f"tenants:\n  tx:\n    my_own_threshold_critical: \"{v}\"\n"}
     b, c = _tree(tmp_path / "base", files("90")), _tree(tmp_path / "cur", files("50"))
     served = tv.load_served_values(c, at=AT)["tx"]
-    assert served.series["my_own_threshold_critical"][0].labels["severity"] == "warning"
+    assert "my_own_threshold_critical" not in served.series, served.series
     rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
-    rows = json.loads(out.out)["changes"]
-    assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [
-        ("my_own_threshold_critical", "not_backtested", _NO_BASE.format("my_own_threshold_critical"))]
+    assert json.loads(out.out)["changes"] == []
     assert (rc, asked) == (0, [])
 
 
