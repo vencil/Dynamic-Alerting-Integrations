@@ -209,6 +209,25 @@ def _setup_schema_json(mod, mp, root, target):
     return _argv_runner(mod, mp, [f"{mod.__name__}.py"])
 
 
+def _setup_reserved_key_lists(mod, mp, root, target):
+    """sync_schema --update: one generated target, named by its absolute
+    path (so the message names it as the other callers do)."""
+    mp.setattr(mod, "load_registry", lambda path: {})
+    mp.setattr(mod, "derive", lambda reg: {})
+    mp.setattr(mod, "targets", lambda root_, d: [(str(target), lambda text: NEW)])
+    return _argv_runner(mod, mp, ["sync_schema.py", "--update", "--root", str(root)])
+
+
+def _setup_recipe_contract(mod, mp, root, target):
+    """gen_recipe_contract --update: one generated copy, as above."""
+    mp.setattr(mod, "load", lambda root_: (None, None))
+    # A whole-file copy (the portal data files): the one kind that may be
+    # absent, and whose directory the tool then makes.
+    mp.setattr(mod, "WHOLE_FILE_TARGETS", frozenset({str(target)}))
+    mp.setattr(mod, "targets", lambda root_, c, grammar: [(str(target), lambda text: NEW)])
+    return _argv_runner(mod, mp, ["gen_recipe_contract.py", "--update", "--root", str(root)])
+
+
 CALLERS: dict[str, Caller] = {
     "tenant_id_json": Caller(
         "gen_tenant_id_json", "scripts/tools/dx/gen_tenant_id_json.py:121",
@@ -252,6 +271,13 @@ CALLERS: dict[str, Caller] = {
     "planning_index": Caller(
         "generate_planning_index", "scripts/dx/generate_planning_index.py:525", "--target",
         _setup_planning_index),
+    # #3981, fourth batch: both write through sync_schema.write_targets.
+    "reserved_key_lists": Caller(
+        "sync_schema", "scripts/tools/dx/sync_schema.py:662", None,
+        _setup_reserved_key_lists),
+    "recipe_contract": Caller(
+        "gen_recipe_contract", "scripts/tools/dx/sync_schema.py:662", None,
+        _setup_recipe_contract),
 }
 
 
@@ -485,7 +511,9 @@ _READS_ITS_TARGET_FIRST = ["rule_pack_stats_fragment", "rule_pack_stats_inject",
                            "byo_rulepack_table", "tool_map", "doc_map",
                            "rule_pack_readme", "alert_reference_zh", "alert_reference_en",
                            # third batch: their bare write blocked on the FIFO
-                           "tenant_id_json", "am_duration_json"]
+                           "tenant_id_json", "am_duration_json",
+                           # fourth batch: their read of the target blocked
+                           "reserved_key_lists", "recipe_contract"]
 
 
 @pytest.mark.parametrize("name", _READS_ITS_TARGET_FIRST)
@@ -513,6 +541,39 @@ def test_a_fifo_target_is_rc2_before_anything_reads_it(name, root, monkeypatch):
     assert stat.S_ISFIFO(os.stat(target).st_mode)
 
 
+@pytest.mark.parametrize("name", ["tenant_id_json", "am_duration_json",
+                                  "reserved_key_lists", "recipe_contract"])
+def test_a_fifo_target_under_check_is_rc2_before_anything_reads_it(name, root, monkeypatch):
+    """#3981, fourth batch: the four `--check` hooks compared the target's
+    bytes with what they would generate — a read that blocked forever on a
+    FIFO (rc 124 under `timeout`). The target is judged first now."""
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    target = _target(root)
+    target.unlink()
+    os.mkfifo(target)
+    caller = CALLERS[name]
+    run = caller.setup(importlib.import_module(caller.module), monkeypatch, root, target)
+    run.argv[:] = [a for a in run.argv if a != "--update"] + ["--check"]
+    assert "--check" in run.argv and "--update" not in run.argv, run.argv
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = run()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert rc == 2 and str(target) in err.getvalue(), err.getvalue()
+    assert len(err.getvalue().strip().splitlines()) == 1, err.getvalue()
+    assert stat.S_ISFIFO(os.stat(target).st_mode)
+
+
 def test_a_refused_english_reference_leaves_the_chinese_one_alone(root, monkeypatch):
     """#3981: the two references are one regeneration. Both targets are judged
     before either is written — the Chinese file used to be rewritten and the
@@ -528,7 +589,7 @@ def test_a_refused_english_reference_leaves_the_chinese_one_alone(root, monkeypa
 
 
 @pytest.mark.parametrize("name", ["rule_pack_stats_fragment", "tenant_id_json",
-                                  "am_duration_json"])
+                                  "am_duration_json", "recipe_contract"])
 def test_the_target_directory_is_created_when_absent(name, root, monkeypatch):
     """The generators that made the directory of a copy they add (a new
     portal data file) still do."""
@@ -594,10 +655,11 @@ def test_a_generator_never_loads_what_loads_the_file_it_repairs(module, constant
     """#3981, third batch (blind review): `sync_schema --update` and
     `gen_recipe_contract --update` rewrite a generated block of
     `_lib_constants.py`. `_lib_io` imports that file — so with the artifact
-    entry on their write path, a block left broken (a merge conflict in it)
-    made `--update` die on the import, and it is `--update` that repairs
-    it. They stay off the entry until it lives in a module that loads
-    neither; this is what says so."""
+    entry taken from it, a block left broken (a merge conflict in it) made
+    `--update` die on the import, and it is `--update` that repairs it.
+    #4223 moved the entries to `_lib_output`, which loads neither; the
+    fourth batch takes them from there, and this says no import of theirs
+    loads the file back."""
     mod = importlib.import_module(module)
     target = getattr(mod, constant)
     assert target == "scripts/tools/_lib_constants.py", target
@@ -622,8 +684,9 @@ def test_the_caller_table_is_the_surveyed_population():
     #3982 (owner 2026-11-18): `audit_rules_drift --out` is an operator
     output now and left the table (seven of the eight remain). #3981, second
     batch: five more sites that rewrote a tracked file with a bare write;
-    third batch: two generators of committed copies of a schema definition."""
-    assert len(CALLERS) == 14
+    third batch: two generators of committed copies of a schema definition;
+    fourth batch: sync_schema and gen_recipe_contract."""
+    assert len(CALLERS) == 16
     for caller in CALLERS.values():
         rel, line = caller.site.rsplit(":", 1)
         src = (REPO_ROOT / rel).read_text(encoding="utf-8").splitlines()

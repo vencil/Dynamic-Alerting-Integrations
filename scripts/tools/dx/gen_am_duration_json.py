@@ -31,6 +31,10 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_THIS_DIR))
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
+# #3981 / #4223: the output entries without PyYAML — `--check` runs as a
+# pre-commit hook in an environment that has none.
+from _lib_output import (  # noqa: E402
+    OutputWriteError, check_repo_artifact, ensure_dir, write_repo_artifact)
 
 SCHEMA_REL = "docs/schemas/tenant-config.schema.json"
 
@@ -92,6 +96,17 @@ def main() -> int:
         return 2
     targets = [(rel, repo / rel) for rel in OUT_RELS]
 
+    # Every copy is judged before it is read or the first is written: a
+    # FIFO there would block the read (`--check` too), a directory or
+    # `/dev/stdout` is no file to compare or replace (#3981).
+    try:
+        for _rel, path in targets:
+            check_repo_artifact(path)
+    except OutputWriteError as exc:
+        print(f"ERROR: {exc.path}: not usable as a generated copy: "
+              f"{exc.strerror or exc.cause}", file=sys.stderr)
+        return 2
+
     if args.check:
         drift = False
         for rel, path in targets:
@@ -109,9 +124,6 @@ def main() -> int:
               f"{SCHEMA_REL} definitions.duration.")
         return 0
 
-    # Imported here, not at the top: `_lib_io` imports PyYAML, and `--check`
-    # runs as a pre-commit hook in an environment that has none (#3981).
-    from _lib_io import OutputWriteError, ensure_dir, write_repo_artifact  # noqa: E402, PLC0415
     try:
         for rel, path in targets:
             ensure_dir(path.parent)
