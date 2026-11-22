@@ -99,12 +99,12 @@ def main() -> int:
         for _rel, path in targets:
             if args.check:
                 if is_special_file(path):
-                    raise OutputWriteError(path, OSError(None, "not a regular file"))
+                    raise OutputWriteError(path, OSError(None, "not a regular file"),
+                                           action="read")
             else:
                 check_repo_artifact(path)
     except OutputWriteError as exc:
-        print(f"ERROR: {exc.path}: not usable as a generated copy: "
-              f"{exc.strerror or exc.cause}", file=sys.stderr)
+        print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
     if args.check:

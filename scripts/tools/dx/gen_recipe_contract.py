@@ -542,8 +542,7 @@ def run(root, update):
     stale, changed = [], []
     for rel, render in targets(root, c, grammar):
         path = Path(root) / rel
-        current = read_target(path, rel, rel in WHOLE_FILE_TARGETS, ContractError,
-                              will_write=update)
+        current = read_target(path, rel, rel in WHOLE_FILE_TARGETS, ContractError)
         wanted = render(current)
         if wanted != current:
             stale.append(rel)

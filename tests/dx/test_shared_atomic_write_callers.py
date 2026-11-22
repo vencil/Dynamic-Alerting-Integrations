@@ -273,10 +273,10 @@ CALLERS: dict[str, Caller] = {
         _setup_planning_index),
     # #3981, fourth batch: both write through sync_schema.write_targets.
     "reserved_key_lists": Caller(
-        "sync_schema", "scripts/tools/dx/sync_schema.py:667", None,
+        "sync_schema", "scripts/tools/dx/sync_schema.py:668", None,
         _setup_reserved_key_lists),
     "recipe_contract": Caller(
-        "gen_recipe_contract", "scripts/tools/dx/sync_schema.py:667", None,
+        "gen_recipe_contract", "scripts/tools/dx/sync_schema.py:668", None,
         _setup_recipe_contract),
 }
 
@@ -588,21 +588,26 @@ def test_a_refused_english_reference_leaves_the_chinese_one_alone(root, monkeypa
     assert (root / "aux" / "other.md").read_text(encoding="utf-8") == "UNCHANGED\n"
 
 
-@pytest.mark.parametrize("name", ["reserved_key_lists", "recipe_contract"])
-def test_a_refused_target_leaves_the_stale_one_before_it_alone(name, root, monkeypatch):
-    """#3981, fourth batch (independent review): `--update` judges every
-    target before the first write. A stale target first and a FIFO second:
-    the run is refused, and the stale one keeps its bytes — with the write
-    inside the read loop it was already rewritten."""
-    if not hasattr(os, "mkfifo"):
-        pytest.skip("no FIFO on this platform")
-    stale = _target(root)
-    fifo = root / "out" / "second.md"
-    os.mkfifo(fifo)
+@contextlib.contextmanager
+def _as_stdin(path: Path):
+    """*path* opened as this process's fd 0 for the block."""
+    saved = os.dup(0)
+    try:
+        with open(path, "rb") as fh:
+            os.dup2(fh.fileno(), 0)
+        yield
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+
+
+def _run_generator_pair(name, monkeypatch, root, first, second, render_second):
+    """`--update` of *name* over two targets, *first* stale (OLD → NEW) and
+    *second* rendered by *render_second*; ``(rc, stderr)``."""
     caller = CALLERS[name]
     mod = importlib.import_module(caller.module)
-    run = caller.setup(mod, monkeypatch, root, stale)
-    pair = [(str(stale), lambda text: NEW), (str(fifo), lambda text: NEW)]
+    run = caller.setup(mod, monkeypatch, root, first)
+    pair = [(str(first), lambda text: NEW), (str(second), render_second)]
     if name == "reserved_key_lists":
         monkeypatch.setattr(mod, "targets", lambda root_, d: pair)
     else:
@@ -610,8 +615,51 @@ def test_a_refused_target_leaves_the_stale_one_before_it_alone(name, root, monke
     err = io.StringIO()
     with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
         rc = run()
-    assert rc == 2 and str(fifo) in err.getvalue(), err.getvalue()
+    return rc, err.getvalue()
+
+
+@pytest.mark.parametrize("name", ["reserved_key_lists", "recipe_contract"])
+@pytest.mark.parametrize("second_is", ["fifo", "stdin"])
+def test_a_refused_target_leaves_the_stale_one_before_it_alone(name, second_is, root,
+                                                                monkeypatch):
+    """#3981, fourth batch (independent reviews): `--update` judges every
+    target before the first write. A stale target first and a refused one
+    second — a FIFO (refused before it is read), or a stale target that is
+    this process's stdin (refused before it is replaced): the run is rc 2,
+    and the first keeps its bytes. With the write inside the read loop, or
+    the stdin judgement left to the write itself, it was already rewritten."""
+    stale = _target(root)
+    second = root / "out" / "second.md"
+    if second_is == "fifo":
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("no FIFO on this platform")
+        os.mkfifo(second)
+        rc, err = _run_generator_pair(name, monkeypatch, root, stale, second, lambda t: NEW)
+    else:
+        second.write_text(OLD, encoding="utf-8")
+        with _as_stdin(second):
+            rc, err = _run_generator_pair(name, monkeypatch, root, stale, second,
+                                          lambda t: NEW)
+        assert "standard stream" in err, err
+    assert rc == 2 and str(second) in err, err
     assert stale.read_text(encoding="utf-8") == OLD
+    if second_is == "stdin":
+        assert second.read_text(encoding="utf-8") == OLD
+
+
+@pytest.mark.parametrize("name", ["reserved_key_lists", "recipe_contract"])
+def test_update_with_an_in_sync_target_as_stdin_is_rc0(name, root, monkeypatch):
+    """#3981, fourth batch (blind review): a target `--update` does not
+    replace — already in sync — may be stdin; only a replaced one is
+    refused. The stale first target is written as usual."""
+    stale = _target(root)
+    in_sync = root / "out" / "second.md"
+    in_sync.write_text(OLD, encoding="utf-8")
+    with _as_stdin(in_sync):
+        rc, err = _run_generator_pair(name, monkeypatch, root, stale, in_sync, lambda t: t)
+    assert rc == 0, err
+    assert stale.read_text(encoding="utf-8") == NEW
+    assert in_sync.read_text(encoding="utf-8") == OLD
 
 
 @pytest.mark.parametrize("script", ["sync_schema.py", "gen_recipe_contract.py",

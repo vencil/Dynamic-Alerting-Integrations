@@ -630,22 +630,17 @@ def targets(root, d):
     ]
 
 
-def read_target(path, rel, whole_file, error=None, *, will_write=False):
+def read_target(path, rel, whole_file, error=None):
     """The current text of generated target *path* ("" for a whole-file
-    target that is absent), judged BEFORE it is read (#3981): a FIFO there
-    would block the read, in `--check` as in `--update`. Only a target
-    *will_write* replaces must also pass `check_repo_artifact` (not this
-    process's stdin / stdout / stderr): reading one is harmless, so a
-    `--check < target` keeps its answer. *error* is the exception class
-    raised (the caller's own; `RegistryError` by default)."""
+    target that is absent). A target that is there and no regular file is
+    refused BEFORE it is read (#3981): a FIFO would block the read, in
+    `--check` as in `--update`. Reading a target that is also this
+    process's stdin / stdout is harmless, so it is not refused here; only
+    one `write_targets` replaces is. *error* is the exception class raised
+    (the caller's own; `RegistryError` by default)."""
     error = error or RegistryError
     if is_special_file(path):
         raise error(f"{rel}: cannot read: not a regular file")
-    if will_write:
-        try:
-            check_repo_artifact(path)
-        except OutputWriteError as e:
-            raise error(f"{rel}: cannot read: {e.strerror or e.cause}") from e
     try:
         return path.read_text(encoding="utf-8") if path.exists() or not whole_file else ""
     except (OSError, UnicodeDecodeError) as e:
@@ -653,13 +648,19 @@ def read_target(path, rel, whole_file, error=None, *, will_write=False):
 
 
 def write_targets(changed, error=None, make_parents=False):
-    """Write each ``(path, text)`` of *changed* through the artifact entry
-    (atomic replace, LF, the mode git would give it). Called only after
-    every target was read and judged, so a target that is no regular file
-    leaves the others untouched; a write that fails later (a full disk)
-    still leaves the ones before it rewritten. *make_parents*: create a
-    missing parent directory first (`ensure_dir`)."""
+    """Write each ``(path, text)`` of *changed* (the stale targets) through
+    the artifact entry (atomic replace, LF, the mode git would give it).
+    Every one of them passes `check_repo_artifact` before the first is
+    written — not this process's stdin / stdout / stderr — so a refused
+    target leaves the others untouched; a write that fails later (a full
+    disk) still leaves the ones before it rewritten. *make_parents*:
+    create a missing parent directory first (`ensure_dir`)."""
     error = error or RegistryError
+    for path, _text in changed:
+        try:
+            check_repo_artifact(path)
+        except OutputWriteError as e:
+            raise error(str(e)) from e
     for path, text in changed:
         try:
             if make_parents:
@@ -676,7 +677,7 @@ def run(root, registry, update):
     stale, changed = [], []
     for rel, render in targets(root, d):
         path = Path(root) / rel
-        current = read_target(path, rel, rel in WHOLE_FILE_TARGETS, will_write=update)
+        current = read_target(path, rel, rel in WHOLE_FILE_TARGETS)
         wanted = render(current)
         if wanted != current:
             stale.append(rel)
