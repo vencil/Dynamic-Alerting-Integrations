@@ -261,9 +261,6 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/dx/check_release_immutable.py": {
         "write_output open(w) [ci_env_file]": 1,
     },
-    "scripts/tools/dx/gen_adr_checks.py": {
-        "run .write_text [artifact]": 1,
-    },
     "scripts/tools/dx/gen_agent_adapters.py": {
         "write_outputs open(w) [artifact]": 1,
         "write_outputs os.chmod [artifact]": 1,
@@ -277,12 +274,6 @@ DEBT: dict[str, dict[str, int]] = {
         "main .mkdir [artifact]": 2,
         "main .write_text [artifact]": 2,
         "main os.chmod [artifact]": 2,
-    },
-    "scripts/tools/dx/generate_rulepack_configmaps.py": {
-        "main .write_text [artifact]": 1,
-    },
-    "scripts/tools/dx/generate_rulepack_derived.py": {
-        "main .write_text [artifact]": 1,
     },
     "scripts/tools/dx/measure_judgement_budget.py": {
         "judge os.mkdir [work_dir]": 1,
@@ -363,7 +354,7 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 96
+_DEBT_CEILING = 93
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
@@ -867,7 +858,7 @@ def test_the_two_lists_sum_per_site():
     assert listed(debt, registered) == {"scripts/x.py": Counter({"main .write_text": 3})}
 
 
-@pytest.mark.parametrize("rel", ["scripts/tools/dx/gen_adr_checks.py",
+@pytest.mark.parametrize("rel", ["scripts/tools/dx/gen_agent_adapters.py",
                                  "scripts/tools/lint/check_iac_helm.py",
                                  "scripts/session-guards/session-init.py"])
 def test_the_scan_reaches_each_kind_of_tree(rel):

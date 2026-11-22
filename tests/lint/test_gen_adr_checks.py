@@ -138,8 +138,12 @@ def test_write_then_check_is_clean(tmp_path) -> None:
 
 def test_check_reports_drift(tmp_path) -> None:
     root = _adr_tree(tmp_path, {"t_test.go": "// adr-check: ADR-042/9.1a\nfunc TestRoutes() {}\n"})
+    files = sorted((root / "docs/adr").glob("*.md"))
+    before = [f.read_bytes() for f in files]
     assert sorted(gen.run(root, ["t_test.go"], write=False)) == [
         "docs/adr/042-example.en.md", "docs/adr/042-example.md"]
+    # #3981 (independent review): --check reports, it never writes.
+    assert [f.read_bytes() for f in files] == before
 
 
 @pytest.mark.parametrize("marker, needle", [
@@ -250,3 +254,64 @@ def test_a_longer_fence_is_closed_only_by_a_matching_fence() -> None:
 def test_a_tilde_fence_is_not_closed_by_backticks() -> None:
     text = ADR_ZH.replace("2. 其他：", "~~~\n```\n### 10. 範例\n~~~\n2. 其他：")
     assert gen.parse_clauses(text, "9") == ["1a", "1b", "2a"]
+
+
+def test_a_refused_adr_leaves_the_other_language_alone(tmp_path, monkeypatch, capsys) -> None:
+    """#3981: both files of an ADR are read and judged before either block
+    is written. With the second one a FIFO (the old read blocked on it
+    forever), `--write` is rc 2 naming it and the first keeps its bytes."""
+    import os
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFO on this platform")
+    root = _adr_tree(tmp_path, {"t_test.go": "// adr-check: ADR-042/9.1a\nfunc TestRoutes() {}\n"})
+    en, zh = root / "docs/adr/042-example.en.md", root / "docs/adr/042-example.md"
+    before = en.read_bytes()
+    zh.unlink()
+    os.mkfifo(zh)
+    monkeypatch.setattr(gen, "REPO_ROOT", root)
+    monkeypatch.setattr(gen, "_tracked", lambda r: ["t_test.go"])
+    with pytest.raises(SystemExit) as exc:
+        gen.main(["--write"])
+    err = capsys.readouterr().err
+    assert exc.value.code == 2 and str(zh) in err, err
+    assert len(err.strip().splitlines()) == 1, err
+    assert en.read_bytes() == before
+
+
+def test_a_violation_found_later_leaves_every_adr_unwritten(tmp_path) -> None:
+    """#3981: a marker naming a section the ADR has no block for is found in
+    the last pass, after the blocks are rendered. `--write` used to have
+    rewritten the stale files by then; nothing is written now."""
+    root = _adr_tree(tmp_path, {"t_test.go": "// adr-check: ADR-042/9.1a\nfunc TestRoutes() {}\n"
+                                              "// adr-check: ADR-042/10.1a\nfunc TestX() {}\n"})
+    files = [root / "docs/adr/042-example.md", root / "docs/adr/042-example.en.md"]
+    before = [f.read_bytes() for f in files]
+    with pytest.raises(gen.AdrChecksError, match="section 10"):
+        gen.run(root, ["t_test.go"], write=True)
+    assert [f.read_bytes() for f in files] == before
+
+
+def test_a_stdin_target_leaves_the_other_language_alone(tmp_path, monkeypatch, capsys) -> None:
+    """#3981 (independent review): the second ADR file is this process's
+    stdin — read without harm, refused before it is replaced. The first
+    target is not written either: every target is judged before the first
+    write. (The FIFO case above stops at the read and never gets here.)"""
+    import os
+    root = _adr_tree(tmp_path, {"t_test.go": "// adr-check: ADR-042/9.1a\nfunc TestRoutes() {}\n"})
+    en, zh = root / "docs/adr/042-example.en.md", root / "docs/adr/042-example.md"
+    before = en.read_bytes(), zh.read_bytes()
+    monkeypatch.setattr(gen, "REPO_ROOT", root)
+    monkeypatch.setattr(gen, "_tracked", lambda r: ["t_test.go"])
+    saved = os.dup(0)
+    try:
+        with open(zh, "rb") as fh:
+            os.dup2(fh.fileno(), 0)
+        with pytest.raises(SystemExit) as exc:
+            gen.main(["--write"])
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2 and str(zh) in err and "standard stream" in err, err
+    assert len(err.strip().splitlines()) == 1, err
+    assert (en.read_bytes(), zh.read_bytes()) == before

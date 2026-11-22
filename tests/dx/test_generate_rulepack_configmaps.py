@@ -16,6 +16,7 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 _DX = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "dx")
@@ -107,3 +108,27 @@ def test_pack_filter_scopes_to_one(tmp_path, monkeypatch):
     # Unknown pack name is a hard error (exit 2), not a silent no-op.
     monkeypatch.setattr(sys, "argv", ["g", "--pack", "ghost"])
     assert gen.main() == 2
+
+
+def test_a_refused_configmap_leaves_the_others_unwritten(tmp_path, monkeypatch, capsys):
+    """#3981: every ConfigMap is judged before the first is written. With
+    the second one a FIFO (the old bare write blocked on it forever), the
+    run is rc 2 naming it, and the first was not written."""
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFO on this platform")
+    (tmp_path / "rule-packs").mkdir()
+    out = tmp_path / "k8s" / "03-monitoring"
+    out.mkdir(parents=True)
+    for name in ("alpha", "beta"):
+        (tmp_path / "rule-packs" / f"rule-pack-{name}.yaml").write_text(
+            yaml.dump(_SRC), encoding="utf-8")
+    fifo = out / gen.target_name("beta")
+    os.mkfifo(fifo)
+    monkeypatch.setattr(gen, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["g"])
+    with pytest.raises(SystemExit) as exc:
+        gen.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2 and str(fifo) in err, err
+    assert len(err.strip().splitlines()) == 1, err
+    assert not (out / gen.target_name("alpha")).exists()
