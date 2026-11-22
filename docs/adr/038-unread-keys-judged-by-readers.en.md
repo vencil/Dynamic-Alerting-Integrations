@@ -14,67 +14,22 @@ lang: en
 
 ✅ **Accepted** (drafted 2026-10-16 and approved by the owner).
 
-Revised 2026-10-16 (corrected from measurement while implementing the registry): one more reader class, `policy_engine`; one more layer, a subdirectory's `_defaults.yaml`; the probe checks both directions, for every reader whose output can be compared (decisions 2 and 3). The cost description in decision 8 is updated.
+Revisions: revised step by step during implementation between 2026-10-16 and 2026-11-22; every change is folded into the decisions in parentheses, and approaches a later revision replaced are not listed.
 
-Revised 2026-10-17: no `_` key produces a threshold row any more, and the exporter reads no `_` key the registry does not list, in line with the JSON schema (decision 2); the verdict therefore no longer has `platform_violation`, and such a key is `unread` (decisions 4 and 6).
-
-Revised 2026-11-05: a threshold key's `disable` turns off the whole family — `_critical` and dimension keys — whichever layer writes them; a key turned off with its base is judged read. The "turned off only in part" warning no longer exists and is removed; a sibling the tenant's own file writes, turned off with its base, is a `disable_cascade` warning; a base only `dimensions:` names is a family's base too (decision 8).
-
-Revised 2026-10-17: the custom alert compiler compiles the exporter's own reading, so the two read `_custom_alerts` in the same layers (decision 2).
-
-Revised 2026-10-21: the generator half follows the registry's declarations, kept consistent with the code by the two-way probe, rather than measuring the generator's output on every verdict (decisions 1 and 5); Go's write check keeps only its value and structure checks and leaves key names to the shared verdict (decision 2); a `_` key in a profile is judged directly from the registry's profile layer, not through tenants (decision 4); before the generator container is wired to the shared verdict, served-values must be able to compute only the named tenants, within the memory and time budget of ADR-036 §3 (decisions 5 and 11).
-
-Revised 2026-10-22: the registry also records each key's value shape, which exporter-side function judges the value, and whether a batch operation may remove the key (decision 2); for a key the exporter reads, the write gate judges the value with the exporter's own parser (decision 1); new decision 12 sets how a bad value already on disk is handled.
-
-Revised 2026-10-23: the mode that computes only a write's tenants covers effective as well as served-values, and the verdict judges only those tenants (decision 5).
-
-Revised 2026-10-24: the verdict in the generator container has its own share of the deadline, reports "verdict not completed" with the reason when it does not fit, and the measured cost is recorded (decision 5).
-
-Revised 2026-10-28: tenant-api adds the verdict to the write response's `warnings`, and which findings each caller sees is set out (decision 5).
-
-Revised 2026-10-28: the generator's `--validate` reports the shared verdict too; the generator container does not have the generator judge again when it runs it (decision 5).
-
-Revised 2026-10-30: the verdict joins the generator container's one judgement, with no deadline of its own and no yielding, replacing 2026-10-24's "the verdict has its own share of the deadline"; the rules once tenant-api blocks when judged replace 2026-10-28's "the verdict only goes in `warnings`": a write whose verdict does not complete is refused, with no degraded path. The write check recomputes counterfactually for the written tenants only (decisions 2, 5, 8, 11).
-
-Revised 2026-10-31: reading a tenant's config (GET) no longer reports whether any reader reads a key, and does not judge it on the spot, replacing "GET's key-name messages switch to the shared verdict"; on load the exporter states only which keys it does not read itself, with no severity. The Go, Python and portal key-name judgements are deleted; the `version` label and rename notices reach CI through da-guard, printed as they are; a dimensional key is served only when every label of it is declared for its base under the root `_defaults.yaml` `dimensions:` (decision 11).
-
-Revised 2026-11-01: whether a dimensional key is served is decided by the labels `dimensions:` declares, replacing "served once its base is declared"; the shipped list is generated from the threshold registry (decision 11).
-
-Revised 2026-11-03: a key no reader reads is an error wherever it is written — a tenant file, a profile, a sub-directory `_defaults.yaml` or a root platform file's `tenants:` — with two exceptions left, a key unread only because of `disable_noop` (warning) and a `_state_<filter>` naming an undeclared filter (notice); every key of a profile, threshold keys included, is judged per profile; the level is kept apart from who is blocked, and a write gate blocks only on a finding in a file that write writes (decisions 4, 5, 6).
-
-Revised 2026-11-04: da-guard computes the verdict (`da-guard key-verdict`), replacing "a shared Python function"; every tool that needs the verdict reads its output and judges nothing itself (decision 5).
-
-Revised 2026-11-04: the gates block on what they judge, decision 4's levels take effect, and the verdict's `blocks` field decides whether to block; whole-tree CI also blocks on a threshold key it cannot judge; the write gate compares before and after in the finding's own unit; judging profile threshold keys per profile is deferred to #3395 (decisions 4, 6, 7).
-
-Revised 2026-11-04: a threshold key of a profile no tenant binds is not judged and is reported as a `profile_not_judged` notice, replacing "every key of a profile is judged per profile"; tenant-api's preview is judged as a write is; tenant-api and the generator container read the verdict's `blocks` (decisions 4, 5, 6).
-
-Revised 2026-11-05: a `dimensions:` base is never a `<key>_critical`: such a declaration declares nothing and no `<key>_critical{…}` key has a row (decision 11).
-
-Revised 2026-11-07: a reserved key that is read but whose value the reader does not read joins the shared verdict (`value_unread`), judged in the file and layer that writes it, never on the merged value: an error in a tenant file, a notice in a profile or a root platform file's `tenants:`; `_metadata`'s sub-keys and `_severity_dedup` each get their reader's value check. tenant-api refuses nothing more on such a finding and keeps decision 12's write check (decisions 10, 12).
-
-Revised 2026-11-07: a served key no alert compares is reported by validate-config's `no_alert` row, judged by `metric_observed_map.yaml`, advisory only; the example tree's 3 `_critical` keys are rule packs without a critical tier, not an index that misses the suffix (decision 10).
-
-Revised 2026-11-12: a tree that reaches the ConfigMap the exporter reads without CI is judged by an optional CronJob of the threshold-exporter chart running `validate-config`, alerting on failure (consequences and known limits).
-
-Revised 2026-11-13: a threshold key the threshold registry's `retired_keys:` lists is `unread`, reason `retired`, at error, whichever layer writes it and whatever reads it; the finding carries a hint naming the key that replaces it, and tenant-api's batch `unset` can remove it (decision 4).
-
-Revised 2026-11-14: a reserved key written with a schedule (a time window or `expires:`) joins the shared verdict (`schedule_unread`), judged in the file and layer that writes it at the levels of `value_unread` (decision 10).
-
-Revised 2026-11-14: the verdict judges each tenant over the whole day: a key some reader reads in any part of the day is read, and only a key no reader reads all day is `unread`; only whether an `expires:` has passed depends on the instant the check runs at. A part of the day /metrics cannot be gathered in is judged on the rows made before the registry. The verdict no longer judges threshold values (an unreadable or non-finite value is the main gate's); the verdict documents drop `served`, which held for one instant only, and move to `da-guard.key-verdict/v3` and `da-tools.explain-keys/v2` (decisions 1, 5, 8, 9, 10).
-
-Revised 2026-11-14: `key_checks` becomes one structured record per check (its kind, the key as the author wrote it and its metric name, the replacing metric name for a rename, and one sentence per kind carrying nothing the author wrote); the generator and validate-config word their line from these fields in a fixed form, instead of printing as is the sentence Go built quoting the whole key and label value; the verdict document moves to `da-guard.key-verdict/v4` and the served-values document to `da-guard.served-values/v2` (decision 11).
-
-Revised 2026-11-15: a reserved key a sub-directory `_defaults.yaml` writes in its defaults, which the exporter does not apply, is `unread` with reason `subtree_default_reserved_key`, read from the same set as da-guard's finding of that name (decision 10).
-
-Revised 2026-11-15: the thresholds the platform ships armed are built into the readers ([ADR-017](017-defaults-yaml-inheritance-dual-hash.en.md) decision 11). A tree in which no root platform file was read is no longer undecidable: the threshold keys the tenant wrote are judged as usual; a tenant writing a default-armed key is judged read even when the root does not write it; and a `disable` of such a key stops counting once expired (decisions 4, 7, 8).
-
-Revised 2026-11-16: `disable` may be written under the root `defaults:` (for a key the built-in layer gives a value only); every tenant inherits it, and it turns the family off and is judged by the same rules as a subdirectory's `disable` (decision 8).
-
-Revised 2026-11-18: the verdict no longer has `undecidable`: the verdict document drops its `undecidable` and `undecidable_blocks` fields, and no gate has a "threshold key it cannot judge" outcome any more; decision 7 is rewritten as "A tree with no root platform file" (decisions 5, 6, 7).
-
-Revised 2026-11-19: a `_` key no reader reads under the root `defaults:` (one the registry does not list, and `_metadata`, which the defaults merge drops at every level) is judged on that file, also when no tenant inherits it; `_metadata`'s reason is `merge_dropped` (decision 4).
-
-Revised 2026-11-22: an unread value of a reserved key used to be a notice in a platform file's `tenants:` and in a profile without exception; two cases are now an error in all three layers — an `_expected_exporters` the exporter does not read, and a `_metadata` that still writes the removed `db_type` (decision 10).
+- 2026-10-16: readers gain a `policy_engine` class, layers gain subdirectory `_defaults.yaml`, the probe runs both ways (decisions 2, 3, 8).
+- 2026-10-17: keys starting with `_` produce no threshold row, and a `_` key the registry does not list is `unread`; the custom-alert compiler reads `_custom_alerts` the way the exporter does (decisions 2, 4, 6).
+- 2026-10-21, 22: the generator's half follows the registry's declarations; the registry records each key's value shape and the predicate that judges it; decision 12 added (decisions 1, 2, 5, 12).
+- 2026-10-23 to 31: the verdict joins the generator container's one judgement and computes only the written tenants; a write whose verdict does not complete is refused; reading a tenant's config (GET) does not judge on the spot; the hand-written key-name checks are deleted (decisions 2, 5, 11).
+- 2026-11-01, 05: a dimensional key is emitted according to the labels `dimensions:` declares; `<key>_critical` cannot be a base in `dimensions:` (decision 11).
+- 2026-11-03, 04: a key no reader reads is always an error; da-guard computes the verdict (`da-guard key-verdict`) and each gate blocks by the verdict's `blocks`; threshold keys on a profile no tenant binds report `profile_not_judged` (decisions 4, 5, 6).
+- 2026-11-05: `disable` turns off the whole family, and a same-family key in the tenant's own file turned off that way reports `disable_cascade` (decision 8).
+- 2026-11-07: a reserved key read but with a value its reader cannot read is `value_unread`; a key emitted but compared by no alert is reported, not blocked, by validate-config's `no_alert` (decisions 10, 12).
+- 2026-11-12: a tree that reached the exporter's ConfigMap without CI is judged by `validate-config` in the chart's optional CronJob (Consequences and known limits).
+- 2026-11-13: a retired threshold key listed in `retired_keys:` is `unread` with reason `retired` (decision 4).
+- 2026-11-14: a reserved key written as a schedule is `schedule_unread`; the verdict judges each tenant over the whole day; the verdict does not judge threshold values; `key_checks` become structured records (decisions 1, 5, 8, 9, 10, 11).
+- 2026-11-15, 16: a reserved key the exporter does not apply in subdirectory defaults reports `subtree_default_reserved_key`; thresholds the platform enables by default are built into the readers; root `defaults:` may write `disable` (decisions 4, 7, 8, 10).
+- 2026-11-18, 19: decision 7 becomes "a tree with no root platform file"; a `_` key no reader reads in root `defaults:` is judged on that file, `_metadata` with reason `merge_dropped` (decisions 4, 5, 6, 7).
+- 2026-11-22: an `_expected_exporters` the exporter does not read, and a still-written, removed `_metadata.db_type`, are errors on all three layers (decision 10).
 
 ## Summary
 
@@ -445,16 +400,9 @@ Measured on the repo's example conf.d, `no_alert` lists 3 keys: `mongodb_connect
        no_alert `mongodb_connections_current_critical` — served, but no shipped alert compares it — file(s) examples/mongo-prod.yaml — tenant(s) mongo-prod
 ```
 
-### 11. Rollout order
+### 11. What each reader does
 
-Each item can ship on its own:
-
-1. The registry, the generated constants and schemas, the black-box probe. No behavior change.
-2. da-guard outputs `read_by` and reasons, counterfactual `disable_noop`, explain and `--assert`; the shared function is wired into validate-config, report only, no blocking.
-3. The generator's `--validate` and the generator container are wired to the shared function, and da-guard's exit 4 widens. This must wait for step 2 of [ADR-036](./036-single-parser-effective-config.en.md) §7 (da-guard gains "undecided") to be done first; before the container is wired up, served-values must be able to compute only the named tenants and have its memory measured (decision 5).
-4. The items of decision 10, and the platform-side notice for `_state_`.
-
-Changing the gates to "block when judged" is not part of this ADR and is driven by [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016). The hand-written key-name checks are deleted in the same step as, or after, the gate on the same entry point starts blocking; a write whose verdict does not complete is refused (decision 5), so apart from the two deliberate loosenings listed in decision 2, no intermediate release is looser than the one before. On tenant-api's entry point the order is: first the generator container judges within the one judgement's deadline, without yielding, recomputing counterfactually for the written tenants only and without truncating errors, still reporting only; then, in one release, tenant-api blocks by the verdict and drops Go's key-name part and the handler's pre-check of `_` keys. In the same release the remaining key-name judgements go too:
+With the shared verdict in place, each reader behaves as follows:
 
 - Reading a tenant's config (GET) no longer reports whether any reader reads a key, and does not judge it on the spot: judging there would take the generator container's judgement queue, and a caller with read permission could trigger it. `da-tools explain-keys` or CI's validate-config show it, and the verdict refuses it on a write — as Kubernetes returns warnings in a write's response only. A git-managed tenant, never written through the API, has such problems reported by CI only.
 - On load the exporter states the keys it does not read itself (a key no row reads, a `disable` written for such a key, a `_` key the registry lists no reader for), with no severity: a reader's fact where it reads, the severity being the verdict's (decision 4). A deployment without CI keeps this signal. The exporter's two other messages about what it reads stay as they are: routing-layer keys in a profile are not applied, and a `_critical` with no base default.
