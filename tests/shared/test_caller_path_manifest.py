@@ -95,9 +95,16 @@ positional among them), so the manifest's ``any`` kind is gone, as ``dir``
   (``test_output_path_write_failure.py``'s join the other way refuses a
   rowed flag declared ``runtime`` / ``not_path`` / ``url``); a NEW output
   flag declared ``runtime`` from the start has no row to be held by, and
-  nothing structural tells a result from a scratch path. A ``reader``'s
-  ``pinned_by`` is only checked to exist (several share one table-driven
-  test); a ``runtime``'s must also spell its flag.
+  nothing structural tells a result from a scratch path.
+* ⚠️ The ``reader`` road out is open: an output flag WITH a row,
+  re-declared ``reader`` with any existing test for a ``pinned_by``, is
+  green everywhere. A ``reader``'s ``pinned_by`` is only checked to exist
+  (several share one table-driven test), and the join the other way cannot
+  refuse ``reader`` — one flag with a row is rightly one
+  (``state-reconcile --manifest-path``).
+* A ``runtime``'s ``pinned_by`` must spell its flag in a string of the test
+  (not in its docstring) — which shows the test names the flag, not that it
+  runs the tool on a path it cannot use.
 * The walk reads the parser the tool builds with ``DA_LANG`` unset. Three
   tools build a second, Chinese parser (alert-quality, cardinality-forecast,
   policy-engine); a flag added to that one alone is not seen.
@@ -231,19 +238,35 @@ def _entries(manifest: dict) -> dict[tuple[str, str], dict]:
     return out
 
 
-def _test_source(ref: str) -> str:
-    """The source of the test *ref* names (`_test_exists` holds for it):
-    the function, decorators and all."""
+def _test_strings(ref: str) -> "list[str]":
+    """The string constants of the test *ref* names (`_test_exists` holds
+    for it): those of its body and of its decorators (a parametrize row),
+    f-string pieces among them — NOT its docstring. A flag a test only
+    talks about in prose is not a flag it runs (blind review of #4192: the
+    socket test's docstring said "costs --work-dir nothing", and a
+    substring search of the source took that for a pin of --work-dir)."""
     import ast
     file, _, name = ref.partition("::")
-    text = (REPO / file).read_text(encoding="utf-8")
-    tree = ast.parse(text)
+    tree = ast.parse((REPO / file).read_text(encoding="utf-8"))
     scopes = [tree.body] + [n.body for n in tree.body if isinstance(n, ast.ClassDef)]
     for body in scopes:
         for node in body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
-                return ast.get_source_segment(text, node) or ""
-    return ""
+                doc = (node.body[0].value if node.body and isinstance(node.body[0], ast.Expr)
+                       and isinstance(getattr(node.body[0], "value", None), ast.Constant)
+                       else None)
+                return [c.value for part in (*node.decorator_list, *node.body)
+                        for c in ast.walk(part)
+                        if isinstance(c, ast.Constant) and isinstance(c.value, str)
+                        and c is not doc]
+    return []
+
+
+def spells_flag(strings: "list[str]", flag: str) -> bool:
+    """Whether one of *strings* holds *flag* as a whole option (`--work` is
+    not in `--work-dir`)."""
+    whole = re.compile(rf"(?<![\w-]){re.escape(flag)}(?![\w-])")
+    return any(whole.search(s) for s in strings)
 
 
 def _test_exists(ref: str) -> bool:
@@ -378,7 +401,8 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
         if kind in PINNED_KINDS:
             if not _test_exists(decl.get("pinned_by", "")):
                 faults.append(f"{where}: {kind} without a pinned_by test that exists")
-            elif kind == "runtime" and key[1] not in _test_source(decl["pinned_by"]):
+            elif kind == "runtime" and not spells_flag(
+                    _test_strings(decl["pinned_by"]), key[1]):
                 faults.append(f"{where}: its pinned_by test never spells {key[1]} — "
                               "a test of something else pins nothing here")
         elif kind == "pending":
@@ -787,12 +811,47 @@ def test_a_runtime_path_needs_its_pinning_test():
         "else pins nothing here"]
     assert _faults({"t": {"--d": "not_path", "--n": {"kind": "runtime"}}}) == [
         "t --n: runtime without a pinned_by test that exists"]
+    # …in a STRING of the test: the docstring above names `runtime` and
+    # `output` and `reader`; none of them is a string this test holds
+    strings = _test_strings(f"{here}::test_a_runtime_path_needs_its_pinning_test")
+    assert "--n" in strings
+    # (the first line: Python 3.13 dedents `__doc__`, the syntax tree does not)
+    first = test_a_runtime_path_needs_its_pinning_test.__doc__.splitlines()[0]
+    assert first and not any(s.startswith(first) for s in strings)
+    # …so a test that only TALKS about a flag does not pin it. The name is
+    # put together here: no string of this file's tests spells it.
+    prose_only = "--zq" + "-only-in-prose"
+    talks = {"kind": "runtime",
+             "pinned_by": f"{here}::test_a_test_that_only_talks_about_a_flag"}
+    assert _faults({"t": {"--d": "not_path", "--n": "not_path", prose_only: talks}},
+                   parsed={**_PARSED, ("t", prose_only): "ops/t.py"}) == [
+        f"t {prose_only}: its pinned_by test never spells {prose_only} — a test of "
+        "something else pins nothing here"]
+    # a whole option, not the start of a longer one
+    assert spells_flag(["ERROR: --work-dir /x: no"], "--work-dir")
+    assert not spells_flag(["--work-dir"], "--work")
+    assert not spells_flag(["x--work-dirs"], "--work-dir")
+    # a parametrize row is a string of the test too
+    assert "decorated" in _test_strings(f"{here}::test_a_decorated_test_shows_its_rows")
+
     gone = {"kind": "runtime", "pinned_by": f"{here}::test_no_such_test"}
     assert len(_faults({"t": {"--d": "not_path", "--n": gone}})) == 1
     declared = {k: d for k, d in _entries(load_manifest()).items()
                 if d.get("kind") == "runtime"}
     assert declared, "no runtime path is declared — the rule above holds nothing"
     assert all(_test_exists(d.get("pinned_by", "")) for d in declared.values()), declared
+
+
+def test_a_test_that_only_talks_about_a_flag():
+    """A fixture of the test above: it says --zq-only-in-prose here, in its
+    docstring, and holds no string that does."""
+
+
+@pytest.mark.parametrize("row", ["decorated"])
+def test_a_decorated_test_shows_its_rows(row):
+    """The fixture of the last assertion above: its only string is in its
+    decorator."""
+    assert row
 
 
 def test_a_manifest_file_line_is_a_fault():
