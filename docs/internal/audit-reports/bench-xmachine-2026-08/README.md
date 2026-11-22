@@ -28,7 +28,7 @@ python3 docs/internal/audit-reports/bench-xmachine-2026-08/reproduce.py
 | **輸入（fixtures）** | 無外部 fixture。四支 bench 皆來自 `components/threshold-exporter/app`，各 shard **自行編譯同一份原始碼**；`shard_meta.csv` 的 `binary_sha256` 是各機實測值 |
 | **原始資料取件** | 從 collect job 的 log 還原（見下「從原始 log 重建」）；208 筆記錄逐筆 SHA-256 驗證通過 |
 | **negative validation** | `python3 .../selftest.py` —— 植入已知效應與已知**無**效應各一，驗估計量兩者都認得；外加 digest 分歧必須被拒 |
-| **逐項輸出與解讀** | ADR-032 §證據 4；本檔以下各節 |
+| **逐項輸出與解讀** | ADR-032 §證據 3；本檔以下各節 |
 
 ## 檔案
 
