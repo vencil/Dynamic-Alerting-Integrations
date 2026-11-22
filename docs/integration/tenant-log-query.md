@@ -193,6 +193,12 @@ gateway 採 **default-deny 白名單**——只放行 VictoriaLogs 的 LogsQL **
   上限筆不同值（Grafana 變數把筆數設成 `0` 時就是這種情況）。
 - POST body 裡帶 `limit=0`：`400`（body 的值會壓過 gateway 補在 URL 的值）。不想自己指定就不要帶。
 
+用 Grafana 的 VictoriaLogs data source 時，下面兩個設定若大於上限，對應的請求會收到 `400`：
+
+- 範本變數（template variable）設定的筆數上限（limit）。設成 `0` 則不帶 `limit`，由 gateway 補上上限值。
+- data source 設定裡 Query Builder 的 field values 筆數上限（`queryBuilderLimits.fieldValue`）。沒設定時
+  plugin 用 `1000`，有設定就以它為準。
+
 其他白名單 endpoint（`hits`、`facets`、`stats_query` 等）沒有這條規定。
 
 ## 5. 你能看到什麼：2-tier 可見度
@@ -267,7 +273,7 @@ VictoriaLogs (AccountID, ProjectID)：強制隔離
 |---|---|
 | 全部請求 `403`（body 含 `Audiences in Jwt are not allowed`）| 多半是**用錯 token**——log query 要 `capability=logs`（`aud=tenant-federation-logs`）的 token，不是 metrics token；重新簽（§3）|
 | 查詢回 `200` 但 result 一直空 | cold-start（你還沒 federation 活動，§6.1）；或時間範圍內無資料；或平台側**還沒**把你配進 `tenantProjections`（§2.2）——聯絡平台團隊確認你的投影已上線 |
-| `/select/logsql/query`、`field_values` 一律 `400`，內文提到 `limit` | `/query` 沒帶 `limit`，或筆數超過上限；透過 Grafana 等工具查詢時，確認它送出的筆數設定在上限以內（§4.2）|
+| `/select/logsql/query`、`field_values` 一律 `400`，內文提到 `limit` | `/query` 沒帶 `limit`，或筆數超過上限；透過 Grafana 查詢時，檢查範本變數的筆數上限與 data source 的 Query Builder field values 上限（`queryBuilderLimits.fieldValue`）是否大於平台上限（§4.2）|
 | 打某 endpoint 一律 `403` | 該 endpoint 不在白名單（`/tail`、`/insert/*`、未知 path）——改用 §4.1 列出的 query/metadata endpoint |
 | 看不到某些欄位（node / 後端 IP）| **設計如此**——tier-2 淨化把基礎設施拓樸結構性移除（§5）；報修請附 `log_event_id` 讓平台值班 join 回完整副本 |
 

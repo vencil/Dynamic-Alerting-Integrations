@@ -631,6 +631,10 @@ def _received_limits(resp):
     ("query=*&field=_msg", str(_MAX_LIMIT)),
     ("query=*&field=_msg&limit=0", str(_MAX_LIMIT)),
     ("query=*&field=_msg&limit=000", str(_MAX_LIMIT)),
+    # An encoded zero key must be dropped by the rewrite too, or Go would read
+    # ["0", max] and FormValue's "0" means no limit.
+    ("query=*&field=_msg&%6Cimit=0", str(_MAX_LIMIT)),
+    ("query=*&field=_msg&l%69mit=00", str(_MAX_LIMIT)),
     ("query=*&field=_msg&limit=5", "5"),
     (f"query=*&field=_msg&limit={_MAX_LIMIT}", str(_MAX_LIMIT)),
 ])
