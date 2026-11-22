@@ -334,9 +334,7 @@ def test_a_failed_stdout_output_says_one_line_and_no_traceback(tmp_path, redirec
 
 def test_closing_the_stdout_sink_never_flushes_stdout(monkeypatch):
     """#4055: the sink's finalizer closes it; a flush there of a stdout that
-    already failed prints an "Exception ignored" traceback. And a body that
-    raises something else must not have that replaced by the flush's error
-    from the ``finally`` that closes the sink."""
+    already failed prints an "Exception ignored" traceback."""
     flushes = []
 
     class _Broken(io.StringIO):
@@ -348,3 +346,71 @@ def test_closing_the_stdout_sink_never_flushes_stdout(monkeypatch):
     sink = _lib_io._StdoutSink()
     sink.close()
     assert flushes == [] and sink.closed
+
+
+_OTHER_OSERROR = """\
+import sys
+sys.path.insert(0, sys.argv[1])
+import _lib_exitcodes, _lib_io
+def main():
+    try:
+        with _lib_io.open_operator_output("-", flag="-o") as fh:
+            fh.write("partial-doc\\n")
+            open(sys.argv[2], encoding="utf-8")  # not stdout's failure
+    except _lib_io.OutputWriteError:
+        pass
+    print("after")
+    return 0
+_lib_exitcodes.run(main)
+"""
+
+_REBOUND = """\
+import sys
+sys.path.insert(0, sys.argv[1])
+import _lib_exitcodes, _lib_io
+real = sys.stdout
+sys.stdout = open("/dev/full", "w", encoding="utf-8")
+try:
+    _lib_io.write_operator_output("-", "x", flag="-o")
+except _lib_io.OutputWriteError:
+    pass
+sys.stdout = real
+print("driver output on the real fd 1")
+"""
+
+
+def _run_script(tmp_path, source, *args):
+    import subprocess
+    script = tmp_path / "entry.py"
+    script.write_text(source, encoding="utf-8")
+    return subprocess.run([sys.executable, "-I", str(script), os.path.abspath(_TOOLS_DIR), *args],
+                          stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                          encoding="utf-8", timeout=60)
+
+
+def test_another_oserror_in_the_body_leaves_a_working_stdout_alone(tmp_path):
+    """#4055 review: only stdout's own failure drops what it buffers."""
+    done = _run_script(tmp_path, _OTHER_OSERROR, str(tmp_path / "missing" / "f"))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "partial-doc\nafter\n"
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/full"), reason="no /dev/full")
+def test_a_rebound_stdout_that_fails_leaves_the_real_fd_1_working(tmp_path):
+    done = _run_script(tmp_path, _REBOUND)
+    assert done.stdout == "driver output on the real fd 1\n", done.stderr
+
+
+def test_a_body_error_is_not_replaced_by_a_failed_stdout(monkeypatch):
+    """The ``finally`` that closes the sink must not flush a broken stdout
+    and raise its OSError over what the body raised."""
+    class _Broken(io.StringIO):
+        def flush(self):
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(sys, "stdout", _Broken())
+    monkeypatch.setattr(_lib_exitcodes, "_stdout_owner", None, raising=False)
+    with pytest.raises(ValueError):
+        with _lib_io.open_operator_output("-", flag="-o") as fh:
+            fh.write("x")
+            raise ValueError("the body's own error")

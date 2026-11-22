@@ -790,14 +790,26 @@ class _StdoutSink(io.TextIOBase):
     def writable(self) -> bool:
         return True
 
+    #: #4055: whether a write or flush through this sink failed — the one
+    #: case in which what stdout still buffers is dropped.
+    failed = False
+    _closing = False
+
     def write(self, s: str) -> int:  # type: ignore[override]
-        return sys.stdout.write(s)
+        try:
+            return sys.stdout.write(s)
+        except OSError:
+            self.failed = True
+            raise
 
     def flush(self) -> None:
-        if not self._closing:
+        if self._closing:
+            return
+        try:
             sys.stdout.flush()
-
-    _closing = False
+        except OSError:
+            self.failed = True
+            raise
 
     def close(self) -> None:
         """Close the sink, never ``sys.stdout``, and without flushing it
@@ -885,10 +897,12 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
                 yield sink
                 sink.flush()
             except OSError:
-                # #4055: the caller reports this failure in its own line;
-                # drop what stdout still buffers, so the last flush at exit
-                # does not fail again and print a second one.
-                _lib_exitcodes.discard_failed_stdout()
+                # #4055: stdout itself failed and the caller reports it in its
+                # own line; drop what stdout still buffers, so the last flush
+                # at exit does not fail again and print a second one. Another
+                # OSError of the body leaves a working stdout alone.
+                if sink.failed:
+                    _lib_exitcodes.discard_failed_stdout()
                 raise
             finally:
                 sink.close()

@@ -1135,8 +1135,11 @@ def discard_failed_stdout() -> None:
     """A stdout write failed and the caller reported it in its own line (an
     operator output on ``-``, #4055): point stdout at the null device, so
     what it still buffers is dropped and the last flush at exit neither
-    fails again nor prints a second line."""
-    _silence_stdout()
+    fails again nor prints a second line. Only ``sys.stdout``: a stream a
+    caller rebound it to fails alone, and the real fd 1 keeps working."""
+    out = sys.stdout
+    if out is not None and out is not sys.stderr:
+        _to_null(out)
 
 
 def note_stdout_failure(exc: BaseException) -> None:
