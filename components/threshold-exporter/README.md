@@ -20,7 +20,7 @@
 2. [核心能力](#2-核心能力) — 六項能力速覽
 3. [營運參考](#3-營運參考) — endpoints / 旗標 / metrics / exit codes
 4. [配置參考](#4-配置參考) — 檔案規則 / 繼承 / 閾值語法 / 自訂告警
-5. [配套 CLI](#5-配套-cli) — da-guard / da-parser / da-batchpr
+5. [配套 CLI](#5-配套-cli) — da-guard / da-parser
 6. [部署](#6-部署) — Helm + 熱重載模型
 7. [開發](#7-開發) — build / test / 驗證
 
@@ -137,13 +137,13 @@
 
 ### 3.4 Exit Codes（CLI binaries）
 
-| Code | `da-guard` | `da-parser` | `da-batchpr` |
-|------|-----------|-------------|--------------|
-| 0 | clean | parse OK | 全部目標成功 |
-| 1 | 發現錯誤（擋 merge） | gate 失敗（non-portable / ambiguous） | 一個以上目標失敗 |
-| 2 | caller error（旗標 / 路徑） | caller error | caller error |
-| 3 | exporter 無法 decode 或讀不到的設定檔（見 [cli-reference §guard](../../docs/cli-reference.md#guard)；#2123） | — | — |
-| 4 | 未判定：樹上有只能由 route generator 判的路由／domain policy 內容（[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)；優先序 3 > 1 > 4 > 0，見 [cli-reference §guard](../../docs/cli-reference.md#guard)） | — | — |
+| Code | `da-guard` | `da-parser` |
+|------|-----------|-------------|
+| 0 | clean | parse OK |
+| 1 | 發現錯誤（擋 merge） | gate 失敗（non-portable / ambiguous） |
+| 2 | caller error（旗標 / 路徑） | caller error |
+| 3 | exporter 無法 decode 或讀不到的設定檔（見 [cli-reference §guard](../../docs/cli-reference.md#guard)；#2123） | — |
+| 4 | 未判定：樹上有只能由 route generator 判的路由／domain policy 內容（[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)；優先序 3 > 1 > 4 > 0，見 [cli-reference §guard](../../docs/cli-reference.md#guard)） | — |
 
 ---
 
@@ -315,17 +315,7 @@ da-parser import --input rules.yaml --fail-on-non-portable
 da-parser allowlist                 # 印出 VM-only allowlist（introspection）
 ```
 
-### `da-batchpr` — 階層感知的 Batch PR 管線
-
-JSON-in / JSON-out + Markdown report；上游由 Python `da-tools` 包裝呼叫。
-
-| Subcommand | 作用 |
-|-----------|------|
-| `apply` | 依 plan 開 / 更新各租戶的 chunk PR |
-| `refresh` | Base PR merge 後，把租戶分支 rebase 到新的 main HEAD |
-| `refresh-source` | 把 data-layer hot-fix 重新 apply 到既有租戶分支 |
-
-> **Python 包裝**：`da-tools guard defaults-impact` / `da-tools batch-pr *` 會 shell-out 到對應 Go binary。Binary 解析序：`--<bin>-binary` 旗標 → `$DA_<BIN>_BINARY` 環境變數 → `$PATH`。
+> **Python 包裝**：`da-tools guard *` / `da-tools parser *` 會 shell-out 到對應 Go binary。Binary 解析序：`--<bin>-binary` 旗標 → `$DA_<BIN>_BINARY` 環境變數 → `$PATH`。
 
 ---
 

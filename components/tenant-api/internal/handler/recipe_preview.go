@@ -98,16 +98,14 @@ func PreviewRecipe(d *Deps) http.HandlerFunc {
 				"recipe preview is not configured on this deployment")
 			return
 		}
-		raw, err := io.ReadAll(io.LimitReader(r.Body, previewMaxBody+1))
-		if err != nil {
-			WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
-			return
-		}
 		// The container's own limit (PREVIEW_MAX_BODY_BYTES), answered here
-		// as a 413 rather than relayed as its 400.
-		if len(raw) > previewMaxBody {
-			WriteJSONErrorWithCode(w, r, http.StatusRequestEntityTooLarge, errcode.PayloadTooLarge,
-				fmt.Sprintf("a recipe preview request is at most %d bytes", previewMaxBody))
+		// as a 413 rather than relayed as its 400 — through the shared
+		// overflow-detecting reader (#2778), under this endpoint's own cap
+		// rather than d.MaxBody().
+		raw, ok := readBodyCapped(w, r, previewMaxBody, func(int) string {
+			return fmt.Sprintf("a recipe preview request is at most %d bytes", previewMaxBody)
+		})
+		if !ok {
 			return
 		}
 		var in struct {

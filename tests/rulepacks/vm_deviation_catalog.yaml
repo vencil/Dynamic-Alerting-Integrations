@@ -88,3 +88,28 @@ deviations:
       persistent in normal operation, so this is a rare one-off, never a flap.
     disposition: accept-document
     ref: docs/internal/platform-log-aggregation-runbook.md （§8.7 TenantProjectionMappingErrors）
+
+  - fixture: platform-tenant-projection-stamp-missing_test.yaml
+    rules: [TenantProjectionStampMissing]
+    mechanism: >-
+      Same MetricsQL cold-start as the entry above, on the `increase(X[1h])` arm:
+      a series whose first sample lies inside the 1h window counts as having started
+      from 0, so its whole first value is reported. The fixture's
+      collection-start-with-non-zero-counter-does-not-fire case (the counter already
+      at 5 when collection starts, no Vector data an hour earlier) is muted on the
+      `unless … offset 1h` arm by `count(vector_uptime_seconds offset 1h)`, but the
+      `increase` arm alone reports 5 on vmalert at 10m and 59m. Verified with
+      vmalert-tool v1.146.0; every other case of the fixture agrees on both engines.
+    direction: over-fire
+    vm_behavior: >-
+      For the first hour of the counter's history in the evaluating storage, every
+      Vector series with a non-zero lifetime count is reported once (its lifetime
+      value). A series born non-zero after a rollout (replayed misses) is caught by
+      MetricsQL's increase natively, as on Prometheus by the new-series arm.
+    prod_impact: >-
+      Only when the VM storage holds none of the counter's history — a fresh/emptied
+      vmstorage or a new retention boundary. The warning then re-reports misses that
+      really happened since each Vector pod started, once, for about an hour. vmstorage
+      is persistent in normal operation, so this is a rare one-off, never a flap.
+    disposition: accept-document
+    ref: docs/internal/platform-log-aggregation-runbook.md （§8.7 TenantProjectionStampMissing）

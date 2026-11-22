@@ -35,7 +35,7 @@ verified-at-version: v2.8.0
 | **< 50 tenant，無組織分群需求** | ⏸️ **不遷** | hierarchical 帶來的 cascading defaults / blast-radius scope 收益 < 你維護兩種 layout 認知成本 |
 | **50-200 tenant，單一 BU/team 管理** | 🟡 **可遷可不遷** | tipping point — 看你是否預期下個季度跨 region 擴。若是，先遷 |
 | **200+ tenant，多 BU/region/env 分群** | 🟢 **遷** | cascading defaults 省的 YAML 行數 + blast-radius 的 scope 訊號是 hard wins |
-| **客戶端有 GitOps PR 流程**（用 `da-tools batch-pr` 分批開 PR）| 🟢 **遷** | PR 怎麼分由 Plan 決定，`apply` 自己不分組。`BuildPlan` 的設計是按 domain（第一層目錄）分；扁平 layout 的租戶都落在同一組，只按租戶數切（預設每支 25 個）。但目前沒有 CLI 會跑 `BuildPlan`。⚠️ `da-tools batch-pr` 是 experimental：`apply` 必填的 Plan JSON 與 emit 目錄目前沒有工具產生，要另外準備（見 [`batch-pr`](../cli-reference.md#batch-pr)） |
+| **客戶端有 GitOps PR 流程**（分批開 PR）| 🟢 **遷** | 按 domain（第一層目錄）分批開 PR 時，每支 PR 只碰一個目錄的 `_defaults.yaml` 與其下租戶，review 範圍清楚；扁平 layout 所有租戶都在同一層，只能按租戶數切 |
 | **預期下個 quarter 引入跨 region/env defaults**（threshold 因 region 不同）| 🟢 **遷** | flat 沒地方放 region 級 `_defaults.yaml`；遷 cost 只增不減，越早越好 |
 | **客戶端 `_defaults.yaml` 一年內幾乎不動**（純 flat 寫死 thresholds）| ⏸️ **不遷** | hierarchical 的核心收益是 cascading 改動 — 用不到就沒收益，只剩維護成本 |
 
@@ -53,7 +53,7 @@ verified-at-version: v2.8.0
 | 一次性成本 | 持續性成本 |
 |---|---|
 | Cutover 期間 mixed mode 掃描變慢（§4 量化）| `_metadata.{domain,region,environment}` 必須在每個 tenant YAML 維護 |
-| 多人協作時 conflict surface 變大（多目錄 `_defaults.yaml`）| GitOps merge 衝突可能跨多目錄，需要 `da-tools batch-pr` 工具協助 (v2.8.0) |
+| 多人協作時 conflict surface 變大（多目錄 `_defaults.yaml`）| GitOps merge 衝突可能跨多目錄，分批 PR 時要依目錄切分、照順序 merge |
 | 一次性 staging rehearsal（v2.8.0 staging rehearsal hard gate）| Operator 要會看 `defaultsPathLevel` 推算受影響 tenants |
 
 ---

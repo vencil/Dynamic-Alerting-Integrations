@@ -4,7 +4,7 @@ package parser
 // rule shape into ParsedRule records with dialect classification.
 //
 // Input shape (subset of the official PrometheusRule v1 spec — only
-// the fields C-9 / C-10 actually consume):
+// the fields the parser actually reads):
 //
 //   apiVersion: monitoring.coreos.com/v1
 //   kind: PrometheusRule

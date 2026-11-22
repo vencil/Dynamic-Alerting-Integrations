@@ -120,7 +120,7 @@ Rule Pack 涵蓋 MySQL、PostgreSQL、Redis、Kafka 等技術棧，每種一包�
 | [`rule-packs/`](rule-packs/) | 16 份 Rule Pack 來源 YAML（`rule-pack-<tech>.yaml`）+ [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md) | 新增/修改告警規則 |
 | [`policies/`](policies/) | OPA Rego 政策範例（naming、routing、threshold-bounds） | 治理層規則 |
 | [`environments/`](environments/) | CI / local 環境 profile | 跨環境差異配置 |
-| [`scripts/`](scripts/) | Shell 進入點 + `scripts/tools/{ops,dx,lint}` 下 226 個 Python 工具 | 跑工具、lint、開發者體驗 |
+| [`scripts/`](scripts/) | Shell 進入點 + `scripts/tools/{ops,dx,lint}` 下 225 個 Python 工具 | 跑工具、lint、開發者體驗 |
 | [`tests/`](tests/) | Python pytest（`test_*.py`）、手動 shell 腳本（`scenarios/`）、`e2e/` Playwright、`snapshots/` | 跑測試、加測試 |
 | [`docs/`](docs/) | 公開文件與其中英雙語 pair，逐份對照表見 [doc-map](docs/internal/doc-map.md)；另有 internal playbook/planning 文件不入 catalog | 讀設計/整合/運維文件 |
 | [`CLAUDE.md`](CLAUDE.md) | AI Agent 起手式與任務分流表 | agent session 開始前必讀 |
@@ -154,7 +154,7 @@ docker compose up da-portal tenant-api     # 只起核心雙星
 | **da-portal**（Tenant Manager UI）<br>`[給 Tenant]` | 視覺化瀏覽/編輯租戶設定，按 Save 即落一個真實 git commit（GitOps） | 開 <http://localhost:8081> | [Helm chart](helm/) |
 | **tenant-api**<br>`[給 Platform Engineer]` | file-based 設定 API（commit-on-write，無資料庫） | [QUICKSTART](components/tenant-api/QUICKSTART.md) | [Helm](helm/) + oauth2-proxy |
 | **threshold-exporter** + Prometheus<br>`[給 Platform Engineer]` | 把 YAML 閾值變成 `user_threshold` 指標 → `group_left` 單規則覆蓋全租戶 | [QUICKSTART](components/threshold-exporter/QUICKSTART.md) | [BYO Prometheus](docs/integration/byo-prometheus-integration.md) |
-| **da-tools**（CLI）<br>`[給 Domain Expert]` | 護欄 / 遷移 / scaffold（`guard`、`parser`、`batch-pr`…） | [QUICKSTART](components/da-tools/app/QUICKSTART.md) | CI 整合 |
+| **da-tools**（CLI）<br>`[給 Domain Expert]` | 護欄 / 遷移 / scaffold（`guard`、`parser`、`migrate`…） | [QUICKSTART](components/da-tools/app/QUICKSTART.md) | CI 整合 |
 
 ---
 
@@ -219,13 +219,13 @@ O(M) 複雜度（`group_left` 向量匹配）· 各 Rule Pack 以 Projected Volu
 
 ### 工具鏈（da-tools CLI）
 
-涵蓋租戶**生命週期**（scaffold / onboard / migrate-rule / cutover / offboard）、**日常運維**（diagnose / patch-config / explain-route）、**品質治理**（validate-config / alert-quality / Policy-as-Code）、與**客戶導入管線**（da-parser → Profile Builder（library）→ da-batchpr → da-guard；Profile Builder 為 library、無獨立 `da-tools profile build` CLI；Profile Builder → da-batchpr 一段尚未接通，`batch-pr` 為 experimental，見 [`batch-pr`](docs/cli-reference.md#batch-pr)）。全部封裝在 `ghcr.io/vencil/da-tools` 容器。
+涵蓋租戶**生命週期**（scaffold / onboard / migrate-rule / cutover / offboard）、**日常運維**（diagnose / patch-config / explain-route）、**品質治理**（validate-config / alert-quality / Policy-as-Code）、與**客戶導入管線**（da-parser 分診 → [`migrate`](docs/cli-reference.md#migrate) 逐租戶轉換 → da-guard）。全部封裝在 `ghcr.io/vencil/da-tools` 容器。
 
 完整命令、旗標與範例 → [CLI 參考](docs/cli-reference.md) · [速查表](docs/cheat-sheet.md) · [互動工具索引](docs/interactive-tools.md)
 
 ### 客戶導入：Migration Toolkit
 
-把客戶現有 PromRule corpus 導入本平台 `conf.d/`（設計為 `da-parser → Profile Builder (library) → da-batchpr → da-guard`；其中 Profile Builder → `da-batchpr apply` 尚未接通、為 experimental，見 [`batch-pr`](docs/cli-reference.md#batch-pr)，目前請用逐租戶的 `migrate`），並以 **Docker / static binary / air-gapped tar 三條交付路徑**（皆 cosign keyless 簽 + SBOM）覆蓋從外網到金融/政府/軍工封閉網路的全光譜環境。
+把客戶現有 PromRule corpus 導入本平台 `conf.d/`（逐租戶用 [`migrate`](docs/cli-reference.md#migrate) 轉成 conf.d 租戶檔，`da-parser` 做可攜性分診、`da-guard` 驗樹；產出 `_custom_alerts` recipe 的批次導入見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)），並以 **Docker / static binary / air-gapped tar 三條交付路徑**（皆 cosign keyless 簽 + SBOM）覆蓋從外網到金融/政府/軍工封閉網路的全光譜環境。
 
 完整安裝與簽章驗證 → [Migration Toolkit Installation](docs/migration-toolkit-installation.md)
 

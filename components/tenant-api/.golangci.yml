@@ -44,6 +44,11 @@ linters:
     - godoclint
   settings:
     forbidigo:
+      # Type-aware matching (#2778 round 2): each expression is matched in its
+      # package-qualified form, so `stdio "io"` still reads as io.ReadAll and a
+      # *http.Request field or method reads as http.Request.<name> whatever the
+      # variable is called. See the #2778 rules for what this still misses.
+      analyze-types: true
       # #932 follow-up: keep outbound HTTP clients off the process-wide
       # http.DefaultClient/DefaultTransport pool. Sharing it let
       # httptest.Server.Close() flush a connection out from under a parallel
@@ -80,13 +85,47 @@ linters:
         # build the idempotent reset seams #1279 describes (NOT save/restore —
         # last-cleanup-wins under t.Parallel()), then delete these two rules.
         #
-        # ⚠️ Matches source text (analyze-types is off), so an import alias
-        # (`w "…/internal/ws"`) evades it. scanOnce is unexported in package
-        # orphan, so NewDetector is the only way a handler test can rescan.
+        # analyze-types (above) matches the package-qualified name, so an
+        # import alias (`w "…/internal/ws"`) no longer evades it. scanOnce is
+        # unexported in package orphan, so NewDetector is the only way a
+        # handler test can rescan.
         - pattern: 'ws\.NewHub'
           msg: 'constructing a real ws hub writes ws.activeHub, a process-global with no reset seam that TestMetricsHandler_Golden reads; build the reset seam first (#1279).'
         - pattern: 'orphan\.NewDetector'
           msg: 'a real orphan Detector rescan writes the orphan gauges, process-globals with no reset seam that TestMetricsHandler_Golden reads; build the reset seam first (#1279).'
+        # #2778 follow-up: a handler reads its request body through the
+        # request_body helpers — ReadLimitedBody / readLimitedBody (cap
+        # d.MaxBody()), readBodyWithin (the batch endpoints' cap), or
+        # readBodyCapped with an endpoint's own cap (recipe preview:
+        # recipepreview.MaxRequestBytes) — never by itself. A bare
+        # io.LimitReader stops at the cap WITHOUT an error, so an over-cap body
+        # was parsed from its truncated prefix: a 400 "invalid JSON" naming
+        # neither size nor cap, or, for YAML, a silent partial write behind a
+        # 200. An uncapped read (json.NewDecoder(r.Body), #1722) holds whatever
+        # the client sends.
+        #
+        # Two halves, because forbidigo sees a selector, not its argument:
+        #   - the request itself: any field or method of *http.Request that
+        #     reads the body (Body, GetBody, the Form family, the multipart
+        #     readers). analyze-types makes this the TYPE's name
+        #     (http.Request.Body), so it holds whatever the variable is called
+        #     and never touches resp.Body (http.Response.Body);
+        #   - io.LimitReader / io.ReadAll / ioutil.ReadAll, which no handler
+        #     needs outside the helper either.
+        #
+        # Scope (exclusions below, keyed on text '#2778'): non-test files of
+        # internal/handler and its subpackages; read_body_capped.go, which
+        # holds only readBodyCapped, is the one exempt file.
+        #
+        # ⚠️ Still not caught: the body reached WITHOUT naming it — r handed to
+        # a function outside internal/handler that reads r.Body there, or to an
+        # interface (io.Reader) obtained some other way. Review holds those.
+        - pattern: '^http\.Request\.(Body|GetBody|Form|PostForm|MultipartForm|ParseForm|ParseMultipartForm|FormValue|PostFormValue|FormFile|MultipartReader)$'
+          msg: 'read the request body through the request_body helpers (handler.ReadLimitedBody, readBodyWithin, readBodyCapped) — they answer an over-cap body with 413 instead of truncating or not capping it (#2778).'
+        - pattern: '^io\.(LimitReader|ReadAll)$'
+          msg: 'read a request body through handler.ReadLimitedBody (413 on over-cap) instead of a bare io.LimitReader/io.ReadAll, which truncates silently or not at all (#2778).'
+        - pattern: '^ioutil\.ReadAll$'
+          msg: 'read a request body through handler.ReadLimitedBody (413 on over-cap) instead of ioutil.ReadAll, which has no cap (#2778).'
     errcheck:
       # CLI/stdout writes are intentional fire-and-forget; checking their error is
       # noise (they only fail on a broken stdout, where there is nothing to do).
@@ -213,6 +252,22 @@ linters:
       # subpackage out.
       - path-except: internal/handler/[^/]*_test\.go
         text: '#1279'
+        linters:
+          - forbidigo
+      # #2778 rules report only in internal/handler (and its subpackages),
+      # only in non-test files, and never in read_body_capped.go — the one
+      # function that reads r.Body through io.LimitReader. The rest of
+      # request_body.go stays under the rules.
+      - path-except: internal/handler/
+        text: '#2778'
+        linters:
+          - forbidigo
+      - path: _test\.go
+        text: '#2778'
+        linters:
+          - forbidigo
+      - path: internal/handler/read_body_capped\.go
+        text: '#2778'
         linters:
           - forbidigo
 

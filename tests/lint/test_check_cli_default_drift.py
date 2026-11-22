@@ -144,9 +144,9 @@ class TestRealRepo:
             f"the check and therefore reaches CI. This floor only catches a "
             f"near-total one.")
         assert stats["matched"] == stats["scored"]
-        # The three binary-wrapper dispatchers own their flags in Go.
+        # The binary-wrapper dispatchers own their flags in Go.
         unscoreable = {n.split()[1] for n in notes if n.startswith("unscoreable:")}
-        assert unscoreable == {"guard", "parser", "batch-pr"}, (
+        assert unscoreable == {"guard", "parser"}, (
             f"the set of subcommands this checker cannot introspect changed: "
             f"{sorted(unscoreable)}. If a subcommand joined that set because "
             f"its import broke, every one of its documented defaults left the "
@@ -161,12 +161,13 @@ class TestRealRepo:
         stayed above any floor. A total cannot see one shape going blind; the
         set can.
 
-        ⚠️ Two mapped shapes appear in the docs and legitimately score zero,
-        so they are NOT in this set and a column-index error in them would go
+        ⚠️ One mapped shape appears in the docs and legitimately scores zero,
+        so it is NOT in this set and a column-index error in it would go
         unnoticed here (disclosed rather than papered over):
           ('Flag','預設','說明')   — `guard` tables; flags owned by the Go binary
-          ('Flag','Default','Purpose') — `batch-pr` tables, same reason
-        ('參數','說明','預設') — `init` — used to be the third: its listed flags
+        ('Flag','Default','Purpose') was the second until its only tables
+        went with a retired Go-wrapper subcommand (#4228), and its mapping
+        with them. ('參數','說明','預設') — `init` — used to be another: its listed flags
         all had a None default until #3110 added `--namespace` and
         `--config-source` to that table.
         """
@@ -262,8 +263,8 @@ class TestBlindIsNotClean:
     def test_the_soft_channel_still_exists_for_real_repo_facts(
             self, tmp_path, monkeypatch):
         """Control. Without it the assertion above is satisfied by routing
-        EVERYTHING to blind, which would red-light the three tools that
-        legitimately exit before argparse (batch-pr / guard / parser)."""
+        EVERYTHING to blind, which would red-light the two tools that
+        legitimately exit before argparse (guard / parser)."""
         quiet = tmp_path / "quiet.py"
         quiet.write_text("import sys\nsys.exit(2)\n", encoding="utf-8")
         monkeypatch.setattr(mod, "parse_command_map", lambda: {"quiet": "quiet.py"})

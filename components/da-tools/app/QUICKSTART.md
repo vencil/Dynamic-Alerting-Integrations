@@ -54,7 +54,6 @@ echo $?      # → 1（errors > 0 即 block merge）
 ## 各子工具一句定位
 - **`da-guard`** — conf.d 安全把關：schema + **cardinality** guard（上面 demo 的就是它；路由與 domain policy 自 #2904 起交給 `da-tools generate-routes --config-dir <conf.d> --validate --strict`，樹上有這類內容時 exit 4）
 - **`da-parser`** — PromRule → conf.d 解析匯入
-- **`da-batchpr`** — hierarchy-aware 批次 PR
 - **`fed-key`** — federation JWT 金鑰簽發（ops-only）
 - 全部子命令：`docker run --rm ghcr.io/vencil/da-tools:v2.9.0 --help`
 

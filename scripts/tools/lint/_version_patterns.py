@@ -432,9 +432,9 @@ AUTO_FIX_PATTERNS: Dict[str, Dict[str, Any]] = {
 # Compare to the current da-tools (tools-line) version.
 TOOLS_RELEASE_TAG_PATTERN = r"tools/v([0-9]+\.[0-9]+\.[0-9]+)"
 
-# `da-guard|da-tools|da-batchpr|da-parser <whitespace> v<X.Y.Z>` — the expected
+# `da-guard|da-tools|da-parser <whitespace> v<X.Y.Z>` — the expected
 # output of a `--version` invocation. Compare to the tools-line version.
-DA_BINARY_VERSION_OUTPUT_PATTERN = r"da-(?:guard|tools|batchpr|parser)\s+v([0-9]+\.[0-9]+\.[0-9]+)"
+DA_BINARY_VERSION_OUTPUT_PATTERN = r"da-(?:guard|tools|parser)\s+v([0-9]+\.[0-9]+\.[0-9]+)"
 
 # helm `--set image.tag=v<X.Y.Z>` (threshold-exporter charts in docs). Compare
 # to the exporter-line version.

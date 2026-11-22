@@ -106,7 +106,7 @@ All commands support the following global options:
 | A declared input that changes after it was judged (the directory or file removed, a selected file under the directory gone — GitOps swapping a mounted `..data`, say) | `2` | One `ERROR:` line on stderr naming the flag and the path (when a later da-guard read saw it, with da-guard's own line); no answer is made from less input than the caller gave, and it is never downgraded to a notice, a row "not checked" or a da-guard fault. ⚠️ It used to differ per command: `generate-routes` and `explain-route` printed a result with no tenant at rc 0; `config-diff` lost inhibit changes; `lint --rule-pack-dir` counted one ERROR at rc 0; `drift-detect` and `migrate-credentials` crashed or handed back a degraded plan; `deprecate` skipped the carrier it could not read; `grafana-import --dashboard-dir` ended in a partial answer naming the wrong flag (`--dashboard`), the dashboards before it already applied; `state-reconcile` listed unresolvable drift at rc 1 ([#3724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3724)). A declared conf.d tree ([#3965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3965)): its judgement keeps the identity of da-guard's walk (`config_hash`, [cli-reference §guard](#guard)), and every later da-guard document of the tree is compared with it — one that read another tree (a file fewer or more, renamed, rewritten) is this refusal, whatever da-guard's exit code; the tool's own writes take the judged identity as a precondition (`da-guard write` refuses another tree before writing anything) and the identity they leave from then on; walks of one da-guard run that read different trees are exit `2` too. The fault-injection gate removes each declared input at every read after its judgement (and before every child process starts), and for a declared conf.d tree removes each of its files at the judgement itself and before every child process; ⚠️ not covered: the reads a Go reader makes inside its own process for inputs other than conf.d, and a symlink the flag names swapped after the judgement for another readable tree (that is the content changed, not the input gone) |
 | A declared YAML / JSON input with a key given twice in one mapping (a name twice in one JSON object) | `2` | One stderr line naming the flag, the path and the key, for YAML with both lines (e.g. `ERROR: --policy p.yaml: not valid YAML: the key 'denied_functions' at line 2 is given again (first at line 1); a mapping takes a key once`). Keys are compared as yaml.v3 compares them (node kind and text); keys a `<<` merge brings in do not count, and an explicit key may override one, but a mapping takes one `<<`. A key written as an alias (`*a : 1`) has its anchor's position, so the message names the mapping's line instead. The other readings of the same kinds of file judge it alike: the metric dictionary as `migrate` / `onboard` and the metric dictionary lint read it (rc 2, the file named), a dashboard as `grafana-import --dashboard-dir` and its ConfigMap check read it (a fail row for that file, its name given), and a state file of `state-reconcile --state-dir`. ⚠️ The last value used to be kept in silence: a lint policy's `denied_functions: [x]` followed by `denied_functions: []` no longer denied x, a deployment policy's second `allowed_domains: ['*']` allowed any domain ([#4064](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4064), ⚠️ Breaking) |
 
-The exit-code table in each command section lists the main triggers and is **not exhaustive**: when bad input makes a tool raise an uncaught exception, a Python tool ends at the `2` in the row above (`tenant-verify` too; `1` before [#3393](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3393)), and a Go tool (`guard`, `batch-pr`, `parser`) panics at `2` too; tables do not list these one by one. The same holds when a script under `scripts/tools/` is run directly rather than through `da-tools`: as long as it loads `_lib_exitcodes` (most tools do, indirectly via `_lib_io` / `_lib_python`), a crash after that is `2`; an error while importing before it (e.g. PyYAML missing) is still `1`. An interactive session (`python -i`) is not affected.
+The exit-code table in each command section lists the main triggers and is **not exhaustive**: when bad input makes a tool raise an uncaught exception, a Python tool ends at the `2` in the row above (`tenant-verify` too; `1` before [#3393](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3393)), and a Go tool (`guard`, `parser`) panics at `2` too; tables do not list these one by one. The same holds when a script under `scripts/tools/` is run directly rather than through `da-tools`: as long as it loads `_lib_exitcodes` (most tools do, indirectly via `_lib_io` / `_lib_python`), a crash after that is `2`; an error while importing before it (e.g. PyYAML missing) is still `1`. An interactive session (`python -i`) is not affected.
 
 > ⚠️ The first two rows used to return `1`, colliding with the per-subcommand "findings" `1` — `docker run … da-tools:<moving tag> <subcommand>` looked, in CI, exactly like "the tool ran fine and found something" (with an empty report on stdout) whenever a subcommand was renamed or the image did not ship it yet. For these two rows a `2` means "the tool did not run"; other `2`s need not (see the stdout-write row above). Consumers should never fold `2` into `1`.
 
@@ -201,7 +201,6 @@ These tools operate on local YAML files and don't require network.
 | `evaluate-policy` | Policy-as-Code DSL evaluation engine | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | `--config-dir <dir>` |
 | `guard` | Dangling Defaults Guard wrapper (v2.8.0); shells out to the `da-guard` Go binary | `defaults-impact --config-dir <dir>` |
-| `batch-pr` | Migration Batch PR Pipeline wrapper (v2.8.0); shells out to the `da-batchpr` Go binary | `apply\|refresh\|refresh-source [flags]` |
 | `parser` | PromRule parser wrapper (v2.8.0); shells out to the `da-parser` Go binary; strict-PromQL portability check + dialect classification | `import\|allowlist [flags]` |
 | `tenant-verify` | Print tenant effective config + merged_hash (v2.8.0; incremental migration playbook rollback checklist) | `<tenant-id> [--conf-d <dir>] [--expect-merged-hash <hash>]` or `--all --json` |
 | `test-notification` | Multi-channel notification connectivity testing | `--config-dir <dir>` |
@@ -3220,90 +3219,6 @@ da-tools guard effective --config-dir conf.d/
 
 ---
 
-#### batch-pr
-
-Migration Batch PR Pipeline (v2.8.0). Python wrapper that shells out to the `da-batchpr` Go binary; designed to take a customer's PromRule corpus through the full "emit → open PRs → review → Base merge → tenant rebase → optional data-layer hot-fix" loop.
-
-> ⚠️ **Experimental: no shipped tool produces either of `apply`'s two required inputs.** The Plan JSON (`--plan`) and the emit output (`--emit-dir`) were meant to come from the Profile Builder (`BuildProposals` / `EmitProposals`) and `BuildPlan`, but neither is wired to any CLI. The Profile Builder's output is also one directory per rule cluster, so a tenant that deviates from the median in two clusters gets a file in each of the two directories and da-guard refuses the tree as a duplicate tenant, while a tenant at the median in every cluster gets no file at all and drops out of the tree. To import customer rules, use the per-tenant [`migrate`](#migrate). The technology choice for bulk import is being redone in [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211); the whole group may be retired (breaking).
-
-**Usage**
-
-```bash
-da-tools batch-pr <subcommand> [flags]
-```
-
-**Subcommands**
-
-| Subcommand | Purpose |
-|---|---|
-| `apply` | Open (or update) tenant chunk PRs from a Plan + an emit directory. Walks the Plan's items in order (Base Infrastructure PR first, then tenant chunks); the grouping is the Plan's, `apply` does none itself. Both inputs must currently be prepared by hand; see the experimental note above. |
-| `refresh` | After the Base PR merges, run `git rebase --onto <merged-sha>` against every `Blocked by` tenant branch; conflicts surface in `refresh-report.md`. |
-| `refresh-source` | When a parser bug fix changes the emission for a known set of source rules, rewrite the affected files in the corresponding tenant PRs and push the patch (data-layer hot-fix). |
-
-**Binary resolution order**
-
-1. `--da-batchpr-binary <path>` (explicit override)
-2. `$DA_BATCHPR_BINARY` env var
-3. `da-batchpr` on `$PATH`
-
-If not found, prints install hints (download from a `tools/v*` release / `sh scripts/ops/go_build.sh components/threshold-exporter/app ./cmd/da-batchpr /usr/local/bin/da-batchpr`).
-
-**`apply` flags (most common)**
-
-| Flag | Default | Purpose |
-|---|---|---|
-| `--plan <path>` | (required) | Plan JSON in the `batchpr.Plan` shape; no CLI produces it, prepare it yourself. |
-| `--emit-dir <dir>` | (required) | Directory of the files to push into the PRs (designed as the Profile Builder's emit output, which no CLI produces); CLI walks it + runs AllocateFiles bucketing. |
-| `--repo <owner/name>` | (required) | GitHub repo. |
-| `--workdir <dir>` | (required) | Local clone (CWD for git ops). |
-| `--base-branch <name>` | `main` | Branch the new PRs target. |
-| `--branch-prefix <p>` | batchpr default | Custom branch prefix. |
-| `--commit-author "Name <email>"` | git config | Commit author. |
-| `--dry-run` | false | Run orchestration without git or GitHub API calls. |
-| `--inter-call-delay-ms <n>` | 0 | Per-item delay (softens GitHub secondary rate limits). |
-| `--report <path>` | `-` (stdout) | Markdown report. |
-| `--result-json <path>` | empty (skip) | JSON ApplyResult; `-` = stdout, empty = skip. Skip is the default to avoid gluing markdown + JSON when `--report` also defaults to stdout. |
-
-**`refresh` / `refresh-source` flags (most common)**
-
-| Flag | Default | Purpose |
-|---|---|---|
-| `--input <path>` | `-` (stdin) | RefreshInput / RefreshSourceInput JSON. |
-| `--workdir <dir>` | (required) | Local clone. |
-| `--patches-dir <dir>` | (required, refresh-source only) | `<dir>/<pr-number>/<file-paths>` layout; CLI loads files into each target's Files map. |
-| `--report <path>` | `-` | Markdown report. |
-| `--result-json <path>` | empty (skip) | Same contract as `apply`. |
-
-**Exit codes**
-
-| Code | Meaning |
-|---|---|
-| 0 | Clean — every target succeeded or was skipped acceptably (closed/merged PR / no-change / dry-run). |
-| 1 | Per-target failures, or refresh produced conflicts (a CI hook should NOT treat conflicts as a green run). |
-| 2 | Caller error (bad flags, JSON parse failure, missing path, missing binary). |
-
-**Examples**
-
-```bash
-# Open PRs: push a prepared emit directory into the customer repo, batched by the Plan
-da-tools batch-pr apply \
-    --plan plan.json --emit-dir ./emit/ \
-    --repo vencil/customer --workdir ./customer-repo
-
-# After Base PR merges: rebase tenant branches onto the new main HEAD
-da-tools batch-pr refresh \
-    --input refresh.json --workdir ./customer-repo
-
-# Parser bug fix: re-emit the 200 affected source rules into existing tenant PRs
-da-tools batch-pr refresh-source \
-    --input refresh-source.json --patches-dir ./patches/ \
-    --workdir ./customer-repo
-```
-
-**Honest scope (v2.8.0 v1)**: JSON-input-first is the v1 contract (machine + automation friendly); convenience flags (`--base-merged-sha N`, `--source-rule-ids id1,id2,id3`) are deferred to a future polish. The Python wrapper shells out using the same pattern as `guard`; binaries ship via `tools/v*` Releases and the da-tools docker image.
-
----
-
 #### parser
 
 MetricsQL-as-Superset PromRule parser (v2.8.0). The Python wrapper shells out to the `da-parser` Go binary, which parses customer `PrometheusRule` CRD YAML into a canonical `ParsedRule` JSON record per rule, annotated with dialect (`prom` / `metricsql` / `ambiguous`), the list of VM-only functions used, and `prom_compatible: bool` (computed via the upstream `prometheus/promql/parser`).
@@ -3380,7 +3295,7 @@ da-tools parser allowlist --format json
 | `vm_only_functions` | []string | Sorted list of VM-only functions used in this rule |
 | `analyze_error` | string | metricsql parse error (populated when `dialect=ambiguous`) |
 | `strict_prom_error` | string | `prometheus/promql/parser` error (populated when `PromCompatible=false`) |
-| `source_rule_id` | string | `<source-file>#groups[i].rules[j]` — reverse-lookup key for `da-batchpr refresh --source-rule-ids` |
+| `source_rule_id` | string | `<source-file>#groups[i].rules[j]` — points back to where the rule sits in the source file |
 | `provenance` | object | `generated_by` / `source_file` / `parsed_at` / `source_checksum` (shared across the rule batch) |
 
 **Anti-vendor-lock-in promise**: when a customer corpus passes `--fail-on-non-portable` cleanly, every rule is also evaluable on a vanilla Prometheus server. Validity rests on `vm_only_functions.yaml`'s version pin matching the metricsql dep in go.mod — the **freshness CI gate** (`vm_only_functions_freshness_test.go`) ensures upstream version bumps don't silently miss new functions.

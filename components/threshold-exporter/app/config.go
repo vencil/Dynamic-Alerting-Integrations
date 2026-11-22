@@ -1229,7 +1229,7 @@ func isTenantOnlyChange(changed, added, removed []string) bool {
 // the incremental reload went 182-195 ms against a full `Load` of 80-94 ms on the
 // same tree, i.e. the fast path became more than twice as slow as the rebuild
 // it exists to avoid. Reachable by anything that regenerates the tree:
-// `assemble_config_dir`, a `da-batchpr` sweep, a formatting migration.
+// `assemble_config_dir`, a bulk migration, a formatting sweep.
 // (#1569 blind review.)
 func indexTenantDeclarations(newConfigs map[string]ThresholdConfig) tenantDeclarations {
 	names := make([]string, 0, len(newConfigs))

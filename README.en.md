@@ -127,7 +127,7 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 | [`rule-packs/`](rule-packs/) | Rule-pack source YAMLs, one per pack (`rule-pack-<tech>.yaml`) + [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.en.md) | Add / modify alerting rules |
 | [`policies/`](policies/) | OPA Rego policy samples (naming, routing, threshold-bounds) | Governance rules |
 | [`environments/`](environments/) | CI / local environment profiles | Cross-environment config |
-| [`scripts/`](scripts/) | Shell entrypoints + 226 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
+| [`scripts/`](scripts/) | Shell entrypoints + 225 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
 | [`tests/`](tests/) | Python pytest (`test_*.py`), manual shell scripts (`scenarios/`), `e2e/` Playwright, `snapshots/` | Run / add tests |
 | [`docs/`](docs/) | Public documents and their zh/en bilingual pairs. Per-document lookup table: [doc-map](docs/internal/doc-map.en.md) | Design / integration / ops docs |
 | [`CLAUDE.md`](CLAUDE.md) | AI Agent bootstrap + task-routing table | Required before starting an agent session |
@@ -161,7 +161,7 @@ Full walkthrough, what to look at, and troubleshooting in **[`try-local/README.m
 | **da-portal** (Tenant Manager UI)<br>`[For: Tenant]` | Browse/edit tenant config visually; Save lands a real git commit (GitOps) | open <http://localhost:8081> | [Helm chart](helm/) |
 | **tenant-api**<br>`[For: Platform Engineer]` | File-based config API (commit-on-write, no database) | [QUICKSTART](components/tenant-api/QUICKSTART.md) | [Helm](helm/) + oauth2-proxy |
 | **threshold-exporter** + Prometheus<br>`[For: Platform Engineer]` | Turns YAML thresholds into `user_threshold` metrics → one `group_left` rule covers every tenant | [QUICKSTART](components/threshold-exporter/QUICKSTART.md) | [BYO Prometheus](docs/integration/byo-prometheus-integration.md) |
-| **da-tools** (CLI)<br>`[For: Domain Expert]` | Guardrails / migration / scaffold (`guard`, `parser`, `batch-pr`…) | [QUICKSTART](components/da-tools/app/QUICKSTART.md) | CI integration |
+| **da-tools** (CLI)<br>`[For: Domain Expert]` | Guardrails / migration / scaffold (`guard`, `parser`, `migrate`…) | [QUICKSTART](components/da-tools/app/QUICKSTART.md) | CI integration |
 
 ---
 
@@ -226,13 +226,13 @@ Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Fou
 
 ### Toolchain (da-tools CLI)
 
-Covers tenant **lifecycle** (scaffold / onboard / migrate-rule / cutover / offboard), **day-to-day ops** (diagnose / patch-config / explain-route), **quality governance** (validate-config / alert-quality / Policy-as-Code), and the **customer onboarding pipeline** (da-parser → Profile Builder (library) → da-batchpr → da-guard; Profile Builder is a library — there is no standalone `da-tools profile build` CLI; the Profile Builder → da-batchpr step is not wired and `batch-pr` is experimental, see [`batch-pr`](docs/cli-reference.en.md#batch-pr)). All packaged in the `ghcr.io/vencil/da-tools` container.
+Covers tenant **lifecycle** (scaffold / onboard / migrate-rule / cutover / offboard), **day-to-day ops** (diagnose / patch-config / explain-route), **quality governance** (validate-config / alert-quality / Policy-as-Code), and the **customer onboarding pipeline** (da-parser triage → per-tenant [`migrate`](docs/cli-reference.en.md#migrate) → da-guard). All packaged in the `ghcr.io/vencil/da-tools` container.
 
 Full commands, flags & examples → [CLI Reference](docs/cli-reference.en.md) · [Cheat Sheet](docs/cheat-sheet.en.md) · [Interactive Tools Index](docs/interactive-tools.md)
 
 ### Customer Onboarding: Migration Toolkit
 
-Migrates a customer's existing PromRule corpus into this platform's `conf.d/` (designed as `da-parser → Profile Builder (library) → da-batchpr → da-guard`; the Profile Builder → `da-batchpr apply` step is not wired yet and is experimental, see [`batch-pr`](docs/cli-reference.en.md#batch-pr) — use the per-tenant `migrate` for now), shipping via **three delivery paths — Docker / static binary / air-gapped tar** (all cosign keyless signed + SBOM) covering the full spectrum from internet-connected to isolated finance / government / defense networks.
+Migrates a customer's existing PromRule corpus into this platform's `conf.d/` (per tenant, [`migrate`](docs/cli-reference.en.md#migrate) converts rules into conf.d tenant files, `da-parser` triages portability and `da-guard` validates the tree; bulk import producing `_custom_alerts` recipes is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)), shipping via **three delivery paths — Docker / static binary / air-gapped tar** (all cosign keyless signed + SBOM) covering the full spectrum from internet-connected to isolated finance / government / defense networks.
 
 Full installation & signature verification → [Migration Toolkit Installation](docs/migration-toolkit-installation.en.md)
 

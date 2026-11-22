@@ -2,7 +2,7 @@
 
 Use case context: B-4 Emergency Rollback Procedures verification
 checklist (item 6 in `docs/scenarios/incremental-migration-playbook.md`
-§Emergency Rollback Procedures). After a batch-PR rollback wave, the
+§Emergency Rollback Procedures). After a rollback wave, the
 operator runs `da-tools tenant-verify <id> --expect-merged-hash <h>` for
 each affected tenant and expects exit code 0 if the merged_hash returned
 to the pre-Base-PR snapshot, exit code 1 if it did not (or the tenant is

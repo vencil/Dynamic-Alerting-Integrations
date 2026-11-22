@@ -35,7 +35,7 @@ The platform **supports both layouts coexisting** (mixed mode), but this is inte
 | **< 50 tenants, no organizational segmentation needs** | ⏸️ **Don't migrate** | Cascading defaults / blast-radius scope benefits < cognitive cost of maintaining two layouts |
 | **50-200 tenants, single BU/team management** | 🟡 **Either way** | Tipping point — depends whether you anticipate cross-region growth next quarter. If yes, migrate now |
 | **200+ tenants, multi-BU/region/env segmentation** | 🟢 **Migrate** | YAML line savings via cascading defaults + blast-radius scope signal are hard wins |
-| **GitOps PR flow on customer side** (opening PRs in batches with `da-tools batch-pr`) | 🟢 **Migrate** | How PRs are split is up to the Plan; `apply` does no grouping itself. `BuildPlan` is designed to split per domain (first directory level); in a flat layout every tenant lands in one bucket and is cut only by tenant count (25 per PR by default). No CLI runs `BuildPlan` today. ⚠️ `da-tools batch-pr` is experimental: no tool produces the Plan JSON and emit directory that `apply` requires, so both have to be supplied separately (see [`batch-pr`](../cli-reference.en.md#batch-pr)) |
+| **GitOps PR flow on customer side** (opening PRs in batches) | 🟢 **Migrate** | Splitting PRs per domain (first directory level) keeps each PR to one directory's `_defaults.yaml` and the tenants under it, so the review scope is clear; in a flat layout every tenant sits at one level and can only be cut by tenant count |
 | **Anticipating cross-region/env defaults next quarter** (region-specific thresholds) | 🟢 **Migrate** | Flat has no place for region-level `_defaults.yaml`; migration cost only grows over time |
 | **Customer's `_defaults.yaml` rarely changes** (pure flat with hardcoded thresholds) | ⏸️ **Don't migrate** | Hierarchical's core benefit is cascading mutations — without them, only the maintenance cost remains |
 
@@ -53,7 +53,7 @@ The platform **fully supports** flat layout (since v2.7.0; no EOL planned), but 
 | One-time cost | Ongoing cost |
 |---|---|
 | Cutover-period mixed-mode scan slowdown (§4 quantitative) | `_metadata.{domain,region,environment}` must be maintained per tenant YAML |
-| Multi-person collaboration conflict surface grows (more `_defaults.yaml` files across dirs) | GitOps merge conflicts may span multiple dirs; needs `da-tools batch-pr` tooling (v2.8.0) |
+| Multi-person collaboration conflict surface grows (more `_defaults.yaml` files across dirs) | GitOps merge conflicts may span multiple dirs; batched PRs have to be split per directory and merged in order |
 | One-time staging rehearsal (v2.8.0 staging rehearsal hard gate) | Operators must understand `defaultsPathLevel` to predict affected-tenant counts |
 
 ---

@@ -160,7 +160,7 @@ jobs:
         if: matrix.name == 'da-tools'
         run: |
           mkdir -p components/da-tools/app/tools
-          for b in da-guard da-batchpr da-parser da-crdecode da-read; do
+          for b in da-guard da-parser da-crdecode da-read; do
             for a in amd64 arm64; do
               touch "components/da-tools/app/$b.$a"
             done

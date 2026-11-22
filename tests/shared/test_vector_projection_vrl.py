@@ -208,9 +208,10 @@ class TestProjectionDisabledByDefault:
         assert cfg["sources"].get("internal_metrics", {}).get("type") == "internal_metrics"
         prom = cfg["sinks"].get("prometheus") or {}
         assert prom.get("type") == "prometheus_exporter", sorted(cfg["sinks"])
-        # internal_metrics + the ADR-021 stamp-miss counter
-        # (TenantProjectionStampMissing reads it; see TestStampMissCounter).
-        assert prom.get("inputs") == ["internal_metrics", "tenant_stamp_missed"]
+        # internal_metrics + the ADR-021 stamp-miss counter and its zero
+        # initialiser (TenantProjectionStampMissing reads it; see
+        # TestStampMissCounter).
+        assert prom.get("inputs") == ["internal_metrics", "tenant_stamp_missed", "tenant_stamp_zero"]
         assert prom.get("address") == "0.0.0.0:9598"
         ds = next(d for d in docs if d.get("kind") == "DaemonSet")
         vec = next(c for c in ds["spec"]["template"]["spec"]["containers"] if c["name"] == "vector")
@@ -527,35 +528,66 @@ class TestStampMissCounter:
         assert consumers == {"tenant_stamp_missed", "prometheus"}, consumers
 
     @_needs_helm
-    @pytest.mark.parametrize("interval,ok", [
-        (None, True), ("15s", True), ("30s", True), ("500ms", True),
-        ("31s", False), ("60s", False), ("1m", False), ("5m", False),
-        ("1m30s", False), ("fast", False),
-    ])
-    def test_servicemonitor_interval_must_fit_the_counter_lifetime(
-            self, repo_root: Path, interval: str | None, ok: bool) -> None:
-        """The exporter drops the stamp-miss series 60-120s after its last
-        increment; a scrape interval of 60s or more can miss a first miss
-        entirely. The ServiceMonitor refuses anything above 30s (two scrapes
-        inside the shortest lifetime); the chart default 15s must pass."""
+    def test_zero_init_covers_exactly_the_reasons_the_vrl_emits(self, repo_root: Path) -> None:
+        """increase() sees a first miss only on a series that already exists at
+        0. tenant_stamp_zero must therefore initialise every reason the VRL can
+        assign, and nothing else (an extra reason is a series no row can ever
+        move). Both sides are read from the render, so a reason added to the
+        VRL by hand, or dropped from the template's $stampReasons, goes red."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
+        vrl = cfg["transforms"]["tenant_stamp_check"]["source"]
+        # Fail-closed: every assignment to `reason` must be a string literal,
+        # or the emitted set cannot be read off the render and this goes red.
+        assignments = re.findall(r'^\s*reason\s*=(?!=)\s*(.*?)\s*$', vrl, re.M)
+        assert assignments, "no `reason =` assignment found in tenant_stamp_check"
+        literals = [re.fullmatch(r'"([^"\\]*)"', a) for a in assignments]
+        assert all(literals), f"non-literal reason assignment(s): {assignments}"
+        emitted = {m.group(1) for m in literals} - {""}
+        assert emitted == {"not_projected", "origin_rejected"}, emitted
+        # The event handed to the counter must carry `reason` itself, unchanged.
+        assert re.search(r'^\s*\. = \{"reason": reason\}\s*$', vrl, re.M), "reason not passed as-is"
+        zero = cfg["sources"]["tenant_stamp_zero"]
+        assert zero["type"] == "static_metrics"
+        (counter,) = cfg["transforms"]["tenant_stamp_missed"]["metrics"]
+        assert zero["namespace"] == counter["namespace"]
+        initialised = set()
+        for m in zero["metrics"]:
+            assert m["name"] == counter["name"], m
+            assert m["kind"] == "incremental", m
+            assert m["value"] == {"counter": {"value": 0}}, m
+            assert set(m["tags"]) == set(counter["tags"]) == {"reason"}, m
+            initialised.add(m["tags"]["reason"])
+        assert len(zero["metrics"]) == len(initialised), "a reason initialised twice"
+        assert initialised == emitted
+
+    @_needs_helm
+    def test_zero_init_refreshes_well_inside_the_flush_period(self, repo_root: Path) -> None:
+        """The exporter expires a series not refreshed within flush_period_secs.
+        The zero source must resend well inside it (the template derives
+        interval_secs from flush_period_secs), and the flush period must be
+        rendered explicitly rather than left to Vector's default."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector"))
+        flush = cfg["sinks"]["prometheus"]["flush_period_secs"]
+        interval = cfg["sources"]["tenant_stamp_zero"]["interval_secs"]
+        assert isinstance(flush, int) and isinstance(interval, int)
+        assert 0 < interval and 2 * interval < flush, (interval, flush)
+
+    @_needs_helm
+    @pytest.mark.parametrize("interval", [None, "15s", "30s", "60s", "5m", "1m30s"])
+    def test_servicemonitor_takes_any_scrape_interval(
+            self, repo_root: Path, interval: str | None) -> None:
+        """The counter series no longer expires between misses, so the render
+        refuses no scrape interval. It still has to stay well under 30m:
+        increase(...[1h]) needs two samples in the window, so one miss holds
+        TenantProjectionStampMissing for about 1h minus one scrape interval.
+        That is documented, not enforced here."""
         sets = {"serviceMonitor.enabled": "true"}
         if interval is not None:
             sets["serviceMonitor.interval"] = interval
         r = _render_result(repo_root / "helm/vector", sets=sets)
-        if ok:
-            assert r.returncode == 0, r.stderr
-        else:
-            assert r.returncode != 0, f"{interval} must be refused"
-            assert "serviceMonitor.interval" in r.stderr, r.stderr
-
-    @_needs_helm
-    def test_servicemonitor_interval_is_not_checked_without_the_counter(self, repo_root: Path) -> None:
-        """With metrics off there is no counter (only the gate exposer), so a
-        slow interval is the operator's business."""
-        r = _render_result(repo_root / "helm/vector", sets={
-            **_PROJECTION_SETS, "serviceMonitor.enabled": "true",
-            "metrics.enabled": "false", "serviceMonitor.interval": "5m"})
         assert r.returncode == 0, r.stderr
+        sm = next(d for d in yaml.safe_load_all(r.stdout) if d and d.get("kind") == "ServiceMonitor")
+        assert [e["interval"] for e in sm["spec"]["endpoints"]] == [interval or "15s"]
 
     @_needs_helm
     def test_counter_is_absent_when_metrics_are_off(self, repo_root: Path) -> None:
@@ -564,6 +596,7 @@ class TestStampMissCounter:
         cfg = _vector_yaml(_render(repo_root / "helm/vector", sets={"metrics.enabled": "false"}))
         assert "tenant_stamp_check" not in cfg["transforms"]
         assert "tenant_stamp_missed" not in cfg["transforms"]
+        assert "tenant_stamp_zero" not in cfg["sources"]
         assert "prometheus" not in cfg["sinks"]
 
 
@@ -594,10 +627,12 @@ class TestFederationEvidenceChannel:
         # Exactly one LOG source. `internal_metrics` (Vector self-telemetry,
         # rendered by default since #1595) is not a log source and does not
         # share the kubernetes_logs checkpoint concern, so it is excluded by
-        # type — any second kubernetes_logs source still goes red here.
+        # type — any second kubernetes_logs source still goes red here. The same
+        # holds for `tenant_stamp_zero` (static_metrics: the ADR-021 stamp-miss
+        # counter's zero initialiser, metrics only).
         log_sources = [n for n, src in sources.items() if src.get("type") == "kubernetes_logs"]
         assert log_sources == ["kubernetes_logs"], "still exactly one primary source"
-        assert set(sources) <= {"kubernetes_logs", "internal_metrics"}, sorted(sources)
+        assert set(sources) <= {"kubernetes_logs", "internal_metrics", "tenant_stamp_zero"}, sorted(sources)
         sel = sources["kubernetes_logs"]["extra_label_selector"]
         assert "federation-gateway" in sel, "gateway must stay in scope (#539)"
         assert "tenant-api" in sel, "evidence producer must be in scope (ADR-028 / #1234)"
@@ -1340,6 +1375,94 @@ class TestVectorValidateAndTest:
             r = subprocess.run(["vector", "test", str(cfg_path), str(tests_file)],
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
             assert r.returncode == 0, f"vector test failed:\n{r.stdout}\n{r.stderr}"
+
+    @_needs_vector
+    def test_stamp_miss_series_starts_at_zero_and_outlives_the_flush_period(
+            self, repo_root: Path) -> None:
+        """`vector test` runs transforms only, so the zero initialiser (a
+        source) and the exporter's expiry are proven here by running Vector:
+        the rendered stamp-miss components, with an http_server source standing
+        in for demux. Both reasons are served at 0 before any row; one
+        not_projected row moves its series to 1; three flush periods later both
+        series are still served. The flush period is scaled down to keep this
+        quick, with the zero interval scaled by the rendered ratio."""
+        import socket
+        import time
+        import urllib.request
+
+        def _free_port() -> int:
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                return sock.getsockname()[1]
+
+        def _series(url: str) -> dict[str, float]:
+            body = urllib.request.urlopen(url, timeout=2).read().decode()
+            out = {}
+            for line in body.splitlines():
+                m = re.match(r'vector_tenant_projection_stamp_missed_events_total\{reason="(\w+)"\} (\S+)', line)
+                if m:
+                    out[m.group(1)] = float(m.group(2))
+            return out
+
+        def _wait_for(url: str, want: dict[str, float], deadline_s: float) -> dict[str, float]:
+            end = time.monotonic() + deadline_s
+            got: dict[str, float] = {}
+            while time.monotonic() < end:
+                try:
+                    got = _series(url)
+                except OSError:
+                    got = {}
+                if got == want:
+                    return got
+                time.sleep(0.25)
+            return got
+
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
+        flush, zero_iv = (cfg["sinks"]["prometheus"]["flush_period_secs"],
+                          cfg["sources"]["tenant_stamp_zero"]["interval_secs"])
+        test_flush = 4
+        test_iv = max(1, test_flush * zero_iv // flush)
+        in_port, out_port = _free_port(), _free_port()
+        with tempfile.TemporaryDirectory() as d:
+            run_cfg = {
+                "data_dir": d,
+                "sources": {
+                    "internal_metrics": cfg["sources"]["internal_metrics"],
+                    "tenant_stamp_zero": {**cfg["sources"]["tenant_stamp_zero"], "interval_secs": test_iv},
+                    "demux": {"type": "http_server", "address": f"127.0.0.1:{in_port}",
+                              "decoding": {"codec": "json"}},
+                },
+                "transforms": {k: cfg["transforms"][k] for k in ("tenant_stamp_check", "tenant_stamp_missed")},
+                "sinks": {"prometheus": {**cfg["sinks"]["prometheus"],
+                                         "address": f"127.0.0.1:{out_port}",
+                                         "flush_period_secs": test_flush}},
+            }
+            p = Path(d) / "run.yaml"
+            p.write_text(yaml.safe_dump(run_cfg, sort_keys=False), encoding="utf-8")
+            proc = subprocess.Popen(["vector", "--config", str(p)],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                url = f"http://127.0.0.1:{out_port}/metrics"
+                before = _wait_for(url, {"not_projected": 0.0, "origin_rejected": 0.0}, 20)
+                assert before == {"not_projected": 0.0, "origin_rejected": 0.0}, before
+                row = json.dumps({"log_type": "federation_audit", "tenant_id": "tenant-gamma",
+                                  "account_id": "1002", "upstream": "10.42.7.13:9428",
+                                  "status": 200}).encode()
+                req = urllib.request.Request(f"http://127.0.0.1:{in_port}/", data=row,
+                                             headers={"content-type": "application/json"})
+                assert urllib.request.urlopen(req, timeout=5).status == 200
+                after = _wait_for(url, {"not_projected": 1.0, "origin_rejected": 0.0}, 10)
+                assert after == {"not_projected": 1.0, "origin_rejected": 0.0}, after
+                time.sleep(3 * test_flush)
+                later = _series(url)
+                assert later == {"not_projected": 1.0, "origin_rejected": 0.0}, (
+                    f"series expired {3 * test_flush}s after the increment: {later}")
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
     @_needs_vector
     def test_additional_sink_env_var_interpolation_as_deployed(self, repo_root: Path) -> None:

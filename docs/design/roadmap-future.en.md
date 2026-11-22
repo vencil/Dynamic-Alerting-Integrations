@@ -20,17 +20,15 @@ DX tooling improvements are tracked in [dx-tooling-backlog.md](../internal/dx-to
 
 The Scale Foundation I laid in v2.7.0 (`conf.d/` hierarchy + `_defaults.yaml` inheritance + dual-hash + `/effective`) + component robustness (Design Token migration across 9 JSX tools + Component Health + dark mode ADR-015) + test infrastructure (1000-tenant fixture + Blast Radius CI bot) evolved in v2.8.0 into a **customer import pipeline (partially shipped, see below) + Scale production validation + automation consolidation**.
 
-### Customer Migration Pipeline — 5-step chain ⚠️ partially shipped
+### Customer Migration Pipeline ⚠️ partially shipped
 
-End-to-end flow that imports a customer's existing PromRule corpus into this platform's conf.d/ architecture. `da-parser` / `da-batchpr` / `da-guard` are codified as offline-runnable Go binaries. ⚠️ Profile Builder is only a library wired to no CLI (`da-tools profile build` is not shipped), so no tool produces `da-batchpr apply`'s two required inputs and it is experimental (see [`batch-pr`](../cli-reference.en.md#batch-pr); bulk import is being re-selected in [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211)). The flow as designed: <!-- datools-cmd-ignore: planned CLI, not shipped -->
+Imports a customer's existing PromRule corpus into this platform's conf.d/ architecture: `da-parser` / `da-guard` are codified as offline-runnable Go binaries, and per-tenant conversion goes through `da-tools migrate`. The Profile Builder library and Batch PR (`da-batchpr`) that also shipped in v2.8.0 were never wired: the former had no CLI, and no tool produced the latter's two required inputs. Both were retired on 2026-11-22 ([#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228), decision in [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211)); bulk import is planned to move to migrate-rule producing `_custom_alerts` recipes (not shipped yet, [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)).
 
 ```
-PromRule corpus → da-parser → Profile Builder (library) → da-batchpr apply → da-guard → conf.d/
+PromRule corpus → da-parser (triage) → da-tools migrate (per tenant) → da-guard → conf.d/
 ```
 
 - **`da-parser`**: Dialect detection (prom / metricsql / ambiguous) + VM-only function allowlist (`vm_only_functions.yaml` via `go:embed`, CI freshness gate detects new metricsql upstream functions) + `StrictPromQLValidator` + provenance header (`generated_by` / `source_rule_id` / `parsed_at` / `source_checksum`). The `prom_portable: bool` flag lets customers identify the "can-go-back-to-Prom" subset after migrating to VM — a concrete anti-vendor-lock-in commitment.
-- **Profile Builder (library-only; the `da-tools profile build` CLI is not yet shipped — planned)**: Cluster similar rules → median algorithm picks the cluster's shared threshold → write `_defaults.yaml`, deviating tenants write `<id>.yaml` containing override-only keys; opt-in fuzzy matching applies duration-equivalence canonicalisation (`[5m]` ≡ `[300s]` ≡ `[300000ms]`); exists as the `BuildProposals` / `EmitProposals` library, with no consumer yet; follows [ADR-018](../adr/018-profile-as-directory-default.en.md) Profile-as-Directory-Default. <!-- datools-cmd-ignore: planned CLI, not shipped -->
-- **`da-batchpr apply`**: Hierarchy-Aware chunking — `_defaults.yaml` changes go in a Base Infrastructure PR; per-tenant PRs marked `Blocked by:`. `refresh` auto-rebases downstream after Base merge; `refresh-source` (+ `--patches-dir`) rewrites affected tenants' files and regenerates patch PRs for parser bug fixes.
 - **`da-guard`**: Schema / Routing / Cardinality / Redundant-override 4-layer check (the Routing layer moved to the route generator in [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904); da-guard now reports it as undetermined, exit 4); `.github/workflows/guard-defaults-impact.yml` runs automatically + posts sticky PR comment (marker-based update vs create) + uploads artifact with 14d retention.
 
 ### Scale Foundation III + Tenant API hardening ✅
@@ -43,7 +41,7 @@ PromRule corpus → da-parser → Profile Builder (library) → da-batchpr apply
 
 - **Server-side Search API** `GET /api/v1/tenants/search`: page_size cap 500 + closed-field free-text + RBAC-before-pagination + 30s TTL `tenantSnapshotCache`; p99 < 200ms @ 1000 tenants.
 - **Tenant Manager JSX**: API-first 3-layer priority chain (API → platform-data.json → DEMO) + 429 retry-with-backoff + server-side `q` filter (debounced 300ms) + URL state (`useURLState` + `useDebouncedValue`) + self-written `useVirtualGrid` (only virtualizes when `filtered.length > 50`; the customer 500+ tenant DOM-freeze problem is solved at the server-cap layer).
-- **Master Onboarding Dual Entry**: Import Journey 5 steps (parser / batch-pr / guard inline CLI + a Profile Builder library step — the `da-tools profile build` CLI is not yet shipped, planned) vs Wizard Journey 5 steps (cicd-setup → deployment → alert-builder → routing-trace → tenant-manager — all 5/5 real wizards). <!-- datools-cmd-ignore: planned CLI, not shipped -->
+- **Master Onboarding Dual Entry**: Import Journey 5 steps (install / parser / migrate / place into conf.d / guard) vs Wizard Journey 5 steps (cicd-setup → deployment → alert-builder → routing-trace → tenant-manager — all 5/5 real wizards).
 - **Tenant Manager × Wizard integration**: TenantCard footer 3 buttons (Alert / Route / Preview) deep link + `?tenant_id=` URL param pre-fill + standalone `simulate-preview.jsx` widget (4-state machine + 500ms debounce + AbortController).
 - **Smart Views**: `useSavedViews` + `SavedViewsPanel` wires to v2.5.0 backend `/api/v1/views` CRUD; RBAC-aware (Save/Delete hidden when `canWrite=false`).
 

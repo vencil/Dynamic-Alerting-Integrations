@@ -455,6 +455,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 |---|---|
 | `BatchRequest.operations` | 1-1000 entries |
 | batch request body 總量(`POST /tenants/batch` **與** `POST /groups/{id}/batch`) | ≤ 256 KiB(`TA_MAX_BATCH_BODY_BYTES`,超量 413 `PAYLOAD_TOO_LARGE`) |
+| 非 batch 寫入的 request body 總量（`PUT /tenants/{id}`、`PUT /groups/{id}`、`PUT /views/{id}`、federation 的 `POST /federation/tokens`、`PUT /federation/policy`、`PUT /tenants/{id}/federation` 等） | ≤ 1 MiB（`TA_MAX_BODY_BYTES`，超量 413 `PAYLOAD_TOO_LARGE`，不解析截斷後的前段）。所有 handler 一律經 request_body helper 讀取 body：batch 端點用 `readBodyWithin`（上限見上一列），recipe preview 用它自己的上限（`recipepreview.MaxRequestBytes`，64 KiB），其餘用 `TA_MAX_BODY_BYTES`；golangci forbidigo 擋下 handler 內其他讀取 body 的寫法（[#2778](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2778)）。⚠️ 破壞性變更：federation 這三個端點過去對超量 body 回 400（截斷後 JSON 解析失敗），以空白填到上限的 body 則會依截斷的前段照常寫入 |
 | 單一租戶文件 | ≤ 64 KiB(`TA_MAX_TENANT_DOC_BYTES`,超量 400)。量的是寫入路徑實際會解析的那一份 —— 合併路徑(batch patch)上是合併後的整份檔案,`PUT /tenants/{id}` 與 dry-run 上是請求自己的 bytes |
 | `BatchOperation.tenant_id` | required, 1-256 chars |
 | `BatchOperation.patch` / `GroupBatchRequest.patch` key 數 | ≤ 1000 entries(bytes 不是這裡的正確單位:合併對 key 數是二次的,且跑在 single-writer token 內) |

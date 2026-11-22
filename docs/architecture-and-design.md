@@ -158,23 +158,18 @@ graph TB
 
 ### 1.3 客戶導入與 GitOps 治理管線 (Day-0 / Day-1 / Day-2)
 
-客戶導入管線把「Day-0 把既有 PromRule corpus 轉進來」「Day-1 用 GitOps PR 切塊治理」「Day-2 運行期熱重載」三階段串成一條可離線、可在 air-gapped 跑、可獨立驗 supply-chain 的端到端流程（下圖是設計）：
-
-> ⚠️ 其中 Profile Builder → `da-batchpr apply` 這一段目前沒有接通（experimental，見 [`batch-pr`](cli-reference.md#batch-pr)）；要導入客戶規則請用逐租戶的 [`migrate`](cli-reference.md#migrate)。
+客戶導入管線把「Day-0 把既有 PromRule corpus 轉進來」「Day-1 用 GitOps PR 治理」「Day-2 運行期熱重載」三階段串成一條可離線、可在 air-gapped 跑、可獨立驗 supply-chain 的端到端流程。產出 `_custom_alerts` recipe 的批次導入見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)，尚未出貨：
 
 ```mermaid
 graph LR
     subgraph Day0["Day-0: Customer Migration"]
         PR["PromRule corpus<br/>(CRD / YAML)"] -->|da-parser| JSON["Canonical JSON<br/>+ prom_portable flag"]
-        JSON -->|Profile Builder library| PB["Profile Builder<br/>(library-only, cluster + median, ADR-018)<br/>CLI 尚未出貨（規劃中）"]
+        PR -->|逐租戶 migrate| MIG["conf.d 租戶檔<br/>(.migration/conf.d/&lt;id&gt;.yaml)"]
     end
 
-    subgraph Day1["Day-1: GitOps Hierarchy-Aware 治理"]
-        PB -->|da-batchpr apply| PR1["Base Infrastructure PR<br/>(_defaults.yaml)"]
-        PB -->|da-batchpr apply| PR2["Tenant Override PRs<br/>(&lt;id&gt;.yaml — Blocked by Base)"]
-        PR1 -.->|refresh --base-merged| PR2
-        PR1 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Cardinality / Redundant-override<br/>+ route generator: Routing)"]
-        PR2 -->|da-guard CI gate| LINT
+    subgraph Day1["Day-1: GitOps 治理"]
+        MIG -->|客戶自己的 PR| PR2["conf.d PR<br/>(_defaults.yaml + &lt;id&gt;.yaml)"]
+        PR2 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Cardinality / Redundant-override<br/>+ route generator: Routing)"]
     end
 
     subgraph Day2["Day-2: Runtime"]
@@ -190,7 +185,6 @@ graph LR
 
 **全週期治理特色：**
 - **零 vendor lock-in**：遷移工具為每條規則保留「可回 Prom」可移植標記，遷入 VictoriaMetrics 後仍能識別可回 Prometheus 的子集。
-- **GitOps PR 切塊的正確順序**：Base PR 先 merge → 租戶 override PR 自動 rebase；parser 修正可針對特定規則細粒度重生 patch PR，不必整批重跑。
 - **CI 自動把關**：da-guard 的 Schema / Cardinality / 冗餘 override 檢查，加上同一個 workflow 跑的 route generator 判 Routing（[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起 da-guard 不判路由），以 sticky PR comment 回報（同一則留言原地更新、不洗版）+ artifact 保留。
 - **三條交付路徑**：Docker image / 多架構 static binary / air-gapped tar，每條路徑 cosign keyless 簽章 + SBOM（SPDX / CycloneDX）；客戶 `make verify-release` 一鍵驗 supply-chain。
 
@@ -212,7 +206,7 @@ graph LR
 | **Alert Routing** | 多通道通知確保關鍵告警必達正確人員 | 6 種 receiver、Timing Guardrails、Enforced Routing | [config-driven.md](design/config-driven.md) |
 | **Tenant API** | Domain expert 可自助操作，無需 YAML 知識 | Commit-on-write + RBAC 熱更新 + PR Write-back + 套完繼承的 effective config endpoint | [config-driven.md](design/config-driven.md) |
 | **Rule Packs** | 跨團隊並行開發零 PR 衝突 | 16 個 Projected Volume + 三部分結構 + 雙語 Annotation | [rule-packs.md](design/rule-packs.md) |
-| **客戶導入管線** | 既有 PromRule corpus → `conf.d/`（Profile Builder → Batch PR 一段尚未接通，見 §1.3）；anti-vendor-lock-in；零 orphan tenant 風險 | 5-step 遷移鏈（解析 → Profile Builder → Hierarchy-Aware Batch PR → Dangling Defaults Guard）。圖示見 [§1.3](#13-客戶導入與-gitops-治理管線-day-0--day-1--day-2) | [migration-toolkit-installation.md](migration-toolkit-installation.md) |
+| **客戶導入管線** | 既有 PromRule corpus → `conf.d/`；anti-vendor-lock-in；零 orphan tenant 風險 | 遷移鏈（解析 → `migrate` 逐租戶轉換 → conf.d PR → Dangling Defaults Guard）。圖示見 [§1.3](#13-客戶導入與-gitops-治理管線-day-0--day-1--day-2) | [migration-toolkit-installation.md](migration-toolkit-installation.md) |
 | **效能架構** | 500+ tenant 毫秒級處理，資源成本近乎不隨租戶數增長 | Pre-computed Recording Rule、O(M) 複雜度、Cardinality Guard | [benchmarks.md](benchmarks.md) |
 | **高可用性 (HA)** | SLA 99.9%+ 警報可靠度，滾動更新零中斷 | 2 副本、PDB、`max by(tenant)` 防雙倍計算 | [high-availability.md](design/high-availability.md) |
 | **未來路線** | 權限 × 可觀測性閉環 × 智慧化 | Field-level RBAC、Auto-Discovery、DaC、Anomaly-Aware Threshold | [roadmap-future.md](design/roadmap-future.md) |
