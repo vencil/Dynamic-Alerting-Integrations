@@ -3105,6 +3105,9 @@ _EXPECTED_EDGE_LOCAL_ALERTS = frozenset({
     "VectorStoreSinkDroppingEvents",
     "TenantProjectionMappingErrors",
     "TenantProjectionFanoutDiscardSpike",
+    # ADR-021: a counter Vector itself exports (log_to_metric beside its
+    # internal_metrics), so it lives where Vector runs, like the two above.
+    "TenantProjectionStampMissing",
     "VectorProjectionGateMismatch",
     "VectorRegistryUnreadableAtBoot",
     "VectorProjectionGateStuck",
