@@ -104,24 +104,73 @@ def load_queries(path: Path) -> dict:
         raise CannotRun(f"cannot read {path}: {e}") from e
     if not isinstance(doc, dict):
         raise CannotRun(f"{path}: the top-level YAML document is not a mapping")
+    problem = shape_problem(doc)
+    if problem:
+        raise CannotRun(f"{path}: {problem}")
     return doc
+
+
+def _names(value: object) -> bool:
+    """A non-empty list of strings: what query-exporter takes for a query's
+    `metrics` and `databases`."""
+    return isinstance(value, list) and bool(value) and all(isinstance(v, str) for v in value)
+
+
+def shape_problem(doc: dict) -> "str | None":
+    """The first shape of *doc* this tool cannot walk, named; None if it can.
+
+    Only the containers this tool reads (#4119): `metrics` and `queries` are
+    mappings keyed by name, every metric and query is a mapping, and a query's
+    `metrics` and `databases` are lists of names. Everything else (types,
+    intervals, SQL parameters) is left to query-exporter's own validation in
+    served_names(). Checked without query-exporter, so a malformed file is
+    "cannot run" by name, never a traceback. Each shape refused here is one
+    query-exporter refuses too (test_every_shape_refused_here_query_exporter_refuses):
+    this is never stricter than the exporter."""
+    for section, item in (("metrics", "metric"), ("queries", "query")):
+        entries = doc.get(section)
+        if entries is None:
+            continue
+        if not isinstance(entries, dict):
+            return f"`{section}` must be a mapping of {item} names, not {type(entries).__name__}"
+        for name, spec in entries.items():
+            if not isinstance(name, str):
+                return f"`{section}`: {item} name {name!r} is not a string"
+            if not isinstance(spec, dict):
+                return f"{item} {name} must be a mapping, not {type(spec).__name__}"
+            if section == "queries":
+                for key in ("metrics", "databases"):
+                    if not _names(spec.get(key)):
+                        return f"query {name}: `{key}` must be a non-empty list of names"
+    return None
 
 
 def unattached_metrics(doc: dict) -> set[str]:
     """Metrics the file declares that no query lists under its `metrics:`.
 
     Read off the YAML, so it answers without query-exporter installed; a shape
-    query-exporter would refuse (a query's `metrics` that is not a list of
-    names) is "cannot run" by name here too, not a traceback."""
+    query-exporter would refuse (shape_problem) is "cannot run" by name here
+    too, not a traceback."""
+    problem = shape_problem(doc)
+    if problem:
+        raise CannotRun(problem)
     attached: set[str] = set()
-    for qname, q in (doc.get("queries") or {}).items():
-        listed = (q or {}).get("metrics") if isinstance(q, dict) else None
-        if listed is None:
-            continue
-        if not isinstance(listed, list) or not all(isinstance(m, str) for m in listed):
-            raise CannotRun(f"query {qname}: `metrics` must be a list of metric names")
-        attached |= set(listed)
+    for q in (doc.get("queries") or {}).values():
+        attached |= set(q["metrics"])
     return set(doc.get("metrics") or {}) - attached
+
+
+def rejection_text(error: Exception) -> str:
+    """query-exporter's refusal, with where and why: its ConfigError says only
+    "N validation error(s)" and carries each one's location and message in
+    `.details` (#4119)."""
+    details = getattr(error, "details", None) or ()
+    parts = []
+    for d in details:
+        if isinstance(d, dict):
+            where, why = d.get("location"), d.get("error")
+            parts.append(f"{where}: {why}" if where else str(why))
+    return f"{error} ({'; '.join(parts)})" if parts else str(error)
 
 
 def served_names(path: Path, doc: dict) -> set[str]:
@@ -149,7 +198,7 @@ def served_names(path: Path, doc: dict) -> set[str]:
         try:
             config = load_config([stub, path])
         except Exception as e:  # query-exporter's own validation error
-            raise CannotRun(f"{path}: query-exporter rejects it: {e}") from e
+            raise CannotRun(f"{path}: query-exporter rejects it: {rejection_text(e)}") from e
     # config.metrics also holds query-exporter's built-ins (query_interval, …),
     # which no query lists and which are served all the same: only a metric of
     # the FILE that no loaded query lists is left out.
@@ -483,7 +532,9 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
         out.append(f"{name} is derived from {queries.relative_to(_REPO)} but not served")
     for name, spec in sorted((doc.get("metrics") or {}).items()):
         want = (spec or {}).get("type")
-        got = types.get(name)
+        # The text format names a counter's TYPE line <name>_total (prometheus_client;
+        # OpenMetrics uses <name>), so a counter is found under either (#4119).
+        got = types.get(name) if name in types else types.get(f"{name}_total")
         if want and got and got != want:
             out.append(f"{name} is served as {got}, the file declares {want}")
     # What the pack itself reads, query-exporter's built-ins included: for those,
