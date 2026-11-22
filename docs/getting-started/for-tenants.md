@@ -41,9 +41,9 @@ tenants:
 
 這會讓你的 tenant 使用**平台目前供給的**預設閾值，沒有自訂路由（alert 會發到 Alertmanager 的 default receiver）。
 
-⚠️ **「預設閾值」不等於「全部閾值」；而「設得動」也不等於「告警活了」。** 平台給值的 key 只有少數，由讀取端內建（`thresholdConfig.defaults` 也渲染同樣的值）。其餘 key 分**兩類**，都不需要平台 operator 先動手：
+⚠️ **「預設閾值」不等於「全部閾值」；而「設得動」也不等於「告警活了」。** 平台給值的 key 只有少數，由讀取端內建（Helm chart 的 `thresholdConfig.defaults` 預設是空的，不另寫這些值）。其餘 key 分**兩類**，都不需要平台 operator 先動手：
 
-- **平台不給值的 key**（目前 35 個）— 讀取端的內建層以 off 宣告它們：你直接在自己的 `conf.d/<tenant>.yaml` 填值就生效，根層 `_defaults.yaml` 不必寫進 `defaults:` 或列在 `optional_overrides:`（[#4163](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4163)）。但平台刻意不給它們預設值，所以**你不填就是靜默，預設也不會有任何錯誤訊息**（可以訂閱提醒，見下方的 `<Pack>ThresholdNotConfigured`）——那是設計，不是漏掉的預設：這些閾值（例如 Oracle PGA 佔 `PGA_AGGREGATE_LIMIT` 的比例、DB2 每 5 分鐘的 deadlock 次數、MariaDB 的 `mysql_threads_running`——健康的 running threads 數隨主機 CPU 核數而定，#3778）只有你自己的 baseline 校準得出來，平台替你選一個數字，**兩個方向都可能出錯**——可能對你的正常運作誤警，也可能寬到接不到真的故障。⚠️ 別把它讀成「平台的數字一律偏低」：目前量到的反例都是誤警方向，但沒量到漏抓不代表不會漏抓。平台自家參考庫實際量到反例的 key，會逐條標在 `_defaults.yaml` / helm values 該 key 底下（`⚠ 參考庫實測反例`），沒有標的就是沒測過。
+- **平台不給值的 key**（目前 35 個）— 讀取端的內建層以 off 宣告它們：你直接在自己的 `conf.d/<tenant>.yaml` 填值就生效，根層 `_defaults.yaml` 不必寫進 `defaults:` 或列在 `optional_overrides:`（[#4163](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4163)）。但平台刻意不給它們預設值，所以**你不填就是靜默，預設也不會有任何錯誤訊息**（可以訂閱提醒，見下方的 `<Pack>ThresholdNotConfigured`）——那是設計，不是漏掉的預設：這些閾值（例如 Oracle PGA 佔 `PGA_AGGREGATE_LIMIT` 的比例、DB2 每 5 分鐘的 deadlock 次數、MariaDB 的 `mysql_threads_running`——健康的 running threads 數隨主機 CPU 核數而定，#3778）只有你自己的 baseline 校準得出來，平台替你選一個數字，**兩個方向都可能出錯**——可能對你的正常運作誤警，也可能寬到接不到真的故障。⚠️ 別把它讀成「平台的數字一律偏低」：目前量到的反例都是誤警方向，但沒量到漏抓不代表不會漏抓。平台自家參考庫實際量到反例的 key，會逐條標在該規則包標頭（`rule-packs/rule-pack-<pack>.yaml`）該 key 底下（`⚠ 參考庫實測反例`），沒有標的就是沒測過。
 - **`<base>_critical`**（目前 34 個）— **你今天就設得動**，不必先寫 base：base 由內建層給平台值或 off，只寫 `<base>_critical` 也送出 critical 告警列。透過 Portal / Tenant API 寫入不會被擋，直接推 GitOps 也一樣。
 
 第一類你沒填時：沒有閾值 series ⇒ 規則配不到 ⇒ 回空，這是 config-driven join 的機制本身。
@@ -52,7 +52,7 @@ tenants:
 
 **不確定某個 key 落在哪一類？不要用眼睛判**——下面〈自助驗證 › 檢視繼承鏈〉那一行指令會直接把答案分段列出來。
 
-`_defaults.yaml` 通常就在你編輯 `<tenant>.yaml` 的**同一個 `conf.d/` 目錄**裡（CODEOWNERS 限制的是誰能**改**它，不是誰能**讀**），所以多數情況下你自己看得到、也跑得動那行指令。只有當你的組織把平台檔放在你存取不到的來源時（例如多團隊 sharded 模式，見 [GitOps CI/CD 整合指南](../scenarios/gitops-ci-integration.md)），才需要向平台 operator 索取——**`defaults:` 與 `optional_overrides:` 兩段都要**。
+`_defaults.yaml` 通常就在你編輯 `<tenant>.yaml` 的**同一個 `conf.d/` 目錄**裡（CODEOWNERS 限制的是誰能**改**它，不是誰能**讀**），所以多數情況下你自己看得到、也跑得動那行指令。只有當你的組織把平台檔放在你存取不到的來源時（例如多團隊 sharded 模式，見 [GitOps CI/CD 整合指南](../scenarios/gitops-ci-integration.md)），才需要向平台 operator 索取**整份根層 `_defaults.yaml`**（它的 `defaults:` 只放平台方的覆寫與退出；規則包的閾值內建在讀取端，不在檔裡）。
 
 ## 常見操作
 

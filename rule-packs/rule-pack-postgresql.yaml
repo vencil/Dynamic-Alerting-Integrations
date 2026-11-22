@@ -6,18 +6,13 @@
 #   - postgres_exporter (https://github.com/prometheus-community/postgres_exporter)
 #
 # >>> GENERATED:threshold-registry:pack-postgresql — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
+# 對應的 threshold-exporter 閾值（全部內建在讀取端，conf.d 不必列；[chart-default]=平台出貨即啟用，省略就用平台值；未標者沒有平台值，「未啟用」一行寫原因，租戶、子目錄或 profile 給值才發射）:
 #   pg_connections: 80   [chart-default]   # % of max_connections — Connection usage % warning
 #   pg_replication_lag: 30   [chart-default]   # seconds — Replication lag warning
 #
-# optional_overrides（不在出貨清單裡，但 base 已出貨——租戶今天就設得動）：
-# 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要列進去。
-# 它們的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值
-# （components/threshold-exporter/app/pkg/config/resolve.go），
-# 而下列每個 key 的 base 都標了
-# [chart-default]＝出貨的 Helm values / dev conf.d 範本就供給它。⇒ 租戶在自己的
-# conf.d 填一個，ValidateTenantKeys 放行、resolveCriticalRows 產出一條真的
-# critical row。清單刻意不收 _critical 也是同一個理由：它們用不到宣告集（#1311）。
+# <base>_critical（critical 層；沒有平台值）：租戶、子目錄或 profile 寫了就送一條
+# severity=critical 的列，根目錄寫的是每個租戶的 critical 預設值（#4173）；
+# base 整族關掉（`<base>: "disable"`）時不送。
 # ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
 #   pg_connections_critical: 90   # % of max_connections — Critical tier connections
 #   pg_replication_lag_critical: 60   # seconds — Critical tier replication lag

@@ -66,7 +66,7 @@ NESTED_CARRIER = "examples/_defaults.yaml"
 CASES = [
     # the root defaults carrier
     ("root-carrier.defaults", "_defaults.yaml", "defaults", None,
-     lambda d: _sub(d / "_defaults.yaml", "\ndefaults:\n", "\ndefaults:\n  container_memory: 86\n"), True),
+     lambda d: _sub(d / "_defaults.yaml", "\ndimensions:\n", "\ndefaults:\n  container_memory: 86\n\ndimensions:\n"), True),
     ("root-carrier.state_filters", "_defaults.yaml", "state_filters", None,
      lambda d: _sub(d / "_defaults.yaml", 'reasons: ["CrashLoopBackOff"]\n    severity: "critical"',
                     'reasons: ["CrashLoopBackOff"]\n    severity: "warning"'), True),
@@ -86,8 +86,8 @@ CASES = [
     ("root-carrier.optional_overrides", "_defaults.yaml", "optional_overrides",
      _both(lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
                           '    mysql_connection_usage_percent: "70"\n    x_opt_root_2962: "100"\n'),
-           lambda d: _sub(d / "_defaults.yaml", "  - oracle_pga_usage_percent",
-                          "  - oracle_pga_usage_percent\n  - x_opt_root_2962")),
+           lambda d: _sub(d / "_defaults.yaml", "\ndimensions:\n",
+                          "\noptional_overrides:\n  - x_opt_root_2962\n\ndimensions:\n")),
      lambda d: _sub(d / "_defaults.yaml", "  - x_opt_root_2962", "  - x_opt_root_2962x"), True),
     ("root-carrier.dimensions", "_defaults.yaml", "dimensions",
      lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',

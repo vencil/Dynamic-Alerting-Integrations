@@ -79,6 +79,17 @@ def repo_root() -> Path:
     return Path(__file__).parent.parent.parent
 
 
+_PROBE = ["zzz_custom_alpha", "zzz_custom_beta", "zzz_custom_gamma"]
+
+
+def _probe_overlay(tmp_path: Path) -> list[str]:
+    overlay = tmp_path / "probe.yaml"
+    overlay.write_text(
+        yaml.safe_dump({"thresholdConfig": {"optional_overrides": _PROBE}}),
+        encoding="utf-8")
+    return ["-f", str(overlay)]
+
+
 def _values(repo_root: Path) -> dict:
     doc = yaml.safe_load((repo_root / _VALUES).read_text(encoding="utf-8")) or {}
     return doc.get("thresholdConfig") or {}
@@ -86,17 +97,15 @@ def _values(repo_root: Path) -> dict:
 
 # ── static layer ────────────────────────────────────────────────────────────
 
-def test_values_ship_a_non_empty_string_list(repo_root: Path):
-    """Fail loud if the shape moves — otherwise the render comparison below
-    would degenerate into `[] == []` and pass vacuously."""
+def test_values_ship_an_empty_list(repo_root: Path):
+    """#3924: every rule-pack key is built into the exporter, so the chart
+    ships the list EMPTY — it exists only for an operator's own custom keys.
+    The render tests below therefore inject a probe list (`_PROBE`) instead of
+    reading the shipped one, so they cannot degenerate into `[] == []`."""
     listed = _values(repo_root).get("optional_overrides")
-    assert isinstance(listed, list) and listed, (
-        f"{_VALUES} thresholdConfig.optional_overrides must be a non-empty "
-        "list — it is generated from the registry, run "
-        "check_threshold_registry.py --regen")
-    assert all(isinstance(k, str) for k in listed), (
-        "array of STRING (docs/schemas/platform-defaults.schema.json) — a "
-        "mapping here would assert a platform value, the opposite of the tier")
+    assert listed == [], (
+        f"{_VALUES} thresholdConfig.optional_overrides must ship empty — "
+        f"rule-pack keys are built in (#3924); got {listed!r}")
 
 
 def test_values_list_carries_no_critical_key(repo_root: Path):
@@ -130,7 +139,7 @@ def test_template_body_actually_carries_the_values_list(repo_root: Path):
 
     ⛔ A bare `".Values.thresholdConfig.optional_overrides" in txt` cannot show
     that: the `{{- if .Values.thresholdConfig.optional_overrides }}` guard
-    satisfies it on its own, so a template whose body hardcoded today's nine
+    satisfies it on its own, so a template whose body hardcoded a fixed key list
     keys would pass while the values file became decoration. On a helm-less
     runner the render tests below skip, so that mutation had zero red tests.
 
@@ -229,24 +238,30 @@ def _render_defaults_file(repo_root: Path, extra: list[str] | None = None) -> di
 
 
 @_needs_helm
-def test_rendered_defaults_file_matches_values_item_for_item(repo_root: Path):
+def test_rendered_defaults_file_matches_values_item_for_item(
+        repo_root: Path, tmp_path: Path):
     """#1310 acceptance: the rendered `optional_overrides:` equals the values
     it was rendered from, in order — no dropped, reordered or invented key."""
-    rendered = _render_defaults_file(repo_root)
-    expected = _values(repo_root)["optional_overrides"]
-    assert rendered.get("optional_overrides") == expected, (
-        "rendered _defaults.yaml optional_overrides diverges from "
-        f"{_VALUES}: {rendered.get('optional_overrides')!r} != {expected!r}")
+    rendered = _render_defaults_file(repo_root, _probe_overlay(tmp_path))
+    assert rendered.get("optional_overrides") == _PROBE, (
+        "rendered _defaults.yaml optional_overrides diverges from the values: "
+        f"{rendered.get('optional_overrides')!r} != {_PROBE!r}")
     # ...as a TOP-LEVEL key, never a child of defaults (the silent-corruption
     # mode: a list under defaults is not a declaration to the Go loader).
     assert "optional_overrides" not in (rendered.get("defaults") or {})
 
 
 @_needs_helm
+def test_shipped_values_render_no_key_at_all(repo_root: Path):
+    """The shipped (empty) list renders no `optional_overrides:` key."""
+    assert "optional_overrides" not in _render_defaults_file(repo_root)
+
+
+@_needs_helm
 def test_rendered_list_is_carriage_not_a_hardcoded_template(
         repo_root: Path, tmp_path: Path):
     """Override the values and the render must follow. Without this, a
-    template that hardcoded today's 9 keys would pass the test above."""
+    template that hardcoded a fixed key list would pass the test above."""
     probe = ["zzz_probe_alpha", "zzz_probe_beta"]
     overlay = tmp_path / "probe.yaml"
     overlay.write_text(
@@ -267,8 +282,9 @@ def test_empty_values_render_no_key_at_all(repo_root: Path, tmp_path: Path):
         encoding="utf-8")
     rendered = _render_defaults_file(repo_root, ["-f", str(overlay)])
     assert "optional_overrides" not in rendered
-    # the rest of the file must still render (guard must not swallow siblings)
-    assert rendered.get("defaults") and rendered.get("state_filters")
+    # the rest of the file must still render (guard must not swallow siblings);
+    # `defaults` ships as `{}` since #3924, so its PRESENCE is what is checked
+    assert "defaults" in rendered and rendered.get("state_filters")
 
 
 @_needs_helm
@@ -278,11 +294,11 @@ def test_rendered_note_ships_and_its_count_tracks_the_list(
     the list it introduces.
 
     The override half is what makes the count claim real — a note that
-    hardcoded today's nine would pass the default render unchanged.
+    hardcoded a fixed count would pass the default render unchanged.
     """
-    raw = _render_defaults_raw(repo_root)
-    expected = len(_values(repo_root)["optional_overrides"])
-    m = re.search(r"以下\s*(\d+)\s*個 key", raw)
+    raw = _render_defaults_raw(repo_root, _probe_overlay(tmp_path))
+    expected = len(_PROBE)
+    m = re.search(r"以下\s*(\d+)\s*個(?:自訂)?\s*key", raw)
     assert m, f"the #1321 note is absent from the rendered {_DEFAULTS_FILE}:\n{raw}"
     assert int(m.group(1)) == expected, (
         f"note says {m.group(1)} keys, values ship {expected}")
@@ -290,52 +306,14 @@ def test_rendered_note_ships_and_its_count_tracks_the_list(
         "the note reached the ConfigMap without its inspection pointer")
 
     probe = ["zzz_probe_alpha", "zzz_probe_beta"]
-    overlay = tmp_path / "probe.yaml"
+    overlay = tmp_path / "probe2.yaml"
     overlay.write_text(
         yaml.safe_dump({"thresholdConfig": {"optional_overrides": probe}}),
         encoding="utf-8")
-    moved = re.search(r"以下\s*(\d+)\s*個 key",
+    moved = re.search(r"以下\s*(\d+)\s*個(?:自訂)?\s*key",
                       _render_defaults_raw(repo_root, ["-f", str(overlay)]))
     assert moved and int(moved.group(1)) == len(probe), (
         "the note's count did not follow the overridden list — it is hardcoded")
-
-
-@_needs_helm
-def test_rendered_note_says_some_of_these_keys_have_a_measured_counterexample(
-        repo_root: Path):
-    """#1176: the ConfigMap is the artifact that reaches EVERY install, and
-    `toYaml` strips the per-key `⚠ 參考庫實測反例` lines exactly as it strips
-    the tier rationale (#1321's lesson, re-learned here).
-
-    ⛔ What is asserted is the POINTER, not the clauses. Reproducing them in a
-    Helm template would be a hand-copy that `--regen` cannot reach — the drift
-    this line of work exists to delete. What must survive is that a reader of
-    the ConfigMap alone knows (a) some of these keys have a measurement and
-    (b) the failure runs in BOTH directions, because "the platform's numbers
-    run low" is false for the under_fire one.
-    """
-    raw = _render_defaults_raw(repo_root)
-    assert "參考庫實測反例" in raw, (
-        "the ConfigMap ships the declared list with no hint that several of "
-        f"those keys have a measured counter-example:\n{raw}")
-    assert "誤警" in raw and "接不到" in raw, (
-        "the note names only one failure direction — a blanket 'these values "
-        "are too low' caveat is false for the under_fire key")
-    # And the clauses themselves must NOT be here: a template copy cannot be
-    # regenerated, so it would go stale on the next recalibration.
-    for observed in _shipped_observed_clauses(repo_root):
-        assert observed not in raw, (
-            f"the template hand-copies a registry clause ({observed!r}) — it "
-            "is not reachable by `check_threshold_registry.py --regen`")
-
-
-def _shipped_observed_clauses(repo_root: Path) -> list[str]:
-    registry = yaml.safe_load(
-        (repo_root / "rule-packs" / "threshold-registry.yaml").read_text(
-            encoding="utf-8"))
-    return [e["value_counterexample"]["observed"]
-            for e in (registry.get("keys") or {}).values()
-            if "value_counterexample" in e]
 
 
 @_needs_helm

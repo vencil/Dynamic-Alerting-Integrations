@@ -124,16 +124,17 @@ Requires:
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  # ⚠️ Values are NUMBERS — one that does not read as a number (e.g. disable,
-  #    abc) gets no default row for its key, and da-guard reports
+  # ⚠️ Values are NUMBERS (or "disable") — one that does not read as a number
+  #    (e.g. abc) gets no default row for its key, and da-guard reports
   #    root_default_refused; a mapping or a list drops the WHOLE file and
   #    every default in it (#3250).
   mysql_connection_usage_percent: 80
   container_cpu: 70
   container_memory: 80
   # A complete dimensional key (metric{label="v"}) may go here too; it is served once top-level dimensions: declares its labels (see migration-guide)
-  # To leave a key with no platform default, just omit it. `defaults` has no
-  # "disable" state; tri-state "disable" and <key>_critical are tenant-only (see for-tenants.en.md)
+  # Omit a rule-pack key -> the platform's value built into the readers (a key with no platform value is served once a tenant sets it; #3924).
+  # A number = every tenant uses it; <key>: "disable" = the family off for the whole tree;
+  # <key>_critical: 95 = every tenant's critical default (served while the base has a value; a tenant overrides it)
 
 # ↓ top-level key, a sibling of `defaults:` — NOT nested under it
 _routing_defaults:

@@ -70,30 +70,9 @@ from _lib_confd import (  # noqa: E402
     printable_name,
     warn_nested,
 )
-# #1310 — the declared-without-value key names shipped in `optional_overrides:`.
-# Same import shape as scaffold_tenant.py's (see its comment): the derivation is
-# shared so the two customer-side `_defaults.yaml` producers cannot disagree
-# about which keys a tenant may set.
-#
-# ⛔ SCOPE of the sharing: the DECLARED-KEY list and the `<base>_critical`
-# SUFFIX constant (`CRITICAL_SUFFIX`, #1218) are contract shape; the `defaults:`
-# VALUES are content, and since #1196 they are ALSO read from
-# `scaffold_tenant.RULE_PACKS` (see `_catalog_defaults`) instead of this
-# module's former hand-copy, whose diverging key spellings the exporter never
-# read. `RULE_PACK_CATALOG` below keeps only what is init-specific (label,
-# auto-enable, per-tenant critical seeds) — the reachability gate's UNDEMANDED
-# face reads those seeds too, so a key nothing reads cannot come back here.
-from _registry_lib import (  # noqa: E402
-    CRITICAL_SUFFIX,
-    _load_scaffold,
-    defaults_counterexample_head,
-    render_tenant_critical_note_lines,
-    render_tenant_declared_note_lines,
-    root_written_defaults,
-    shipped_dimensions_for_packs,
-    shipped_optional_keys_for_packs,
-    tenant_declared_foot,
-)
+# #3475: the labels a dimensional key may carry, shared with scaffold_tenant so
+# the two `_defaults.yaml` producers declare the same `dimensions:`.
+from _registry_lib import shipped_dimensions_for_packs  # noqa: E402
 
 _LANG = detect_cli_lang()
 
@@ -436,69 +415,20 @@ def _gitlab_apply_image(deploy_method: str) -> tuple[str, str]:
 
 
 # ============================================================
-# Rule Pack catalog (labels + the critical tier seeded into tenant stubs)
+# Rule Pack catalog (labels and auto-enable)
 # ============================================================
-# ⛔ NO `defaults:` VALUES LIVE HERE any more (issue 1196). This dict used to
-# carry its own copy of every pack's `defaults:` — a known divergence from
-# `scaffold_tenant.RULE_PACKS` — and the copy had drifted into key names no
-# alert reads: 36 of its 67 keys matched no `alert_threshold:<key>` in any rule
-# pack (`jvm_heap_usage`, `redis_memory_usage`, `oracle_active_sessions`, every
-# nginx / clickhouse / db2 key…), while the keys the packs DO read
-# (`jvm_memory`, `kafka_broker_count`, …) were absent — and `resolveBaseRows`
-# walks only `defaults:`, so a tenant who set them got no series either
-# (measured through `config.LoadDir` + `ResolveAt`). `_catalog_defaults` now
-# reads `scaffold_tenant.RULE_PACKS`, the working copy that
-# `check_threshold_registry.py` holds equal to `rule-packs/threshold-registry.yaml`
-# (epic 1200 D2), so both `_defaults.yaml` producers render one contract.
-# `check_threshold_reachability.py` fails if a key this module writes is one no
-# alert reads.
-#
-# What stays is init-specific: the display label, `auto_enabled`, and WHICH
-# `<base>_critical` keys get seeded into the `<tenant>.yaml` stub:
-#
-#   'critical_seeds'     → keys whose VALUE is read from the registry's
-#                          `optional_overrides` (via scaffold), same single
-#                          source as `defaults:`. The old hand-copied values
-#                          had drifted too (pg_connections_critical 150 vs 90;
-#                          rabbitmq_queue_messages_critical 50000, below the
-#                          registry's 100000 WARNING tier once defaults moved).
-#   'critical_overrides' → key → value, ONLY for keys the registry does not
-#                          carry (`test_init_project` fails if one it does
-#                          carry lands here, which would re-fork the value).
-#
-#   Both land in the tenant stub because `resolveCriticalRows` iterates TENANT
-#   OVERRIDES only and admits on `defaults[<base>]` — the tenant file is the
-#   ONLY place a `<base>_critical` key does anything.
-#
-# ⛔ A `<base>_critical` written into 'defaults' does not "also work, just less
-# neatly" — it silently becomes a DIFFERENT metric. `parseMetricKey` splits on
-# the first underscore, so `pg_connections_critical` resolves to
-# `{component="pg", metric="connections_critical", severity="warning"}`: a series
-# no recording rule joins, while `tenant:alert_threshold:pg_connections_critical`
-# (which reads `severity="critical"`) stays empty and the `*Critical` alert
-# cannot fire. Measured both directions in
-# `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`.
-# The placement rule is enforced for every `_defaults.yaml` producer by
-# `check_threshold_reachability.py`'s defaults-tier face, so a key put in the
-# wrong dict below fails CI rather than shipping.
+# Only what is init-specific: the display label and `auto_enabled`. No
+# threshold key lives here, and none is written by this tool (#3924): every
+# key of the threshold registry is built into the readers (#3832, #4163) — the
+# platform's number for a key it ships armed, off for every other — so the
+# generated `_defaults.yaml` names none, and the tenant stub seeds none (it
+# used to seed `<base>_critical` keys from a `critical_seeds` list here).
 RULE_PACK_CATALOG = {
     'mariadb': {
         'label': 'MariaDB / MySQL',
-        'critical_seeds': (
-            'mysql_connection_usage_percent_critical',
-            # No mysql_threads_running_critical (#3778): its base is
-            # declared-only (optional_overrides, no platform value), and a
-            # critical row is admitted on `defaults[<base>]` only — this file
-            # writes no such base, so the seed could never be served.
-            'mysql_replication_lag_critical',
-        ),
     },
     'postgresql': {
         'label': 'PostgreSQL',
-        'critical_seeds': (
-            'pg_connections_critical',
-            'pg_replication_lag_critical',
-        ),
     },
     'redis': {
         'label': 'Redis',
@@ -511,13 +441,6 @@ RULE_PACK_CATALOG = {
     },
     'oracle': {
         'label': 'Oracle',
-        # Read from the registry like every other seed. This used to be a
-        # `critical_overrides` entry whose comment said the pack read it via
-        # `severity="critical"` — the pack had no critical record or alert at
-        # all, so the seeded value armed nothing. #3658 declared the tier in
-        # `scaffold_tenant.RULE_PACKS` and shipped
-        # OracleTablespaceAlmostFullCritical, so the value now has one home.
-        'critical_seeds': ('oracle_tablespace_used_percent_critical',),
     },
     'db2': {
         'label': 'IBM DB2',
@@ -527,11 +450,9 @@ RULE_PACK_CATALOG = {
     },
     'kafka': {
         'label': 'Apache Kafka',
-        'critical_seeds': ('kafka_consumer_lag_critical',),
     },
     'rabbitmq': {
         'label': 'RabbitMQ',
-        'critical_seeds': ('rabbitmq_queue_messages_critical',),
     },
     'jvm': {
         'label': 'JVM Applications',
@@ -541,11 +462,6 @@ RULE_PACK_CATALOG = {
     },
     'kubernetes': {
         'label': 'Kubernetes',
-        'critical_seeds': (
-            'container_cpu_critical',
-            'container_cpu_throttle_critical',
-            'container_memory_critical',
-        ),
     },
     'operational': {
         'label': 'Operational (auto-enabled)',
@@ -562,225 +478,23 @@ RULE_PACK_CATALOG = {
 # ============================================================
 
 
-def _catalog_defaults(rule_packs: list[str]) -> dict:
-    """The `defaults:` mapping this run will write into `_defaults.yaml`.
-
-    ONE derivation, consumed by both files a run produces: `_defaults_file`
-    writes it, and `_tenant_file` reads it to decide what its header may
-    claim about `<base>_critical` (#1321). Re-spelling the loop in the second
-    caller would recreate exactly the drift this fix exists to remove — the
-    tenant header would then be describing a `defaults:` section that is only
-    assumed to match the one on disk.
-
-    ⛔ It passes the merged mapping through UNFILTERED, and that is deliberate
-    (#1218 blind review). An earlier draft dropped any `_critical` key here as
-    "belt-and-braces". It was the opposite: `check_threshold_reachability`'s
-    defaults-tier face reads THIS function's rendered output, so the filter made
-    the only gate that polices the placement structurally unable to fire, while
-    a comment claimed it still would. A misfiled key would then have vanished
-    from BOTH generated files — no warning row, no critical row, no gate — which
-    is strictly worse than the bug being fixed. A misfile now flows through to
-    `defaults:`, where the gate names it and CI fails.
-
-    The VALUES come from `scaffold_tenant.RULE_PACKS` (issue 1196): the same
-    per-pack `defaults` tier `scaffold_tenant.generate_defaults` renders, held
-    equal to `rule-packs/threshold-registry.yaml` by
-    `check_threshold_registry.py`. Only the packs the caller selected, in the
-    caller's order — unlike `generate_defaults`, which always adds kubernetes,
-    this run's kubernetes pack is an explicit selection like any other. Packs
-    scaffold does not define (`operational`, `platform`) carry no threshold key.
-    """
-    rule_packs_def = _load_scaffold().RULE_PACKS
-    defaults: dict = {}
-    for rp in rule_packs:
-        for key, info in rule_packs_def.get(rp, {}).get('defaults', {}).items():
-            defaults[key] = info['value']
-    return defaults
-
-
-def _catalog_critical(rule_packs: list[str]) -> dict:
-    """The `<base>_critical` mapping this run will seed into `<tenant>.yaml`.
-
-    Sibling of `_catalog_defaults`, and the reason the pair exists: these keys
-    are worthless in `_defaults.yaml` and load-bearing in the tenant file, so
-    the two generators must not read one mapping and hope. Iteration follows the
-    CALLER's pack order, so `--rule-packs a,b` and `b,a` seed the same keys in a
-    different order (measured — the rendered stubs are not byte-identical).
-
-    Keys whose base is not in the same run's `defaults:` are dropped rather
-    than emitted: `resolveCriticalRows` admits on `defaults[<base>]`, so such a
-    key produces nothing and `ValidateTenantKeys` rejects the tenant write
-    outright (a dangling `_critical` is an Error, not a warning, since #1227).
-    Seeding a stub that the only supported writer refuses is worse than seeding
-    nothing. Today every catalog `_critical` has its base in the same pack, so
-    this drops nothing — it is a guard against a pack losing a base key later.
-    """
-    defaults = _catalog_defaults(rule_packs)
-    rule_packs_def = _load_scaffold().RULE_PACKS
-    critical: dict = {}
-    for rp in rule_packs:
-        if rp not in RULE_PACK_CATALOG:
-            continue
-        registry_crit = rule_packs_def.get(rp, {}).get('optional_overrides', {})
-        seeds = [(key, registry_crit[key]['value'])
-                 for key in RULE_PACK_CATALOG[rp].get('critical_seeds', ())]
-        seeds += list(RULE_PACK_CATALOG[rp].get('critical_overrides', {}).items())
-        for key, value in seeds:
-            # Suffix-guard before slicing: a key without `_critical` would have
-            # nine arbitrary characters chopped off it, and the membership test
-            # below would then pass or fail for a reason unrelated to this key.
-            # `test_catalog_tiers_do_not_overlap_and_are_suffix_correct` pins the
-            # shipped catalog, so this is defensive only — but a wrong-for-the-
-            # wrong-reason branch is exactly what the rest of this fix is about.
-            if not key.endswith(CRITICAL_SUFFIX):
-                continue
-            base = key[: -len(CRITICAL_SUFFIX)]
-            if base in defaults:
-                critical[key] = value
-    return critical
-
-
-def _critical_prefill_note(critical: dict) -> str:
-    """The sentences `render_tenant_critical_note_lines` cannot say for us.
-
-    That renderer is shared with `scaffold_tenant`, and it describes the
-    `_defaults.yaml` regime ("the platform ships no critical value; set one
-    here"). True for both generators — but only THIS one also pre-fills them,
-    and a tenant told to "set one here" while N are already set below would go
-    looking for a section it has. Kept local rather than adding a third regime
-    to the shared table: the difference being described is this generator's
-    behaviour, not a property of the `_defaults.yaml` it writes.
-
-    ⛔ It says "already set below", not "the platform supplies these" — the
-    sentence above it (correctly) says the platform supplies no critical value,
-    and a follow-up that read like a platform assertion would contradict it
-    (blind review, #1218).
-
-    It says a later platform recalibration does not reach these lines: since
-    #3832 the built-in base values above do follow the platform, so the
-    pre-filled `_critical` values are the copies that do not.
-
-    ⛔ Nor does it name the ConfigMap wiring, which an earlier draft also did
-    ("this tool wires conf.d/ straight into the threshold-config ConfigMap").
-    That mechanism only exists for `--deploy kustomize`: with the default
-    `--config-source configmap`, `--deploy helm` generates no `kustomize/` tree
-    at all (measured — the output is `.da-init.yaml`, the CI files,
-    `.pre-commit-config.da.yaml` and `conf.d/`, nothing else).
-    (GitOps Native Mode, `--config-source git`, used to add a
-    `kustomize/overlays/gitops/` tree under every `--deploy`; it is refused
-    since issue 1349, so `configmap` is now the only source.)
-    ⚠️ "the CI files" is deliberately not a count:
-    `--ci gitlab`/`both` also writes the repo-root `.gitlab-ci.yml` shell
-    (#1357), so the old wording "two CI files" went stale the moment that
-    landed, and `_gen_tenant_yaml` never receives `deploy`,
-    so a deploy-specific sentence here cannot be true for two of the three.
-    The claim was narrowed to the property that holds for all three: nothing
-    generated tracks the platform (blind review, #1218).
-
-    ⛔ The costs it DOES carry are the ones a tenant cannot infer, and every
-    one of them is measured against the real resolver, not read off it:
-      * `<base>: "disable"` switches its `<base>_critical` off too (#3046:
-        the resolver's familyHeadOff), so keeping the critical tier alone is
-        `<base>: "N:critical"` with the `<base>_critical` line deleted — both
-        together give one series twice and the whole `/metrics` fails.
-      * …and DELETE is not a synonym for disable, which an earlier draft
-        offered as one ("Disable or delete BOTH lines"). Measured, same three
-        cases: both disabled → 0 rows; both deleted → 1 row,
-        `{severity="warning", value=<the platform default>}`, because an absent
-        key is State 2. Telling a tenant who wants the metric off to delete
-        both lines hands them back the warning tier they were trying to remove.
-      * A dangling `<base>_critical` is write-blocking on the tenant-api path
-        (`ValidateTenantKeys` blocking `Errors` → `gitops/writer.go:599`
-        `keyErrs`, the set every write gate turns into `ErrValidation`).
-        ⛔ The note names the tenant-api path as the ONLY blocker and says a
-        green pipeline proves nothing — deliberately WITHOUT describing the
-        state of the generated CI, which two earlier drafts did in opposite
-        directions and both were one merge away from being false. Draft 1
-        promised "EVERY write of this file is rejected" (a stop the customer's
-        own pipeline does not perform). Draft 2 corrected it by saying that
-        pipeline "fails before it validates anything" — true only while the
-        generated invocations passed `--ci`, which `validate_config.py` does not
-        accept (#1380).
-
-        ⛔ And that is no longer even a hypothetical: #1347 merged as PR #1390
-        (`b016f77e`) WHILE THIS PR WAS IN REVIEW, removing `--ci` from the three
-        `validate-config` invocations (measured: the generated tree still
-        contains three `--ci`, all of them on `da-tools lint`, which does accept
-        the flag — saying "all three invocations" without the qualifier reads as
-        "all of them"). Draft 2 would now be describing a defect that no
-        longer exists, in a file customers keep. The reasoning paragraph itself
-        went stale the same way the sentence would have — which is the strongest
-        argument available for the rule it states.
-
-        What survives every regime is the invariant: bare `validate-config`
-        FAILs and exits 1 on this input (measured, `--strict` included; it
-        warned and exited 0 until the key verdict blocked, #3016). A
-        customer-facing file must carry the invariant, not the current state of
-        a neighbouring defect.
-
-    ⛔ It also no longer says the values are "at the platform's suggested
-    starting values" — three lines under a paragraph that (correctly) states
-    the platform supplies no critical value, that reads as exactly the platform
-    assertion the docstring above forbids.
-
-    Derived from the mapping actually seeded (same rule as its neighbours): an
-    empty tier renders nothing at all, so the file never points at an absent
-    section.
-    """
-    if not critical:
-        return ''
-    return (
-        '\n# {n} of them are written in below, as a starting point. The lines\n'
-        '# are in THIS file, so they are yours: retune them freely. Like any\n'
-        '# value written into your repo, they are a one-time copy: a later\n'
-        '# platform recalibration does not reach them.\n'
-        '#\n'
-        '# What editing alone will not tell you:\n'
-        '#   * `<base>: "disable"` switches its `<base>_critical` off too:\n'
-        '#     the critical line below then serves nothing. To keep the\n'
-        '#     critical tier only, write `<base>: "N:critical"` and DELETE\n'
-        '#     the `<base>_critical` line (both together fail /metrics).\n'
-        '#   * …and no `<base>` line is in this file: to silence one, ADD\n'
-        '#     `<base>: "disable"` yourself; omitting it means "inherit the\n'
-        '#     value above", not "off".\n'
-        '#   * DELETING both lines is not the same thing: an absent key falls\n'
-        '#     back to the value above, so the warning row returns. Delete only\n'
-        '#     suppresses the critical row.\n'
-        '#   * If a `<base>` ever stops having a value, its `<base>_critical`\n'
-        '#     line here must go too: no reader reads it. `da-tools\n'
-        '#     validate-config` FAILs on it (exit 1), and the tenant-api write\n'
-        '#     path rejects THIS WHOLE FILE while it is there — every other\n'
-        '#     change in the same save with it.'
-    ).format(n=len(critical))
-
-
 def _gen_defaults_yaml(rule_packs: list[str], namespace: str) -> str:
     """The text `da-guard write` writes for `_defaults_file` (a dry run)."""
     return _defaults_file(rule_packs, namespace).preview()
 
 
 def _defaults_file(rule_packs: list[str], namespace: str) -> "_lib_confedit.NewFile":
-    """Generate _defaults.yaml with selected rule pack defaults, as data and
-    its comments; `da-guard write` writes the text (ADR-036 §2, #3206 10c-3).
+    """Generate _defaults.yaml for the selected rule packs, as data and its
+    comments; `da-guard write` writes the text (ADR-036 §2, #3206 10c-3).
 
-    Also emits the `optional_overrides:` DECLARED-KEY list (#1310) — key names
-    only, no values: the platform recognises them, the tenant supplies the
-    number. Without it in THIS file, a tenant on the GitOps topology gets an
-    HTTP 400 for every one of those keys, because tenant-api's `--config-dir`
-    is the customer repo clone and `config.mergeTenantConfig` reads its
-    `_defaults.yaml` for `OptionalOverrides` (the chart-side list only ever
-    reaches threshold-exporter).
-
-    #3832 decision 7: `defaults:` holds no built-in key (`root_written_defaults`):
-    the readers serve those, and a copy here would pin the day's number.
+    #3924: no threshold key of the registry — no value under `defaults:`, no
+    name under `optional_overrides:`. Every one is built into the readers
+    (#3832, #4163): the platform's number for a key it ships armed (a copy here
+    would pin the day's number, #3832 decision 7), off for every other one (a
+    copy here would arm, for every tenant, a number only the deployment can
+    calibrate). A tenant, subtree or profile that gives an off key a value is
+    served without this file declaring it.
     """
-    defaults = root_written_defaults(_catalog_defaults(rule_packs))
-
-    # DERIVED from the shared predicate, never listed here — see the import
-    # comment for why this one derivation is shared while the values above are
-    # not. Pack names are the registry's; any catalog-only name (`operational`,
-    # `platform`) simply contributes nothing.
-    optional_overrides = shipped_optional_keys_for_packs(rule_packs)
 
     state_filters = {
         'container_crashloop': {
@@ -815,13 +529,7 @@ def _defaults_file(rule_packs: list[str], namespace: str) -> "_lib_confedit.NewF
         'repeat_interval': '4h',
     }
 
-    # Omitted when empty (a selection whose every valued key is built in):
-    # an absent and an empty `defaults:` read the same.
-    config = {'defaults': defaults} if defaults else {}
-    if optional_overrides:
-        # Omitted when empty rather than emitted as `[]` (an empty list reads
-        # as an accident; the Go loader treats absent and empty the same).
-        config['optional_overrides'] = optional_overrides
+    config: dict = {}
     # #3475: which labels a dimensional key may carry and still be served;
     # on the GitOps topology this file is the only declaration there is.
     dimensions = shipped_dimensions_for_packs(rule_packs)
@@ -841,23 +549,18 @@ def _defaults_file(rule_packs: list[str], namespace: str) -> "_lib_confedit.NewF
     # _defaults.yaml — Platform global defaults
     # Managed by Platform Team. Tenant files should NOT contain this section.
     #
-    # The thresholds the platform ships armed are built into the readers
-    # (exporter, da-guard, tenant-api), so `defaults:` does not list them.
-    # For each such key, in `defaults:`:
-    #   leave it out        -> the platform's value, following its updates
-    #   <key>: <number>     -> your value, pinned
+    # Every threshold of the rule packs is built into the readers (exporter,
+    # da-guard, tenant-api), so `defaults:` lists none of them. A key the
+    # platform ships armed has the platform's value; every other key has none
+    # (only your deployment can calibrate it) and is served once a tenant,
+    # subdirectory or profile gives it a value. For any of them, in `defaults:`:
+    #   leave it out        -> the platform's value (following its updates),
+    #                          or nothing served
+    #   <key>: <number>     -> this number for every tenant, pinned
     #   <key>: "disable"    -> off for every tenant; a subdirectory, profile
     #                          or tenant that gives it a value turns it back on
-    # Which keys they are, and the values in force:
-    #   da-tools validate-config --config-dir <this dir>   (platform_defaults)
-    #
-    # optional_overrides (if present): key NAMES only, no values. The platform
-    # RECOGNISES these keys — a tenant may set them in its own file and they
-    # take effect — but asserts no value of its own, so an unset key stays
-    # silent. That silence is the intended end state, not a missing default:
-    # these are thresholds only the tenant's own baseline can calibrate.
-    # Do NOT move one into `defaults:` to "fix" the silence — that arms a
-    # platform-chosen number for every tenant.
+    # Which keys they are, the platform's values, and how many tenants set
+    # each: da-tools validate-config --config-dir <this dir>  (platform_defaults)
     #
     # dimensions (if present): per base key, the labels a dimensional key
     # `<base>{{label="v"}}` may carry and still be served (a regex selector
@@ -867,18 +570,8 @@ def _defaults_file(rule_packs: list[str], namespace: str) -> "_lib_confedit.NewF
     # Generated by: da-tools init
     # Rule Packs: {rule_packs}""").format(rule_packs=', '.join(rule_packs))
 
-    # ⛔ Same annotation as `scaffold_tenant.write_outputs`, from the same
-    # composer. This is the SECOND producer of a file called `_defaults.yaml`
-    # in the same `conf.d/`: it derives its declared list from the same shared
-    # predicate, so it lists exactly the keys ADR-030's reference library has
-    # counter-examples for. Without this, `da-tools init` wrote the caveat into
-    # `<tenant>.yaml` (which shares the stub renderer) and left the sibling
-    # `_defaults.yaml` bare — one annotated file and one not, side by side
-    # (blind review, #1344). English, because everything this tool writes is.
     return _lib_confedit.NewFile(
-        '_defaults.yaml', config, _lib_confedit.comment_block(header),
-        node_head=lambda at, value: defaults_counterexample_head(
-            at, value, lang="en"))
+        '_defaults.yaml', config, _lib_confedit.comment_block(header))
 
 
 def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
@@ -890,111 +583,53 @@ def _tenant_file(tenant: str, rule_packs: list[str]) -> "_lib_confedit.NewFile":
     """Generate a tenant stub, as data and its comments; `da-guard write`
     writes the text (ADR-036 §2, #3206 10c-3).
 
-    ⛔ This is the ONE file a tenant opens, so the header has to be true for
-    EVERY population of key (#1321). It used to say "Omitted keys inherit from
-    _defaults.yaml", which holds only for keys `_defaults.yaml` gives a value
-    to; for the DECLARED tier (`optional_overrides:` — key names, no values) it
-    is exactly backwards: there is nothing to inherit, so omission is silence.
-    The declared keys for the selected packs follow as a commented,
-    valueless block after the YAML (the file's foot comment) — see
-    `_registry_lib.tenant_declared_foot`.
-
-    ⛔ Two buckets is still not the whole taxonomy: `<base>_critical` is in
-    neither block, yet it takes effect whenever `<base>` has a value under
-    `defaults:` (resolveCriticalRows keys off exactly that) — AND ONLY when it
-    is written HERE. Until #1218 this generator put 16 of them into `defaults:`
-    instead, where they emitted `{component="<prefix>",
-    metric="<rest>_critical"}` (parseMetricKey splits on the first underscore) warning
-    series and no critical tier at all; the header rendered from that mapping
-    then told the tenant "the critical row fires without you doing anything",
-    which was the opposite of what shipped. The paragraph is still rendered
-    from the very `defaults:` mapping this run writes
-    (`_registry_lib.render_tenant_critical_note_lines`) — that is what made the
-    regime flip when the keys moved, instead of leaving a stale sentence.
-
-    ⛔ The pointer at the declared block ("listed at the end of this file") is
-    derived for the same reason. The block is appended only when the declared
-    list is non-empty, and most packs' optional tier is `_critical`-only
-    (measured: mariadb, postgresql, redis, mongodb, elasticsearch, kafka,
-    rabbitmq, jvm, nginx, kubernetes all yield []), so `da-tools init
-    --rule-packs mariadb` used to hand the tenant a header pointing at a
-    section that file does not contain — see
-    `_registry_lib.render_tenant_declared_note_lines`.
+    #3924: one rule for every threshold key — each is built into the readers
+    (#3832, #4163), with the platform's number or off — so the header needs no
+    key list, and the stub seeds no threshold (it used to write `<base>_critical`
+    values from the registry and list the declared keys in a foot comment).
     """
-    # The selected packs' valued bases (`_defaults_file` writes these minus the
-    # built-in keys, #3832; a built-in base still has a value, so the critical
-    # note counts it) — the header claims below are read off it, not asserted
-    # about it. Same for the declared
-    # list: one derivation per run, shared by the header sentence and the block
-    # appended at the bottom, so the two cannot disagree.
-    defaults = _catalog_defaults(rule_packs)
-    critical = _catalog_critical(rule_packs)
-    declared_keys = shipped_optional_keys_for_packs(rule_packs)
-    critical_note = '\n'.join(render_tenant_critical_note_lines(defaults, lang='en'))
-    critical_note += _critical_prefill_note(critical)
-    declared_note = '\n'.join(
-        render_tenant_declared_note_lines(declared_keys, lang='en'))
     _lib_confedit.comment_field("the tenant (--tenants)", tenant, line=True)
     header = textwrap.dedent("""\
     # {tenant}.yaml — Tenant threshold overrides
     # Only the 'tenants' section is allowed in tenant files.
-    # Omitting a key that has a value above (in _defaults.yaml's `defaults:`,
-    # or built in by the platform) inherits that value.
-    {declared_note}
-    {critical_note}
+    # Every threshold of the rule packs is built in: omitting a key serves
+    # the value _defaults.yaml or the platform gives it, or nothing for a key
+    # that has none (only your deployment can calibrate those). Give such a
+    # key, or any `<key>_critical`, a value here to serve it for this tenant.
+    # Which keys they are, the platform's values, and how many tenants set
+    # each: da-tools validate-config --config-dir <conf.d>  (platform_defaults)
     # Set a key to "disable" to suppress that metric.
     #
-    # Generated by: da-tools init""").format(tenant=tenant, declared_note=declared_note,
-                                            critical_note=critical_note)
+    # Generated by: da-tools init""").format(tenant=tenant)
 
     tenant_config = _tenant_override_rows(tenant, rule_packs)
     config = {'tenants': {tenant: tenant_config}}
-
-    # Same derivation, same argument, same call as `_defaults_file` above —
-    # the two files are generated side by side from one `rule_packs`, so the
-    # stub can only ever advertise keys that file actually declares. And it is
-    # the SAME `declared_keys` the header sentence above was rendered from, so
-    # "listed at the end of this file" is a fact about this file (the block
-    # is its foot comment), not a hope.
     return _lib_confedit.NewFile(
-        f'{tenant}.yaml', config, _lib_confedit.comment_block(header),
-        tenant_declared_foot(declared_keys, lang='en'))
+        f'{tenant}.yaml', config, _lib_confedit.comment_block(header))
 
 
 def _tenant_override_rows(tenant: str, rule_packs: list[str]) -> dict:
     """The override mapping `conf.d/<tenant>.yaml` carries for this run.
 
-    ⛔ Factored out of `_tenant_file` because a SECOND artifact now names
-    the same keys. Under `--deploy helm` the chart renders its ConfigMap from
+    ⛔ Factored out of `_tenant_file` because a SECOND artifact names the same
+    keys. Under `--deploy helm` the chart renders its ConfigMap from
     `thresholdConfig.tenants` and nothing feeds `conf.d/` to it, so
     `_gen_helm_values` has to tell the customer which keys to carry across.
-    One derivation, two readers: two hand-kept copies of a key list is the
-    shape this module keeps deleting (issue 1454 B).
+    One derivation, two readers (issue 1454 B).
 
-    No base key (#3832 decision 7): a tenant line equal to the value it
-    inherits is a copy that stops following the platform. (It used to carry
-    three of the first pack's base values as examples.)
-
-    The critical tier goes in for EVERY selected pack — not just the first.
-    This is the section the keys had to move to (#1218):
-    `resolveCriticalRows` iterates tenant overrides, so a `<base>_critical`
-    anywhere else produces no critical row. Seeded with a value rather than
-    commented out because that is what the platform's number is FOR, and it is
-    the same position `scaffold_tenant` takes (its prompt offers the registry
-    value as the Enter-default). The customer
-    edits or deletes them in review — they are in the customer's own file,
-    which is exactly the tier boundary `defaults:` violated.
+    No threshold key (#3924): the readers build every one in, so a tenant
+    line could only copy a value it already inherits or arm a number the
+    deployment has not calibrated. *rule_packs* is kept for the callers.
     """
-    rows: dict = {}
-    for k, v in _catalog_critical(rule_packs).items():
-        rows[k] = str(v)
-    rows['_routing'] = {
-        'receiver': {
-            'type': 'webhook',
-            'url': f'https://webhook.{tenant}.example.com/alerts',
+    del rule_packs  # no threshold key is seeded (#3924)
+    return {
+        '_routing': {
+            'receiver': {
+                'type': 'webhook',
+                'url': f'https://webhook.{tenant}.example.com/alerts',
+            },
         },
     }
-    return rows
 
 
 def _gen_helm_values(
@@ -1020,9 +655,9 @@ def _gen_helm_values(
     ⛔ It carries `thresholdConfig.tenants` and NOTHING ELSE, and the two
     absences are the design:
 
-      * no `defaults:` — the chart already ships the platform's calibrated
-        numbers and a copy here deep-merges OVER them, so a later upstream
-        recalibration is silently reverted. The platform hit exactly that
+      * no `defaults:` — the exporter builds the platform's calibrated
+        numbers in (#3924) and a copy here pins today's number OVER them, so a
+        later upstream recalibration is silently reverted. The platform hit exactly that
         (mysql_cpu 80→30, #944) and left the warning standing in its own
         `environments/local/threshold-exporter.yaml`. Shipping a second copy
         to every customer would industrialise that trap.
@@ -1105,11 +740,11 @@ def _gen_helm_values(
     # them, because two live copies with nothing comparing them is a
     # silent-drift trap.
     #
-    # ⛔ No `thresholdConfig.defaults:` here, deliberately. The chart already
-    # ships the platform's calibrated defaults; a copy in this file
-    # deep-merges OVER them, so a later upstream recalibration is silently
-    # reverted for you. Override a default only when you mean to, and re-check
-    # it on every chart upgrade.
+    # ⛔ No `thresholdConfig.defaults:` here, deliberately. The exporter
+    # builds the platform's calibrated values in; a copy in this file pins
+    # today's number for every tenant, so a later upstream recalibration is
+    # silently reverted for you. Override a value only when you mean to, and
+    # re-check it on every upgrade.
     #
     # ⛔ No credentials here, ever. No kubeconfig, no tokens, no webhook
     # secrets — wire receiver credentials through the chart's Secret reference.

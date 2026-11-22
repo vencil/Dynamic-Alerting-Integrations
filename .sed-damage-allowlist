@@ -284,3 +284,10 @@ tests/shared/test_write_failure_class.py
 tests/rulepacks/cluster_identity_baseline.yaml  # #4097: the ratchet list shrinks as rules keep da_cluster (119 -> 3 findings)
 # #2789: ADR-034 rewritten to the ADR writing rules; the evidence log and the side-defect section left (to 47% of before).
 docs/adr/034-legal-value-as-fallback.md
+# #3924: the reachability lint's producer faces collapse into one policy (no registry key written or listed); the per-face renderers and their floors left (to 29% of before).
+scripts/tools/lint/check_threshold_reachability.py
+# #3924: the registry blocks leave the shipped roots and the chart values (every registry key is built into the readers); the lint's tests follow its rewrite.
+helm/threshold-exporter/values.yaml
+components/threshold-exporter/config/conf.d/_defaults.yaml
+try-local/seed/conf.d/_defaults.yaml
+tests/lint/test_check_threshold_reachability.py
