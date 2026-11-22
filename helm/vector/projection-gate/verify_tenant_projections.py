@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """verify_tenant_projections.py — fail-closed correctness gate for tenant log
-projections (ADR-021 §平台副本與租戶副本 / #908).
+projections (ADR-021 Phase 2(a) / #908).
 
 WHY THIS EXISTS
 ---------------

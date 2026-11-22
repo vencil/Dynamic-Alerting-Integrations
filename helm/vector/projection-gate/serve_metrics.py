@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """serve_metrics.py — long-lived exposer for the projection-gate verdict metric
-(ADR-021 §平台副本與租戶副本 / #908 PR-3).
+(ADR-021 Phase 2(a) / #908 PR-3).
 
 WHY THIS EXISTS
 ---------------
