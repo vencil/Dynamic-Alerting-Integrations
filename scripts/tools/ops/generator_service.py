@@ -1959,15 +1959,25 @@ def _check_config_subdir(git: str, repo: str, sub: str, shown: str,
           file=sys.stderr, flush=True)
 
 
-def _prepare_socket_path(path: str) -> None:
+def _old_socket_at(path: str) -> bool:
+    """Whether an old socket is at --socket; anything else there refuses to
+    start and is left as it was. ``lstat``: a symlink is not a socket,
+    whatever it points at. No side effect — `main` asks before it prepares
+    --work-dir (#3983 review: a --socket refused after that had already
+    cost the work directory its `jobs`)."""
     try:
         st = os.lstat(path)
     except FileNotFoundError:
-        return
+        return False
     if not stat.S_ISSOCK(st.st_mode):
         raise RuntimeError(f"--socket {path!r} exists and is not a socket; "
                            f"refusing to replace it")
-    os.unlink(path)
+    return True
+
+
+def _prepare_socket_path(path: str) -> None:
+    if _old_socket_at(path):
+        os.unlink(path)
 
 
 def _jobs_dir(work_dir: str) -> str:
@@ -2036,8 +2046,11 @@ def _prepare_work_dir(path: str) -> None:
         shutil.rmtree(_jobs_dir(path), ignore_errors=True)
         os.mkdir(_jobs_dir(path), 0o700)
     except OSError as exc:
-        raise RuntimeError(
-            f"--work-dir {path}: cannot be used as the work directory: {exc}") from exc
+        # `safe_label`, as --repo's line: a path with a newline in it must
+        # not forge a second `ERROR:` line (the exception's own text shows
+        # the path through `repr`).
+        raise RuntimeError(f"--work-dir {safe_label(path)}: cannot be used as the work "
+                           f"directory: {safe_label(str(exc))}") from exc
 
 
 async def serve(settings: Settings, object_format: str) -> None:
@@ -2110,6 +2123,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         fmt = state.object_format
         _check_config_subdir(settings.git, settings.repo, settings.config_subdir,
                              safe_label(repr(args.config_subdir)), state.head)
+        _old_socket_at(settings.socket)  # refuses before anything is touched
         _prepare_work_dir(settings.work_dir)
         _check_limits(settings)
         _prepare_socket_path(settings.socket)

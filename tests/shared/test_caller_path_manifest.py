@@ -28,7 +28,9 @@ that takes a value to be declared in ``caller_path_manifest.yaml`` as one of:
   not leave as a result: the socket a service binds, the scratch directory
   it builds in and empties. No write entry is on it and no control run ends
   with a file to read, so it is not an ``output``; like a ``reader`` it is
-  held by ``pinned_by``, the test that runs the tool on a path it cannot use.
+  held by ``pinned_by``, the test that runs the tool on a path it cannot use
+  — and that test's own source must spell the flag (a ``pinned_by`` naming
+  some test that exists pinned nothing).
 * ``url`` / ``url_list`` (#3528) — a URL the tool sends a request to (a
   ``url_list``: comma-separated URLs). Judged at parse time by
   ``_lib_validation.url_problem`` through ``type=url_type(empty=...)`` /
@@ -88,6 +90,14 @@ positional among them), so the manifest's ``any`` kind is gone, as ``dir``
   the manifest, not something the gate can refuse: no structure tells a path
   from a name, and a vocabulary net (help text mentioning "file") would read
   as a rule while missing whatever it did not spell.
+* Declaring a path the tool WRITES as ``runtime`` or ``reader`` instead of
+  ``output``. An output flag that already has its row cannot leave that way
+  (``test_output_path_write_failure.py``'s join the other way refuses a
+  rowed flag declared ``runtime`` / ``not_path`` / ``url``); a NEW output
+  flag declared ``runtime`` from the start has no row to be held by, and
+  nothing structural tells a result from a scratch path. A ``reader``'s
+  ``pinned_by`` is only checked to exist (several share one table-driven
+  test); a ``runtime``'s must also spell its flag.
 * The walk reads the parser the tool builds with ``DA_LANG`` unset. Three
   tools build a second, Chinese parser (alert-quality, cardinality-forecast,
   policy-engine); a flag added to that one alone is not seen.
@@ -219,6 +229,21 @@ def _entries(manifest: dict) -> dict[tuple[str, str], dict]:
         for arg, decl in (args or {}).items():
             out[(command, arg)] = decl if isinstance(decl, dict) else {"kind": decl}
     return out
+
+
+def _test_source(ref: str) -> str:
+    """The source of the test *ref* names (`_test_exists` holds for it):
+    the function, decorators and all."""
+    import ast
+    file, _, name = ref.partition("::")
+    text = (REPO / file).read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    scopes = [tree.body] + [n.body for n in tree.body if isinstance(n, ast.ClassDef)]
+    for body in scopes:
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                return ast.get_source_segment(text, node) or ""
+    return ""
 
 
 def _test_exists(ref: str) -> bool:
@@ -353,6 +378,9 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
         if kind in PINNED_KINDS:
             if not _test_exists(decl.get("pinned_by", "")):
                 faults.append(f"{where}: {kind} without a pinned_by test that exists")
+            elif kind == "runtime" and key[1] not in _test_source(decl["pinned_by"]):
+                faults.append(f"{where}: its pinned_by test never spells {key[1]} — "
+                              "a test of something else pins nothing here")
         elif kind == "pending":
             if not isinstance(decl.get("ticket"), int):
                 faults.append(f"{where}: pending without a ticket number")
@@ -749,6 +777,14 @@ def test_a_runtime_path_needs_its_pinning_test():
     here = "tests/shared/test_caller_path_manifest.py"
     ok = {"kind": "runtime", "pinned_by": f"{here}::test_a_runtime_path_needs_its_pinning_test"}
     assert _faults({"t": {"--d": "not_path", "--n": ok}}) == []
+    # a test that exists and is about something else pins nothing: it must
+    # spell the flag (this one spells --n and --d; the third is put together
+    # here so that this source does not spell it)
+    absent = "--" + "z" * 2
+    assert _faults({"t": {"--d": "not_path", "--n": "not_path", absent: ok}},
+                   parsed={**_PARSED, ("t", absent): "ops/t.py"}) == [
+        f"t {absent}: its pinned_by test never spells {absent} — a test of something "
+        "else pins nothing here"]
     assert _faults({"t": {"--d": "not_path", "--n": {"kind": "runtime"}}}) == [
         "t --n: runtime without a pinned_by test that exists"]
     gone = {"kind": "runtime", "pinned_by": f"{here}::test_no_such_test"}

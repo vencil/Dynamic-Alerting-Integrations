@@ -3077,11 +3077,51 @@ class TestManifestJoin:
                             lambda c, out: [], reach="synthetic")]
         assert len(manifest_join_faults(self._OUT, other_script)) == 1
 
-    def test_a_runtime_path_is_not_an_output_of_the_join(self):
-        """#3983: the socket and the scratch directory left the join by
-        being declared what they are, not by a listed exception."""
-        outputs = _manifest_output_flags()
-        assert not [k for k in outputs if k[0] == "generator-service"], outputs
+    def test_a_rowed_flag_declared_something_else_is_a_fault(self):
+        parsed = {("cmd", "--output-dir"): "ops/t.py", ("cmd", "--n"): "ops/t.py"}
+        for kind in sorted(NOT_A_WRITTEN_PATH):
+            assert rowed_flags_declared_otherwise(
+                {("cmd", "--output-dir"): kind, ("cmd", "--n"): "not_path"},
+                parsed, self._ROW) == [
+                f"cmd --output-dir: ops/t.py has a write-failure row for it, and the "
+                f"manifest declares it `{kind}` — a path the tool writes is `output`"]
+        for kind in ("output", "reader"):
+            assert rowed_flags_declared_otherwise(
+                {("cmd", "--output-dir"): kind}, parsed, self._ROW) == []
+
+
+#: The manifest kinds that say "the tool writes no result here".
+NOT_A_WRITTEN_PATH = frozenset({"runtime", "not_path", "url", "url_list"})
+
+
+def rowed_flags_declared_otherwise(declared: dict[Key, str], parsed: dict[Key, str],
+                                   rows: list[Row]) -> list[str]:
+    """The join the other way (#3983 review): a flag a row here RUNS as an
+    output path may not be declared a kind that says it is none. Without it,
+    re-declaring `backtest --output` as `runtime` (any existing test for a
+    `pinned_by`) took it out of `manifest_join_faults` with every gate green.
+
+    ⚠️ What it cannot see: a NEW output flag declared `runtime` from the
+    start, with no row yet — nothing structural tells a result from a
+    scratch path (the manifest gate's docstring lists it as not mechanised).
+    """
+    rowed = {(row.tool, spelling) for row in rows for spelling in row.flag.split("/")}
+    return [f"{command} {flag}: {parsed[(command, flag)]} has a write-failure row for it, "
+            f"and the manifest declares it `{kind}` — a path the tool writes is `output`"
+            for (command, flag), kind in sorted(declared.items())
+            if kind in NOT_A_WRITTEN_PATH and (command, flag) in parsed
+            and (parsed[(command, flag)], flag) in rowed]
+
+
+def test_no_flag_with_a_row_is_declared_as_something_the_tool_does_not_write():
+    import test_caller_path_manifest as manifest
+    parsed, _unreached = manifest.parsed_arguments()
+    declared = {key: decl.get("kind")
+                for key, decl in manifest._entries(manifest.load_manifest()).items()}
+    assert any(kind == "runtime" for kind in declared.values()), (
+        "no runtime path is declared — the rule's newest kind was not measured")
+    faults = rowed_flags_declared_otherwise(declared, parsed, ROWS)
+    assert not faults, "\n".join(faults)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

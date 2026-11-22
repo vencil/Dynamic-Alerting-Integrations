@@ -1202,25 +1202,94 @@ def test_an_old_socket_is_replaced_and_a_file_is_refused(tmp_path, world):
         shutil.rmtree(sdir, ignore_errors=True)
 
 
-@pytest.mark.parametrize("shape", ["a_file", "under_a_file", "jobs_is_a_file",
-                                   "jobs_is_a_link"])
+@pytest.mark.parametrize("shape", ["file", "directory", "fifo", "link_to_a_socket"])
+def test_what_is_at_the_socket_path_and_is_no_socket_is_left_as_it_was(tmp_path, world, shape):
+    """#3983: the manifest's ``runtime`` kind pins --socket here. Whatever is
+    there that is not a socket — a file, a directory with something in it, a
+    FIFO, a symlink (even one to a socket: the service would unlink the
+    link and bind beside its target) — refuses to start (rc 2) naming
+    --socket, is left as it was, and costs --work-dir nothing: the refusal
+    comes before the work directory's `jobs` is emptied."""
+    sdir = h.short_dir()
+    try:
+        path = sdir / "there"
+        target = sdir / "real.sock"
+        if shape == "file":
+            path.write_text("keep me", encoding="utf-8")
+        elif shape == "directory":
+            path.mkdir()
+            (path / "inside").write_text("keep me", encoding="utf-8")
+        elif shape == "fifo":
+            os.mkfifo(path)
+        else:
+            s = socket.socket(socket.AF_UNIX)
+            s.bind(str(target))
+            s.close()
+            symlink_or_skip(target, path)
+        before = os.lstat(path)
+        inflight = tmp_path / "s" / "work" / "jobs" / "inflight"
+        inflight.parent.mkdir(parents=True)
+        inflight.write_text("a judgement's tree", encoding="utf-8")
+        svc = h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                        socket_path=path, wait=False)
+        assert svc.proc.wait(60) == 2
+        log = svc.log.read_text(encoding="utf-8")
+        assert f"ERROR: --socket {str(path)!r} exists and is not a socket" in log, log
+        assert "Traceback" not in log, log
+        after = os.lstat(path)
+        assert (after.st_mode, after.st_ino) == (before.st_mode, before.st_ino)
+        if shape == "file":
+            assert path.read_text(encoding="utf-8") == "keep me"
+        elif shape == "directory":
+            assert (path / "inside").read_text(encoding="utf-8") == "keep me"
+        elif shape == "link_to_a_socket":
+            assert stat.S_ISSOCK(os.lstat(target).st_mode)
+        assert inflight.read_text(encoding="utf-8") == "a judgement's tree"
+    finally:
+        shutil.rmtree(sdir, ignore_errors=True)
+
+
+_WORK_DIR_SHAPES = {
+    # shape: the errno text the refusal must carry
+    "a_file": "File exists",
+    "a_dangling_link": "File exists",
+    "under_a_file": "Not a directory",
+    "through_a_link_loop": "Too many levels of symbolic links",
+    "a_name_too_long": "File name too long",
+    "jobs_is_a_file": "File exists",
+    "jobs_is_a_link": "File exists",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_WORK_DIR_SHAPES))
 def test_a_work_dir_that_cannot_be_one_is_named_and_nothing_there_is_removed(
         tmp_path, world, shape):
     """#3983: the manifest's ``runtime`` kind pins --work-dir here. Each
     shape is a path the service cannot build in; it must refuse to start
-    (rc 2) naming the flag, and leave what was there."""
+    (rc 2) naming --work-dir and the reason, leave what was there, and
+    leave an old socket at --socket alone — that one is replaced only by a
+    service that starts."""
     work = tmp_path / "s" / "work"  # where `h.Service` puts --work-dir
     work.parent.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    (outside / "keep").write_text("keep me", encoding="utf-8")
+    kept = outside / "keep"
+    kept.write_text("keep me", encoding="utf-8")
+    plain = tmp_path / "plain"
+    plain.write_text("keep me", encoding="utf-8")
+    args: tuple = ()
     if shape == "a_file":
         work.write_text("keep me", encoding="utf-8")
         kept = work
+    elif shape == "a_dangling_link":
+        symlink_or_skip(tmp_path / "nowhere", work)
     elif shape == "under_a_file":
-        kept = tmp_path / "plain"
-        kept.write_text("keep me", encoding="utf-8")
-        symlink_or_skip(kept / "sub", work)
+        work = plain / "sub"
+    elif shape == "through_a_link_loop":
+        symlink_or_skip(tmp_path / "loop", tmp_path / "loop")
+        work = tmp_path / "loop" / "sub"
+    elif shape == "a_name_too_long":
+        work = tmp_path / ("n" * 300)
     elif shape == "jobs_is_a_file":
         work.mkdir()
         kept = work / "jobs"
@@ -1228,15 +1297,64 @@ def test_a_work_dir_that_cannot_be_one_is_named_and_nothing_there_is_removed(
     else:
         work.mkdir()
         symlink_or_skip(outside, work / "jobs")
-        kept = outside / "keep"
-    svc = h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"], wait=False)
+    if work != tmp_path / "s" / "work":
+        args = ("--work-dir", str(work))  # the last one given is the one taken
+    sdir = h.short_dir()
+    try:
+        old = sdir / "old.sock"
+        s = socket.socket(socket.AF_UNIX)
+        s.bind(str(old))
+        s.close()
+        svc = h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"], args=args,
+                        socket_path=old, wait=False)
+        assert svc.proc.wait(60) == 2
+        log = svc.log.read_text(encoding="utf-8")
+        assert f"ERROR: --work-dir {work}: cannot be used as the work directory" in log, log
+        assert _WORK_DIR_SHAPES[shape] in log, log
+        assert "Traceback" not in log, log
+        assert kept.read_text(encoding="utf-8") == "keep me"
+        assert plain.read_text(encoding="utf-8") == "keep me"
+        assert (outside / "keep").exists()
+        assert stat.S_ISSOCK(os.lstat(old).st_mode), "the old socket went with a refused start"
+    finally:
+        shutil.rmtree(sdir, ignore_errors=True)
+
+
+def test_a_work_dir_path_cannot_forge_a_log_line(tmp_path, world):
+    """The refusal shows the path through `safe_label`, as --repo's does: a
+    newline in it would otherwise start a second `ERROR:` line."""
+    plain = tmp_path / "plain"
+    plain.write_text("x", encoding="utf-8")
+    work = f"{plain}/ev\nERROR: forged"
+    svc = h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                    args=("--work-dir", work), wait=False)
     assert svc.proc.wait(60) == 2
-    log = svc.log.read_text(encoding="utf-8")
-    assert f"ERROR: --work-dir {work}: cannot be used as the work directory" in log, log
-    assert "Traceback" not in log, log
-    assert kept.read_text(encoding="utf-8") == "keep me"
-    assert not svc.socket.exists()
-    svc.stop()
+    lines = svc.log.read_text(encoding="utf-8").splitlines()
+    assert [ln for ln in lines if ln.startswith("ERROR:")] == [
+        ln for ln in lines if "--work-dir" in ln], lines
+    assert len([ln for ln in lines if ln.startswith("ERROR:")]) == 1, lines
+
+
+def test_a_work_dir_in_use_keeps_everything_but_its_jobs(tmp_path, world):
+    """…and the other half of what the manifest says of --work-dir: a
+    service that STARTS empties `jobs` (what a crashed run left) and
+    touches nothing else there — a --work-dir that is a symlink stays one."""
+    real = tmp_path / "real"
+    (real / "jobs" / "job-9").mkdir(parents=True)
+    (real / "jobs" / "job-9" / "left").write_text("x", encoding="utf-8")
+    (real / "mine.txt").write_text("keep me", encoding="utf-8")
+    (real / "other").mkdir()
+    (real / "other" / "deep").write_text("keep me", encoding="utf-8")
+    (tmp_path / "s").mkdir()
+    symlink_or_skip(real, tmp_path / "s" / "work")
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"]) as svc:
+        assert svc.call("GET", "/v1/status")[0] == 200
+        assert (tmp_path / "s" / "work").is_symlink()
+        assert not (real / "jobs" / "job-9").exists()
+        assert stat.S_IMODE(os.stat(real / "jobs").st_mode) == 0o700
+        assert (real / "mine.txt").read_text(encoding="utf-8") == "keep me"
+        assert (real / "other" / "deep").read_text(encoding="utf-8") == "keep me"
+    assert sorted(p.name for p in real.iterdir()) == ["jobs", "mine.txt", "other"]
 
 
 def test_status_reports_versions(world):
