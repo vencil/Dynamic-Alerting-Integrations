@@ -63,6 +63,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E4
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 import _lib_input  # noqa: E402  (#3462: the one wording of "selected nothing")
 import _threshold_alerts  # noqa: E402  (#4098: the rule packs this layout ships)
+import _lib_metric_sources  # noqa: E402  (#4137: what the scrape says about tenant)
 from _lib_label import safe_label  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -374,10 +375,11 @@ def lint_preserved(targets, records, filepath, flow_of=None):
     result does not keep the label, read on Prometheus' parse tree (``da-read
     promql-label-flow``, following *records* — the recording rules of the
     run, ``{name: [{"expr", "labels"}]}``). *flow_of(label, exprs, records)*
-    defaults to ``_lib_consumer_read.promql_label_flow``. ⛔ "unknown" is an
+    defaults to ``_lib_metric_sources.label_flow`` (what the scrape says
+    about the label, #4137). ⛔ "unknown" is an
     ERROR too: a check that passes what it cannot prove is fail-open."""
     if flow_of is None:
-        flow_of = _lib_consumer_read.promql_label_flow
+        flow_of = _lib_metric_sources.label_flow
     results = []
     for label, rules in targets.items():
         verdicts = flow_of(label, [e for _, e in rules], records)
@@ -387,8 +389,11 @@ def lint_preserved(targets, records, filepath, flow_of=None):
                     filepath, name, None, "ERROR",
                     f"the result drops label '{label}' (an aggregation without it, "
                     f"without({label}), a one-to-one match not on it, a function with no "
-                    f"labels…), so the alert's {label} is empty: keep '{label}' in every "
-                    f"aggregation and match"))
+                    f"labels, a metric scraped without it — kube-state-metrics', "
+                    f"Prometheus' or Alertmanager's own, `up` or `go_*` of a job other than "
+                    f"the tenant exporters'…), so the alert's {label} is empty: keep "
+                    f"'{label}' in every aggregation and match, and copy it from namespace "
+                    f"(label_replace) or select the tenant exporters' job"))
             elif v["result"] != "kept":
                 results.append(LintResult(
                     filepath, name, None, "ERROR",

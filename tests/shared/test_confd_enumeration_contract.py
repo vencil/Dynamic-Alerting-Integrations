@@ -223,11 +223,15 @@ _ROOT_ONLY_BY_DEFINITION: dict[tuple[str, str], str] = {
         "declaration (#3426, #3438), every other top-level YAML there is "
         "refused by name, and a rules file in a subdirectory rings the "
         "coverage tripwire (lint/_rule_tripwire.py) instead of being read",
-    ("_lib_consumer_read.py", "named_in"):
-        "lists the da-tools image's flat layout (every tool and its data in "
-        "one directory) for the files a RULE_SOURCES entry names as rule "
-        "files (#3471) — repo-shipped rule packs copied beside the tools, "
-        "never a tenant conf.d; nothing below that directory is a rule pack",
+    ("_lib_consumer_read.py", "names_in"):
+        "the one listing behind `named_in` (#4041: split out of it, so a "
+        "caller can ask for the names alone). It lists the da-tools image's "
+        "flat layout (every tool and its data in one directory) for the "
+        "files a RULE_SOURCES entry names as rule files (#3471) — "
+        "repo-shipped rule packs copied beside the tools — and "
+        "migrate-to-operator's --output-dir for the PrometheusRule files a "
+        "run would leave beside its own: never a tenant conf.d, and nothing "
+        "below either directory is a rule file of that naming",
     ("migrate_builtin_defaults.py", "_root"):
         "finds the ROOT defaults carrier — the one file whose `defaults:` and "
         "`optional_overrides:` the built-in layer sits under (#3832); nothing "

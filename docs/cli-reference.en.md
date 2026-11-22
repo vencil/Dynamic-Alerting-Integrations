@@ -1641,6 +1641,14 @@ da-tools migrate-to-operator [options]
 >
 > ⛔ The key names overlap but the types differ. Consumers must branch in that order — **not on `--output-dir` alone**: `--output-dir DIR --dry-run` yields the preview envelope, not the report.
 
+**One source object gives one PrometheusRule** ([#4041](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4041))
+
+- A ConfigMap becomes **one** PrometheusRule whatever number of rule-file keys it has, its groups in the order the manifest gives the keys (those of `data` first, then those of `binaryData`; a manifest exported from a cluster lists keys alphabetically, so the group order may differ from the file in a repository; the rules are the same); a plain rule file is one. `configmap_files` and the summary line count these source objects.
+- Object names: a ConfigMap named `prometheus-rules-<pack>` (this platform's rule-pack ConfigMaps) and a `rule-pack-<pack>.yaml` file give `da-rule-pack-<pack>`, the name `operator-generate` gives its object for the same pack; any other source gives `da-rule-pack-<its name, lower-cased>` (a leading `rule-pack-` is not repeated).
+- Exit code `2`, with nothing written and no preview printed (`--dry-run`, `--json` and `--checklist-only` alike), each case named: two sources would give one object name; a resulting name is not a valid Kubernetes object name, or is too long for its output file name; a resulting name is the name of a PrometheusRule already in the source directory; two keys of one ConfigMap hold a group of the same name (Prometheus takes that, since they are different rule files; one PrometheusRule cannot hold it).
+- Exit code `2`, nothing written (`--dry-run` alike; `--checklist-only` writes no CRD and does not look in the directory), when `--output-dir` already holds a PrometheusRule file of this tool's naming (`da-rule-pack-*.yaml`) that this run does not write: the checklist's steps on the whole directory (the dry-run check, the rollback) would take it too. Files this run writes are replaced as before.
+- ⚠️ Earlier versions named a rule pack's object `da-rule-pack-prometheus-rules-<pack>`, and cut a `rule-pack-` out of the middle of a name (`my-rule-pack-foo` was `da-rule-pack-my-foo`; it is `da-rule-pack-my-rule-pack-foo` now). A cluster that applied that output has the old and the new objects after applying the new one, and the same rules load twice; Phase 5 of the checklist lists each object of this plan that was renamed (old name → new name) with the command that finds the old one; one old name may be in more than one namespace, so act only on the one in the namespace the earlier output was applied to; back it up, and delete it once the new one is loaded and every group of the old one is in the new one (a group that is not means it did not come from these sources: do not delete it). Other objects carrying the same label belong to other migrations: leave them.
+
 **Examples**
 
 ```bash

@@ -28,7 +28,9 @@ import http.client
 import json
 import os
 import re
+import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlencode
 
 import pytest
@@ -463,3 +465,129 @@ def test_vl10_gateway_rereads_a_rotated_password(vl_gateway_url, logs_signer):
             fh.truncate()
     recovered = _gateway_status_until(vl_gateway_url, token, lambda s: s == 200)
     assert recovered == 200, f"the gateway did not recover after the password was restored: last status {recovered}"
+
+
+# ── VL11 / VL12 — per-token in-flight limit (ADR-020 §Gateway 驗章、撤銷與限流) ──
+# The limit is mode-agnostic Lua; it is exercised here because only this stack
+# has an upstream the driver can make SLOW (mock_logstore.py `e2e-hold:<s>`),
+# and a query has to stay in flight for the limit to have anything to count.
+_INFLIGHT_LUA = os.path.join(os.path.dirname(__file__), "rendered", "victorialogs", "inflight_limit.lua")
+
+
+def _inflight_settings():
+    """(slots per worker, lease TTL seconds) as the harness actually rendered
+    them. The compose file runs ONE Envoy worker and the runner renders
+    concurrency=1, so the per-worker count is the per-instance cap."""
+    with open(_INFLIGHT_LUA, encoding="utf-8") as fh:
+        src = fh.read()
+    cap = re.search(r"^local MAX_PER_WORKER = (\d+)$", src, re.M)
+    ttl = re.search(r"^local LEASE_TTL = (\d+)$", src, re.M)
+    assert cap and ttl, "could not read MAX_PER_WORKER / LEASE_TTL out of the rendered filter"
+    return int(cap.group(1)), int(ttl.group(1))
+
+
+def _hold_query(url, token, secs):
+    return requests.get(
+        url + "/select/logsql/query", params={"query": f"e2e-hold:{secs}"},
+        headers={"Authorization": "Bearer " + token}, timeout=35)
+
+
+def _gateway_audit_lines():
+    """The victorialogs gateway's stdout audit log, one dict per JSON line.
+    The compose project is the runner's `-p fedvl` (E2E_VL_COMPOSE_PROJECT
+    overrides it for a stack brought up under another name)."""
+    project = os.environ.get("E2E_VL_COMPOSE_PROJECT", "fedvl")
+    out = subprocess.run(
+        ["docker", "compose", "-p", project, "logs", "--no-log-prefix", "federation-gateway-logs"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60, check=True).stdout
+    lines = []
+    for raw in out.splitlines():
+        raw = raw.strip()
+        if raw.startswith("{"):
+            try:
+                lines.append(json.loads(raw))
+            except ValueError:
+                pass
+    return lines
+
+
+def test_vl11_inflight_limit_refuses_the_query_over_the_cap(vl_gateway_url, logs_signer):
+    """`cap` slow queries in flight on one token: the next query on that token is
+    429, a forbidden path on that token still gets its own 403 (routes the
+    gateway answers itself take no slot), a second token of the SAME tenant
+    is not affected (the limit is per token), the refusal is in the audit log as status 429 with the token id (the
+    audit sidecar buckets 429 as `rate_limited`), and once the slow queries
+    complete the token is admitted again (slots are released on completion)."""
+    cap, _ = _inflight_settings()
+    tenant, acct = TENANT_A
+    token_id, token = logs_signer(tenant, acct)
+    _, other = logs_signer(tenant, acct)
+    with ThreadPoolExecutor(max_workers=cap) as pool:
+        holds = [pool.submit(_hold_query, vl_gateway_url, token, 6) for _ in range(cap)]
+        time.sleep(2.0)  # let all `cap` reach the store and sit there
+        assert not any(h.done() for h in holds), "a held query finished early — nothing is in flight"
+        over = _query(vl_gateway_url, token)
+        assert over.status_code == 429, \
+            f"query #{cap + 1} on a token with {cap} in flight was not refused: {over.status_code} {over.text[:200]}"
+        assert "too many concurrent queries" in over.text
+        # A path the gateway answers itself takes no slot: the token at its
+        # cap still gets the default-deny 403, not 429.
+        denied = _query(vl_gateway_url, token, path="/select/logsql/tail")
+        assert denied.status_code == 403, \
+            f"a forbidden path on a token at its cap answered {denied.status_code}, not the route's 403"
+        assert _query(vl_gateway_url, other).status_code == 200, \
+            "a different token of the same tenant was refused — the limit must be per token"
+        statuses = [h.result().status_code for h in holds]
+    assert statuses == [200] * cap, f"the held queries themselves did not succeed: {statuses}"
+    after = _query(vl_gateway_url, token)
+    assert after.status_code == 200, \
+        f"the token is still refused after its queries completed — slots were not released: {after.status_code}"
+
+    # Envoy flushes its access-log file on an interval (1s by default), so poll.
+    refused = []
+    deadline = time.monotonic() + 15.0
+    while not refused and time.monotonic() < deadline:
+        refused = [ln for ln in _gateway_audit_lines()
+                   if ln.get("token_id") == token_id and str(ln.get("status")) == "429"]
+        if not refused:
+            time.sleep(1.0)
+    assert refused, "the in-flight refusal is not in the gateway audit log"
+    assert refused[-1].get("tenant_id") == tenant
+
+
+def test_vl12_a_client_reset_slot_is_reclaimed_by_lease_expiry(vl_gateway_url, logs_signer):
+    """Envoy's Lua filter gets no callback when the client resets a stream, so a
+    slot taken by a query whose client disconnected is NOT released on the spot:
+    right after the reset the token is still at its cap (429). It must come back
+    by lease expiry — LEASE_TTL after the slots were taken, not before the TTL
+    and not never. A counter without the expiry path stays at 429 forever."""
+    cap, ttl = _inflight_settings()
+    tenant, acct = TENANT_B
+    _, token = logs_signer(tenant, acct)
+    host = vl_gateway_url.rsplit(":", 1)[0].replace("http://", "")
+    port = int(vl_gateway_url.rsplit(":", 1)[1])
+    qs = urlencode({"query": "e2e-hold:20"})
+    conns = []
+    taken_at = time.monotonic()
+    for _ in range(cap):
+        conn = http.client.HTTPConnection(host, port, timeout=35)
+        conn.putrequest("GET", "/select/logsql/query?" + qs, skip_accept_encoding=True)
+        conn.putheader("Authorization", "Bearer " + token)
+        conn.endheaders()
+        conns.append(conn)
+    time.sleep(2.0)  # all `cap` in flight at the store
+    for conn in conns:
+        conn.close()  # client goes away mid-query: Envoy resets the stream
+    time.sleep(1.0)
+    held = _query(vl_gateway_url, token)
+    assert held.status_code == 429, (
+        f"expected the reset queries to still hold their slots right after the reset "
+        f"(no Lua callback for a client reset), got {held.status_code} — if Envoy now "
+        f"reports resets to Lua, update inflight_limit.lua and this test")
+
+    freed = _gateway_status_until(vl_gateway_url, token, lambda s: s == 200, timeout_s=ttl + 15.0)
+    elapsed = time.monotonic() - taken_at
+    assert freed == 200, f"slots leaked: still {freed} {elapsed:.0f}s after a client reset (lease TTL {ttl}s)"
+    # Lease timestamps are whole seconds, so expiry can come up to 1s early.
+    assert elapsed >= ttl - 2, f"slots came back after {elapsed:.0f}s, before the {ttl}s lease TTL"

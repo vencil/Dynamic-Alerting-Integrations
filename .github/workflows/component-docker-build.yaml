@@ -112,11 +112,13 @@ on:
       - "scripts/ops/workflow_path_filter.py"
       - "scripts/tools/_lib_atomic_write.py"
       - "scripts/tools/_lib_confd.py"
+      - "scripts/tools/_lib_metric_sources.py"
       - "scripts/tools/ops/_grar_merge.py"
       - "scripts/tools/ops/_grar_parse.py"
       - "scripts/tools/ops/_grar_routes.py"
       - "scripts/tools/ops/_grar_validate.py"
       - "scripts/tools/ops/_threshold_alerts.py"
+      - "scripts/tools/ops/generate_rule_pack_split.py"
       - "scripts/tools/ops/lint_custom_rules.py"
       # END GENERATED path-trace
 
