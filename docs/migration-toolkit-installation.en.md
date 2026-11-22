@@ -18,10 +18,10 @@ lang: en
 Importing a customer's existing Prometheus alerting rule corpus (PromRule CRDs / Alertmanager YAML) into the Dynamic Alerting Platform's conf.d/ Profile-as-Directory-Default architecture ([ADR-018](adr/018-profile-as-directory-default.en.md)) requires a chain of tools:
 
 ```
-PromRule corpus → da-parser → profile-builder cluster + translator → da-batchpr → da-guard validation → conf.d/
+PromRule corpus → da-parser (triage) → da-tools migrate (per tenant) → da-guard validation → conf.d/
 ```
 
-> ⚠️ The Profile Builder → `da-batchpr apply` step is not wired today (experimental, see [`batch-pr`](cli-reference.en.md#batch-pr)); to import customer rules, use the per-tenant [`migrate`](cli-reference.en.md#migrate).
+The conversion step is [`migrate`](cli-reference.en.md#migrate); bulk import producing `_custom_alerts` recipes is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226).
 
 The Migration Toolkit packages this pipeline into a customer-runnable bundle that works offline, in air-gapped environments, and with verifiable binary integrity.
 
@@ -29,9 +29,8 @@ The Migration Toolkit packages this pipeline into a customer-runnable bundle tha
 
 | Tool | Interface | Purpose |
 |---|---|---|
-| `da-tools` | Python CLI | 41+ existing ops / config-gen / policy-eval subcommands; new `guard` + `batch-pr` + `parser` subcommands wrapping da-guard / da-batchpr / da-parser |
+| `da-tools` | Python CLI | 41+ existing ops / config-gen / policy-eval subcommands; new `guard` + `parser` subcommands wrapping da-guard / da-parser |
 | `da-guard` | Go binary | Dangling Defaults Guard CLI (schema / cardinality / redundant-override checks; routing and domain policy are left to `da-tools generate-routes --config-dir <conf.d> --validate --strict` since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904), exit 4 when the tree holds them) |
-| `da-batchpr` | Go binary | Migration Batch PR Pipeline CLI (apply / refresh / refresh-source subcommands; plan → open PRs → rebase after Base merge / data-layer hot-fix). Experimental: no tool produces `apply`'s inputs, see [`batch-pr`](cli-reference.en.md#batch-pr) |
 | `da-parser` | Go binary | PromRule parser CLI (import / allowlist subcommands; strict-PromQL compatibility check + dialect / VM-only function classification; anti-vendor-lock-in) |
 
 ## Three delivery paths
@@ -65,7 +64,7 @@ docker run --rm \
     guard defaults-impact --config-dir /conf.d --required-fields cpu,memory
 ```
 
-**Contents**: Python `da-tools` CLI + bundled `da-guard` / `da-batchpr` / `da-parser` Linux/amd64 binaries at `/usr/local/bin/`. The `da-tools guard` / `da-tools batch-pr` / `da-tools parser` subcommands auto-locate their respective binaries inside the image — no need to set `$DA_GUARD_BINARY` / `$DA_BATCHPR_BINARY` / `$DA_PARSER_BINARY`.
+**Contents**: Python `da-tools` CLI + bundled `da-guard` / `da-parser` Linux/amd64 binaries at `/usr/local/bin/`. The `da-tools guard` / `da-tools parser` subcommands auto-locate their respective binaries inside the image — no need to set `$DA_GUARD_BINARY` / `$DA_PARSER_BINARY`.
 
 **Trivy CVE scan** runs automatically at release time (`CRITICAL` / `HIGH` severities fail-fast). The image SBOM + **cosign keyless signatures** ship with every artefact from `tools/v2.9.0` onward (see [§Signature Verification](#signature-verification) below to verify).
 
@@ -73,7 +72,7 @@ docker run --rm \
 
 ## Path B: Static binary download
 
-Each Release ships three sets of 6 cross-compiled binaries (18 archives total):
+Each Release ships two sets of 6 cross-compiled binaries (12 archives total; `da-batchpr` was retired in [#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228) and later releases no longer carry it):
 
 **`da-guard`** (Dangling Defaults Guard):
 
@@ -86,17 +85,6 @@ Each Release ships three sets of 6 cross-compiled binaries (18 archives total):
 | Windows | amd64 | `da-guard-windows-amd64.zip` |
 | Windows | arm64 | `da-guard-windows-arm64.zip` |
 
-**`da-batchpr`** (Migration Batch PR Pipeline, v2.8.0+):
-
-| OS | ARCH | Filename |
-|---|---|---|
-| Linux | amd64 | `da-batchpr-linux-amd64.tar.gz` |
-| Linux | arm64 | `da-batchpr-linux-arm64.tar.gz` |
-| macOS | amd64 | `da-batchpr-darwin-amd64.tar.gz` |
-| macOS | arm64 (Apple Silicon) | `da-batchpr-darwin-arm64.tar.gz` |
-| Windows | amd64 | `da-batchpr-windows-amd64.zip` |
-| Windows | arm64 | `da-batchpr-windows-arm64.zip` |
-
 **`da-parser`** (PromRule parser, v2.8.0+):
 
 | OS | ARCH | Filename |
@@ -108,7 +96,7 @@ Each Release ships three sets of 6 cross-compiled binaries (18 archives total):
 | Windows | amd64 | `da-parser-windows-amd64.zip` |
 | Windows | arm64 | `da-parser-windows-arm64.zip` |
 
-Each archive contains **one** binary (or `<name>.exe`), plus a single `SHA256SUMS` file listing hashes for all 18 archives. Customers download only what they need (just `da-guard` for conf.d/ validation; add `da-batchpr` for the migration batch PR flow; add `da-parser` for PromRule import + portability checks).
+Each archive contains **one** binary (or `<name>.exe`), plus a single `SHA256SUMS` file listing the hashes of every archive and raw binary. Customers download only what they need (just `da-guard` for conf.d/ validation; add `da-parser` for PromRule import + portability checks).
 
 ### Install (Linux/macOS)
 
@@ -193,7 +181,7 @@ After that, internal CI / pre-commit hooks use `internal-registry.corp/da-tools:
 
 ### Pure binary also works in air-gapped
 
-If the customer doesn't use Docker, walk Path B: download the 18 binary archives (da-guard / da-batchpr / da-parser × 6 OS/ARCH each) + `SHA256SUMS`, take them in via USB, extract. Each binary is statically linked; no runtime deps.
+If the customer doesn't use Docker, walk Path B: download the 12 binary archives (da-guard / da-parser × 6 OS/ARCH each) + `SHA256SUMS`, take them in via USB, extract. Each binary is statically linked; no runtime deps.
 
 ---
 
@@ -203,7 +191,7 @@ Each Release ships:
 
 | Asset | Contents |
 |---|---|
-| `SHA256SUMS` | Hashes for all 18 binary archives (da-guard / da-batchpr / da-parser × 6 OS/ARCH combos; used by Paths B / C) |
+| `SHA256SUMS` | Hashes of every archive and raw binary (da-guard / da-parser × 6 OS/ARCH combos; used by Paths B / C) |
 | `da-tools-image-v<X.Y.Z>.tar.gz.sha256` | Hash of the air-gapped image tar (used by Path C) |
 
 ## Signature Verification

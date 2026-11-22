@@ -21,9 +21,8 @@ package config
 // ⛔ It is the only RECURSIVE conf.d walker in the exporter module's
 // production paths — pinned by app/confd_walker_population_test.go, which
 // fails on any other production function that references a stdlib DIRECT
-// directory-listing entry point (see that file's NOT GUARDED list;
-// cmd/da-batchpr's walkFilesDir is excluded by name: it walks a PR payload,
-// not conf.d). (Not the only reader of conf.d in the repo: tenant-api
+// directory-listing entry point (see that file's NOT GUARDED list and its
+// named exclusions, none of which walks conf.d). (Not the only reader of conf.d in the repo: tenant-api
 // lists it with its own non-recursive os.ReadDir — internal/handler/
 // tenant_list.go, internal/confd/resolve.go, internal/federation/orphan/
 // detector.go — and describe_tenant.py walks it in Python.) The

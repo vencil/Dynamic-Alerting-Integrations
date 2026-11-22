@@ -22,7 +22,15 @@ updated_at: 2026-11-22
 
 🟢 **Accepted**（v2.8.0, 2026-04-27）— Profile Builder 的 PromRule→threshold translator 與 emission 隨 v2.8.0 出貨。
 
-2026-11-22：Profile Builder 沒有接到任何 CLI，batch PR pipeline 也沒有呼叫它；而一個租戶在兩個 cluster 都偏離中位數時，emission 會在兩個目錄各寫一份該租戶的檔，da-guard 以重複租戶拒收整棵樹。大量導入的做法重新選型中，現況見 [`batch-pr`](../cli-reference.md#batch-pr)。本 ADR 的 default-vs-override 邊界不受影響。
+### 修訂（2026-11-22）：Profile Builder 已退役
+
+Profile Builder（translator 與 emission）與原本要呼叫它的批次 PR 工具，已於 2026-11-22 一併從程式碼刪除，沒有過渡期（[#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228)）。退役的理由：它從未接到任何 CLI，也沒有任何呼叫者；而一個租戶在兩個 cluster 都偏離中位數時，emission 會在兩個目錄各寫一份該租戶的檔，da-guard 以重複租戶拒收整棵樹。
+
+退役的決定與討論見 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211)。
+
+客戶規則的批次導入預計改走 `da-tools migrate`（migrate-rule），由它產出 `_custom_alerts` recipe；這部分尚未出貨，進度見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
+
+本 ADR 的 default-vs-override 邊界仍然有效：手動整理或其他工具產出的 conf.d 樹照樣適用，da-guard 的 redundant-override 檢查也照它判。下文描述 Profile Builder 的段落與「實作位置」所列的檔案，記錄的是退役前的設計，那些檔案已不存在。
 
 ## 背景
 
@@ -110,7 +118,7 @@ Emission ship 後客戶 PR 自動跑 Guard 的 GH Actions wrapper 校驗，閉�
 | `internal/profile/emit.go` | `EmissionInput.Translate` 旗標 + dispatch 到 `emitTranslatedProposal`；conf.d-shape 模板實作 |
 | `internal/profile/translate_test.go` | 表格測試覆蓋 translator + cluster 聚合（`-race -count=2` 穩定）|
 
-（這些檔案在 `components/threshold-exporter/app/` 下，位於 MkDocs site 範圍外，請從 GitHub 端開啟。）
+（這些檔案原本在 `components/threshold-exporter/app/` 下，已隨 Profile Builder 退役刪除，見上方「修訂」。）
 
 ## 變更紀錄
 

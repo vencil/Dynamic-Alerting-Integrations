@@ -6,7 +6,7 @@
 # declaration is on the parser (`action.input_spec`), and the gate reads it there.
 
 # COMMAND_MAP entries that dispatch to Go: no Python parser to walk.
-dispatched_to_go: [batch-pr, guard, parser]
+dispatched_to_go: [guard, parser]
 
 commands:
   alert-correlate:

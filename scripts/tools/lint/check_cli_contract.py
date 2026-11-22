@@ -42,7 +42,7 @@ finding 同時被帳本與 ignore 豁免是硬錯。
 結束碼：閘門自己跑不完回 2；有 finding 或內容面硬錯在 ``--ci`` 下回 1。
 輸出末尾的 NOT scored 是揭露不是涵蓋：列在那裡的東西這支工具看不到。
 
-分工：無 parser 的 Go wrapper（``guard``／``parser``／``batch-pr``）只揭露不判，其子命令合法性歸
+分工：無 parser 的 Go wrapper（``guard``／``parser``）只揭露不判，其子命令合法性歸
 ``check_doc_datools_cmds``；表頭 pin、環境變數清洗與掃描面恆等式直接 import
 ``check_cli_default_drift``，不抄第二份。
 """
@@ -2217,7 +2217,7 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
         f"reference sections with options but no option table (V7 reports "
         f"each of their options)",
         f"NOT scored: {s['cmd_no_parser']} commands under a subcommand with no "
-        f"argparse parser (guard/parser/batch-pr — their subcommands are "
+        f"argparse parser (guard/parser — their subcommands are "
         f"check_doc_datools_cmds' job), {s['cmd_script_not_in_map']} `python3 "
         f"scripts/tools/…` scripts not in COMMAND_MAP, "
         f"{s['cmd_outside_command_position']} `da-tools <subcommand>` invocations "
@@ -2245,7 +2245,7 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
         f"{s['ignored']} lines/rows under `{INLINE_IGNORE}`, "
         f"{s['v7_suppressed_options']} `help=SUPPRESS` options V7 does not require "
         f"a row for, {s['v7_sections_without_parser']} sections of a command with "
-        f"no argparse parser (guard/parser/batch-pr — V7 cannot list their "
+        f"no argparse parser (guard/parser — V7 cannot list their "
         f"options), "
         f"{s['unscanned_carrier_files']} non-markdown files mentioning da-tools "
         f"(portal JS/JSX, shell scripts) outside this scan set",

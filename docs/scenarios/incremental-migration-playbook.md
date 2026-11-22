@@ -713,9 +713,9 @@ echo "新版少掉（或值不同）的列："; comm -23 "$out/current.txt" "$ou
 ## Emergency Rollback Procedures（緊急退版程序）
 
 > **適用情境**：客戶 cutover 後發現結構性 bug（例：parser 吃掉 label / Dangling Guard 誤判 / 大量 false positive），需要把 Base Infrastructure PR + 多個 tenant PR 整批退版。
-> 與「階段 0/1/2/3 回滾」的差異：那些是試點期單一域的回退；本節是 cutover 後 batch PR pipeline 的整體退版，要處理 cascading defaults 與 hierarchical 依賴。
+> 與「階段 0/1/2/3 回滾」的差異：那些是試點期單一域的回退；本節是 cutover 後整批 PR（一個 Base PR + 多個 tenant PR）的退版，要處理 cascading defaults 與 hierarchical 依賴。
 >
-> **此程序為 v2.8.0 新增**（配合 Migration Batch PR Pipeline 的 hierarchy-aware chunking 設計）。
+> **此程序為 v2.8.0 新增**。
 
 ### 退版順序：merge 順序的嚴格反序
 
@@ -753,7 +753,7 @@ sum(rate(da_config_debounce_batch_size_count[5m]))
 **未跑過 rehearsal 不准正式 cutover** —— 寫入 cutover checklist 作為 hard gate（Customer Delivery 客戶里程碑日曆）。
 
 Rehearsal 內容：
-1. 客戶 staging 環境完整套用一輪 batch PR pipeline 產出（不限規模，最少 1 個 Base PR + 5 個 tenant PR）
+1. 客戶 staging 環境完整套用一輪整批 PR（不限規模，最少 1 個 Base PR + 5 個 tenant PR）
 2. **立刻** 跑反序退版（不等任何 cooldown）
 3. 量測每段時間：每個 PR 的 review/merge/git-sync apply/WatchLoop settle 各約幾秒，整輪退版到 `merged_hash` 收斂回 Base PR merge 前狀態的端到端時間
 4. 數據填入下方「退版時間預算表」，正式 cutover 時若實測時間超過預算 1.5 倍即視為異常需 abort
@@ -792,10 +792,8 @@ Rehearsal 內容：
 ### 尚未實作的工具（沒有排期）
 
 - `make rollback-dryrun` Makefile target —— 客戶 staging 環境一鍵跑 staging rehearsal，自動填上方時間預算表
-- `da-tools batch-pr rollback --plan` —— 從 Base PR # 反推完整退版順序，產出 markdown plan 給 ops review
-- `da-tools batch-pr rollback --execute` —— 自動執行反序 revert，每步等 git-sync apply + reload 收斂後才前進
 
-在它們出現之前，照本節的程序手動執行；本節也是它們的規格。
+在它出現之前，照本節的程序手動執行；本節也是它的規格。
 
 ---
 

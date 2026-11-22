@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""test_dispatch_contract.py — dispatcher shim 佈線契約（parametrized over 3 shims）。
+"""test_dispatch_contract.py — dispatcher shim 佈線契約（parametrized over shims）。
 
-取代原本三份近乎逐行鏡像的 per-shim 測試檔：
+取代原本近乎逐行鏡像的 per-shim 測試檔：
 
   tests/ops/test_guard_dispatch.py     (16 cases)
-  tests/ops/test_batchpr_dispatch.py   (22 cases)
   tests/ops/test_parser_dispatch.py    (22 cases)
 
-三個 shim（guard_dispatch / batchpr_dispatch / parser_dispatch）自 v2.8.0 PR-2
+各 shim（guard_dispatch / parser_dispatch）自 v2.8.0 PR-2
 起都是「純 config + 委派給 _lib_godispatch.GoBinaryDispatcher」的薄殼；
 library 本身的契約由 tests/shared/test_lib_godispatch.py 用假 dispatcher 釘住。
 本檔釘的是 **每個 shim 的實際佈線**（subcommand 集合、binary 名 / flag / env var、
@@ -35,7 +34,6 @@ from typing import Callable
 import pytest
 
 # conftest.py 已把 scripts/tools 與 scripts/tools/ops 放進 sys.path。
-import batchpr_dispatch
 import guard_dispatch
 import parser_dispatch
 
@@ -104,43 +102,6 @@ SPECS = [
             ),
         ),
         forwarded_subcommands=("served-values", "effective"),
-    ),
-    ShimSpec(
-        id="batchpr",
-        main=batchpr_dispatch.main,
-        cli_alias="batch-pr",
-        binary_name="da-batchpr",
-        binary_flag="--da-batchpr-binary",
-        env_var="DA_BATCHPR_BINARY",
-        subcommands=("apply", "refresh", "refresh-source"),
-        pass_subcommand=True,
-        sample_flags=("--workdir", "/tmp/repo"),
-        # "refresh" 是 "refresh-source" 的 substring — 用行首 + 後接空白鎖定
-        # standalone refresh 那一行，避免 false-positive（沿自原 batchpr 測試）。
-        help_regexes=(r"batch-pr", r"apply", r"(?m)^\s*refresh\s{2,}", r"refresh-source"),
-        passthrough_samples=(
-            (
-                "refresh-source",
-                (
-                    "--input", "in.json",
-                    "--patches-dir", "./patches/",
-                    "--workdir", "./repo",
-                    "--report", "out.md",
-                    "--dry-run",
-                ),
-            ),
-            (
-                "apply",
-                (
-                    "--plan", "plan.json",
-                    "--emit-dir", "./emit/",
-                    "--repo", "vencil/customer",
-                    "--workdir", "./customer-repo",
-                    "--branch-prefix", "import/",
-                    "--inter-call-delay-ms", "500",
-                ),
-            ),
-        ),
     ),
     ShimSpec(
         id="parser",

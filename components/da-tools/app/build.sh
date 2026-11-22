@@ -175,9 +175,6 @@ TOOL_FILES=(
     # v2.8.0 Phase .c C-12 — Dangling Defaults Guard dispatcher
     # (shells out to the `da-guard` Go binary; see scripts/tools/ops/guard_dispatch.py)
     ops/guard_dispatch.py
-    # v2.8.0 Phase .c C-10 PR-5 — Batch PR Pipeline dispatcher
-    # (shells out to the `da-batchpr` Go binary; see scripts/tools/ops/batchpr_dispatch.py)
-    ops/batchpr_dispatch.py
     # v2.8.0 Phase .c C-8 PR-2 — PromRule parser dispatcher
     # (shells out to the `da-parser` Go binary; see scripts/tools/ops/parser_dispatch.py)
     ops/parser_dispatch.py
@@ -250,8 +247,8 @@ TOOL_FILES=(
     # ops/operator_generate.py + ops/migrate_to_operator.py (write_yaml_crd
     # + _dict_to_yaml). Writes through _lib_io's operator entry (above).
     _lib_yaml.py
-    # v2.8.0 PR-2 — shared dispatcher for the three Go-binary
-    # subcommands (guard / batchpr / parser). Imported by their
+    # v2.8.0 PR-2 — shared dispatcher for the Go-binary
+    # subcommands (guard / parser). Imported by their
     # respective ops/*_dispatch.py shims.
     _lib_godispatch.py
     # #3862 — stdlib only: the one record of "da-guard / da-read /
@@ -393,9 +390,9 @@ echo "  Copied ${#REPO_DATA_FILES[@]} data file(s) from the repo tree"
 # by tests/ops/test_image_flat_layout.py. A build-time source edit only
 # made the shipped code differ from the code the tests exercised.
 
-# ── Build bundled Go binaries (v2.8.0 C-8/C-10/C-11) ─────────────────
-# da-tools' `guard` / `batch-pr` / `parser` subcommands shell out to the
-# da-guard / da-batchpr / da-parser Go binaries (see the *_dispatch.py
+# ── Build bundled Go binaries (v2.8.0 C-8/C-11) ──────────────────────
+# da-tools' `guard` / `parser` subcommands shell out to the
+# da-guard / da-parser Go binaries (see the *_dispatch.py
 # shims). Bundling them into the image keeps the container air-gapped
 # friendly (no $PATH lookup outside the container, no extra install).
 #
@@ -420,11 +417,11 @@ fi
 DA_TOOLS_VERSION=$(cat "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')
 # #3206 (ADR-036 §12): da-crdecode reads Kubernetes manifests the way kubectl
 # does; onboard_platform hands it the ConfigMap that holds alertmanager.yml.
-echo "▸ Cross-compiling da-guard / da-batchpr / da-parser / da-crdecode for amd64 + arm64..."
+echo "▸ Cross-compiling da-guard / da-parser / da-crdecode for amd64 + arm64..."
 # The build flags (CGO_ENABLED=0, -trimpath, -ldflags "-s -w") are written in
 # ONE place, scripts/ops/go_build.sh, which says why each one is there (#3425).
 GO_BUILD="$PROJECT_ROOT/scripts/ops/go_build.sh"
-for cmd in da-guard da-batchpr da-parser da-crdecode; do
+for cmd in da-guard da-parser da-crdecode; do
     for arch in amd64 arm64; do
         sh "$GO_BUILD" -X "main.Version=v${DA_TOOLS_VERSION}" --goos linux --goarch "$arch" \
             "$EXPORTER_APP" "./cmd/${cmd}" "$SCRIPT_DIR/${cmd}.${arch}"
@@ -463,7 +460,7 @@ docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
 
 # ── Cleanup temporary copies ────────────────────────────────────────
 rm -rf "$SCRIPT_DIR/tools"
-rm -f "$SCRIPT_DIR"/da-guard.* "$SCRIPT_DIR"/da-batchpr.* "$SCRIPT_DIR"/da-parser.* \
+rm -f "$SCRIPT_DIR"/da-guard.* "$SCRIPT_DIR"/da-parser.* \
     "$SCRIPT_DIR"/da-crdecode.* "$SCRIPT_DIR"/da-read.*
 
 echo "✓ Built: $IMAGE_NAME"

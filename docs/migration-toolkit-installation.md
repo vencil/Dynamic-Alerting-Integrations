@@ -18,10 +18,10 @@ lang: zh
 把客戶現有的 Prometheus alerting rule corpus（PromRule CRD / Alertmanager YAML）導入到 Dynamic Alerting Platform 的 conf.d/ Profile-as-Directory-Default 架構（[ADR-018](adr/018-profile-as-directory-default.md)），需要一連串工具串接：
 
 ```
-PromRule corpus → da-parser → profile-builder cluster + translator → da-batchpr → da-guard validation → conf.d/
+PromRule corpus → da-parser（分診）→ da-tools migrate（逐租戶）→ da-guard validation → conf.d/
 ```
 
-> ⚠️ 其中 Profile Builder → `da-batchpr apply` 這一段目前沒有接通（experimental，見 [`batch-pr`](cli-reference.md#batch-pr)）；要導入客戶規則請用逐租戶的 [`migrate`](cli-reference.md#migrate)。
+轉換步驟見 [`migrate`](cli-reference.md#migrate)；產出 `_custom_alerts` recipe 的批次導入見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
 
 Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gapped 環境跑、可 自動驗 binary integrity 的客戶可用工具集。
 
@@ -29,9 +29,8 @@ Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gapped �
 
 | 工具 | 介面 | 用途 |
 |---|---|---|
-| `da-tools` | Python CLI | 既有 41+ 個運維 / 配置生成 / 政策評估子命令；新增 `guard` + `batch-pr` + `parser` 子命令 wrapping da-guard / da-batchpr / da-parser |
+| `da-tools` | Python CLI | 既有 41+ 個運維 / 配置生成 / 政策評估子命令；新增 `guard` + `parser` 子命令 wrapping da-guard / da-parser |
 | `da-guard` | Go binary | Dangling Defaults Guard CLI（schema / cardinality / redundant-override 檢查；路由與 domain policy 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起交給 `da-tools generate-routes --config-dir <conf.d> --validate --strict`，樹上有這類內容時 exit 4）|
-| `da-batchpr` | Go binary | Migration Batch PR Pipeline CLI（apply / refresh / refresh-source 子命令；plan → 開 PR → Base merge 後 rebase / data-layer hot-fix）。experimental：`apply` 的輸入沒有工具產生，見 [`batch-pr`](cli-reference.md#batch-pr) |
 | `da-parser` | Go binary | PromRule parser CLI（import / allowlist 子命令；strict-PromQL 相容性檢查 + dialect / VM-only 函數分類；anti-vendor-lock-in）|
 
 ## 三種交付路徑
@@ -65,7 +64,7 @@ docker run --rm \
     guard defaults-impact --config-dir /conf.d --required-fields cpu,memory
 ```
 
-**內含**：Python `da-tools` CLI + bundled `da-guard` / `da-batchpr` / `da-parser` Linux/amd64 binaries（`/usr/local/bin/`）。`da-tools guard` / `da-tools batch-pr` / `da-tools parser` 子命令會自動在 image 內找到對應 binary，不需另外設 `$DA_GUARD_BINARY` / `$DA_BATCHPR_BINARY` / `$DA_PARSER_BINARY`。
+**內含**：Python `da-tools` CLI + bundled `da-guard` / `da-parser` Linux/amd64 binaries（`/usr/local/bin/`）。`da-tools guard` / `da-tools parser` 子命令會自動在 image 內找到對應 binary，不需另外設 `$DA_GUARD_BINARY` / `$DA_PARSER_BINARY`。
 
 **Trivy CVE scan** 在 release 時自動跑（`CRITICAL` / `HIGH` 級別 fail-fast）。Image SBOM + **cosign keyless 簽章**自 `tools/v2.9.0` 起隨每個 artefact 發佈（驗證方式見下方 [§Signature Verification](#signature-verification)）。
 
@@ -73,7 +72,7 @@ docker run --rm \
 
 ## 路徑 B：Static binary download
 
-每個 Release 提供三組 6 個 cross-compiled binary（共 18 個 archive）：
+每個 Release 提供兩組 6 個 cross-compiled binary（共 12 個 archive；`da-batchpr` 已於 [#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228) 退役，之後的 release 不再附）：
 
 **`da-guard`**（Dangling Defaults Guard）：
 
@@ -86,17 +85,6 @@ docker run --rm \
 | Windows | amd64 | `da-guard-windows-amd64.zip` |
 | Windows | arm64 | `da-guard-windows-arm64.zip` |
 
-**`da-batchpr`**（Migration Batch PR Pipeline，v2.8.0 起）：
-
-| OS | ARCH | 檔名 |
-|---|---|---|
-| Linux | amd64 | `da-batchpr-linux-amd64.tar.gz` |
-| Linux | arm64 | `da-batchpr-linux-arm64.tar.gz` |
-| macOS | amd64 | `da-batchpr-darwin-amd64.tar.gz` |
-| macOS | arm64 (Apple Silicon) | `da-batchpr-darwin-arm64.tar.gz` |
-| Windows | amd64 | `da-batchpr-windows-amd64.zip` |
-| Windows | arm64 | `da-batchpr-windows-arm64.zip` |
-
 **`da-parser`**（PromRule parser，v2.8.0 起）：
 
 | OS | ARCH | 檔名 |
@@ -108,7 +96,7 @@ docker run --rm \
 | Windows | amd64 | `da-parser-windows-amd64.zip` |
 | Windows | arm64 | `da-parser-windows-arm64.zip` |
 
-每份 archive 內含**一個** binary（或 `<name>.exe`），再加一份**單一** `SHA256SUMS` 檔案 list 全部 18 個 archive 的 hash。客戶可以只下載自己需要的（純驗 conf.d/ 拿 `da-guard` 就好；要走 batch PR 再加 `da-batchpr`；要做 PromRule 解析+portability check 再加 `da-parser`）。
+每份 archive 內含**一個** binary（或 `<name>.exe`），再加一份**單一** `SHA256SUMS` 檔案列出全部 archive 與 raw binary 的 hash。客戶可以只下載自己需要的（純驗 conf.d/ 拿 `da-guard` 就好；要做 PromRule 解析+portability check 再加 `da-parser`）。
 
 ### 安裝範例（Linux/macOS）
 
@@ -192,7 +180,7 @@ docker push internal-registry.corp/da-tools:v2.9.0
 
 ### 純 binary 走 air-gapped 也可以
 
-如果客戶不用 Docker，直接走路徑 B 把 18 個 binary archive（da-guard / da-batchpr / da-parser 各 6 個 OS/ARCH）+ `SHA256SUMS` 一起 download → USB 帶進去 → 解壓即可。每個 binary 都是 statically linked，無 runtime dep。
+如果客戶不用 Docker，直接走路徑 B 把 12 個 binary archive（da-guard / da-parser 各 6 個 OS/ARCH）+ `SHA256SUMS` 一起 download → USB 帶進去 → 解壓即可。每個 binary 都是 statically linked，無 runtime dep。
 
 ---
 
@@ -202,7 +190,7 @@ docker push internal-registry.corp/da-tools:v2.9.0
 
 | Asset | 內容 |
 |---|---|
-| `SHA256SUMS` | 18 個 binary archive 的 hash（da-guard × 6 + da-batchpr × 6 + da-parser × 6 OS/ARCH 組合，路徑 B / C 都會用到）|
+| `SHA256SUMS` | 全部 archive 與 raw binary 的 hash（da-guard × 6 + da-parser × 6 OS/ARCH 組合，路徑 B / C 都會用到）|
 | `da-tools-image-v<X.Y.Z>.tar.gz.sha256` | air-gapped image tar 的 hash（路徑 C 用）|
 
 ## Signature Verification
