@@ -23,8 +23,8 @@ type Snapshot map[string][]byte
 // two cannot disagree: each fixed key with Get (os.ReadFile, which follows a
 // symlink — a ConfigMap volume's files are symlinks into `..data/`; only
 // "does not exist" is an absent record, any other read error fails the
-// whole snapshot), and the per-tenant subsets as Keys lists them, each then
-// read with Get.
+// whole snapshot), and the per-tenant subsets and log visibility selections
+// as Keys lists them, each then read with Get.
 func ReadDirSnapshot(dir string) (Snapshot, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("statestore: state directory is empty")
@@ -42,6 +42,11 @@ func ReadDirSnapshot(dir string) (Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	logVis, err := s.Keys(ctx, LogVisibilityPrefix)
+	if err != nil {
+		return nil, err
+	}
+	subsets = append(subsets, logVis...)
 	snap := Snapshot{}
 	for _, k := range append([]string{KeyGroups, KeyViews, KeyFederationPolicy, KeyAccountRegistry}, subsets...) {
 		b, ok, err := s.Get(ctx, k)

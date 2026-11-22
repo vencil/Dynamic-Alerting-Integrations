@@ -1644,6 +1644,127 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/tenants/{id}/federation/log-visibility": {
+            "get": {
+                "description": "The selection is applied by Vector's tenant log projection, at\nwrite time, once the platform copies it into the tenant's\nprojection entry; it only ever narrows the platform-curated fields.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "federation"
+                ],
+                "summary": "Get a tenant's log visibility selection",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tenant ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_federation.LogVisibilityResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "federation"
+                ],
+                "summary": "Replace a tenant's log visibility selection",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tenant ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to keep; null returns to the platform default",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_federation_logvis.Selection"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler_federation.LogVisibilityResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "507": {
+                        "description": "Insufficient Storage",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/tenants/{id}/metrics": {
             "get": {
                 "description": "Lists the metric names that have at least one series\ncarrying {tenant=\"\u003cid\u003e\"} in the last 24h, optionally\nfiltered by a name prefix. Backs the portal recipe-\nauthoring UX (ADR-024 Capability B). Stateless proxy over\nPrometheus; the result can only contain the tenant's own\nmetrics.",
@@ -2493,6 +2614,21 @@ const docTemplate = `{
             "properties": {
                 "metric": {
                     "type": "string"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_federation_logvis.Selection": {
+            "type": "object",
+            "required": [
+                "fields"
+            ],
+            "properties": {
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "x-nullable": true
                 }
             }
         },
@@ -4020,6 +4156,43 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "token_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler_federation.LogVisibilityResponse": {
+            "type": "object",
+            "properties": {
+                "always_visible_fields": {
+                    "description": "AlwaysVisibleFields are kept whatever the selection.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "fields": {
+                    "description": "Fields is the tenant's selection; null means no selection — the\nplatform default, every curated field (including ones added later).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "x-nullable": true
+                },
+                "selectable_fields": {
+                    "description": "SelectableFields are the fields a selection may name.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "selected_visible_fields": {
+                    "description": "SelectedVisibleFields is every field a projected row would keep under\nFields once the platform applies this selection to Vector's tenant\nprojection. tenant-api does not track whether it has been applied, so\nthis is the selection's meaning, not what the tenant's rows carry now.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "tenant_id": {
                     "type": "string"
                 }
             }
