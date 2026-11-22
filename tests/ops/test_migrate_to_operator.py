@@ -1447,6 +1447,9 @@ def test_cli_two_keys_end_as_one_file_and_the_summary_says_one(tmp_path):
                           f"<namespace>.{old}.backup.yaml`") == 1, text
     assert "act only on the one in the namespace the earlier output was applied to" in checklist
     assert "只處理當初套用本工具舊版輸出的那個 namespace 裡的" in zh
+    # …and by content: a name and a namespace do not say which sources made it
+    assert "every group of the old one is in the new one" in checklist
+    assert "舊名物件的每個 group 都在新名物件裡" in zh
     assert "belong to other migrations: leave them" in checklist
     assert "屬於別次遷移，不要動" in zh
 

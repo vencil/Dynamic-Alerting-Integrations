@@ -696,7 +696,8 @@ def build_migration_checklist(
             "只處理當初套用本工具舊版輸出的那個 namespace 裡的，其餘屬於別次遷移。先備份"
             "（`kubectl get prometheusrule -n <namespace> <舊名> -o yaml > "
             "<namespace>.<舊名>.backup.yaml`；回滾時 `kubectl apply -f` 它），"
-            "確認新名物件已載入（Phase 3）後再刪除："
+            "確認新名物件已載入（Phase 3），且舊名物件的每個 group 都在新名物件裡"
+            "（有不在的，它就不是這次遷移的來源：不要刪）後再刪除："
             "`kubectl delete prometheusrule -n <namespace> <舊名>`。"
             "帶同一個標籤的其他物件屬於別次遷移，不要動。\n" + rows)
         en_renamed = (
@@ -707,7 +708,9 @@ def build_migration_checklist(
             "was applied to — the others belong to other migrations. Back it up (`kubectl "
             "get prometheusrule -n <namespace> <old-name> -o yaml > "
             "<namespace>.<old-name>.backup.yaml`; to roll back, `kubectl apply -f` it) and, "
-            "once the new one is loaded (Phase 3), delete it: "
+            "once the new one is loaded (Phase 3) and every group of the old one is in the "
+            "new one (a group that is not means it did not come from these sources: do not "
+            "delete it), delete it: "
             "`kubectl delete prometheusrule -n <namespace> <old-name>`. "
             "Other objects carrying that label belong to other migrations: leave them.\n" + rows)
     # #3426: PrometheusRules found in --source-dir are named here — they are
