@@ -495,13 +495,13 @@ def _limit_req(url, token, *, method="GET", path=_QUERY_PATH, raw_qs=None,
         return sess.send(prep, timeout=35)
 
 
-def _assert_gateway_rejected(resp, status, label):
+def _assert_gateway_rejected(resp, status, label, endpoint=_QUERY_PATH):
     assert resp.status_code == status, (
         f"{label}: expected {status} from the gateway, got {resp.status_code}: {resp.text[:200]}")
     # The mock answers every request with this key; its absence proves the
     # gateway, not the store, produced the answer.
     assert "received_account_id" not in resp.text, f"{label}: request reached the store"
-    assert "federation gateway: /select/logsql/query" in resp.text, (label, resp.text[:200])
+    assert f"federation gateway: {endpoint}" in resp.text, (label, resp.text[:200])
 
 
 @pytest.mark.parametrize("raw_qs, label", [
@@ -603,11 +603,103 @@ def test_vl11e_post_bodies_the_gateway_cannot_read_are_refused(vl_gateway_url, l
 def test_vl11f_in_query_pipe_and_other_endpoints_are_not_gated(vl_gateway_url, logs_signer):
     """A `| limit N` pipe in the LogsQL text is forwarded as-is: VictoriaLogs
     appends the URL limit as the query's last pipe, so the tenant's pipe cannot
-    raise the cap (an upstream property this mock cannot show). The other
-    allowlisted endpoints take no mandatory limit."""
+    raise the cap (an upstream property this mock cannot show). An endpoint
+    outside the limit guard (hits) takes no mandatory limit and is forwarded
+    unchanged."""
     _, token = logs_signer(*TENANT_A)
     piped = _limit_req(vl_gateway_url, token, raw_qs="query=%2A%20%7C%20limit%20100000&limit=10")
     assert piped.status_code == 200, (piped.status_code, piped.text[:200])
-    for path in ("/select/logsql/hits", "/select/logsql/field_values"):
-        resp = _limit_req(vl_gateway_url, token, path=path, raw_qs="query=*&field=log_type")
-        assert resp.status_code == 200, (path, resp.status_code, resp.text[:200])
+    resp = _limit_req(vl_gateway_url, token, path="/select/logsql/hits", raw_qs="query=*&step=1h")
+    assert resp.status_code == 200, (resp.status_code, resp.text[:200])
+    assert "limit" not in parse_qs(urlsplit(resp.json()["received_path"]).query), resp.json()
+
+
+# -- VL12 -- field_values / stream_field_values: limit injected when missing ---
+# Same counting and validation as /query, but a missing (or single zero) limit
+# is replaced by limit=<max> in the URL instead of rejected: Grafana's
+# VictoriaLogs data source omits `limit` here when a variable's limit is 0 or
+# unset. field=_msg would otherwise list every distinct log message.
+_VALUE_ENDPOINTS = ["/select/logsql/field_values", "/select/logsql/stream_field_values"]
+
+
+def _received_limits(resp):
+    return parse_qs(urlsplit(resp.json()["received_path"]).query).get("limit")
+
+
+@pytest.mark.parametrize("endpoint", _VALUE_ENDPOINTS)
+@pytest.mark.parametrize("raw_qs, expect", [
+    ("query=*&field=_msg", str(_MAX_LIMIT)),
+    ("query=*&field=_msg&limit=0", str(_MAX_LIMIT)),
+    ("query=*&field=_msg&limit=000", str(_MAX_LIMIT)),
+    ("query=*&field=_msg&limit=5", "5"),
+    (f"query=*&field=_msg&limit={_MAX_LIMIT}", str(_MAX_LIMIT)),
+])
+def test_vl12_value_endpoints_forward_exactly_one_bounded_limit(
+        vl_gateway_url, logs_signer, endpoint, raw_qs, expect):
+    _, token = logs_signer(*TENANT_A)
+    resp = _limit_req(vl_gateway_url, token, path=endpoint, raw_qs=raw_qs)
+    assert resp.status_code == 200, (raw_qs, resp.status_code, resp.text[:200])
+    assert _received_limits(resp) == [expect], resp.json()
+    # The other params survive the rewrite.
+    received = parse_qs(urlsplit(resp.json()["received_path"]).query)
+    assert received.get("field") == ["_msg"] and received.get("query") == ["*"], resp.json()
+
+
+@pytest.mark.parametrize("endpoint", _VALUE_ENDPOINTS)
+@pytest.mark.parametrize("raw_qs, label", [
+    (f"query=*&field=_msg&limit={_MAX_LIMIT + 1}", "over max"),
+    ("query=*&field=_msg&limit=5&limit=6", "duplicate"),
+    ("query=*&field=_msg&limit=0&limit=0", "duplicate zero"),
+    ("query=*&field=_msg&limit=5&%6Cimit=6", "duplicate with a percent-encoded key"),
+    ("query=*&field=_msg&limit=", "empty"),
+    ("query=*&field=_msg&limit=-1", "negative"),
+    ("query=*&field=_msg&limit=abc", "non-numeric"),
+])
+def test_vl12b_value_endpoints_reject_bad_limits(vl_gateway_url, logs_signer, endpoint, raw_qs, label):
+    _, token = logs_signer(*TENANT_A)
+    _assert_gateway_rejected(
+        _limit_req(vl_gateway_url, token, path=endpoint, raw_qs=raw_qs), 400, label, endpoint)
+
+
+@pytest.mark.parametrize("endpoint", _VALUE_ENDPOINTS)
+def test_vl12c_value_endpoints_post(vl_gateway_url, logs_signer, endpoint):
+    """POST: a body limit is honoured and counted with the URL; a body without
+    one gets the default injected into the URL (Go reads the URL when the body
+    has none); a zero limit in the body is refused because the body would win
+    over an injected URL value. The data source's own shape -- POST, params in
+    the URL, no body -- gets the injection too."""
+    _, token = logs_signer(*TENANT_A)
+    form = {"Content-Type": _FORM_CT}
+
+    ok = _limit_req(vl_gateway_url, token, method="POST", path=endpoint, headers=form,
+                    body="query=*&field=_msg&limit=10")
+    assert ok.status_code == 200, (ok.status_code, ok.text[:200])
+    assert _received_limits(ok) is None and ok.json()["received_body"].endswith("limit=10"), ok.json()
+
+    injected = _limit_req(vl_gateway_url, token, method="POST", path=endpoint, headers=form,
+                          body="query=*&field=_msg")
+    assert injected.status_code == 200, (injected.status_code, injected.text[:200])
+    assert _received_limits(injected) == [str(_MAX_LIMIT)], injected.json()
+    assert injected.json()["received_body"] == "query=*&field=_msg", injected.json()
+
+    datasource_shape = _limit_req(vl_gateway_url, token, method="POST", path=endpoint,
+                                  raw_qs="query=*&field=_msg&start=0&end=1")
+    assert datasource_shape.status_code == 200, (datasource_shape.status_code, datasource_shape.text[:200])
+    assert _received_limits(datasource_shape) == [str(_MAX_LIMIT)], datasource_shape.json()
+
+    rejected = {
+        "zero limit in the body": (None, "query=*&field=_msg&limit=0"),
+        "body over max": (None, f"query=*&field=_msg&limit={_MAX_LIMIT * 100}"),
+        "URL limit + body limit": ("limit=10", f"query=*&field=_msg&limit={_MAX_LIMIT * 100}"),
+    }
+    for label, (raw_qs, body) in rejected.items():
+        resp = _limit_req(vl_gateway_url, token, method="POST", path=endpoint, headers=form,
+                          raw_qs=raw_qs, body=body)
+        _assert_gateway_rejected(resp, 400, label, endpoint)
+
+    boundary = "e2eboundary"
+    multipart = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"limit\"\r\n\r\n"
+                 f"{_MAX_LIMIT * 100}\r\n--{boundary}--\r\n")
+    resp = _limit_req(vl_gateway_url, token, method="POST", path=endpoint, raw_qs="query=*&field=_msg",
+                      headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, body=multipart)
+    _assert_gateway_rejected(resp, 415, "multipart/form-data", endpoint)

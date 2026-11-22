@@ -2395,10 +2395,12 @@ groups:
       #
       # bad_request (every 4xx except 401/403/429/499, see
       # helm/federation-gateway/files/audit-metrics.vector.yaml) also takes
-      # the gateway's /select/logsql/query limit check: a missing, invalid
-      # or over-max `limit` (400) and a POST body the gateway cannot read
-      # (415). Right after a gateway upgrade that introduces the check, a
-      # client that never sent `limit` is the likeliest cause.
+      # the gateway's `limit` check: on /select/logsql/query a missing,
+      # invalid or over-max `limit` (400); on /query, field_values and
+      # stream_field_values an invalid, over-max or duplicated one (400);
+      # and a POST body the gateway cannot read (415). Right after a gateway
+      # upgrade that introduces the check, a client that never sent `limit`
+      # to /query is the likeliest cause.
       - alert: TenantLogQueryRejectionRateAnomaly
         expr: |
           (
@@ -2426,8 +2428,9 @@ groups:
             403), a tenant exceeding its rate limit, or a client hitting
             the victorialogs-mode endpoint allowlist. A bad_request surge
             right after a gateway upgrade is most likely
-            /select/logsql/query calls without a valid `limit` (400) or
-            with a non-form POST body (415). NOTE: this counts
+            /select/logsql/query calls without a valid `limit`, or
+            query / field_values calls over the limit cap (400), or a
+            non-form POST body (415). NOTE: this counts
             POST-JWT rejections only — an EXPIRED / bad-signature / wrong-
             audience token 401s at jwt_authn BEFORE account_id is stamped,
             so it is NOT counted here (attack noise; see jwt_authn stats,

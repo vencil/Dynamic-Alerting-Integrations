@@ -161,6 +161,11 @@ def test_victorialogs_wrong_audience_aborts(repo_root: Path):
 # router, its file ships in the ConfigMap, and the max is a validated number.
 _VL = {"mode": "victorialogs", "jwt.audience": "tenant-federation-logs"}
 _QUERY_LIMIT_FILTER = "envoy.filters.http.lua.query_limit"
+_LIMIT_POLICY = {
+    "/select/logsql/query": "reject",
+    "/select/logsql/field_values": "inject",
+    "/select/logsql/stream_field_values": "inject",
+}
 
 
 def _rendered_cm_data(stdout: str) -> dict:
@@ -194,7 +199,20 @@ def test_victorialogs_query_limit_filter_wired_after_buffer(repo_root: Path):
         "victorialogs"]["maxQueryLimit"]
     assert f"local MAX_LIMIT = {int(default)}\n" in lua, (
         "chart default maxQueryLimit not templated into the Lua")
-    assert 'QUERY_PATH_RE = "^/select/logsql/query/?$"' in lua
+    assert 'ENDPOINT_RE = "^(/select/logsql/[a-z_]+)/?$"' in lua
+    # The per-endpoint policy (ADR-021): /query rejects a missing limit, the two
+    # value-listing endpoints get one injected. Losing an entry drops that
+    # endpoint from the guard entirely.
+    for endpoint, policy in _LIMIT_POLICY.items():
+        assert f'["{endpoint}"] = "{policy}",' in lua, f"{endpoint} must carry policy {policy!r}"
+
+
+def test_limit_guarded_endpoints_are_allowlisted(repo_root: Path):
+    """A guarded endpoint missing from the allowlist would be a silent no-op
+    guard (and a guarded name typo would leave the real endpoint uncapped)."""
+    values = yaml.safe_load((repo_root / _CHART / "values.yaml").read_text(encoding="utf-8"))
+    allowed = set(values["victorialogs"]["allowedEndpoints"])
+    assert set(_LIMIT_POLICY) <= allowed, set(_LIMIT_POLICY) - allowed
 
 
 @_needs_helm

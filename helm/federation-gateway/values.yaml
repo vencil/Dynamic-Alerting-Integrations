@@ -142,14 +142,27 @@ victorialogs:
     - /select/logsql/stream_field_values
     - /select/logsql/field_names
     - /select/logsql/field_values
-  # Upper bound on `limit` for /select/logsql/query (ADR-021
-  # §查詢端點白名單). That endpoint streams every matching row unless the
-  # request carries a limit, and VictoriaLogs reads a missing / empty / 0 limit
-  # as "no limit". files/query_limit.lua therefore requires exactly one `limit`
-  # (query string or form-urlencoded POST body), 1..maxQueryLimit, and answers
-  # 400 otherwise — it never fills in or clamps a value, so a tenant is never
-  # handed a silently truncated result. Whole number, 1..1000000000 (checked at
-  # render). The other allowlisted endpoints are NOT capped by this value.
+  # Upper bound on `limit` for the three endpoints whose result size
+  # VictoriaLogs leaves unbounded without one (ADR-021 §查詢端點白名單);
+  # VictoriaLogs reads a missing / empty / 0 limit as "no limit". Enforced by
+  # files/query_limit.lua, per endpoint (fixed in the Lua, not configurable):
+  #
+  #   endpoint                            missing or 0 limit   over max / bad / duplicate
+  #   /select/logsql/query                400 (reject)         400
+  #   /select/logsql/field_values         limit=max injected   400
+  #   /select/logsql/stream_field_values  limit=max injected   400
+  #
+  # `limit` is counted across the query string and a form-urlencoded POST
+  # body; a POST body that is not form-urlencoded or carries a
+  # Content-Encoding gets 415. /query never fills in or clamps a value, so a
+  # tenant is never handed a silently truncated audit result; the two
+  # value-listing endpoints get the default because Grafana's VictoriaLogs
+  # data source omits `limit` on them when a variable's limit is 0 or unset
+  # (a zero limit inside a POST body is still 400 there: the body would win
+  # over an injected URL value). One value for all three: the two value lists
+  # are bounded for the same reason as /query (field=_msg lists log text).
+  # Whole number, 1..1000000000 (checked at render). The other allowlisted
+  # endpoints are NOT capped by this value.
   maxQueryLimit: 1000
 
 # ── Revoked set (ADR-020 §Token) ──────────────────────────────────

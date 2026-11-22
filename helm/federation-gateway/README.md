@@ -26,7 +26,7 @@ Per request, **cheap checks before expensive ones** (Envoy HTTP filter chain):
 | 5 | `local_ratelimit` (per-tenant) | Sybil ceiling, keyed on `tenant_id` (a tenant round-robining its ≤16 live tokens) |
 | 6 | `buffer` | Buffers the request body (≤ 1 MiB) for the audit Lua. **After** the rate limiters — a rejected request is never buffered into Envoy memory, so the rate limit bounds buffer cost |
 | 7 | `lua` (audit) | Reads the buffered POST body / GET query-string, extracts the PromQL selector into dynamic metadata for the audit log's `query` field |
-| 7b | `lua` (query limit) | **`victorialogs` mode only.** `/select/logsql/query` must carry exactly one `limit`, 1..`victorialogs.maxQueryLimit`, in the query string or form body — else `400` / `415`. After the buffer (reads POST form bodies) and the audit filter (a rejected query is still audited) |
+| 7b | `lua` (query limit) | **`victorialogs` mode only.** `/select/logsql/query`, `/field_values` and `/stream_field_values` carry at most one `limit`, 1..`victorialogs.maxQueryLimit`, in the query string or form body — else `400` / `415`. A missing limit is `400` on `/query` and injected as the max on the other two. After the buffer (reads POST form bodies) and the audit filter (a rejected query is still audited) |
 | 8 | `router` | Forward to the upstream |
 
 A request reaches the upstream only if all checks pass.
@@ -112,17 +112,24 @@ Which read APIs a tenant can call through the gateway depends on the mode:
   dependence) — it never reaches the upstream. `jwt_authn` additionally
   rejects any token whose audience is not `tenant-federation-logs` before the
   Lua even runs, so a metrics-pull token cannot reach the log store at all.
-- **`victorialogs` caps what `/select/logsql/query` returns.** That endpoint
-  streams every matching row unless the request carries `limit`, and
-  VictoriaLogs reads a missing / empty / `0` limit as "no limit". A third Lua
-  filter (`query_limit.lua`, after the body buffer) requires exactly one
-  `limit` between 1 and `victorialogs.maxQueryLimit`, counted across the query
+- **`victorialogs` caps what `/select/logsql/query`, `/field_values` and
+  `/stream_field_values` return.** `/query` streams every matching row, and
+  the two value endpoints list every distinct value (with `field=_msg`, the
+  log text), unless the request carries `limit`; VictoriaLogs reads a
+  missing / empty / `0` limit as "no limit". A third Lua filter
+  (`query_limit.lua`, after the body buffer) counts `limit` across the query
   string and a form-urlencoded POST body (VictoriaLogs reads both, body
-  first), and rejects everything else with `400` — duplicates included, so the
-  gateway and the store can never read two different values. A POST body it
-  cannot read (multipart, compressed, other content types) gets `415`. A
-  `| limit N` pipe in the LogsQL text cannot raise the cap: VictoriaLogs
-  appends the request's limit as the last pipe, after all of the tenant's.
+  first) and answers `400` to more than one, to a non-numeric value and to a
+  value above `victorialogs.maxQueryLimit` — so the gateway and the store can
+  never read two different values. A missing (or zero) limit is `400` on
+  `/query`, where a silently truncated audit result must not happen, and is
+  replaced by `limit=<max>` in the URL on the two value endpoints, which
+  Grafana's VictoriaLogs data source calls without a limit when a variable's
+  limit is 0 or unset; a zero limit inside a POST body is `400` there, since
+  the body would win over the injected URL value. A POST body it cannot read
+  (multipart, compressed, other content types) gets `415`. A `| limit N` pipe
+  in the LogsQL text cannot raise the `/query` cap: VictoriaLogs appends the
+  request's limit as the last pipe, after all of the tenant's.
 - **Tokens never reach a log.** `jwt_authn` is configured `from_headers`
   only — an `?access_token=` in the URL is not accepted — and the access log
   records the path **without** its query string (`%REQ_WITHOUT_QUERY(:PATH)%`),
@@ -298,7 +305,7 @@ exposed, 1 = one ingress, …).
 |---|---|---|
 | `mode` | `prom-label-proxy` | `prom-label-proxy` \| `vm-cluster` \| `victorialogs` |
 | `victorialogs.allowedEndpoints` | LogsQL query/metadata list | **`victorialogs` mode only.** Default-deny allowlist; everything else (incl. `/tail`, `/insert/*`, `/select/tenant_ids`) gets `403`. Adding an endpoint is an explicit maintainer action |
-| `victorialogs.maxQueryLimit` | `1000` | **`victorialogs` mode only.** `/select/logsql/query` must carry exactly one `limit`, `1`..this value, in the query string or a form-urlencoded POST body; missing / empty / `0` / non-numeric / over-max / duplicated ⇒ `400`, a POST body that is not form-urlencoded or carries a `Content-Encoding` ⇒ `415`. Rejected, never filled in or clamped. Whole number `1`..`1000000000` (checked at render). Other allowlisted endpoints are not capped by it |
+| `victorialogs.maxQueryLimit` | `1000` | **`victorialogs` mode only.** Cap on `limit` for `/select/logsql/query`, `/field_values` and `/stream_field_values`, counted across the query string and a form-urlencoded POST body: empty / non-numeric / over-max / duplicated ⇒ `400`; a POST body that is not form-urlencoded or carries a `Content-Encoding` ⇒ `415`. Missing or `0`: `400` on `/query` (never filled in or clamped), `limit=<this value>` injected into the URL on the two value endpoints (a `0` in a POST body ⇒ `400`). The per-endpoint policy is fixed in `query_limit.lua`. Whole number `1`..`1000000000` (checked at render). Other allowlisted endpoints are not capped by it |
 | `victorialogs.auth.existingSecret` | `""` | **`victorialogs` mode only** (#1295). Secret (key `password`) whose value matches the store's vmauth consumer `victorialogs.auth.username` (default `federation-gateway`). Mounted as a file; the Lua sends it as HTTP basic auth on every forwarded query and re-reads it on the revoked-set cadence, so rotation needs no restart. Empty ⇒ no credential, which only works while helm/victorialogs runs `auth.mode: observe` |
 | `emergencyGlobalBlock` | `false` | Incident kill switch — `true` ⇒ a `direct_response` 503 to every request (see "Emergency global block") |
 | `jwt.jwks` | `""` | **Required.** Public JWKS of tenant-api's RS256 key. Empty ⇒ keyless JWKS ⇒ Envoy refuses to start (fail-loud CrashLoopBackOff). Produced by IV-2l (#518) |

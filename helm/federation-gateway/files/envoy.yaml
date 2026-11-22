@@ -187,8 +187,9 @@ static_resources:
                         # /export endpoint; the real unbounded surfaces are
                         # /query streaming and /tail — /tail is denied, /query
                         # is bounded by -search.maxQueryTimeRange at Layer 1
-                        # and by the mandatory `limit` that filter 7b,
-                        # query_limit.lua, enforces.)
+                        # and by the `limit` cap that filter 7b,
+                        # query_limit.lua, enforces on it and on the two
+                        # value-listing endpoints.)
                         #
                         # EXACT-path safe_regex (`^<endpoint>/?$`), NOT
                         # path_separated_prefix: a path-separated prefix matches
@@ -422,11 +423,14 @@ static_resources:
                         filename: /etc/envoy/audit_extract.lua
                   {{- if eq .Values.mode "victorialogs" }}
                   # 7b. LogsQL result cap (ADR-021 §查詢端點白名單):
-                  #    /select/logsql/query must carry exactly one `limit`,
+                  #    /select/logsql/query, field_values and
+                  #    stream_field_values take at most one `limit`,
                   #    1..victorialogs.maxQueryLimit, in the query string or
-                  #    the form body — else 400/415. After the buffer (it reads
-                  #    POST form bodies) and after the audit filter (a rejected
-                  #    query is still audited). See query_limit.lua.
+                  #    the form body — else 400/415; a missing one is 400 on
+                  #    /query and injected as the max on the other two. After
+                  #    the buffer (it reads POST form bodies) and after the
+                  #    audit filter (a rejected query is still audited). See
+                  #    query_limit.lua.
                   - name: envoy.filters.http.lua.query_limit
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
