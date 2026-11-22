@@ -644,7 +644,9 @@ def find_metric_dictionary(tool_dir: str) -> "str | None":
 
 # #4223: the output entry points live in _lib_output (no PyYAML, no
 # _lib_constants). Re-exported so `from _lib_io import …` keeps working;
-# a spy or monkeypatch must target _lib_output, where they call each other.
+# a spy replaces the name where the caller looks it up: _lib_output for the
+# entries' calls to each other, _lib_io for a lookup here (write_onboard_hints
+# resolves open_operator_output in this module).
 from _lib_output import (  # noqa: E402,F401  (re-export)
     OutputWriteError,
     _die_on_write_error,

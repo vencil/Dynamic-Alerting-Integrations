@@ -4,13 +4,20 @@
 importing PyYAML or ``_lib_constants``: an isolated pre-commit hook has no
 PyYAML, and a generator that rewrites ``_lib_constants.py`` must not load it
 (a broken generated block would kill ``--update`` at import time, before it
-could repair the block). This module depends on the standard library,
-``_lib_exitcodes`` and ``_lib_label`` only;
-``tests/shared/test_read_only_modes_need_no_pyyaml.py`` holds it to that.
+could repair the block). At import it loads the standard library,
+``_lib_exitcodes`` and ``_lib_label`` only; :func:`write_repo_artifact`
+also loads ``_lib_atomic_write`` (stdlib + ``_lib_label`` + this module) on
+first use, so a layout that ships this module ships that one too.
+``tests/shared/test_read_only_modes_need_no_pyyaml.py`` calls every entry
+and every failure exit with PyYAML, ``_lib_constants`` and ``_lib_io``
+refused.
 
 ``_lib_io`` re-exports every name below, so ``from _lib_io import …`` keeps
-working; new code imports from here. A spy or ``monkeypatch`` must target
-THIS module: the entries call each other through this module's globals.
+working; new code imports from here. A spy or ``monkeypatch`` replaces the
+name where the CALLER looks it up: the entries call each other through
+THIS module's globals (patch ``_lib_output``), while a caller that looks a
+name up on ``_lib_io`` — ``_lib_io.write_onboard_hints`` included — sees
+``_lib_io``'s own binding, which patching ``_lib_output`` does not replace.
 """
 from __future__ import annotations
 
