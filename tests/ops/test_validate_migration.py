@@ -196,17 +196,72 @@ class TestLoadMappingPairs:
         assert pairs[0]["alert_name"] == "HighCPU"
         assert pairs[0]["golden_match"] is True
 
-    def test_skips_entries_without_original(self, tmp_path):
-        mapping = {
-            "has_original": {"original_metric": "metric_a"},
-            "no_original": {"alert_name": "Alert1"},
-        }
+    @pytest.mark.parametrize("text, reason", [
+        ("custom_x:\n", "值不是映射（實為空值）"),
+        ("custom_x: node_cpu\n", "值不是映射（實為字串）"),
+        ("custom_x: [a]\n", "值不是映射（實為清單）"),
+        ("1: {original_metric: m}\n", "key 不是字串（實為數字）"),
+        ("custom_x: {alert_name: A}\n",
+         "沒有 old_query／new_query，也沒有 original_metric 或 golden_rule"),
+        ("custom_x: {old_query: 'sum(a)', original_metric: m}\n",
+         "old_query 與 new_query 只有一個"),
+        ("custom_x: {new_query: 'tenant:x:max', original_metric: m}\n",
+         "old_query 與 new_query 只有一個"),
+        ("custom_x: {old_query: '', new_query: 'tenant:x:max'}\n",
+         "old_query 不是非空字串（實為字串）"),
+        ("custom_x: {old_query: 'sum(a)', new_query: '  '}\n",
+         "new_query 不是非空字串（實為字串）"),
+        ("custom_x: {old_query: 'sum(a)', new_query: 3}\n",
+         "new_query 不是非空字串（實為數字）"),
+        ("custom_x: {original_metric: [m]}\n",
+         "original_metric 不是非空字串（實為清單）"),
+    ])
+    def test_an_unusable_entry_is_named_and_refused(self, tmp_path, text, reason):
+        """#4210: each of these was skipped without a word (or crashed, for a
+        non-string key), so the run reported the rest as the whole file."""
+        from _lib_exitcodes import CallerError
         p = tmp_path / "mapping.yaml"
-        p.write_text(yaml.safe_dump(mapping), encoding="utf-8")
+        p.write_text("ok_key: {original_metric: metric_a}\n" + text, encoding="utf-8")
+        with pytest.raises(CallerError) as exc:
+            vm.load_mapping_pairs(_mapping_args(p))
+        assert f"（{reason}）" in str(exc.value)
+        assert str(exc.value).startswith(f"--mapping {p}: 1 個項目不能用")
 
+    def test_every_unusable_entry_is_named_at_once(self, tmp_path):
+        from _lib_exitcodes import CallerError
+        p = tmp_path / "mapping.yaml"
+        p.write_text("a:\nb: {alert_name: A}\nc: {original_metric: m}\n", encoding="utf-8")
+        with pytest.raises(CallerError) as exc:
+            vm.load_mapping_pairs(_mapping_args(p))
+        said = str(exc.value)
+        assert "2 個項目不能用" in said and "a（" in said and "b（" in said
+        assert "c（" not in said
+
+    def test_the_usable_shapes_still_load(self, tmp_path, capsys):
+        p = tmp_path / "mapping.yaml"
+        p.write_text(
+            "pair: {old_query: 'max by(tenant) (a)', new_query: 'tenant:pair:max'}\n"
+            "gold: {golden_rule: G, original_metric: m, old_query: null}\n"
+            "legacy_critical: {original_metric: m}\n", encoding="utf-8")
         pairs = vm.load_mapping_pairs(_mapping_args(p))
-        assert len(pairs) == 1
-        assert pairs[0]["label"] == "has_original"
+        assert [(x["label"], x["new_query"]) for x in pairs] == [
+            ("pair", "tenant:pair:max"), ("legacy_critical", "tenant:legacy:max")]
+        assert "gold" in capsys.readouterr().err
+
+    def test_the_cli_exits_2_naming_the_entry_before_any_query(self, tmp_path):
+        import subprocess
+        p = tmp_path / "mapping.yaml"
+        p.write_text("custom_x:\n", encoding="utf-8")
+        done = subprocess.run(
+            [sys.executable, str(vm.__file__), "--mapping", str(p),
+             "--prometheus", "http://127.0.0.1:9", "-o", str(tmp_path / "out")],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", timeout=60)
+        assert done.returncode == 2, done.stderr
+        assert done.stderr.splitlines() == [
+            f"ERROR: --mapping {p}: 1 個項目不能用，整份未比對"
+            "（請用 migrate 重產這個檔，或修正這幾項）: custom_x（值不是映射（實為空值））"]
+        assert done.stdout == ""
 
     def test_empty_mapping(self, tmp_path):
         """An empty mapping file is refused by name (#3445): it was read as
