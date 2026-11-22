@@ -70,7 +70,7 @@ issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說�
 
 依分流推 tag；步驟、artifact、benchmark gate 見 [`github-release-playbook.md`](../../../docs/internal/github-release-playbook.md)。
 
-⛔ **收尾 PR 合併後立刻推 tag。** `da-tools init` 的預設映像是 `:v<VERSION>`（#2900），收尾 PR 一合併，VERSION 就指向還沒發布的 tag：期間 nightly 的 delivered 映像掃描**預期有一晚 degraded**，動到 `init_project.py` 的 PR 其 `image-ref-resolve` delivered scope 也會紅。不是事故，但空窗越長越難和真問題區分（playbook Step 2）。
+⛔ **收尾 PR 合併後立刻推 tag。** `da-tools init` 的預設映像是 `:v<VERSION>`（#2900），收尾 PR 一合併，VERSION 就指向還沒發布的 tag：期間 nightly 的 delivered 映像掃描**每晚**都會在追蹤 issue 留「unresolvable」留言（#1400 刻意不壓制：空窗期產生的專案真的拉不到），修法是推 `tools/v<VERSION>` tag；動到 `init_project.py` 的 PR 其 `image-ref-resolve` delivered scope 也會紅。空窗越長，越難和真問題區分（playbook Step 2）。
 
 ## 使用法
 

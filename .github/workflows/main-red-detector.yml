@@ -19,9 +19,11 @@ name: Main red detector
 # ⛔ `workflows:` below is the list of workflows that report an entry of
 # .github/required-checks.yaml. GitHub reads it statically, so it cannot be
 # computed at run time; tests/ops/test_main_red_report.py fails when it differs
-# from the set derived from that file, in either direction. The script reads
-# the list from HERE, so there is no second copy. A listed workflow with no
-# `push` trigger for main (Commitlint) simply never fires this.
+# from the set derived from that file, in either direction — plus the
+# workflows that test names one by one, each with its reason (a faster verdict
+# on a check one of the others reports). The script reads the list from HERE,
+# so there is no second copy. A listed workflow with no `push` trigger for
+# main (Commitlint) simply never fires this.
 #
 # A separate workflow on purpose: a job added to ci.yml / docs-ci.yaml /
 # validate.yaml would have to sit inside the `needs` closure of a registered
@@ -58,7 +60,7 @@ name: Main red detector
 
 on:
   workflow_run:
-    workflows: ["CI", "Commitlint", "Documentation CI", "Validate"]
+    workflows: ["CI", "Commitlint", "Documentation CI", "Path filter drift", "Validate"]
     types: [completed]
     branches: [main]
   workflow_dispatch:

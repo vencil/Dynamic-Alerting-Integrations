@@ -124,6 +124,28 @@ func TestRemedies_ListsEveryConstantOnce(t *testing.T) {
 	}
 }
 
+// TestCommittedWrites_RemedyRefresh (#1073): the codes whose answers say
+// committed: true — the write IS saved — tell the client to reload and look,
+// not to resend. STATE_RELOAD_FAILED once said retry_after, though a resent
+// PUT overwrites any change made in between and a resent DELETE answers 404
+// once a reload has loaded the delete.
+func TestCommittedWrites_RemedyRefresh(t *testing.T) {
+	t.Parallel()
+	for _, c := range []Code{BatchCommitted, StateReloadFailed} {
+		spec, ok := Lookup(c)
+		if !ok {
+			t.Errorf("%s is not in the code table", c)
+			continue
+		}
+		if spec.Remedy != RemedyRefresh {
+			t.Errorf("%s: remedy %q, want %q (the write is saved; do not resend it)", c, spec.Remedy, RemedyRefresh)
+		}
+		if spec.Remedy.Retryable() {
+			t.Errorf("%s: remedy %q is retryable; a saved write must not be resent blindly", c, spec.Remedy)
+		}
+	}
+}
+
 // TestSpecs_IsACopy: the exported listing cannot edit the table.
 func TestSpecs_IsACopy(t *testing.T) {
 	t.Parallel()

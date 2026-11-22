@@ -30,6 +30,14 @@ package handler
 //     regardless of retry cadence. Mirrors Prometheus's own
 //     prometheus_config_last_reload_successful.
 //
+// The gauge STARTS at 0 ("not yet confirmed"), not 1 (#1073). A manager only
+// moves it to 1 by reporting a successful load, and SetReloadObserver replays
+// the initial load's outcome the moment it is wired (before the server
+// serves), so every wired manager reads its real state from the first scrape.
+// A manager that main.go forgot to wire therefore stays at 0 and the existing
+// `== 0` alert fires. Starting at 1 made the same omission permanently green:
+// nothing would ever report for that component, so its gauge never moved.
+//
 // Import direction: handler → configwatcher (a leaf package). configwatcher
 // never imports handler, so the observer INTERFACE is declared in configwatcher
 // and IMPLEMENTED here.
@@ -78,6 +86,12 @@ var configReloadComponents = [...]string{
 	"views",
 }
 
+// ConfigReloadComponents returns the component labels both config-reload metric
+// families are emitted for, in sorted order. cmd/server's wiring test compares
+// it against the set of managers main actually wires to the observer, so a
+// component left unwired (whose gauge would then sit at 0) is caught in CI.
+func ConfigReloadComponents() []string { return sortedComponents() }
+
 // ConfigReloadMetrics holds the per-component reload-failure counter and the
 // current last-reload-successful gauge. It satisfies configwatcher.ReloadObserver.
 // Both stores are atomic so recording is lock-free and safe from every writer
@@ -89,7 +103,7 @@ type ConfigReloadMetrics struct {
 	// sized FROM it at compile time (len of an array value is a constant
 	// expression), so they can never drift out of sync with the label set.
 	counters [len(configReloadComponents)]atomic.Int64 // monotonic failure count
-	states   [len(configReloadComponents)]atomic.Int64 // 1 = last reload ok, 0 = failed
+	states   [len(configReloadComponents)]atomic.Int64 // 1 = last reload ok, 0 = failed or never reported
 }
 
 // RecordReload implements configwatcher.ReloadObserver: it records the outcome of
@@ -140,18 +154,18 @@ var _ configwatcher.ReloadObserver = (*ConfigReloadMetrics)(nil)
 // isolation construct their own ConfigReloadMetrics and read it via Snapshot().
 var activeConfigReloadMetrics atomic.Pointer[ConfigReloadMetrics]
 
-// NewConfigReloadObserver constructs a fresh store, initializes every
-// last-reload-successful gauge to 1 (assumed-current until a load says
-// otherwise), registers it as the one /metrics renders, and returns it as a
-// configwatcher.ReloadObserver for injection into every config manager via
-// SetReloadObserver. Called once at startup, unconditionally (the metrics are
-// part of the base reload path, not an opt-in feature), so both families are
-// always present.
+// NewConfigReloadObserver constructs a fresh store, registers it as the one
+// /metrics renders, and returns it as a configwatcher.ReloadObserver for
+// injection into every config manager via SetReloadObserver. Called once at
+// startup, unconditionally (the metrics are part of the base reload path, not an
+// opt-in feature), so both families are always present.
+//
+// Every last-reload-successful gauge is left at its zero value, 0 ("not yet
+// confirmed"), on purpose (#1073): wiring replays each manager's initial-load
+// outcome, so only a component nobody wired keeps reading 0 — and that is
+// exactly the omission the `== 0` alert must catch. Do not initialize it to 1.
 func NewConfigReloadObserver() configwatcher.ReloadObserver {
 	m := &ConfigReloadMetrics{}
-	for i := range m.states {
-		m.states[i].Store(1)
-	}
 	activeConfigReloadMetrics.Store(m)
 	return m
 }
@@ -173,18 +187,15 @@ func writeConfigReloadFailureMetrics(w io.Writer) {
 
 // writeConfigReloadStateMetrics renders the
 // tenant_api_config_last_reload_successful gauge family. When no store is
-// installed all series are emitted at 1 (assumed-current), so the metric's
-// presence is stable and a never-reloaded deployment does not false-alarm.
+// installed all series are still emitted, at 0 — nothing has confirmed any
+// manager's load (the same "not yet confirmed" value a fresh store starts at,
+// #1073) — so the metric's presence is stable.
 func writeConfigReloadStateMetrics(w io.Writer) {
-	snap := map[string]int64{}
+	var snap map[string]int64
 	if m := activeConfigReloadMetrics.Load(); m != nil {
 		snap = m.StateSnapshot()
-	} else {
-		for _, c := range configReloadComponents {
-			snap[c] = 1
-		}
 	}
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_config_last_reload_successful Whether each config manager's LAST reload succeeded (1) or failed and is serving stale last-good config (0). Unlike the failure counter, whose growth depends on the retry cadence, it is 0 from the first failure and stays 0 until a load succeeds — alert on == 0.\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_config_last_reload_successful Whether each config manager's LAST reload succeeded (1), or failed and is serving stale last-good config — or was never reported because the manager is not wired to the observer (0). Unlike the failure counter, whose growth depends on the retry cadence, it is 0 from the first failure and stays 0 until a load succeeds — alert on == 0.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_config_last_reload_successful gauge\n")
 	for _, c := range sortedComponents() {
 		_, _ = fmt.Fprintf(w, "tenant_api_config_last_reload_successful{component=%q} %d\n", c, snap[c])

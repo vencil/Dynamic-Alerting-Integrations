@@ -190,7 +190,7 @@ func TestReload_Success_RecordsOKNotFailure(t *testing.T) {
 // A file that is already BROKEN at startup fails the initial load() while no
 // observer is installed yet (New runs before SetReloadObserver). Installing the
 // observer must REPLAY that failure so the gauge reflects the stale state
-// immediately — otherwise the gauge sits at the assumed-current default until
+// immediately — otherwise the gauge keeps the observer's starting value until
 // the next load (a WatchLoop tick later, or forever for a watcher run without
 // one), while the config is already stale (verifier finding #1).
 //

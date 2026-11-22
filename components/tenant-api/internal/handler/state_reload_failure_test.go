@@ -4,9 +4,10 @@ package handler
 // of the in-memory snapshot that failed, used to answer 200 — mutateState
 // discarded the reload's error (`_ = d.Groups.Reload()`) — so the caller
 // believed the change was live while reads kept serving the old snapshot.
-// It now answers 503 STATE_RELOAD_FAILED with committed: true and a
-// Retry-After, and a resend of the same request (safe: these writes replace
-// or delete by id) loads it.
+// It now answers 503 STATE_RELOAD_FAILED with committed: true and remedy
+// refresh: no Retry-After, since the client should reload and look rather
+// than resend (a resend does load it — these writes replace or delete by id —
+// but a resent PUT overwrites any change made in between).
 
 import (
 	"context"
@@ -41,8 +42,8 @@ func (s *readFailingStore) Get(ctx context.Context, key string) ([]byte, bool, e
 }
 
 // wantStateReloadFailed asserts the #1073 answer: 503, code
-// STATE_RELOAD_FAILED, committed: true, Retry-After on the header and in
-// the body.
+// STATE_RELOAD_FAILED, committed: true, and no Retry-After on the header
+// or in the body (remedy refresh, not retry_after).
 func wantStateReloadFailed(t *testing.T, what string, w *httptest.ResponseRecorder) {
 	t.Helper()
 	if w.Code != http.StatusServiceUnavailable {
@@ -61,11 +62,11 @@ func wantStateReloadFailed(t *testing.T, what string, w *httptest.ResponseRecord
 	if body["error"] != msgStateReloadFailed {
 		t.Errorf("%s: error = %v, want the fixed text %q", what, body["error"], msgStateReloadFailed)
 	}
-	if got := w.Header().Get("Retry-After"); got != "5" {
-		t.Errorf("%s: Retry-After = %q, want 5", what, got)
+	if got := w.Header().Get("Retry-After"); got != "" {
+		t.Errorf("%s: Retry-After = %q, want none (remedy refresh: reload, do not resend)", what, got)
 	}
-	if body["retry_after_s"] != float64(5) {
-		t.Errorf("%s: retry_after_s = %v, want 5", what, body["retry_after_s"])
+	if v, ok := body["retry_after_s"]; ok {
+		t.Errorf("%s: retry_after_s = %v, want absent (remedy refresh: reload, do not resend)", what, v)
 	}
 }
 

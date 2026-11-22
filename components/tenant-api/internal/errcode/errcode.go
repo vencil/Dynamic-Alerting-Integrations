@@ -416,7 +416,7 @@ var codeTable = []codeRow{
 	{ConfigDecode, RemedyFixInRepo},
 	{BaseRestoreFailed, RemedyOperator},
 	{StateFull, RemedyOperator},
-	{StateReloadFailed, RemedyRetryAfter},
+	{StateReloadFailed, RemedyRefresh},
 	{GroupIDUnavailable, RemedyChooseOther},
 	{Upstream, RemedyRetryAfter},
 	{NotImplemented, RemedyOperator},
