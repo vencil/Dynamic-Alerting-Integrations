@@ -175,19 +175,29 @@ class TestValidateDir:
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
         assert any("maraidb" in v for v in viol)
 
-    @pytest.mark.parametrize("value", ["[mariadb]", "[mariadb, redis]", "[nginx, jvm]", "[]", "null"])
+    @pytest.mark.parametrize("value", ["[mariadb]", "[mariadb, redis]", "[nginx, jvm]", "[]", "null",
+                                       "[mariadb@edge-1]", "[mariadb@east, mariadb@west, redis]",
+                                       "[redis@a]", "[redis@eu-west.1_b]", "[redis@East, redis@east]"])
     def test_expected_exporters_list_accepted(self, confd, schema, value):
         # #4097: a tenant lists the exporter kinds it runs — nginx and jvm are
-        # kinds too; an empty list (or null) declares nothing.
+        # kinds too; an empty list (or null) declares nothing. An entry may
+        # be `kind@cluster`.
         _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    _expected_exporters: {value}\n')
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
         assert viol == []
 
     @pytest.mark.parametrize("value", ["mariadb", "[mariadb, mariadb]", "[mariadb, maraidb]",
-                                       "[kubernetes]", "[5]", "{mariadb: true}", "[mariadb@edge-1]"])
+                                       "[kubernetes]", "[5]", "{mariadb: true}",
+                                       "[maraidb@east]", "[kubernetes@east]", '["@east"]', '["mariadb@"]',
+                                       '["mariadb@east@west"]', '["mariadb@-east"]', '["mariadb@east."]',
+                                       '["mariadb@edge 1"]', '["mariadb@.*"]', '["mariadb@東"]',
+                                       "[mariadb@east, mariadb@east]", '["mariadb@east\n"]',
+                                       '["mariadb@' + "a" * 64 + '"]'])
     def test_expected_exporters_scalar_repeated_or_unknown_rejected(self, confd, schema, value):
         # A list, unique, each item one of the kinds (the registry's packs with
-        # a presence metric) — as the exporter itself judges the value.
+        # a presence metric) or `kind@cluster` with a cluster id — as the
+        # exporter itself judges the value. (One kind written both alone and
+        # per cluster is the exporter's to refuse: a schema cannot say it.)
         _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    _expected_exporters: {value}\n')
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
         assert viol, value

@@ -41,8 +41,8 @@
     },
     "_expected_exporters": {
       "read_by": {"exporter": ["tenant", "platform_tenants", "profile"]},
-      "description": "The exporter kinds the tenant runs (a list of rule packs that have a presence metric), served as tenant_expected_exporter{tenant, pack}; declaring a kind turns TenantExporterAbsent on for it.",
-      "note": "Replaces `_metadata.db_type` (#4097). The allowed kinds are the packs of rule-packs/threshold-registry.yaml with `presence:`.",
+      "description": "The exporters the tenant runs: a list of entries, each an exporter kind (a rule pack that has a presence metric) or `kind@cluster`. Served as tenant_expected_exporter{tenant, pack} for a kind alone (an exporter of that kind answering in any cluster is enough) and tenant_expected_exporter{tenant, pack, expected_cluster} for `kind@cluster` (one must answer in that cluster); declaring turns TenantExporterAbsent on for it.",
+      "note": "Replaces `_metadata.db_type` (#4097). The allowed kinds are the packs of rule-packs/threshold-registry.yaml with `presence:`. A cluster is the `da_cluster` of the Prometheus the exporter's series come through (ADR-006); one kind is written alone or per cluster, not both.",
       "value": {"shape": "list", "check": "expected_exporters"}
     },
     "_profile": {

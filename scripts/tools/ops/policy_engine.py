@@ -17,7 +17,9 @@ DSL 運算子：
   （欄位值是 list 時——`_expected_exporters`（#4097）、`_metadata.tags`、`_metadata.groups`——逐元素比：
    主規則的值運算子一律要每個元素都成立（空 list 只滿足 `not_equals`）；`when` 條件裡
    `equals`／`matches`／`one_of`／`contains` 任一元素成立即成立，`not_equals` 仍要
-   每個元素都不等）
+   每個元素都不等。`_expected_exporters` 的元素是【整個條目】：`mariadb@east`
+   （逐叢集的寫法，#4097）不等於 `mariadb`，`one_of: [mariadb]` 不接受它；要以
+   kind 為準就用 `matches: "^mariadb(@|$)"`。沒有以 kind 比對的運算子）
 
 條件式規則：
   when 子句：僅在條件成立時才評估主規則。
@@ -815,6 +817,9 @@ def _evaluate_operator(operator: str, actual: Any, expected: Any, *,
     #   `not_equals` keeps "no element equals".
     # A one-element list reads as the scalar it stands for
     # (`_expected_exporters: [mariadb]` satisfies `equals: mariadb`).
+    # An element is the WHOLE entry (#4097): `mariadb@east` is not `mariadb`
+    # to `equals` / `one_of` / `not_equals`; there is no operator that
+    # compares by kind — `matches: "^mariadb(@|$)"` says it.
     if isinstance(actual, list) and operator in _ELEMENTWISE_OPERATORS:
         if operator == "not_equals":
             return all(_evaluate_operator(operator, a, expected) for a in actual)

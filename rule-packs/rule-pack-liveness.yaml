@@ -32,6 +32,45 @@
 # critical。改成 `on(tenant, service)` 也不行：tenant_expected_exporter 沒有
 # service，兩條都不響。所以期望集合帶 pack，存在判定也帶 pack。
 #
+# === 逐叢集的宣告：`kind@cluster`（ADR-006 契約第 6 點，#4097）===
+# 上面的 anti-join 只問「這個租戶有沒有這一種 exporter 在回應」。同一個租戶在 east、
+# west 兩個叢集各跑一套 mariadb 時，west 的 exporter 消失、east 還在，右手邊仍有
+# east 的序列 → 不 fire。要逐叢集看，租戶把條目寫成 `kind@cluster`：
+#   _expected_exporters: [mariadb@east, mariadb@west, redis]
+# threshold-exporter 對這種條目送 tenant_expected_exporter{tenant, pack,
+# expected_cluster}（只寫 kind 的條目照舊，沒有 expected_cluster）。Rule A 因此是
+# 兩支以 or 併起來：
+#   (帶 expected_cluster 的列，把它抄進 da_cluster、再拿掉 expected_cluster)
+#     unless on(tenant, pack, da_cluster) (<存在判定>)
+#     unless on(tenant, pack)             (<存在判定>，只取【沒有 da_cluster】的序列)
+#   or
+#   (沒有 expected_cluster 的列) unless on(tenant, pack) (<存在判定>)   ← 原本那條
+# - 存在序列屬於哪個叢集，看它的 da_cluster——那是它經過的 Prometheus 的 external
+#   label，所以只有兩個叢集的資料相遇的地方（中央 Prometheus）序列上才有。
+# - 沒有 da_cluster 的存在序列，對【每一個】宣告的叢集都算存在。只抓自己叢集的
+#   Prometheus 看到的就是這種序列；沒有這一項，那裡每個寫了 `kind@cluster` 的租戶
+#   會對每個宣告的叢集齊響。它是運算式的一項，不是「有沒有看到帶叢集的序列」的閘門：
+#   閘門在 federation 連線抖動時會翻面，把 for: 重置（promtool L8）。
+# - 欄位叫 expected_cluster 而不是 da_cluster：只寫 kind 的列從邊緣 federate 上來時，
+#   邊緣的 external label 會蓋上 da_cluster，若宣告的叢集也寫在那個 label，這種列會被
+#   讀成「有宣告叢集」。
+# - 告警的身分是 (tenant, pack, da_cluster)，da_cluster 就是宣告的那個叢集。
+# - 一個值裡，同一個 kind 不能既單獨寫又寫 `@cluster`（exporter 拒收整個值）。
+# - 沒有叢集登錄表：叢集 ID 打錯（mariadb@wset）不會在載入時被擋，而是 Rule A 對
+#   da_cluster="wset" 響——那就是打錯字現形的方式。
+# ⚠️ 已知限制：逐叢集的判定只在序列帶 da_cluster 的地方成立，也就是中央
+#   Prometheus（federation／remote write），split 部署下告警規則本來就放在那裡。
+#   各叢集拿同一份 conf.d、各自評估規則的部署，序列上沒有 da_cluster：每個
+#   `@cluster` 條目在那裡都退化成「本地有就算有」，本地沒有這一種 exporter 時，
+#   會對該 kind【每一個】宣告的叢集各響一則（label 上是本地 Prometheus 看不到的
+#   叢集）。這種部署請只寫 kind、各叢集用自己的 conf.d（promtool L4 釘住這個行為）。
+#   同理，中央 Prometheus 若自己也直接抓租戶 exporter（序列沒有 da_cluster），那份
+#   本地序列會替所有宣告的叢集擋掉 Rule A；要逐叢集，就在那個抓取 job 上寫
+#   da_cluster（ADR-006「一台 Prometheus 直接抓好幾個叢集」，promtool L5b）。
+# Rule C 同樣逐叢集：宣告 mariadb@east、mariadb 卻在 west 回應 → 對 west 指名。
+# Rule B 刻意維持整個租戶（見該規則上方）。MassExporterOutage 仍以 (tenant, pack)
+# 為單位計數，一對宣告了三個叢集仍算一對。
+#
 # === 存在判定 ===
 # 每個 kind 讀一個「只有這種 exporter 會吐、而且每次回應 scrape 都吐」的
 # 指標，限定 job="tenant-exporters"：
@@ -56,6 +95,8 @@
 # === Label 來源 ===
 # `unless on(tenant, pack)` 保留左手邊全部 label，fired alert 帶
 # tenant + pack (來自 tenant_expected_exporter)。promtool exp_labels 驗證。
+# `kind@cluster` 的列先收成 (tenant, pack, expected_cluster) 再改寫，告警只帶
+# tenant + pack + da_cluster（宣告的叢集）。
 #
 # ⚠️ 殘餘缺口（owner 已知）：同一個 kind 有兩個 Service、其中一個全掛時，
 # 另一個 Service 的存在指標仍擋住 Absent，只剩 TenantExporterReplicaDown 的 warning。
@@ -69,7 +110,8 @@
 # 讓「有 exporter 卻沒被 liveness 納管」不再是靜默狀態。
 # ⚠️ opt-in 的反面風險是打錯字：鍵打錯會被 `_` 命名空間擋下（沒有 reader 讀的 `_`
 # 鍵是 key verdict 的 error），值由 exporter 自己判（#4097）——不是列表、不認得的
-# kind (maraidb)、重複，一律是 key verdict 在【每一層】的 error，而且整個值不送出
+# kind (maraidb)、重複、`@` 後面不是合法的叢集 ID、同一個 kind 既單獨寫又寫
+# `@cluster`，一律是 key verdict 在【每一層】的 error，而且整個值不送出
 # 任何期望（不會只送出拼對的那幾種）。已移除的 `_metadata.db_type` 同樣在每一層被擋，
 # 訊息就是遷移指示。schema（tenant-config.schema.json，check_confd_schema.py）在
 # author/CI 再擋一次。
@@ -120,23 +162,63 @@ groups:
       # tenant_expected_exporter 由 threshold-exporter 的每個副本各送一份（逐 pod
       # 抓取，#3483）：先 max without(instance, pod) 收掉，每個 (租戶, pack) 只發一則。
       # 配對鍵是 (tenant, pack)（#3771）：同租戶另一種 exporter 健康不會擋住這一種。
+      # 寫成 `kind@cluster` 的條目另外以 (tenant, pack, da_cluster) 配對（#4097，見檔頭
+      # 「逐叢集的宣告」）：同租戶另一個叢集的同一種 exporter 健康也不會擋住這個叢集。
       # expr 由 _lib_exporter_presence.py 生成（見檔頭「存在判定」），不要手改。
       - alert: TenantExporterAbsent
         expr: |
-          max without(instance, pod) (tenant_expected_exporter)
-          unless on(tenant, pack) (
-            label_replace(pg_up{job="tenant-exporters"}, "pack", "postgresql", "", "")
-            or label_replace(mysql_up{job="tenant-exporters"}, "pack", "mariadb", "", "")
-            or label_replace(redis_up{job="tenant-exporters"}, "pack", "redis", "", "")
-            or label_replace(mongodb_up{job="tenant-exporters"}, "pack", "mongodb", "", "")
-            or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "pack", "elasticsearch", "", "")
-            or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters"}, "pack", "oracle", "", "")
-            or label_replace(query_interval{query="db2_liveness", job="tenant-exporters"}, "pack", "db2", "", "")
-            or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "pack", "clickhouse", "", "")
-            or label_replace(kafka_brokers{job="tenant-exporters"}, "pack", "kafka", "", "")
-            or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "pack", "rabbitmq", "", "")
-            or label_replace(jvm_memory_used_bytes{job="tenant-exporters"} or jvm_memory_bytes_used{job="tenant-exporters"}, "pack", "jvm", "", "")
-            or label_replace(nginx_up{job="tenant-exporters"}, "pack", "nginx", "", "")
+          (
+            label_replace(
+              label_replace(
+                max by(tenant, pack, expected_cluster) (tenant_expected_exporter{expected_cluster!=""}),
+                "da_cluster", "$1", "expected_cluster", "(.+)"),
+              "expected_cluster", "", "", "")
+            unless on(tenant, pack, da_cluster) (
+              label_replace(pg_up{job="tenant-exporters"}, "pack", "postgresql", "", "")
+              or label_replace(mysql_up{job="tenant-exporters"}, "pack", "mariadb", "", "")
+              or label_replace(redis_up{job="tenant-exporters"}, "pack", "redis", "", "")
+              or label_replace(mongodb_up{job="tenant-exporters"}, "pack", "mongodb", "", "")
+              or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "pack", "elasticsearch", "", "")
+              or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters"}, "pack", "oracle", "", "")
+              or label_replace(query_interval{query="db2_liveness", job="tenant-exporters"}, "pack", "db2", "", "")
+              or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "pack", "clickhouse", "", "")
+              or label_replace(kafka_brokers{job="tenant-exporters"}, "pack", "kafka", "", "")
+              or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "pack", "rabbitmq", "", "")
+              or label_replace(jvm_memory_used_bytes{job="tenant-exporters"} or jvm_memory_bytes_used{job="tenant-exporters"}, "pack", "jvm", "", "")
+              or label_replace(nginx_up{job="tenant-exporters"}, "pack", "nginx", "", "")
+            )
+            unless on(tenant, pack) (
+              label_replace(pg_up{job="tenant-exporters", da_cluster=""}, "pack", "postgresql", "", "")
+              or label_replace(mysql_up{job="tenant-exporters", da_cluster=""}, "pack", "mariadb", "", "")
+              or label_replace(redis_up{job="tenant-exporters", da_cluster=""}, "pack", "redis", "", "")
+              or label_replace(mongodb_up{job="tenant-exporters", da_cluster=""}, "pack", "mongodb", "", "")
+              or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters", da_cluster=""}, "pack", "elasticsearch", "", "")
+              or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters", da_cluster=""}, "pack", "oracle", "", "")
+              or label_replace(query_interval{query="db2_liveness", job="tenant-exporters", da_cluster=""}, "pack", "db2", "", "")
+              or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters", da_cluster=""}, "pack", "clickhouse", "", "")
+              or label_replace(kafka_brokers{job="tenant-exporters", da_cluster=""}, "pack", "kafka", "", "")
+              or label_replace(rabbitmq_up{job="tenant-exporters", da_cluster=""} or rabbitmq_identity_info{job="tenant-exporters", da_cluster=""}, "pack", "rabbitmq", "", "")
+              or label_replace(jvm_memory_used_bytes{job="tenant-exporters", da_cluster=""} or jvm_memory_bytes_used{job="tenant-exporters", da_cluster=""}, "pack", "jvm", "", "")
+              or label_replace(nginx_up{job="tenant-exporters", da_cluster=""}, "pack", "nginx", "", "")
+            )
+          )
+          or
+          (
+            max without(instance, pod) (tenant_expected_exporter{expected_cluster=""})
+            unless on(tenant, pack) (
+              label_replace(pg_up{job="tenant-exporters"}, "pack", "postgresql", "", "")
+              or label_replace(mysql_up{job="tenant-exporters"}, "pack", "mariadb", "", "")
+              or label_replace(redis_up{job="tenant-exporters"}, "pack", "redis", "", "")
+              or label_replace(mongodb_up{job="tenant-exporters"}, "pack", "mongodb", "", "")
+              or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "pack", "elasticsearch", "", "")
+              or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters"}, "pack", "oracle", "", "")
+              or label_replace(query_interval{query="db2_liveness", job="tenant-exporters"}, "pack", "db2", "", "")
+              or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "pack", "clickhouse", "", "")
+              or label_replace(kafka_brokers{job="tenant-exporters"}, "pack", "kafka", "", "")
+              or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "pack", "rabbitmq", "", "")
+              or label_replace(jvm_memory_used_bytes{job="tenant-exporters"} or jvm_memory_bytes_used{job="tenant-exporters"}, "pack", "jvm", "", "")
+              or label_replace(nginx_up{job="tenant-exporters"}, "pack", "nginx", "", "")
+            )
           )
         for: 3m
         labels:
@@ -144,10 +226,10 @@ groups:
           maintenance: page
           tenant: "{{ $labels.tenant }}"
         annotations:
-          summary: "Exporter absent for tenant {{ $labels.tenant }} ({{ $labels.pack }})"
-          summary_zh: "租戶 {{ $labels.tenant }} ({{ $labels.pack }}) 的 exporter 缺席"
-          description: "No {{ $labels.pack }} exporter of tenant {{ $labels.tenant }} has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs {{ $labels.pack }}, remove it from _expected_exporters; if the tenant was de-provisioned, remove its conf.d entry too (otherwise this is a stale-config false positive)."
-          description_zh: "租戶 {{ $labels.tenant }} 的 {{ $labels.pack }} exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 {{ $labels.pack }}，請從 _expected_exporters 移除；若租戶已退租，請確認 conf.d 裡它的設定也一併移除 (否則這是殘留組態造成的假陽性)。"
+          summary: "Exporter absent for tenant {{ $labels.tenant }} ({{ $labels.pack }}{{ with $labels.da_cluster }}, da_cluster {{ . }}{{ end }})"
+          summary_zh: "租戶 {{ $labels.tenant }} ({{ $labels.pack }}{{ with $labels.da_cluster }}，da_cluster {{ . }}{{ end }}) 的 exporter 缺席"
+          description: "No {{ $labels.pack }} exporter of tenant {{ $labels.tenant }} has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs {{ $labels.pack }}, remove it from _expected_exporters; if the tenant was de-provisioned, remove its conf.d entry too (otherwise this is a stale-config false positive).{{ with $labels.da_cluster }} This alert carries da_cluster={{ . }}. For a kind declared per cluster ({{ $labels.pack }}@{{ . }} in _expected_exporters) that is the declared cluster no exporter answers from; the kind may be healthy in the tenant's other clusters. If {{ . }} is not a cluster the tenant runs in (a misspelt cluster id, or a cluster it left), correct or remove that entry. For a kind declared alone the label only names the Prometheus the declaration came through: no cluster has one answering.{{ end }}"
+          description_zh: "租戶 {{ $labels.tenant }} 的 {{ $labels.pack }} exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 {{ $labels.pack }}，請從 _expected_exporters 移除；若租戶已退租，請確認 conf.d 裡它的設定也一併移除 (否則這是殘留組態造成的假陽性)。{{ with $labels.da_cluster }}本告警帶 da_cluster={{ . }}。逐叢集宣告的 kind（_expected_exporters 裡的 {{ $labels.pack }}@{{ . }}）：這就是沒有 exporter 回應的那個宣告叢集，同租戶其他叢集的這一種 exporter 可能仍正常；若 {{ . }} 不是租戶所在的叢集（叢集 ID 打錯，或已撤出），請更正或移除該條目。只寫 kind 的宣告：這個 label 只代表宣告經過的是哪一台 Prometheus，意思是沒有任何叢集有這一種 exporter 在回應。{{ end }}"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
@@ -174,6 +256,15 @@ groups:
       # for:10m 吸收滾動重啟（舊 pod 終止期間 up=0）。
       # Scope: 只看值（up==0）。副本 pod 被刪、series 缺席不在此（Rule A 照舊管全部
       # 缺席；DB workload 的副本數差額由 TenantHAReplicasDegraded 從 K8s 層看）。
+      # 跨叢集（#4097）：`and on(tenant)` 的配對刻意維持整個租戶、不含 da_cluster。
+      # 「west 整個掛了、east 健康、west 的 target 仍被發現（up=0）」時，逐叢集配對
+      # 會讓 west 的右手邊為空 → 本規則不響；而只寫 kind、沒宣告叢集的租戶，Rule A
+      # 也被 east 擋住，那個租戶就完全沒有訊號。維持整個租戶，這種情形至少有本規則的
+      # warning。宣告了 `kind@cluster` 的租戶則另有 Rule A 對 west 的 critical。
+      # ⚠️ 這只在 west 的 target 仍被發現、讀到 up=0 時成立。target 本身不在了（Service
+      # 被移除）就沒有 up 序列：本規則不響，只寫 kind 的租戶 Rule A 也不響（east 滿足
+      # 它）——那種情形沒有任何訊號，要宣告 `kind@cluster` 才有。
+      # da_cluster: tenant-wide on-drops-cluster (tenant) — 另一個叢集的 up==1 也算「同租戶仍有健康 target」：只寫 kind 的租戶某個叢集全掛、其 target 仍被發現（up=0）時，這條 warning 是唯一的訊號（#4097）
       - alert: TenantExporterReplicaDown
         expr: |
           (up{job="tenant-exporters"} == 0) and on(tenant) (up{job="tenant-exporters"} == 1)
@@ -207,7 +298,13 @@ groups:
       # 回看 1 小時：exporter 全掛時不會一掛就因存在指標消失而解除、被讀成已修好
       # （promtool U5）；1 小時後仍沒回來才解除。1h 是 rule pack CI 政策允許的最長 range
       # （.github/custom-rule-policy.yaml max_range_duration，只有 GENERATED pack 可放寬）。
-      # unless on(tenant, pack) tenant_expected_exporter 拿掉宣告過的那一種。
+      # unless on(tenant, pack) tenant_expected_exporter{expected_cluster=""} 拿掉單獨
+      # 宣告過的那一種（不分叢集都算宣告）。逐叢集（#4097）：左手邊每個回應的叢集一列，
+      # `unless on(tenant, pack, da_cluster)` 拿掉「宣告了這個叢集」的那些——右手邊是
+      # `kind@cluster` 的列把 expected_cluster 抄進 da_cluster；右手邊另外帶一份沒有
+      # da_cluster 的 (tenant, pack)，所以左手邊沒有 da_cluster 的列（Prometheus 自己
+      # 抓的，說不出是哪個叢集）只要該 kind 有任何一個叢集的宣告就算宣告過。於是
+      # 「宣告 mariadb@east、mariadb 卻在 west 回應」對 west 指名（promtool L9）。
       # 守門 `and on(tenant) tenant_metadata_info`（leftouterjoin-enrichment 只准它出現在
       # and／unless 的右側）：threshold-exporter 自己掛了時 tenant_expected_exporter 整個
       # 消失，若不守門每個租戶都會被當成「沒宣告」齊響（promtool U3）；以 tenant 配對，
@@ -234,7 +331,12 @@ groups:
             or label_replace(max_over_time(rabbitmq_up{job="tenant-exporters"}[1h]) or max_over_time(rabbitmq_identity_info{job="tenant-exporters"}[1h]), "pack", "rabbitmq", "", "")
             or label_replace(max_over_time(nginx_up{job="tenant-exporters"}[1h]), "pack", "nginx", "", "")
           )
-          unless on(tenant, pack) tenant_expected_exporter
+          unless on(tenant, pack) tenant_expected_exporter{expected_cluster=""}
+          unless on(tenant, pack, da_cluster) (
+            label_replace(group by(tenant, pack, expected_cluster) (tenant_expected_exporter{expected_cluster!=""}),
+              "da_cluster", "$1", "expected_cluster", "(.+)")
+            or group by(tenant, pack) (tenant_expected_exporter{expected_cluster!=""})
+          )
           and on(tenant) tenant_metadata_info
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -244,10 +346,10 @@ groups:
           maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
-          summary: "Tenant {{ $labels.tenant }} runs a {{ $labels.pack }} exporter but does not declare {{ $labels.pack }} in _expected_exporters"
-          summary_zh: "租戶 {{ $labels.tenant }} 有 {{ $labels.pack }} exporter 在回應，但沒有在 _expected_exporters 宣告 {{ $labels.pack }}"
-          description: "A {{ $labels.pack }} exporter of tenant {{ $labels.tenant }} has answered under job=\"tenant-exporters\" within the last hour, but the tenant's _expected_exporters does not list {{ $labels.pack }}, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. Add {{ $labels.pack }} to the tenant's top-level _expected_exporters list (for example _expected_exporters: [mariadb, redis])."
-          description_zh: "租戶 {{ $labels.tenant }} 的 {{ $labels.pack }} exporter 最近一小時內在 job=\"tenant-exporters\" 下回應過，但租戶的 _expected_exporters 沒有列出 {{ $labels.pack }}，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。請把 {{ $labels.pack }} 加進租戶頂層的 _expected_exporters 列表（例如 _expected_exporters: [mariadb, redis]）。"
+          summary: "Tenant {{ $labels.tenant }} runs a {{ $labels.pack }} exporter{{ with $labels.da_cluster }} in cluster {{ . }}{{ end }} but does not declare {{ $labels.pack }}{{ with $labels.da_cluster }} for that cluster{{ end }} in _expected_exporters"
+          summary_zh: "租戶 {{ $labels.tenant }} 有 {{ $labels.pack }} exporter{{ with $labels.da_cluster }}（叢集 {{ . }}）{{ end }} 在回應，但沒有在 _expected_exporters {{ with $labels.da_cluster }}為該叢集{{ end }}宣告 {{ $labels.pack }}"
+          description: "A {{ $labels.pack }} exporter of tenant {{ $labels.tenant }} has answered under job=\"tenant-exporters\"{{ with $labels.da_cluster }} in cluster {{ . }}{{ end }} within the last hour, and no entry of the tenant's _expected_exporters covers it{{ with $labels.da_cluster }} in that cluster{{ end }}, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. What to add to the tenant's top-level _expected_exporters list depends on what the list already holds for {{ $labels.pack }}; one kind is never written in both forms (the whole list is then not read). If the list has no {{ $labels.pack }} entry at all, add {{ $labels.pack }} (for example _expected_exporters: [mariadb, redis]){{ with $labels.da_cluster }}; written alone, {{ $labels.pack }} covers every cluster but is satisfied by an exporter in any one of them. If the list already declares {{ $labels.pack }} per cluster, what to do depends on the cluster ID: when it is 1 to 63 characters of ASCII letters, digits, '.', '_' and '-', the first and the last a letter or a digit, add {{ $labels.pack }}@{{ . }}; a cluster whose ID does not match that format cannot be declared per cluster, so replace every {{ $labels.pack }}@… entry of the list with {{ $labels.pack }} written alone{{ end }}."
+          description_zh: "租戶 {{ $labels.tenant }} 的 {{ $labels.pack }} exporter 最近一小時內在 job=\"tenant-exporters\" 下{{ with $labels.da_cluster }}（叢集 {{ . }}）{{ end }}回應過，但 _expected_exporters 裡沒有任何條目涵蓋{{ with $labels.da_cluster }}叢集 {{ . }} 的{{ end }}這個 exporter，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。要在租戶頂層的 _expected_exporters 列表補什麼，看列表裡 {{ $labels.pack }} 現在怎麼寫；同一個 kind 絕不能兩種寫法並存（整個列表會不被讀取）。列表裡完全沒有 {{ $labels.pack }} 的條目：補 {{ $labels.pack }}（例如 _expected_exporters: [mariadb, redis]）{{ with $labels.da_cluster }}；單獨寫的 {{ $labels.pack }} 涵蓋所有叢集，但任何一個叢集有 exporter 回應就算存在。列表已經逐叢集宣告 {{ $labels.pack }}：看叢集 ID——是 1 到 63 個英文字母、數字、'.'、'_'、'-'，且頭尾是字母或數字時，改補 {{ $labels.pack }}@{{ . }}；ID 不符合這個格式的叢集無法逐叢集宣告，要把列表裡所有 {{ $labels.pack }}@… 的條目換成單獨寫的 {{ $labels.pack }}{{ end }}。"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

@@ -30,7 +30,21 @@ Not covered (so it does not look covered):
     healthy looks like; those cases are written out in
     rule-pack-cluster-masking_test.yaml.
   * tests whose rule_files are not all under rule-packs/, and test blocks
-    that already carry da_cluster, are skipped.
+    that already carry da_cluster, are skipped. So are blocks whose input
+    declares a cluster (`expected_cluster`, a `kind@cluster` entry of
+    `_expected_exporters`): what such a block asserts depends on which of
+    its series carry which cluster, which is what it writes out itself
+    (rule-pack-liveness-per-cluster_test.yaml).
+  * the TEXT of an alert whose annotations name the cluster (they read
+    `$labels.da_cluster`: `CLUSTER_NAMING`). Its annotations are not the
+    same with a cluster label as without one, by design, so the replay
+    checks which of them fire and with which labels — through
+    `ALERTS{alertname="X", alertstate="firing"}` — and leaves the text to
+    the tests that write the cluster out.
+  * an alert that is per cluster for one kind of input and per tenant for
+    another (its scopes are {cluster, flat}: TenantExporterAbsent) is
+    replayed as the shipped tests have it — every one of them declares the
+    kind alone, so its alerts are the per-tenant ones.
   * a pack the lint's baseline still lists (a rule that does not keep the
     label yet): a replay that differs there is an expected failure, not a pass.
   * an alert no shipped test makes FIRE is replayed to no effect.
@@ -54,6 +68,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "tools" / "lint"))
 sys.path.insert(0, str(ROOT / "scripts" / "tools"))
 import check_cluster_identity as cci  # noqa: E402
+import _lib_consumer_read  # noqa: E402
 
 PROMTOOL = shutil.which("promtool")
 TESTS = sorted((ROOT / "tests" / "rulepacks").glob("*_test.yaml"))
@@ -68,6 +83,52 @@ _ALERT_COUNT = re.compile(
 #: firing test lowers it, and either fails `test_what_the_replay_reaches` until
 #: this number says what the tree does. (#4097 tracks bringing it down.)
 UNREACHED_CEILING = 48
+
+#: Alerts whose annotations name the cluster the alert is for. Read off the
+#: rule packs (`_cluster_naming`) and held equal to this, so one cannot be
+#: added without the replay's reduced check being a decision.
+CLUSTER_NAMING = frozenset({"TenantExporterAbsent", "TenantExporterUndeclared"})
+_NAMES_CLUSTER = re.compile(r"\{\{\s*with\s+\$labels\.da_cluster\s*\}\}")
+
+
+def _cluster_naming() -> "set[str]":
+    out = set()
+    for path in _lib_consumer_read.RULE_PACKS.files_under(ROOT):
+        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for group in doc.get("groups") or []:
+            for rule in group.get("rules") or []:
+                if "alert" in rule and any(_NAMES_CLUSTER.search(str(v))
+                                           for v in (rule.get("annotations") or {}).values()):
+                    out.add(rule["alert"])
+    return out
+
+
+def test_the_alerts_that_name_the_cluster_are_the_listed_ones():
+    assert _cluster_naming() == CLUSTER_NAMING
+
+
+def _declares_a_cluster(series: "list[dict]") -> bool:
+    return any("da_cluster" in (s.get("series") or "") or "expected_cluster" in (s.get("series") or "")
+               for s in series)
+
+
+def _firing_labels_case(case: dict, clusters: "list[str]") -> dict:
+    """*case* (an alert_rule_test of a cluster-scoped alert) as a
+    promql_expr_test: the alerts that fire and their whole label sets, one
+    per cluster, without their annotations."""
+    name = case["alertname"]
+    samples = []
+    for exp in case.get("exp_alerts") or []:
+        for c in clusters:
+            labels = dict(exp.get("exp_labels") or {}, alertname=name, alertstate="firing", da_cluster=c)
+            body = ", ".join(f'{k}="{_escape(str(v))}"' for k, v in sorted(labels.items()))
+            samples.append({"labels": f"ALERTS{{{body}}}", "value": 1})
+    return {"expr": f'ALERTS{{alertname="{name}", alertstate="firing"}}',
+            "eval_time": case["eval_time"], "exp_samples": samples}
+
+
+def _escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 @pytest.fixture(scope="module")
@@ -108,7 +169,7 @@ def _replay(doc: dict, records: dict, alerts: dict, clusters: "list[str]", src: 
     kept = []
     for block in out.get("tests") or []:
         series = block.get("input_series") or []
-        if any("da_cluster" in (s.get("series") or "") for s in series):
+        if _declares_a_cluster(series):
             continue
         new_series = []
         for s in series:
@@ -130,6 +191,13 @@ def _replay(doc: dict, records: dict, alerts: dict, clusters: "list[str]", src: 
         if exprs:
             block["promql_expr_test"] = exprs
         cases = block.get("alert_rule_test") or []
+        named = [c for c in cases if c["alertname"] in CLUSTER_NAMING
+                 and alerts.get(c["alertname"]) == {cci.CLUSTER}]
+        if named:
+            cases = [c for c in cases if c not in named]
+            exprs += [_firing_labels_case(c, clusters) for c in named]
+            block["promql_expr_test"] = exprs
+            block["alert_rule_test"] = cases
         if not cases and not exprs:
             continue
         for case in cases:
@@ -205,7 +273,7 @@ def _fired_in_replayable_tests(alerts: dict) -> "set[str]":
         if not _under_rule_packs(doc, src):
             continue
         for block in doc.get("tests") or []:
-            if any("da_cluster" in (s.get("series") or "") for s in block.get("input_series") or []):
+            if _declares_a_cluster(block.get("input_series") or []):
                 continue
             for case in block.get("alert_rule_test") or []:
                 if case.get("exp_alerts"):

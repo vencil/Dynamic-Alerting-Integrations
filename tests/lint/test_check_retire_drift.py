@@ -163,6 +163,17 @@ SHAPES = {
     "application-kinds": ({"_defaults.yaml": _DEFAULTS,
                            "alpha.yaml": "tenants:\n  alpha:\n"
                                          "    _expected_exporters: [nginx, jvm]\n"}, "nginx,jvm"),
+    # #4097: an entry may be `kind@cluster`; the entries are kept as written,
+    # and the tenant is declared either way.
+    "per-cluster": ({"_defaults.yaml": _DEFAULTS,
+                     "alpha.yaml": "tenants:\n  alpha:\n"
+                                   "    _expected_exporters: [postgresql@east, postgresql@west, redis]\n"},
+                    "postgresql@east,postgresql@west,redis"),
+    # … and one kind written both alone and per cluster is not read: nothing declared.
+    "bare-and-per-cluster": ({"_defaults.yaml": _DEFAULTS,
+                              "alpha.yaml": "tenants:\n  alpha:\n"
+                                            "    _expected_exporters: [postgresql, postgresql@east]\n"},
+                             None),
     # #4097: the exporter judges the value. One it does not read — a
     # non-string entry, a kind it does not know (the v2.9 free text) — serves
     # no kind at all, so nothing is declared.

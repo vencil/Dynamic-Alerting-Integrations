@@ -157,6 +157,29 @@ describe('TenantManager — last-mile activation', () => {
     expect(domainOpts).not.toContain('finance');
   });
 
+  it('per-cluster entries: one option per KIND, the filter matches by kind, the card shows the entry as written (#4097)', async () => {
+    const base = {
+      environment: 'production', region: 'x', tier: 'tier-1', domain: 'd', owner: 'x', routing_channel: 'x',
+      operational_mode: 'normal', metric_count: 0, last_config_commit: 'x', tags: [], groups: [],
+    };
+    demoOverride.tenants = {
+      't-both': { ...base, expected_exporters: ['mariadb@east', 'mariadb@west', 'redis'] },
+      't-bare': { ...base, expected_exporters: ['mariadb'] },
+      't-other': { ...base, expected_exporters: ['kafka@east'] },
+    };
+    await renderAndSettle();
+    const select = document.getElementById('filter-expected-exporter') as HTMLSelectElement;
+    const opts = Array.from(select.options).map((o) => o.value).filter((v) => v !== '');
+    // kinds, each once — not `mariadb@east` / `mariadb@west` as two options
+    expect(opts).toEqual(['kafka', 'mariadb', 'redis']);
+    expect(screen.getAllByText('mariadb@east, mariadb@west, redis').length).toBeGreaterThan(0);
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.change(select, { target: { value: 'mariadb' } });
+    await waitFor(() => expect(screen.queryAllByText('t-other').length).toBe(0));
+    expect(screen.getAllByText('t-both').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('t-bare').length).toBeGreaterThan(0);
+  });
+
   it('still renders the fixed-enum filters (env/tier/mode) untouched', async () => {
     await renderAndSettle();
     // These stay hardcoded by design — guard against an over-broad refactor.

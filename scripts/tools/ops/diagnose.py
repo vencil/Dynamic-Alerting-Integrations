@@ -211,6 +211,9 @@ def tenant_expected_kind(tenant: str, prom_url: str) -> tuple[str | None, str | 
     #3771: a tenant may declare several kinds (one series each). The checks
     below are MariaDB's, so a tenant declaring mariadb among others reads as
     mariadb; otherwise the kinds are returned joined by "," (sorted).
+    #4097: a kind declared per cluster (`mariadb@east`, `mariadb@west`) is
+    one series per cluster, each with the same `pack` and the cluster in
+    `expected_cluster`; the kind is `pack` either way, named once.
     """
     results, err = query_prometheus(prom_url, f'tenant_expected_exporter{{tenant="{tenant}"}}')
     if err:

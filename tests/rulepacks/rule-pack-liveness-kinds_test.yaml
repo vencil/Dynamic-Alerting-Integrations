@@ -244,8 +244,8 @@ tests:
             exp_annotations:
               summary: "Tenant t-loose runs a mariadb exporter but does not declare mariadb in _expected_exporters"
               summary_zh: "租戶 t-loose 有 mariadb exporter 在回應，但沒有在 _expected_exporters 宣告 mariadb"
-              description: "A mariadb exporter of tenant t-loose has answered under job=\"tenant-exporters\" within the last hour, but the tenant's _expected_exporters does not list mariadb, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. Add mariadb to the tenant's top-level _expected_exporters list (for example _expected_exporters: [mariadb, redis])."
-              description_zh: "租戶 t-loose 的 mariadb exporter 最近一小時內在 job=\"tenant-exporters\" 下回應過，但租戶的 _expected_exporters 沒有列出 mariadb，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。請把 mariadb 加進租戶頂層的 _expected_exporters 列表（例如 _expected_exporters: [mariadb, redis]）。"
+              description: "A mariadb exporter of tenant t-loose has answered under job=\"tenant-exporters\" within the last hour, and no entry of the tenant's _expected_exporters covers it, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. What to add to the tenant's top-level _expected_exporters list depends on what the list already holds for mariadb; one kind is never written in both forms (the whole list is then not read). If the list has no mariadb entry at all, add mariadb (for example _expected_exporters: [mariadb, redis])."
+              description_zh: "租戶 t-loose 的 mariadb exporter 最近一小時內在 job=\"tenant-exporters\" 下回應過，但 _expected_exporters 裡沒有任何條目涵蓋這個 exporter，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。要在租戶頂層的 _expected_exporters 列表補什麼，看列表裡 mariadb 現在怎麼寫；同一個 kind 絕不能兩種寫法並存（整個列表會不被讀取）。列表裡完全沒有 mariadb 的條目：補 mariadb（例如 _expected_exporters: [mariadb, redis]）。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -272,8 +272,8 @@ tests:
             exp_annotations:
               summary: "Tenant t-loose runs a mariadb exporter but does not declare mariadb in _expected_exporters"
               summary_zh: "租戶 t-loose 有 mariadb exporter 在回應，但沒有在 _expected_exporters 宣告 mariadb"
-              description: "A mariadb exporter of tenant t-loose has answered under job=\"tenant-exporters\" within the last hour, but the tenant's _expected_exporters does not list mariadb, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. Add mariadb to the tenant's top-level _expected_exporters list (for example _expected_exporters: [mariadb, redis])."
-              description_zh: "租戶 t-loose 的 mariadb exporter 最近一小時內在 job=\"tenant-exporters\" 下回應過，但租戶的 _expected_exporters 沒有列出 mariadb，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。請把 mariadb 加進租戶頂層的 _expected_exporters 列表（例如 _expected_exporters: [mariadb, redis]）。"
+              description: "A mariadb exporter of tenant t-loose has answered under job=\"tenant-exporters\" within the last hour, and no entry of the tenant's _expected_exporters covers it, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. What to add to the tenant's top-level _expected_exporters list depends on what the list already holds for mariadb; one kind is never written in both forms (the whole list is then not read). If the list has no mariadb entry at all, add mariadb (for example _expected_exporters: [mariadb, redis])."
+              description_zh: "租戶 t-loose 的 mariadb exporter 最近一小時內在 job=\"tenant-exporters\" 下回應過，但 _expected_exporters 裡沒有任何條目涵蓋這個 exporter，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。要在租戶頂層的 _expected_exporters 列表補什麼，看列表裡 mariadb 現在怎麼寫；同一個 kind 絕不能兩種寫法並存（整個列表會不被讀取）。列表裡完全沒有 mariadb 的條目：補 mariadb（例如 _expected_exporters: [mariadb, redis]）。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -456,8 +456,8 @@ tests:
             exp_annotations:
               summary: "Tenant t-edge runs a nginx exporter but does not declare nginx in _expected_exporters"
               summary_zh: "租戶 t-edge 有 nginx exporter 在回應，但沒有在 _expected_exporters 宣告 nginx"
-              description: "A nginx exporter of tenant t-edge has answered under job=\"tenant-exporters\" within the last hour, but the tenant's _expected_exporters does not list nginx, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. Add nginx to the tenant's top-level _expected_exporters list (for example _expected_exporters: [mariadb, redis])."
-              description_zh: "租戶 t-edge 的 nginx exporter 最近一小時內在 job=\"tenant-exporters\" 下回應過，但租戶的 _expected_exporters 沒有列出 nginx，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。請把 nginx 加進租戶頂層的 _expected_exporters 列表（例如 _expected_exporters: [mariadb, redis]）。"
+              description: "A nginx exporter of tenant t-edge has answered under job=\"tenant-exporters\" within the last hour, and no entry of the tenant's _expected_exporters covers it, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. What to add to the tenant's top-level _expected_exporters list depends on what the list already holds for nginx; one kind is never written in both forms (the whole list is then not read). If the list has no nginx entry at all, add nginx (for example _expected_exporters: [mariadb, redis])."
+              description_zh: "租戶 t-edge 的 nginx exporter 最近一小時內在 job=\"tenant-exporters\" 下回應過，但 _expected_exporters 裡沒有任何條目涵蓋這個 exporter，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。要在租戶頂層的 _expected_exporters 列表補什麼，看列表裡 nginx 現在怎麼寫；同一個 kind 絕不能兩種寫法並存（整個列表會不被讀取）。列表裡完全沒有 nginx 的條目：補 nginx（例如 _expected_exporters: [mariadb, redis]）。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -751,7 +751,9 @@ tests:
                 More than 5 tenants AND over 10% of the declared (tenant, pack)
                 pairs (the kinds tenants list in _expected_exporters)
                 simultaneously have no exporter of that kind answering under
-                job="tenant-exporters" (that kind's presence metric absent).
+                job="tenant-exporters" (that kind's presence metric absent). A
+                kind declared per cluster (kind@cluster) is one pair however many
+                clusters it names, absent when any of them has none answering.
                 Both conditions together mean this is almost certainly a SHARED
                 failure (node pool drained, network partition, image-pull outage on a
                 rolling restart) rather than N independent exporter deaths or a

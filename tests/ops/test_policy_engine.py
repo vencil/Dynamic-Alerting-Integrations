@@ -280,6 +280,22 @@ class TestEvaluateOperator:
         assert pe._evaluate_operator("equals", ["mariadb", "oracle"], "mariadb") is False
         assert pe._evaluate_operator("contains", ["mariadb", "oracle"], "maria") is False
 
+    def test_a_per_cluster_entry_is_compared_whole(self):
+        """#4097：`_expected_exporters` 的元素是整個條目。`mariadb@east` 不等於 `mariadb`——
+        沒有「以 kind 比對」的運算子；要以 kind 為準，寫 matches。"""
+        entries = ["mariadb@east", "mariadb@west"]
+        assert pe._evaluate_operator("one_of", entries, ["mariadb", "postgresql"]) is False
+        assert pe._evaluate_operator("equals", ["mariadb@east"], "mariadb") is False
+        assert pe._evaluate_operator("not_equals", entries, "mariadb") is True
+        assert pe._evaluate_operator("one_of", entries, ["mariadb@east", "mariadb@west"]) is True
+        assert pe._evaluate_operator("matches", entries, "^mariadb(@|$)") is True
+        assert pe._evaluate_operator("matches", entries + ["redis"], "^mariadb(@|$)") is False
+        # when：任一元素成立即成立，同樣是整個條目
+        when = {"target": "_expected_exporters", "operator": "one_of", "value": ["mariadb"]}
+        assert pe._evaluate_when({"_expected_exporters": entries}, when) is False
+        when = {"target": "_expected_exporters", "operator": "matches", "value": "^mariadb(@|$)"}
+        assert pe._evaluate_when({"_expected_exporters": entries + ["redis"]}, when) is True
+
     def test_empty_list_value(self):
         """空 list：只滿足 not_equals。"""
         for op, val in [("equals", "x"), ("matches", "x"), ("one_of", ["x"]), ("contains", "x")]:

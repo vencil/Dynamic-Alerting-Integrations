@@ -1527,3 +1527,29 @@ def test_ungathered_refusal_names_every_part():
     text = tv.ungathered_refusal((tv.UngatheredPart("01:00", "01:29", "HTTP 500"),
                                   tv.UngatheredPart("22:00", "24:00", "dup")))
     assert "01:00-01:29 UTC (HTTP 500)" in text and "22:00-24:00 UTC (dup)" in text
+
+
+@pytest.mark.parametrize("entry, kind", [
+    ("mariadb@east", "mariadb"), ("redis", "redis"), ("", ""), ("@east", ""), ("a@b@c", "a")])
+def test_expected_exporter_kind_is_the_part_before_at(entry, kind):
+    """#4097: an `_expected_exporters` entry is `kind` or `kind@cluster`; a
+    consumer that asks by kind takes the part before `@` (the exporter's own
+    ExpectedExporterKind, pinned to the same cases in expected_exporters_test.go)."""
+    assert tv.expected_exporter_kind(entry) == kind
+
+
+def test_expected_exporter_kinds_names_each_kind_once_in_order():
+    assert tv.expected_exporter_kinds(["mariadb@east", "redis", "mariadb@west"]) == ["mariadb", "redis"]
+    assert tv.expected_exporter_kinds(()) == []
+
+
+def test_served_facts_carry_per_cluster_entries_as_written(tmp_path, da_guard):
+    """What da-guard serves for `_expected_exporters` is the entries as
+    written — a list of strings, the shape it always had."""
+    root = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "t1.yaml": "tenants:\n  t1:\n    _expected_exporters: [mariadb@east, mariadb@west, redis]\n",
+        "t2.yaml": "tenants:\n  t2:\n    _expected_exporters: [redis, redis@east]\n"})
+    facts = tv.load_served_facts(root, binary=da_guard)
+    assert facts.tenants["t1"].expected_exporters == ("mariadb@east", "mariadb@west", "redis")
+    assert facts.tenants["t2"].expected_exporters == ()

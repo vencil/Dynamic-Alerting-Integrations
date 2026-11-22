@@ -541,6 +541,58 @@ func TestSnapshotCache_InvalidateForcesRebuild(t *testing.T) {
 	}
 }
 
+// #4097: an entry may be `kind@cluster`. The row carries the entries as
+// written; the filter compares BY KIND when it is a kind (so a tenant that
+// declares mariadb only per cluster is found by `mariadb`), and by the whole
+// entry when it carries `@`. A value that mixes the two forms of one kind is
+// not read: it lists and matches nothing.
+func TestSearchTenants_ExpectedExportersFilterPerClusterEntries(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{
+		"both.yaml":  fixtureTenantYAML("both", "prod", "tier1", "db", "[mariadb@east, mariadb@west, redis]", "alice"),
+		"east.yaml":  fixtureTenantYAML("east", "prod", "tier1", "db", "[mariadb@east]", "alice"),
+		"bare.yaml":  fixtureTenantYAML("bare", "prod", "tier1", "db", "[mariadb]", "alice"),
+		"mixed.yaml": fixtureTenantYAML("mixed", "prod", "tier1", "db", "[mariadb, mariadb@east]", "alice"),
+		"other.yaml": fixtureTenantYAML("other", "prod", "tier1", "db", "[redis@east]", "alice"),
+	})
+	ids := func(query string) []string {
+		resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, query)
+		got := []string{}
+		for _, it := range resp.Items {
+			got = append(got, it.ID)
+		}
+		return got
+	}
+	for query, want := range map[string][]string{
+		"expected_exporters=mariadb":                {"bare", "both", "east"},
+		"expected_exporters=redis":                  {"both", "other"},
+		"expected_exporters=" + "mariadb%40east":    {"both", "east"},
+		"expected_exporters=" + "mariadb%40west":    {"both"},
+		"expected_exporters=" + "mariadb%40south":   {},
+		"expected_exporters=" + "mariadb%40":        {},
+		"expected_exporters=" + "%40east":           {},
+		"expected_exporters=east":                   {},
+		"expected_exporters=" + "maria%40east":      {},
+		"expected_exporters=" + "mariadb%40eas":     {},
+		"expected_exporters=" + "redis%40east":      {"other"},
+		"q=" + "%40west":                            {"both"},
+		"q=mariadb&expected_exporters=redis":        {"both"},
+		"expected_exporters=" + "mariadb%40east&q=": {"both", "east"},
+	} {
+		if got := ids(query); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s matched %v, want %v", query, got, want)
+		}
+	}
+	resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=50")
+	want := map[string][]string{"both": {"mariadb@east", "mariadb@west", "redis"}, "east": {"mariadb@east"},
+		"bare": {"mariadb"}, "mixed": nil, "other": {"redis@east"}}
+	for _, it := range resp.Items {
+		if !reflect.DeepEqual(it.ExpectedExporters, want[it.ID]) {
+			t.Errorf("%s expected_exporters = %v, want %v (as written)", it.ID, it.ExpectedExporters, want[it.ID])
+		}
+	}
+}
+
 // #4097: the `db_type` filter was renamed to `expected_exporters`, not
 // aliased. A query that still sends it is refused — ignoring the parameter
 // would answer a filtered query with every tenant.

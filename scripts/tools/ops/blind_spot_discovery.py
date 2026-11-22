@@ -41,6 +41,7 @@ from _lib_python import (  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
     ServedValuesError,
     exit_on_served_values_error,
+    expected_exporter_kinds,
     load_served_facts,
     print_load_warnings,
 )
@@ -137,7 +138,10 @@ def load_declared_kinds(config_dir):
     Files the load serves no tenant from are named on stderr, after whatever
     da-guard prints on stderr (line by line, each behind `DA_GUARD_PREFIX`).
     da-guard missing or failing, a file the load cannot decode, or declared
-    kinds that are not a list of strings raises (the CLI exits 2). So does
+    kinds that are not a list of strings raises (the CLI exits 2). An entry
+    may be `kind@cluster` (#4097): the kind it declares is the part before
+    `@` — this tool compares kinds, and a kind declared for one cluster is
+    a kind the tenant is monitored for. So does
     a *config_dir* that is not there or not a directory (#3392) — judged by
     `main` (`_lib_parse_cache.declared_trees`, #3751), never again here.
     """
@@ -151,7 +155,7 @@ def load_declared_kinds(config_dir):
                 f"da-guard served-values: tenant '{shown_key(t_name)}' carries "
                 f"expected_exporters that are not a list of strings "
                 f"({type(declared).__name__})", None, "")
-        for kind in declared:
+        for kind in expected_exporter_kinds(declared):
             result.setdefault(kind, set()).add(t_name)
 
     return result
