@@ -96,6 +96,9 @@ _PROJECTION_SETS = {
     "tenantProjections[0].accountId": "1000",
     "tenantProjections[1].tenantId": "tenant-beta",
     "tenantProjections[1].accountId": "1001",
+    # ADR-021 tenant-selected visibility: tenant-beta narrows its copy,
+    # tenant-alpha keeps the default — projection_tests.yaml runs both.
+    "tenantProjections[1].visibleFields": "{status,path}",
     # #908 PR-2: the projection gate's init-container needs the conf.d registry
     # ConfigMap; the chart `required`s it whenever tenantProjections is set, so
     # every projection-enabled render must provide it.
@@ -205,7 +208,9 @@ class TestProjectionDisabledByDefault:
         assert cfg["sources"].get("internal_metrics", {}).get("type") == "internal_metrics"
         prom = cfg["sinks"].get("prometheus") or {}
         assert prom.get("type") == "prometheus_exporter", sorted(cfg["sinks"])
-        assert prom.get("inputs") == ["internal_metrics"]
+        # internal_metrics + the ADR-021 stamp-miss counter
+        # (TenantProjectionStampMissing reads it; see TestStampMissCounter).
+        assert prom.get("inputs") == ["internal_metrics", "tenant_stamp_missed"]
         assert prom.get("address") == "0.0.0.0:9598"
         ds = next(d for d in docs if d.get("kind") == "DaemonSet")
         vec = next(c for c in ds["spec"]["template"]["spec"]["containers"] if c["name"] == "vector")
@@ -365,6 +370,75 @@ class TestProjectionEnabledShape:
         assert "duplicate tenantId" in r.stderr
 
     @_needs_helm
+    def test_visible_fields_outside_allowlist_fails_render(self, repo_root: Path) -> None:
+        """ADR-021 tenant-selected visibility can only NARROW the allowlist: a
+        visibleFields entry outside tenantProjectionKeepFields (here the backend
+        IP field the allowlist exists to drop) must fail the render, not be
+        silently accepted."""
+        r = _render_result(repo_root / "helm/vector", sets={
+            **_PROJECTION_SETS,
+            "tenantProjections[1].visibleFields": "{status,upstream}",
+        })
+        assert r.returncode != 0, "a visibleFields entry outside the allowlist must not render"
+        assert "not in tenantProjectionKeepFields" in r.stderr, r.stderr
+
+    @_needs_helm
+    def test_always_visible_set_is_not_configurable(self, repo_root: Path) -> None:
+        """tenant-api offers tenants exactly keepFields − tenantProjectionAlwaysVisibleFields
+        as selectable, so changing the always-visible set would silently override
+        their selections: adding `query` keeps a field a tenant dropped, removing
+        `log_event_id` drops the 0:0 join key. Either must fail the render; the
+        same set in another order renders."""
+        for override in ("{tenant_id,log_type,log_event_id,timestamp,query}",
+                         "{tenant_id,log_type,timestamp}",
+                         "{}"):
+            r = _render_result(repo_root / "helm/vector", sets={
+                **_PROJECTION_SETS, "tenantProjectionAlwaysVisibleFields": override})
+            assert r.returncode != 0, f"override {override} must not render"
+            assert "tenantProjectionAlwaysVisibleFields must be exactly" in r.stderr, r.stderr
+        r = _render_result(repo_root / "helm/vector", sets={
+            **_PROJECTION_SETS,
+            "tenantProjectionAlwaysVisibleFields": "{timestamp,log_event_id,log_type,tenant_id}"})
+        assert r.returncode == 0, r.stderr
+
+    @_needs_helm
+    def test_missing_always_visible_key_renders_like_default(self, repo_root: Path) -> None:
+        """`helm upgrade --reuse-values` from a chart before
+        tenantProjectionAlwaysVisibleFields existed carries no such key. That
+        must mean the fixed set — the render (narrowing VRL included, the
+        fixture has a visibleFields tenant) is identical to the default one —
+        not "nothing is always visible" and not a render failure. `--set
+        key=null` deletes the key, which is the state reuse-values leaves."""
+        default = _render_result(repo_root / "helm/vector", sets=_PROJECTION_SETS)
+        missing = _render_result(repo_root / "helm/vector", sets={
+            **_PROJECTION_SETS, "tenantProjectionAlwaysVisibleFields": "null"})
+        assert default.returncode == 0, default.stderr
+        assert missing.returncode == 0, missing.stderr
+        assert missing.stdout == default.stdout
+        # ...and with no visibleFields anywhere it also renders (no guard trip).
+        plain = {k: v for k, v in _PROJECTION_SETS.items() if "visibleFields" not in k}
+        r = _render_result(repo_root / "helm/vector", sets={
+            **plain, "tenantProjectionAlwaysVisibleFields": "null"})
+        assert r.returncode == 0, r.stderr
+
+    @_needs_helm
+    def test_visible_fields_narrowing_only_iterates_the_allowlist(self, repo_root: Path) -> None:
+        """The narrowing condition is attached to allowlist copies only: every
+        `kept.<f> = .<f>` line still comes from tenantProjectionKeepFields, and
+        always-visible fields carry no narrowing condition."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
+        vrl = cfg["transforms"]["tenant_project"]["source"]
+        values = yaml.safe_load((repo_root / "helm/vector/values.yaml").read_text(encoding="utf-8"))
+        keep = values["tenantProjectionKeepFields"]
+        always = values["tenantProjectionAlwaysVisibleFields"]
+        copied = re.findall(r"^\s*kept\.(\w+) = \.\1$", vrl, flags=re.M)
+        assert sorted(copied) == sorted(keep), "only allowlisted fields may be copied"
+        assert '"tenant-beta": ["status","path"]' in vrl, "selection rendered into the map"
+        for f in keep:
+            narrowed = f'if exists(.{f}) && (!narrow || includes(visible, "{f}")) {{' in vrl
+            assert narrowed == (f not in always), f"{f}: narrowing condition {'missing' if not narrowed else 'on an always-visible field'}"
+
+    @_needs_helm
     def test_noninteger_accountid_fails_schema(self, repo_root: Path) -> None:
         """values.schema.json constrains accountId to integer — a quoted/typo'd
         id (which would render an invalid VRL identifier → silent empty
@@ -389,6 +463,108 @@ class TestProjectionEnabledShape:
         # Eligibility + fail-closed aborts present.
         assert 'if .log_type != "federation_audit"' in vrl
         assert "abort" in vrl
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Should-have-been-stamped counter (ADR-021 §日誌進入端的契約)
+#
+# tenant_stamp_check → tenant_stamp_missed (log_to_metric) → the prometheus
+# exporter, read by TenantProjectionStampMissing. The behaviour (which rows
+# count, under which reason) is pinned by the `stamp-miss:` cases in
+# projection_tests.yaml; these pin the wiring the behaviour depends on.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _account_map_block(vrl: str) -> str:
+    m = re.search(r"account_map = \{(.*?)\n\s*\}", vrl, re.S)
+    assert m, "no account_map literal in the VRL"
+    return "\n".join(line.strip() for line in m.group(1).strip().splitlines())
+
+
+class TestStampMissCounter:
+    @_needs_helm
+    def test_counter_uses_the_same_map_tenant_project_stamps_from(self, repo_root: Path) -> None:
+        """"Not stamped" must mean exactly "tenant_project did not find the
+        tenant_id". The two transforms each render the map from
+        tenantProjections; if they ever diverge, the counter either misses real
+        misses or counts rows that were projected."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
+        project = _account_map_block(cfg["transforms"]["tenant_project"]["source"])
+        check = _account_map_block(cfg["transforms"]["tenant_stamp_check"]["source"])
+        assert project == check
+        assert '"tenant-alpha": 1000,' in check
+
+    @_needs_helm
+    def test_counter_is_rendered_without_any_projection(self, repo_root: Path) -> None:
+        """No tenantProjections is the case where EVERY logs-token row misses
+        its partition, so the counter must exist then too (empty map)."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector"))
+        assert "tenant_project" not in cfg["transforms"]
+        check = cfg["transforms"]["tenant_stamp_check"]
+        assert re.search(r"account_map = \{\s*\}", check["source"]), "empty map expected"
+
+    @_needs_helm
+    def test_counter_reads_demux_and_feeds_only_the_exporter(self, repo_root: Path) -> None:
+        """The check is a side branch: it reads demux and its output may reach
+        the metrics exporter only, never a store sink (it would write a
+        `{reason}` row into the log store)."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
+        check = cfg["transforms"]["tenant_stamp_check"]
+        assert check["type"] == "remap"
+        assert check["inputs"] == ["demux"]
+        assert check["drop_on_abort"] is True and check["reroute_dropped"] is False
+        missed = cfg["transforms"]["tenant_stamp_missed"]
+        assert missed["type"] == "log_to_metric"
+        assert missed["inputs"] == ["tenant_stamp_check"]
+        (metric,) = missed["metrics"]
+        assert metric["type"] == "counter"
+        assert (metric["namespace"], metric["name"]) == (
+            "vector", "tenant_projection_stamp_missed_events_total"), (
+            "TenantProjectionStampMissing selects this exact name")
+        assert metric["tags"] == {"reason": "{{ reason }}"}
+        consumers = {name for section in ("transforms", "sinks")
+                     for name, comp in cfg[section].items()
+                     if {"tenant_stamp_check", "tenant_stamp_missed"} & set(comp.get("inputs") or [])}
+        assert consumers == {"tenant_stamp_missed", "prometheus"}, consumers
+
+    @_needs_helm
+    @pytest.mark.parametrize("interval,ok", [
+        (None, True), ("15s", True), ("30s", True), ("500ms", True),
+        ("31s", False), ("60s", False), ("1m", False), ("5m", False),
+        ("1m30s", False), ("fast", False),
+    ])
+    def test_servicemonitor_interval_must_fit_the_counter_lifetime(
+            self, repo_root: Path, interval: str | None, ok: bool) -> None:
+        """The exporter drops the stamp-miss series 60-120s after its last
+        increment; a scrape interval of 60s or more can miss a first miss
+        entirely. The ServiceMonitor refuses anything above 30s (two scrapes
+        inside the shortest lifetime); the chart default 15s must pass."""
+        sets = {"serviceMonitor.enabled": "true"}
+        if interval is not None:
+            sets["serviceMonitor.interval"] = interval
+        r = _render_result(repo_root / "helm/vector", sets=sets)
+        if ok:
+            assert r.returncode == 0, r.stderr
+        else:
+            assert r.returncode != 0, f"{interval} must be refused"
+            assert "serviceMonitor.interval" in r.stderr, r.stderr
+
+    @_needs_helm
+    def test_servicemonitor_interval_is_not_checked_without_the_counter(self, repo_root: Path) -> None:
+        """With metrics off there is no counter (only the gate exposer), so a
+        slow interval is the operator's business."""
+        r = _render_result(repo_root / "helm/vector", sets={
+            **_PROJECTION_SETS, "serviceMonitor.enabled": "true",
+            "metrics.enabled": "false", "serviceMonitor.interval": "5m"})
+        assert r.returncode == 0, r.stderr
+
+    @_needs_helm
+    def test_counter_is_absent_when_metrics_are_off(self, repo_root: Path) -> None:
+        """metrics.enabled=false renders no exporter; a log_to_metric with no
+        consumer would only cost CPU, so the branch goes with it."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets={"metrics.enabled": "false"}))
+        assert "tenant_stamp_check" not in cfg["transforms"]
+        assert "tenant_stamp_missed" not in cfg["transforms"]
+        assert "prometheus" not in cfg["sinks"]
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -125,7 +125,7 @@ lang: zh
 :   負責部署、維運平台基礎設施與路由的角色 persona。與 Domain Expert、Tenant 並列三大使用者角色，見角色指南。
 
 **Profile Builder**
-:   da-portal 的互動式路由 profile 產生工具（JSX），協助以視覺化方式組裝 Routing Profile 與 Domain Policies。
+:   客戶導入管線中的 Go library（`internal/profile`：`BuildProposals`／`EmitProposals`），把相似的告警規則聚類，提出 `_defaults.yaml` 與租戶 override 的候選（[ADR-018](adr/018-profile-as-directory-default.md)）。目前沒有接到任何 CLI，見 [`batch-pr`](cli-reference.md#batch-pr)。
 
 **Projected Volume**
 :   Kubernetes Volume 類型，可將多個 ConfigMap 掛載至同一目錄。本平台用於將所有 Rule Pack ConfigMap 掛載至 Prometheus 的 rules 目錄，每個設定 `optional: true`。

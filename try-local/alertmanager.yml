@@ -38,8 +38,8 @@ inhibit_rules:
     equal: ['tenant']
   # Severity Dedup: when a critical fires, suppress the paired warning for the
   # same tenant + metric_group — the direct critical→warning form the platform
-  # actually deploys (docs/design/config-driven.md §2.8; k8s renders ONE such
-  # rule for every tenant via generate_alertmanager_routes.py, #3899 — this one,
+  # actually deploys (docs/design/config-driven.md §2.8; k8s renders the same two
+  # rules for every tenant via generate_alertmanager_routes.py, #3899 — these,
   # plus a tenant!~ list of the tenants set to "disable").
   #
   # NOT the TenantSeverityDedupEnabled sentinel: a sentinel source can only say
@@ -57,6 +57,14 @@ inhibit_rules:
   # static rule has no such list and never consults _severity_dedup — dedup
   # always applies. Both demo tenants use the default ("enable") so the demo
   # matches prod, but a hand-edited "disable" would NOT take effect here.
-  - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"', 'tenant =~ ".+"']
-    target_matchers: ['severity = "warning"', 'metric_group =~ ".+"', 'tenant =~ ".+"']
+  #
+  # Two rules (#4097): a tenant may run in several clusters, and a critical in
+  # one of them must not hide another cluster's warning. Alerts that carry
+  # da_cluster (every Prometheus sets it under external_labels, ADR-006) pair
+  # inside one cluster; alerts that carry none pair as they did before.
+  - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"', 'tenant =~ ".+"', 'da_cluster =~ ".+"']
+    target_matchers: ['severity = "warning"', 'metric_group =~ ".+"', 'tenant =~ ".+"', 'da_cluster =~ ".+"']
+    equal: ['tenant', 'metric_group', 'da_cluster']
+  - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"', 'tenant =~ ".+"', 'da_cluster = ""']
+    target_matchers: ['severity = "warning"', 'metric_group =~ ".+"', 'tenant =~ ".+"', 'da_cluster = ""']
     equal: ['tenant', 'metric_group']

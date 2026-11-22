@@ -312,8 +312,8 @@ def test_domain_check_unparseable_host_still_blocks(mods):
 
 
 def test_non_dropped_lines_stay_unmarked(mods):
-    """The INFO dedup line (#3899: a tenant excluded from the one dedup
-    rule) drops no entry: it is never blocking."""
+    """The INFO dedup line (#3899: a tenant excluded from the dedup
+    rules) drops no entry: it is never blocking."""
     gv, gar = mods[0], mods[1]
     _rules, warns = gar.generate_inhibit_rules({"t1": "disable"})
     assert any("excluded from the severity dedup inhibit rule" in w

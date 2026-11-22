@@ -12,16 +12,17 @@ updated_at: 2026-05-19
 
 # 租戶 Offboarding Runbook — Federation 清理
 
-> 移除一個租戶時，**federation 的兩樣東西不會隨租戶設定檔 `conf.d/<tenant>.yaml`（或 `.yml`）一起消失**，必須手動清掉，否則留下殭屍憑證與孤兒 subset 紀錄。本 runbook 是 ADR-020 §Token 的 offboarding 收尾程序（issue [#521](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/521)）。
+> 移除一個租戶時，**federation 的三樣東西不會隨租戶設定檔 `conf.d/<tenant>.yaml`（或 `.yml`）一起消失**，必須手動清掉，否則留下殭屍憑證與孤兒 subset／日誌可見度紀錄。本 runbook 是 ADR-020 §Token 的 offboarding 收尾程序（issue [#521](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/521)）。
 
 ## 背景：為什麼 offboarding 不會自動清乾淨
 
-租戶 offboarding 在本平台是一個 **git 操作** —— 移除該租戶的設定檔 `conf.d/<tenant>.yaml`（或 `.yml`，副檔名不分大小寫）。但 federation 有兩樣東西**不在**租戶設定檔裡，所以不會被一併帶走：
+租戶 offboarding 在本平台是一個 **git 操作** —— 移除該租戶的設定檔 `conf.d/<tenant>.yaml`（或 `.yml`，副檔名不分大小寫）。但 federation 有三樣東西**不在**租戶設定檔裡，所以不會被一併帶走：
 
 | 殘留物 | 存放處 | 不清會怎樣 |
 |---|---|---|
 | **federation token records** | `tenant-federation-store` ConfigMap（runtime state，ADR-020 §Token）| token 在密碼學上仍合法、gateway 仍會驗過 —— 殭屍憑證，直到 4h TTL 到期 |
 | **federation subset 紀錄** | tenant-api state store 的 `_federation.<tenant>.yaml`（Kubernetes 上是 `tenant-api-state` ConfigMap 的 key；per-tenant 指標子集，ADR-020 §隔離與治理的分界；[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）| 孤兒紀錄永久殘留；若日後 tenant id 被重用，會變成意外的既存狀態 |
+| **日誌可見度選擇紀錄** | tenant-api state store 的 `_log_visibility.<tenant>.yaml`（per-tenant 日誌欄位選擇，ADR-021 §租戶自選的可見度子集）| 同上；孤兒偵測不涵蓋它。tenant id 被重用時，新租戶繼承的是一份只會縮小可見欄位的選擇 |
 
 風險等級 **低**：殭屍 token 對已刪租戶注入 `{tenant="X"}` 只會回空集（無 live 資料外洩），且受 gateway per-token / per-tenant 限流約束 —— 屬 offboarding-completeness / 合規問題。但「低」不等於「可略過」：稽核（SOC 2 / ISO 27001）會檢查 offboarding 流程是否完整。
 
@@ -30,7 +31,7 @@ updated_at: 2026-05-19
 - 你要 offboard 的租戶 id（以下記為 `<tenant>`）。
 - portal 的登入與對該租戶的 admin 權限：撤銷 token 在 portal 的 Tenant Manager 操作（經 oauth2-proxy 的互動式登入即可 —— 不需要任何帶外憑證）。
 - conf.d repo 的寫入權（offboarding 的 git PR）。
-- 對 tenant-api namespace 裡 `tenant-api-state` ConfigMap 的 `patch` 權限（步驟 2；tenant-api 沒有刪除 subset 的 API）。
+- 對 tenant-api namespace 裡 `tenant-api-state` ConfigMap 的 `patch` 權限（步驟 2；tenant-api 沒有刪除 subset 或日誌可見度紀錄的 API）。
 
 ## 步驟
 
@@ -58,6 +59,8 @@ kubectl -n tenant-api patch configmap tenant-api-state --type=json \
 
 並非每個租戶都有 subset（只有曾經設定過 federation 指標子集的租戶才有）。第一行印不出內容就跳過——對不存在的 key 做 `remove`，patch 會失敗。單機（try-local，`TA_STATE_STORE=dir`）則是刪掉 state 目錄裡的 `_federation.<tenant>.yaml` 檔。
 
+日誌可見度選擇（ADR-021 [§租戶自選的可見度子集](../adr/021-tenant-log-query-federation.md)）同理存在 `_log_visibility.<tenant>.yaml`，用同樣兩行把 key 換成 `_log_visibility\.<tenant>\.yaml`（`get`）與 `/data/_log_visibility.<tenant>.yaml`（`remove`）；沒設定過選擇的租戶沒有這個 key。孤兒偵測（`tenant_api_federation_orphaned_*`）目前不涵蓋它。
+
 ⚠️ conf.d 若還留著搬遷前的 `conf.d/_federation/<tenant>.yaml`（或 `.yml`），也在步驟 3 的同一個 PR 裡 `git rm`：tenant-api 啟動時會把 conf.d 裡的舊 subset 檔匯入 state store 中**沒有**該紀錄的位置，所以只刪 key、不刪舊檔，下次重啟它會回來。
 
 > **平台 whitelist（`_federation_policy.yaml` 紀錄）不要動** —— 那是平台層級的、不隨單一租戶 offboarding 改變。只刪 per-tenant 的 `_federation.<tenant>.yaml`。
@@ -73,10 +76,14 @@ git rm <上一步列出的每個路徑>
 
 步驟 3（以及步驟 2 提到的舊 subset 檔）在同一個 commit、走同一次 PR review。
 
+### 3b. 有日誌投影的租戶：從 `tenantProjections` 移除
+
+租戶若有日誌 AccountID（ADR-021），把它從 `helm/vector` 的 `tenantProjections` 拿掉、升級 chart；AccountID 留在帳本 `_account_registry.yaml`、**永不回收**（ADR-021 §AccountID 配發規則）。⚠️ **順序：先做完步驟 1，等過最終一致性窗口（見下）再移除**。撤銷還沒傳到 gateway 時，舊 logs token 的請求仍會被轉給日誌庫，它們的稽核列帶著 `account_id` 卻已沒有分區，會觸發 `TenantProjectionStampMissing`（`not_projected`）。撤銷生效後的請求由 gateway 直接回 403、沒有 upstream，不計入該告警（[`platform-log-aggregation-runbook.md`](platform-log-aggregation-runbook.md) §8.7）。
+
 ### 4. 驗證
 
 - portal 的 **Federation tokens（依租戶 ID）** 輸入 `<tenant>`，顯示沒有未過期的 token。
-- `tenant-api-state` ConfigMap 已沒有 `_federation.<tenant>.yaml` 這個 key。
+- `tenant-api-state` ConfigMap 已沒有 `_federation.<tenant>.yaml` 與 `_log_visibility.<tenant>.yaml` 這兩個 key。
 - `conf.d/` 與 `conf.d/_federation/` 底下都已沒有主檔名為 `<tenant>` 的 `.yaml`／`.yml` 檔（任何副檔名大小寫）。
 - 等過最終一致性窗口後（見下），舊 token 打 gateway 應回 `403`。
 

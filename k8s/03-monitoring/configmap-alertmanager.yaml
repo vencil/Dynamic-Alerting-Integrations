@@ -12,7 +12,8 @@ data:
     # Alertmanager notification templates with fallback logic:
     # - Prefer *_zh annotations when available (Chinese)
     # - Fall back to English if *_zh is not set
-    # Pattern: {{ or .CommonAnnotations.annotation_zh .CommonAnnotations.annotation }}
+    # Pattern, per alert inside {{ range .Alerts }}:
+    #   {{ or .Annotations.annotation_zh .Annotations.annotation }}
     # Receiver-specific templates override the defaults below
     templates: []  # Built-in templates only, no custom template files in this MVP
 
@@ -151,12 +152,13 @@ data:
         # pattern), not sentinel delivery.
 
     inhibit_rules:
-      # Severity Dedup (critical suppresses warning of the same tenant and
-      # metric_group) is NOT written here: the generator renders ONE rule
+      # Severity Dedup (critical suppresses warning of the same tenant,
+      # metric_group and cluster) is NOT written here: the generator renders
+      # its two rules (alerts that carry da_cluster / alerts that do not, #4097)
       # from conf.d into the OUTPUT (`generate_alertmanager_routes.py
       # --config-dir conf.d/ --output-configmap --base-config <this
       # alertmanager.yml>`, #1211), with `_severity_dedup: "disable"` tenants
-      # in its `tenant!~` list (#3899). This file is the SOURCE it merges
+      # in their `tenant!~` list (#3899). This file is the SOURCE it merges
       # into, and the generator's rule kept here would be merged as written —
       # deduping tenants whatever conf.d says — so the merge refuses a source
       # that holds the generator's own rule shape
@@ -189,7 +191,15 @@ data:
       # alert_source="platform" are excluded. Watchdog is unaffected either way —
       # severity=none never matched the warning/critical targets.
       #
-      # Only THESE TWO rules need it. The generated severity-dedup rule and the
+      # ⛔ Silent Mode stays TENANT-WIDE: `equal` is [tenant], never da_cluster.
+      # A sentinel is computed from threshold-exporter series, so the da_cluster
+      # it carries only says which Prometheus evaluated it, while the alert it
+      # silences carries the cluster its series came from (ADR-006). With
+      # da_cluster in `equal` a tenant's silence would hold in one cluster only.
+      # The same goes for CustomRecipeSilent below. Pinned by
+      # tests/alertmanager-inhibit (…_in_another_cluster).
+      #
+      # Only THESE TWO rules need it. The generated severity-dedup rules and the
       # CustomRecipeSilent rule below are already immune for structural reasons:
       # the dedup target requires metric_group=~".+" and ZERO platform alerts
       # carry metric_group; CustomRecipeSilent targets component="custom" and no
@@ -247,26 +257,32 @@ data:
 
   # v2.0.0 Bilingual Notification Templates (i18n)
   # Templates with fallback logic: prefer Chinese (*_zh) → fall back to English
-  # Pattern: {{ $var := or .CommonAnnotations.annotation_zh .CommonAnnotations.annotation }}
+  # Pattern, per alert inside {{ range .Alerts }}:
+  #   {{ or .Annotations.annotation_zh .Annotations.annotation }}
   #
-  # These templates are used by receivers (email, webhook, slack, teams, pagerduty).
+  # One notification can hold several alerts (several instances, or several
+  # clusters of one tenant — each alert carries its cluster in the da_cluster
+  # label). .CommonAnnotations / .CommonLabels hold only what is identical
+  # across them, so an annotation that differs between the alerts prints as
+  # empty there. The examples therefore list each alert.
+  #
+  # These templates are used by receivers (email, slack, teams, pagerduty).
   # Alertmanager evaluates templates at notification time, using the {{or}} function
   # to prefer Chinese annotations when available.
   #
   # Receiver-specific usage:
   #   - Email: use in 'headers' and 'text'/'html' fields
-  #   - Webhook: use in custom request body (tenant-defined JSON)
+  #   - Webhook: Alertmanager's standard JSON payload; it carries every alert's labels and annotations
   #   - Slack: use in 'title' and 'text' fields
   #   - Teams: use in 'title' and 'text' fields
   #   - PagerDuty: use in 'description' field
   #
   # Example email_template.html:
-  #   {{ $summary := or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
-  #   {{ $description := or .CommonAnnotations.description_zh .CommonAnnotations.description }}
-  #   {{ $platformSummary := or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
-  #   <h2>{{ $summary }}</h2>
-  #   <p>{{ $description }}</p>
-  #   <p><strong>Platform Perspective:</strong> {{ $platformSummary }}</p>
+  #   {{ range .Alerts }}
+  #   <h2>{{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}</h2>
+  #   <p>{{ or .Annotations.description_zh .Annotations.description }}</p>
+  #   <p><strong>Platform Perspective:</strong> {{ or .Annotations.platform_summary_zh .Annotations.platform_summary }}</p>
+  #   {{ end }}
   #
   # Rules for Rule Pack authors:
   #   - Always provide 'summary' and 'description' (English)
@@ -279,44 +295,64 @@ data:
 
     ## Annotation Fallback Pattern
 
-    For each annotation, use the Go template `or` function to prefer Chinese:
+    For each annotation, use the Go template `or` function to prefer Chinese.
+    Read it per alert, inside `{{ range .Alerts }}`:
 
     ```
-    {{ $summary := or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
-    {{ $description := or .CommonAnnotations.description_zh .CommonAnnotations.description }}
-    {{ $platformSummary := or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
+    {{ range .Alerts -}}
+    {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+    {{ or .Annotations.description_zh .Annotations.description }}
+    {{ or .Annotations.platform_summary_zh .Annotations.platform_summary }}
+    {{ end }}
     ```
+
+    One notification can hold several alerts (several instances, or several
+    clusters of one tenant; `da_cluster` is the alert's cluster). With
+    `send_resolved`, it can hold a resolved alert next to one that still
+    fires, so each line prints the alert's own `.Status`.
+    `.CommonAnnotations` and `.CommonLabels` hold only what is identical across
+    them, so an annotation that differs between the alerts prints as empty
+    there. `.GroupLabels` holds only the labels listed in the route's
+    `group_by`.
 
     ## Receiver-Specific Examples
 
     ### Email (text)
     ```
-    Summary: {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
-    Description: {{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}
-    Platform View: {{ or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
-    Severity: {{ .GroupLabels.severity }}
-    Tenant: {{ .GroupLabels.tenant }}
+    {{ .Status | toUpper }}: {{ .CommonLabels.alertname }}
+    Tenant: {{ .CommonLabels.tenant }}
+    {{ range .Alerts -}}
+    {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }} {{ .Labels.severity }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+    {{ or .Annotations.description_zh .Annotations.description }}
+    {{ end }}
     ```
 
     ### Slack
     ```
-    title: "{{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}"
-    text: |
-      *Severity:* {{ .GroupLabels.severity | toUpper }}
-      *Tenant:* {{ .GroupLabels.tenant }}
-      *Description:* {{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}
-      *Platform Summary:* {{ or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
+    title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.tenant }})'
+    text: |-
+      {{ range .Alerts -}}
+      {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }} {{ .Labels.severity }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+      {{ or .Annotations.description_zh .Annotations.description }}
+      {{ end }}
     ```
 
     ### Webhook (JSON)
+
+    The platform's `webhook` receiver type sends Alertmanager's standard
+    JSON payload, and each entry of `alerts` carries that alert's labels (including
+    `da_cluster`) and all its annotations; the receiving end picks
+    `summary_zh` or `summary` per alert:
+
     ```json
     {
-      "alert": "{{ .GroupLabels.alertname }}",
-      "summary": "{{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}",
-      "description": "{{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}",
-      "platform_summary": "{{ or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}",
-      "severity": "{{ .GroupLabels.severity }}",
-      "tenant": "{{ .GroupLabels.tenant }}"
+      "status": "firing",
+      "alerts": [
+        {
+          "labels": {"alertname": "...", "tenant": "...", "severity": "warning", "da_cluster": "east"},
+          "annotations": {"summary": "...", "summary_zh": "...", "description": "...", "description_zh": "..."}
+        }
+      ]
     }
     ```
 
@@ -350,7 +386,13 @@ data:
     # These examples show how to configure different receiver types
     # to use the bilingual annotation fallback pattern.
     #
-    # Pattern: {{ or .CommonAnnotations.annotation_zh .CommonAnnotations.annotation }}
+    # Pattern, per alert inside {{ range .Alerts }}:
+    #   {{ or .Annotations.annotation_zh .Annotations.annotation }}
+    #
+    # One notification can hold several alerts (several instances, or several
+    # clusters of one tenant; da_cluster is the alert's cluster), and
+    # .CommonAnnotations holds only what is identical across them — an
+    # annotation that differs prints as empty there. The examples list each alert.
     #
     # Copy these examples to your tenant YAML _routing configuration.
 
@@ -403,10 +445,12 @@ data:
     #       auth_username: user
     #       auth_password: pass
     #       text: |
-    #         Summary: {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
-    #         Severity: {{ .GroupLabels.severity }}
-    #         Tenant: {{ .GroupLabels.tenant }}
-    #         Description: {{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}
+    #         {{ .Status | toUpper }}: {{ .CommonLabels.alertname }}
+    #         Tenant: {{ .CommonLabels.tenant }}
+    #         {{ range .Alerts -}}
+    #         {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }} {{ .Labels.severity }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+    #         {{ or .Annotations.description_zh .Annotations.description }}
+    #         {{ end }}
     #
     # The {{ or }} function is evaluated by Alertmanager:
     # - If summary_zh exists and is non-empty → use it
@@ -423,15 +467,23 @@ data:
     #       type: slack
     #       api_url: https://hooks.slack.com/services/T/B/xxxxx
     #       channel: "#alerts"
-    #       title: |
-    #         [{{ .GroupLabels.severity | toUpper }}] {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
-    #       text: |
-    #         *Tenant:* {{ .GroupLabels.tenant }}
-    #         *Severity:* {{ .GroupLabels.severity }}
-    #         *Description:* {{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}
-    #         *Platform View:* {{ or .CommonAnnotations.platform_summary_zh .CommonAnnotations.platform_summary }}
+    #       title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.tenant }})'
+    #       text: |-
+    #         {{ range .Alerts -}}
+    #         {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }} {{ .Labels.severity }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+    #         {{ or .Annotations.description_zh .Annotations.description }}
+    #         {{ end }}
     #
-    # Slack renders Markdown. Use ** for bold, _ for italics, ` for monospace.
+    # Sent for the same alert firing in clusters east and west:
+    #   FIRING: MariaDBHighConnections (t1)
+    #   [east] FIRING warning: MariaDB high connections on t1
+    #   91% of max_connections
+    #   [west] FIRING warning: MariaDB high connections on t1
+    #   82% of max_connections
+    # With send_resolved, once east has resolved and west still fires, the
+    # east line reads `[east] RESOLVED warning: ...`.
+    #
+    # Slack renders its own mrkdwn. Use * for bold, _ for italics, ` for monospace.
 
     # ========================================================
     # Teams Example
@@ -443,12 +495,14 @@ data:
     #     receiver:
     #       type: teams
     #       webhook_url: https://outlook.webhook.office.com/webhookb2/...
-    #       title: |
-    #         {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
-    #       text: |
-    #         **Tenant:** {{ .GroupLabels.tenant }}
-    #         **Severity:** {{ .GroupLabels.severity }}
-    #         **Description:** {{ or .CommonAnnotations.description_zh .CommonAnnotations.description }}
+    #       title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.tenant }})'
+    #       text: |-
+    #         {{ range .Alerts -}}
+    #         {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}**{{ .Status | toUpper }} {{ .Labels.severity }}**: {{ or .Annotations.summary_zh .Annotations.summary }}
+    #
+    #         {{ or .Annotations.description_zh .Annotations.description }}
+    #
+    #         {{ end }}
     #
     # Teams supports Markdown formatting.
 
@@ -461,13 +515,13 @@ data:
     #   _routing:
     #     receiver:
     #       type: pagerduty
-    #       service_key: <pagerduty_integration_key>
-    #       description: |
-    #         {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }} ({{ .GroupLabels.tenant }})
-    #       severity: "{{ .GroupLabels.severity }}"
+    #       routing_key: <pagerduty_integration_key>
+    #       description: '{{ .CommonLabels.alertname }} ({{ .CommonLabels.tenant }}): {{ range $i, $a := .Alerts.Firing }}{{ if $i }}; {{ end }}{{ with $a.Labels.da_cluster }}[{{ . }}] {{ end }}{{ or $a.Annotations.summary_zh $a.Annotations.summary }}{{ end }}'
+    #       severity: '{{ or .CommonLabels.severity "error" }}'
     #       client: "Dynamic Alerting Platform"
     #
-    # PagerDuty automatically creates incidents based on description.
+    # PagerDuty opens one incident per notification group; the description is its
+    # one-line title, and the incident's details list every alert with its labels.
 
     # ========================================================
     # Locale Detection (Client-Side)

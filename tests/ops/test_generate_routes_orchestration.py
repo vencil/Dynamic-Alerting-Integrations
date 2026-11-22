@@ -1274,7 +1274,8 @@ class TestCustomAlertIsolationInjection:
 
 
 def _build_inhibit_for_test():
-    # the generated severity-dedup inhibit (#3899: one rule for every tenant)
+    # the generated severity-dedup inhibit (#3899: the same rules for every
+    # tenant; #4097: two of them — this is the per-cluster one)
     return generate_inhibit_rules({"db-a": "enable"})[0][0]
 
 
@@ -3104,6 +3105,9 @@ _EXPECTED_EDGE_LOCAL_ALERTS = frozenset({
     "VectorStoreSinkDroppingEvents",
     "TenantProjectionMappingErrors",
     "TenantProjectionFanoutDiscardSpike",
+    # ADR-021: a counter Vector itself exports (log_to_metric beside its
+    # internal_metrics), so it lives where Vector runs, like the two above.
+    "TenantProjectionStampMissing",
     "VectorProjectionGateMismatch",
     "VectorRegistryUnreadableAtBoot",
     "VectorProjectionGateStuck",

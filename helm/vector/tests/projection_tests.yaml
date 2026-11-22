@@ -12,13 +12,16 @@
 #     --set 'tenantProjections[0].accountId=1000' \
 #     --set 'tenantProjections[1].tenantId=tenant-beta' \
 #     --set 'tenantProjections[1].accountId=1001' \
+#     --set 'tenantProjections[1].visibleFields={status,path}' \
 #     | yq '.[] | select(.kind=="ConfigMap" and (.metadata.name|test("vector-config"))) | .data."vector.yaml"' \
 #     > /tmp/rendered-vector.yaml
 #   vector test /tmp/rendered-vector.yaml helm/vector/tests/projection_tests.yaml
 #
 # The fixture render MUST include tenantProjections for tenant-alpha→1000 and
 # tenant-beta→1001, or the tenant_project / tenant_route transforms (and the
-# t_1000 / t_1001 routes these tests reference) are not rendered.
+# t_1000 / t_1001 routes these tests reference) are not rendered. tenant-beta
+# also carries a visibility selection (visibleFields [status, path]) and
+# tenant-alpha none, so both sides of ADR-021's tenant-selected visibility run.
 #
 # The mock events model what Vector's kubernetes_logs source produces: a raw
 # `.message` string (the gateway's audit JSON, or Envoy operational text) plus
@@ -367,6 +370,82 @@ tests:
     # Must NOT leak into tenant-alpha's partition.
     no_outputs_from:
       - tenant_route.t_1000
+
+  # ── ADR-021 tenant-selected visibility: a selection only NARROWS ─────────
+  # tenant-beta selected [status, path]. Its copy keeps those plus the
+  # always-visible fields and drops every other allowlisted field — from the
+  # event AND from the re-serialized message. tenant-alpha (no selection)
+  # keeps the whole allowlist; the 0:0 copy is untouched either way. The
+  # payload's `upstream` stays absent: no selection can add a field.
+  - name: "tenant-beta's visibleFields narrows its copy; 0:0 and tenant-alpha keep everything"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-beta","token_id":"tok-b","method":"GET","path":"/select/logsql/query","query":"_time:5m secret-term","status":200,"duration_ms":7,"upstream":"10.42.7.13:9428","response_flags":"-"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-fghij
+          kubernetes.pod_node_name: node-9
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.query, "_time:5m secret-term", "0:0 keeps every field")
+              assert_eq!(.token_id, "tok-b")
+      - extract_from: tenant_route.t_1001
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.account_id, 1001)
+              # Selected fields kept.
+              assert_eq!(.status, "200")
+              assert_eq!(.path, "/select/logsql/query")
+              # Always-visible fields kept whatever the selection says.
+              assert_eq!(.tenant_id, "tenant-beta")
+              assert_eq!(.log_type, "federation_audit")
+              assert!(is_string(.log_event_id), "join key kept")
+              assert!(exists(.timestamp), "event time kept")
+              # Allowlisted but NOT selected: dropped.
+              assert!(!exists(.query),          "unselected query kept")
+              assert!(!exists(.method),         "unselected method kept")
+              assert!(!exists(.token_id),       "unselected token_id kept")
+              assert!(!exists(.duration_ms),    "unselected duration_ms kept")
+              assert!(!exists(.response_flags), "unselected response_flags kept")
+              msg = to_string(.message) ?? ""
+              assert!(!contains(msg, "secret-term"), "unselected query inside re-serialized message")
+              assert!(!contains(msg, "tok-b"),       "unselected token_id inside re-serialized message")
+              # Outside the allowlist: still absent.
+              assert!(!exists(.upstream), "LEAK: upstream")
+              assert!(!contains(msg, "10.42.7.13"), "LEAK: upstream inside message")
+    no_outputs_from:
+      - tenant_route.t_1000
+
+  - name: "tenant-alpha (no visibility selection) keeps every allowlisted field"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-a","method":"GET","path":"/select/logsql/hits","query":"_time:1h","status":200,"duration_ms":9,"response_flags":"-"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_route.t_1000
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.query, "_time:1h")
+              assert_eq!(.method, "GET")
+              assert_eq!(.token_id, "tok-a")
+              assert_eq!(.response_flags, "-")
+              assert!(exists(.duration_ms))
+    no_outputs_from:
+      - tenant_route.t_1001
 
   # ══ ADR-028 §證據通道 / #1234 — federation revocation EVIDENCE channel ═══════════
   # These insert_at `origin_split` (NOT demux) because the routing decision is
@@ -1006,3 +1085,449 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.token_id, "tok-ok")
+
+  # ══ ADR-021 §日誌進入端的契約 — the should-have-been-stamped counter ══════════
+  # tenant_stamp_check / tenant_stamp_missed feed
+  # vector_tenant_projection_stamp_missed_events_total, which
+  # TenantProjectionStampMissing alerts on. A row counts only when it carries a
+  # VERIFIED tenant identity (a valid account_id, written by Envoy from the
+  # logs-token claim) and still reaches no tenant partition. Each case below
+  # pins one side of that line; the fixture projects tenant-alpha→1000 and
+  # tenant-beta→1001 only.
+
+  # ── (S1) valid account_id, tenant not in tenantProjections → counted ──────
+  - name: "stamp-miss: a logs-token audit row of a tenant with no projection is counted as not_projected"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"upstream":"10.42.7.13:9428","tenant_id":"tenant-gamma","account_id":"1002","token_id":"tok-g","status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "tenant-gamma", "the 0:0 copy is untouched")
+      - extract_from: tenant_stamp_check
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "not_projected")
+              assert!(!exists(.tenant_id), "the counter input carries the reason only")
+      - extract_from: tenant_stamp_missed
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.name, "tenant_projection_stamp_missed_events_total")
+              assert_eq!(.namespace, "vector")
+              assert_eq!(.tags.reason, "not_projected")
+              assert_eq!(.kind, "incremental")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (S2) the gateway may log account_id as a JSON number (int or float) ───
+  - name: "stamp-miss: a numeric account_id (integer) is accepted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"upstream":"10.42.7.13:9428","tenant_id":"tenant-gamma","account_id":1002,"status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_stamp_check
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "not_projected")
+
+  - name: "stamp-miss: a numeric account_id (whole float) is accepted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"upstream":"10.42.7.13:9428","tenant_id":"tenant-gamma","account_id":1002.0,"status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_stamp_check
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "not_projected")
+
+  # ── (S3) valid account_id but blank tenant_id → still a miss ──────────────
+  - name: "stamp-miss: a valid account_id with a blank tenant_id is counted (tenant_project aborts it)"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"upstream":"10.42.7.13:9428","tenant_id":"","account_id":"1000","status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_stamp_check
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "not_projected")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (S4) the stamped case is NOT counted ──────────────────────────────────
+  - name: "stamp-miss: a projected tenant's logs-token row reaches its partition and is not counted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"upstream":"10.42.7.13:9428","tenant_id":"tenant-alpha","account_id":"1000","token_id":"tok-a","status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_route.t_1000
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.token_id, "tok-a")
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  # ── (S5) no verified identity → not counted, whatever the tenant_id ───────
+  # A metrics-token row (account_id empty) of a tenant with no partition is
+  # TenantProjectionFanoutDiscardSpike's population, not this one: such a
+  # tenant may legitimately have no AccountID.
+  - name: "stamp-miss: a metrics-token row (empty account_id) of an unprojected tenant is not counted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"upstream":"10.42.7.13:9428","tenant_id":"tenant-gamma","account_id":"","status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (S6) account_id the gateway Lua would refuse → not counted ────────────
+  # Same acceptance rule as revoked_check.lua: whole number in [1000, 2^32-1].
+  - name: "stamp-miss: a reserved-band account_id (< 1000) is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"upstream":"10.42.7.13:9428","tenant_id":"tenant-gamma","account_id":"999","status":403}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+
+  - name: "stamp-miss: a non-integer account_id is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"upstream":"10.42.7.13:9428","tenant_id":"tenant-gamma","account_id":"1002.5","status":403}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+
+  - name: "stamp-miss: an account_id above 2^32-1 is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"upstream":"10.42.7.13:9428","tenant_id":"tenant-gamma","account_id":"4294967296","status":403}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+
+  # ── (S7) platform-only classes are never counted ──────────────────────────
+  - name: "stamp-miss: gateway_operational and prometheus_query_log rows are never counted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '[2026-11-22 envoy] upstream connect error account_id=1002'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"upstream":"10.42.7.13:9428","params":{"query":"up{tenant=\"tenant-gamma\"}"},"account_id":"1002"}'
+          kubernetes.container_name: prometheus
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: prometheus-0
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: StatefulSet/prometheus
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  # ── (S8) origin rejected: the wrong-prefix shape and the forgery shape ────
+  # A gateway-labelled row whose owner fails audit.gatewayPodOwnerPrefix is
+  # reclassified to suspicious_audit and never projected. With a valid
+  # account_id it counts as origin_rejected — a wrong prefix that rejects the
+  # real gateway would otherwise empty every partition in silence.
+  - name: "stamp-miss: a suspicious_audit row with a valid account_id is counted as origin_rejected"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"upstream":"10.42.7.13:9428","tenant_id":"tenant-alpha","account_id":"1000","token_id":"tok-x","status":200}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: not-the-gateway-1234-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/not-the-gateway-1234
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "suspicious_audit")
+      - extract_from: tenant_stamp_missed
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tags.reason, "origin_rejected")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+
+  # ── (S9) only rows the gateway forwarded to the store count ───────────────
+  # A request the gateway answered itself — here the Lua 403 a revoked logs
+  # token gets after its tenant was offboarded and removed from
+  # tenantProjections — has no upstream host and read no log data. It still
+  # carries tenant_id and account_id (jwt_authn verified the token before the
+  # revocation check), so without this rule every offboarded tenant would
+  # fire not_projected until its token expired.
+  - name: "stamp-miss: a locally answered request (upstream null, revoked-token 403) is not counted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"1002","status":403,"upstream":null}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  - name: "stamp-miss: a locally answered request (upstream \"-\") is not counted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"1002","status":429,"upstream":"-"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  - name: "stamp-miss: a locally answered request (no upstream field) is not counted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"1002","status":403}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  # ── (S10) account_id string forms the gateway Lua admits but tenant-api ───
+  # never signs (tenant-api writes a uint32 JSON number): not counted. These
+  # pin the regex; dropping it or loosening its anchors turns one red.
+  - name: "stamp-miss: account_id string 1000.0 is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"1000.0","status":200,"upstream":"10.42.7.13:9428"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  - name: "stamp-miss: account_id string  1000 is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":" 1000","status":200,"upstream":"10.42.7.13:9428"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  - name: "stamp-miss: account_id string 1000  is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"1000 ","status":200,"upstream":"10.42.7.13:9428"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  - name: "stamp-miss: account_id string 0x3E8 is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"0x3E8","status":200,"upstream":"10.42.7.13:9428"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  - name: "stamp-miss: account_id string +1000 is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"+1000","status":200,"upstream":"10.42.7.13:9428"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  - name: "stamp-miss: account_id string 1e3 is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"1e3","status":200,"upstream":"10.42.7.13:9428"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  - name: "stamp-miss: account_id string 1002\\n is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"1002\n","status":200,"upstream":"10.42.7.13:9428"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  # ── (S11) the upper bound is inclusive ────────────────────────────────────
+  - name: "stamp-miss: account_id 4294967295 (2^32-1) is accepted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"4294967295","status":200,"upstream":"10.42.7.13:9428"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_stamp_check
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "not_projected")
+
+  - name: "stamp-miss: account_id 1000 (the lower bound) is accepted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":1000,"status":200,"upstream":"10.42.7.13:9428"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_stamp_check
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "not_projected")

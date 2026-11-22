@@ -20,18 +20,18 @@ DX 工具改善追蹤見 [dx-tooling-backlog.md](../internal/dx-tooling-backlog.
 
 ## v2.8.0 已交付（release 收尾中）
 
-v2.7.0 奠定的 Scale Foundation I（`conf.d/` 階層 + `_defaults.yaml` 繼承 + dual-hash + `/effective`）+ 元件健壯化（Design Token 9 支 JSX + Component Health + dark mode ADR-015）+ 測試基礎設施（1000-tenant fixture + Blast Radius CI bot），在 v2.8.0 進化為**客戶可導入的完整 pipeline + Scale 生產驗證 + 自動化收斂**。
+v2.7.0 奠定的 Scale Foundation I（`conf.d/` 階層 + `_defaults.yaml` 繼承 + dual-hash + `/effective`）+ 元件健壯化（Design Token 9 支 JSX + Component Health + dark mode ADR-015）+ 測試基礎設施（1000-tenant fixture + Blast Radius CI bot），在 v2.8.0 進化為**客戶導入 pipeline（部分出貨，見下）+ Scale 生產驗證 + 自動化收斂**。
 
-### 客戶導入管線 — 5-step chain ✅
+### 客戶導入管線 — 5-step chain ⚠️ 部分出貨
 
-把客戶既有的 PromRule corpus 導入到本平台 conf.d/ 架構的端到端流程，`da-parser` / `da-batchpr` / `da-guard` codify 為可離線執行的 Go binary，Profile Builder 則為嵌入 batch-pr 管線的 library（`da-tools profile build` 獨立 CLI 尚未出貨、規劃中）： <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
+把客戶既有的 PromRule corpus 導入到本平台 conf.d/ 架構的端到端流程，`da-parser` / `da-batchpr` / `da-guard` codify 為可離線執行的 Go binary。⚠️ Profile Builder 只是 library，沒有接到任何 CLI（`da-tools profile build` 尚未出貨），所以 `da-batchpr apply` 的兩個必填輸入沒有工具產生，目前是 experimental（見 [`batch-pr`](../cli-reference.md#batch-pr)；大量導入在 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211) 重新選型）。下圖是設計中的流程： <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
 
 ```
 PromRule corpus → da-parser → Profile Builder（library）→ da-batchpr apply → da-guard → conf.d/
 ```
 
 - **`da-parser`**：dialect 偵測（prom / metricsql / ambiguous）+ VM-only 函數 allowlist（`vm_only_functions.yaml` 走 `go:embed`，CI freshness gate 偵測新版 metricsql 上游函數）+ `StrictPromQLValidator` + provenance header（`generated_by` / `source_rule_id` / `parsed_at` / `source_checksum`）。`prom_portable: bool` 旗標讓客戶遷入 VM 後仍能識別「可回 Prom」的子集 — anti-vendor-lock-in 具體承諾
-- **Profile Builder（library-only；`da-tools profile build` CLI 尚未出貨、規劃中）**：cluster 相似 rules → median 演算法決定 cluster 共通閾值 → 寫 `_defaults.yaml`、偏離 tenant 寫 `<id>.yaml` 只含 override；fuzzy matching opt-in 套 duration-equivalence canonicalisation（`[5m]` ≡ `[300s]` ≡ `[300000ms]`）；以 `BuildProposals` / `EmitProposals` library 由 batch-pr 管線消費，遵循 [ADR-018](../adr/018-profile-as-directory-default.md) Profile-as-Directory-Default <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
+- **Profile Builder（library-only；`da-tools profile build` CLI 尚未出貨、規劃中）**：cluster 相似 rules → median 演算法決定 cluster 共通閾值 → 寫 `_defaults.yaml`、偏離 tenant 寫 `<id>.yaml` 只含 override；fuzzy matching opt-in 套 duration-equivalence canonicalisation（`[5m]` ≡ `[300s]` ≡ `[300000ms]`）；以 `BuildProposals` / `EmitProposals` library 形式存在、尚無消費者，遵循 [ADR-018](../adr/018-profile-as-directory-default.md) Profile-as-Directory-Default <!-- datools-cmd-ignore: 規劃中的 CLI，尚未出貨 -->
 - **`da-batchpr apply`**：Hierarchy-Aware 分塊 — `_defaults.yaml` 變更打 Base Infrastructure PR、tenant PRs 標 `Blocked by:`；`refresh` 在 Base merge 後自動 rebase 下游；`refresh-source`（+ `--patches-dir`）對 parser bug fix 重寫受影響 tenant 檔案、重生 patch PR
 - **`da-guard`**：Schema / Routing / Cardinality / Redundant-override 四層檢查（Routing 層自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起移交 route generator，da-guard 改報未判定、exit 4）；`.github/workflows/guard-defaults-impact.yml` 自動跑 + sticky PR comment（marker-based update vs create）+ artifact 14d retention
 

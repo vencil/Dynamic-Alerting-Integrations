@@ -56,6 +56,7 @@ var generatorRoutes = map[string]string{
 // noGeneratorRoutes: the write routes that do not ask it, and why.
 var noGeneratorRoutes = map[string]string{
 	"PUT /api/v1/tenants/{id}/federation":                   "federation state, not conf.d (statestore)",
+	"PUT /api/v1/tenants/{id}/federation/log-visibility":    "log visibility state, not conf.d (statestore)",
 	"POST /api/v1/tenants/{id}/diff":                        "a diff of the body against the file; judges nothing",
 	"POST /api/v1/tenants/{id}/recipe-preview":              "asks the recipe-preview container (ADR-027 §5), not the generator; writes nothing",
 	"POST /api/v1/tenants/simulate":                         "always 501 SIMULATE_NOT_PROVIDED; reads nothing",
@@ -635,6 +636,7 @@ func logMatrixMetrics(t *testing.T) {
 // noGeneratorRequests: one request per noGeneratorRoutes entry, keyed by it.
 var noGeneratorRequests = map[string]struct{ method, path, body string }{
 	"PUT /api/v1/tenants/{id}/federation":                   {"PUT", "/api/v1/tenants/t-a/federation", `{"metrics":["up"]}`},
+	"PUT /api/v1/tenants/{id}/federation/log-visibility":    {"PUT", "/api/v1/tenants/t-a/federation/log-visibility", `{"fields":["status"]}`},
 	"POST /api/v1/tenants/{id}/diff":                        {"POST", "/api/v1/tenants/t-a/diff", "tenants:\n  t-a:\n    mysql_connections: \"72\"\n"},
 	"POST /api/v1/tenants/{id}/recipe-preview":              {"POST", "/api/v1/tenants/t-a/recipe-preview", `{"recipe":{"recipe":"threshold","metric":"m","threshold":"1:warning"},"scenario":{"value":5}}`},
 	"POST /api/v1/tenants/simulate":                         {"POST", "/api/v1/tenants/simulate", "tenants:\n  t-a:\n    mysql_connections: \"72\"\n"},

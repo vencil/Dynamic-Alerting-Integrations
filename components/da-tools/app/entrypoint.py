@@ -94,7 +94,7 @@ def _build_help_text(lang):
                       `--all --json` 拍 pre-base snapshot 給 rollback 後 diff
 
 命令 (Batch PR — Migration Batch PR Pipeline, v2.8.0):
-    batch-pr          開出/更新 tenant chunk PRs，或於 Base merge 後 rebase。
+    batch-pr          開出/更新 tenant chunk PRs，或於 Base merge 後 rebase（experimental）。
                       子命令: apply / refresh / refresh-source
 
 命令 (Parser — PromRule parser, v2.8.0):
@@ -187,7 +187,7 @@ Commands (Tenant Verify — rollback verification, v2.8.0):
                       after rollback.
 
 Commands (Batch PR — Migration Batch PR Pipeline, v2.8.0):
-    batch-pr          Open/update tenant chunk PRs, or rebase after Base merges.
+    batch-pr          Open/update tenant chunk PRs, or rebase after Base merges (experimental).
                       Subcommands: apply / refresh / refresh-source
 
 Commands (Parser — PromRule parser, v2.8.0):

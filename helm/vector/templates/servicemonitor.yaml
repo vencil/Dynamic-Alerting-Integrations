@@ -11,6 +11,27 @@ tenantProjections. No `jobLabel`: the job is the Service name, as in raw mode.
 Pinned by tests/helm/test_platform_servicemonitors.py.
 */ -}}
 {{- if and .Values.serviceMonitor.enabled (or .Values.metrics.enabled .Values.tenantProjections) }}
+{{- /* Scrape-interval bound (ADR-021 stamp-miss counter). The exporter on the
+       `metrics` port removes the vector_tenant_projection_stamp_missed_events_total
+       series 60-120s after its last increment (flush_period_secs default 60;
+       see the coupling note at `tenant_stamp_missed` in configmap.yaml). A
+       scrape interval of 60s or more can fall entirely between a first miss
+       and its removal, and TenantProjectionStampMissing never sees it. 30s
+       guarantees at least two scrapes inside the shortest lifetime. Only a
+       single-unit duration is accepted here (15s, 500ms, 1m). */}}
+{{- if .Values.metrics.enabled }}
+{{- $iv := toString (.Values.serviceMonitor.interval | default "15s") }}
+{{- $m := regexFindAll "^([0-9]+)(ms|s|m|h)\\z" $iv 1 }}
+{{- if not $m }}
+{{- fail (printf "serviceMonitor.interval %q: use a single-unit duration such as 15s or 30s (it is checked against the 30s bound the stamp-miss counter needs)" $iv) }}
+{{- end }}
+{{- $num := regexReplaceAll "(ms|s|m|h)\\z" $iv "" | atoi }}
+{{- $unit := regexReplaceAll "^[0-9]+" $iv "" }}
+{{- $ms := mul $num (get (dict "ms" 1 "s" 1000 "m" 60000 "h" 3600000) $unit) }}
+{{- if gt $ms 30000 }}
+{{- fail (printf "serviceMonitor.interval %q is above 30s: Vector's exporter drops the ADR-021 stamp-miss counter series 60-120s after its last increment, so a slower scrape can miss a tenant audit row that reached only 0:0 and TenantProjectionStampMissing would never fire. Use 30s or less." $iv) }}
+{{- end }}
+{{- end }}
 {{- $own := include "vector.labels" . | fromYaml }}
 {{- range $k, $_ := .Values.serviceMonitor.labels }}
 {{- if hasKey $own $k }}

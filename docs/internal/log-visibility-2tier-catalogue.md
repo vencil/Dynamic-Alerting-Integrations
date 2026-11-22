@@ -70,7 +70,7 @@ enforced（runbook §8.1 / §8.3）。
 |---|---|---|
 | `federation_audit` | ✅ **可策展**（tier-1）| 「平台關於該租戶」的營運事件（它的查詢／告警 eval／federation 行為），且帶可信 `tenant_id` 可歸屬 |
 | `gateway_operational` | ⛔ platform-only | Envoy 操作層錯誤，非租戶可歸屬；落 `0:0` |
-| `suspicious_audit` | ⛔ platform-only | demux 的 origin spoof guard 判定 `pod_owner` 不符 gateway workload 名前綴時的落點（#566 T2-1），平台資安自用。⚠️ **它是被動保留、不是主動偵測訊號**：這個 class **沒有任何告警或 dashboard panel**，只是留在 `0:0` 可查詢；不要據此以為偽造會被通知。（`TenantProjectionFanoutDiscardSpike` 也看不到它：自 [#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595) 起，非 `federation_audit` 的列——本 class 在內——在 `tenant_eligible` filter 就被丟掉，根本不進 `tenant_project`，所以不計入那條告警讀的 discard counter；filter 自己的丟棄數只反映流量，沒有任何告警。）⛔ 另見 [#1293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1293)：guard 曾因比對錯 `pod_owner` 形狀而把**全部**合法 audit 列丟進這裡，因為本 class 無人消費而完全靜默 |
+| `suspicious_audit` | ⛔ platform-only | demux 的 origin spoof guard 判定 `pod_owner` 不符 gateway workload 名前綴時的落點（#566 T2-1），平台資安自用。⚠️ **只有一部分會被通知**：帶合法 `account_id`（logs token 已驗章的 claim）、且被 gateway 轉給日誌庫的列由 `TenantProjectionStampMissing`（`reason="origin_rejected"`）告警，見 runbook §8.7；沒有 `account_id` 的列（指標 token、JWT 驗證失敗、偽造者沒填）**沒有任何告警或 dashboard panel**，只是留在 `0:0` 可查詢，不要據此以為那種偽造會被通知。（`TenantProjectionFanoutDiscardSpike` 看不到它：自 [#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595) 起，非 `federation_audit` 的列——本 class 在內——在 `tenant_eligible` filter 就被丟掉，根本不進 `tenant_project`，所以不計入那條告警讀的 discard counter；filter 自己的丟棄數只反映流量，沒有任何告警。）⛔ 另見 [#1293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1293)：guard 曾因比對錯 `pod_owner` 形狀而把**全部**合法 audit 列丟進這裡，因為本 class 無人消費而完全靜默 |
 | `prometheus_query_log` | ⛔ platform-only | 平台查詢成本資料（#552 chargeback），非租戶可見 |
 | `federation_evidence` | ⛔ platform-only | 聯邦 token 撤銷的 tamper-evidence audit trail（ADR-028 §證據通道 / #1234）。⛔ 它**不經過 `demux`**——`origin_split` 在 demux **之前**就把它分出去，所以它連 `tenant_project` 的入口都到不了，是**結構性**不可投影（非靠 runtime 判斷）。**實際欄位集＝keep-list 重建的結果**（`evidenceChannel.keepFields` 預設 `event` / `token_id` / `expires_at`，加上平台注入的 `timestamp` / `log_type` / `app` / `k8s_namespace` / `pod_name` / `pod_node` / `log_event_id` 與由這些欄位 re-serialize 的 `message`）——注意它**帶平台拓樸欄位**（`app` / `k8s_namespace` / `pod_name` / `pod_node`，stream field 與值班定位需要），這正是它 platform-only 的理由之一。⚠️ **「不帶租戶識別碼」不是 channel 本身的性質**，而是 producer（tenant-api 在這兩個事件裡只寫 token 層欄位）＋ keep-list 未列任何租戶 id 兩者合成的結果：keep-list 是 operator 可調的 SSOT，`evidenceChannel.keepFields` 加一個 `tenant_id`（或 producer 把租戶 id 塞進 `token_id` 語意）就會帶進來，而 `token_id` 本身即可經 token registry 回推到單一租戶（**間接**可歸屬）。ADR-028 §事件不帶租戶識別碼 是對 producer 與 keep-list 的**要求**，改動任一側都要重新檢視 |
 | JWT-fail / 未帶有效 `tenant_id` 的列 | ⛔ platform-only | 無法歸屬到租戶 → fail-closed 落 `0:0`（runbook §8.3）|
@@ -113,6 +113,23 @@ enforced（runbook §8.1 / §8.3）。
 `query` / `token_id` / `path` / `log_event_id` 等高基數欄位設為 stream field（每個 distinct
 值建一條 stream → RAM 爆，Gemini #894；runbook §8.7）；它們是 queryable data field，非 stream field。
 
+## 租戶自選子集（在 Tier-2 之內再縮小）
+
+> 用詞：本文件的 **Tier-1 / Tier-2** 指平台策展的兩個維度（類別、欄位），兩者都歸平台。ADR-021 說的「可見度分兩層」是另一個切法：**平台策展**（本文件 Tier-1 + Tier-2）與**租戶自選**（本節）。
+
+ADR-021 [§租戶自選的可見度子集](../adr/021-tenant-log-query-federation.md)：租戶可以從上面的 Tier-2 欄位中選自己的副本保留哪些。它**只會縮小、不會擴大** Tier-2：
+
+| | 在哪 | 誰改 |
+|---|---|---|
+| 租戶的選擇 | tenant-api state store 的 `_log_visibility.<tenant>.yaml`（`GET`／`PUT /api/v1/tenants/{id}/federation/log-visibility`）| 該租戶的 admin |
+| Vector 套用的副本 | `helm/vector/values.yaml` `tenantProjections[].visibleFields` | 平台，從 tenant-api 抄（與抄 `accountId` 同一個 PR 流程）|
+| 永遠保留、不能被選掉的欄位 | `tenantProjectionAlwaysVisibleFields`（`tenant_id` / `log_type` / `log_event_id` / `timestamp`）| 平台 |
+
+- 沒有選擇（無紀錄、`fields: null`、或 `tenantProjections` 項目沒有 `visibleFields`）＝ Tier-2 全部欄位。
+- `tenant_project` 的迴圈仍只走 `tenantProjectionKeepFields`，選擇只能讓某個可選欄位**不被複製**；`visibleFields` 裡出現不在 keepFields 的欄位時 chart 渲染失敗。
+- tenant-api 的可選清單（`components/tenant-api/internal/federation/logvis`）＝ keepFields − always-visible，由 `logvis_test.go` 的 `TestVocabularyMatchesVectorChart` 比對本 chart 的 `values.yaml`。
+- ⚠️ 抄寫沒有機制比對：沒抄或抄舊了，租戶副本保留平台預設或舊選擇（仍在 Tier-2 之內）。
+
 ## 租戶看不到（即使在自己分區）的東西 — 明確邊界
 
 - **他租戶的任何列**：VictoriaLogs `AccountID` 分區硬隔離（gateway 注入已驗證 `AccountID`、
@@ -132,6 +149,8 @@ enforced（runbook §8.1 / §8.3）。
 | 讓某欄位對租戶可見 / 不可見 | `helm/vector/values.yaml` `tenantProjectionKeepFields`（security-reviewed）| 本文件 §Tier-2 表 | `test_log_visibility_catalogue.py`（drift-guard）+ `test_vector_projection_vrl.py`（VRL allowlist）|
 | 讓某 `log_type` 對租戶可見 / 不可見 | Vector `tenant_route` 邏輯 + ADR review | 本文件 §Tier-1 表 | `vector test`（runbook §8.6 negative assertion）|
 | 改 stream field 維度 | `tenantProjectionStreamFields` | 本文件 §Stream fields | `test_vector_projection_vrl.py` |
+| 套用某租戶的可見度選擇 | `tenantProjections[].visibleFields`（從 tenant-api 的 `GET .../federation/log-visibility` 抄 `fields`）| — | render-time `{{ fail }}`（不在 keepFields 的欄位）+ `vector test`（projection_tests.yaml 的 visibleFields 案例）|
+| 改永遠保留的欄位 | `tenantProjectionAlwaysVisibleFields` + `templates/configmap.yaml` 裡寫死的 `$alwaysWant` 與 `$always`（chart 拒絕任何其他集合）+ tenant-api `logvis.AlwaysVisibleFields`，同一個 PR，chart 要升版 | 本文件 §租戶自選子集 | `TestVocabularyMatchesVectorChart`（只比對 values 與 Go）**加上** `helm template`／`test_vector_projection_vrl.py` 的渲染測試：只改 values 與 Go 時詞彙測試會過，但 chart 渲染會失敗 |
 
 > 所有變更走 GitOps commit 歷史（控制平面 audit；ADR-021 §稽核）。
 

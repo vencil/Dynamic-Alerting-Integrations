@@ -35,7 +35,7 @@ verified-at-version: v2.8.0
 | **< 50 tenant，無組織分群需求** | ⏸️ **不遷** | hierarchical 帶來的 cascading defaults / blast-radius scope 收益 < 你維護兩種 layout 認知成本 |
 | **50-200 tenant，單一 BU/team 管理** | 🟡 **可遷可不遷** | tipping point — 看你是否預期下個季度跨 region 擴。若是，先遷 |
 | **200+ tenant，多 BU/region/env 分群** | 🟢 **遷** | cascading defaults 省的 YAML 行數 + blast-radius 的 scope 訊號是 hard wins |
-| **客戶端有 GitOps PR 流程**（用 `da-tools batch-pr` 分批開 PR）| 🟢 **遷** | 預設按 domain（第一層目錄）分 PR；扁平 layout 的租戶都在根目錄、落在同一組，只會按租戶數切（預設每支 25 個）。⚠️ `da-tools batch-pr` 沒有 `plan` 子命令，`apply` 必填的 Plan JSON 要另外準備（[#3367](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3367)） |
+| **客戶端有 GitOps PR 流程**（用 `da-tools batch-pr` 分批開 PR）| 🟢 **遷** | PR 怎麼分由 Plan 決定，`apply` 自己不分組。`BuildPlan` 的設計是按 domain（第一層目錄）分；扁平 layout 的租戶都落在同一組，只按租戶數切（預設每支 25 個）。但目前沒有 CLI 會跑 `BuildPlan`。⚠️ `da-tools batch-pr` 是 experimental：`apply` 必填的 Plan JSON 與 emit 目錄目前沒有工具產生，要另外準備（見 [`batch-pr`](../cli-reference.md#batch-pr)） |
 | **預期下個 quarter 引入跨 region/env defaults**（threshold 因 region 不同）| 🟢 **遷** | flat 沒地方放 region 級 `_defaults.yaml`；遷 cost 只增不減，越早越好 |
 | **客戶端 `_defaults.yaml` 一年內幾乎不動**（純 flat 寫死 thresholds）| ⏸️ **不遷** | hierarchical 的核心收益是 cascading 改動 — 用不到就沒收益，只剩維護成本 |
 
