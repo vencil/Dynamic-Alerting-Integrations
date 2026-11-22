@@ -880,3 +880,21 @@ def test_a_new_table_is_not_announced_by_the_old_fragment(tmp_path):
 
 def test_live_repo_announces_its_builtin_digest():
     assert gate.check_builtin_digest_announced(lib.load_registry()) is None
+
+
+# ── which keys still wait for a ratio form (#1320) ────────────────────────
+
+def test_the_keys_waiting_for_a_ratio_form_are_these():
+    """`ratio_pending` says "the fix is a ratio form, not written yet" and
+    renders 「待改比值」 on every generated surface. Nothing can check that
+    claim against the rule packs, so the set is pinned: a key leaves it when
+    its ratio form ships or is ruled out (then it is `site_specific`, with the
+    reason — oracle_sessions_active: the share of SESSIONS is
+    OracleHighSessionUtilization; clickhouse_active_connections and
+    db2_connections_active: no ceiling is exported to take a share of), and
+    a key joins it only with #1320 told about it."""
+    doc = lib.load_registry()
+    pending = sorted(k for k, e in doc["keys"].items()
+                     if e.get("portability") == "ratio_pending")
+    assert pending == ["mongodb_connections_current", "rabbitmq_connections",
+                       "redis_connected_clients", "redis_memory_used_bytes"], pending

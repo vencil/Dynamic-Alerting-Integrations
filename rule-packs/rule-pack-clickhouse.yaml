@@ -14,7 +14,9 @@
 #   clickhouse_queries_rate: 500   # qps — Query rate warning (5m)
 #       未啟用（依部署而定）：查詢量是工作負載而非故障，任何數字都只適用於特定部署
 #   clickhouse_active_connections: 200   # count — Active TCP connections warning
-#       未啟用（待改比值）：絕對連線數跨部署沒有意義；上限（max_connections）目前沒有匯出，分母由 #1320 決定
+#       未啟用（依部署而定）：正常的連線數取決於工作負載與 server 前面的連線池大小，而且沒有可以拿來算比例的上限：ClickHouse 的 /metrics 不匯出
+#       max_connections（讀 v25.8.1.5101-lts 原始碼：只寫出 system.metrics、events、asynchronous metrics 與
+#       errors）。知道 max_connections 的部署，對照它來填
 #
 # optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
 # 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`
