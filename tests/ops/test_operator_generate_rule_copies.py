@@ -203,6 +203,54 @@ def test_rule_content_equals_the_source_pack(generated):
     assert compared > 100, f"only {compared} rules compared"
 
 
+def _rules(doc: dict, less: "list[str]") -> "list[tuple]":
+    """(group, rule) for every rule of a PrometheusRule, *less* the alerts
+    named — the content, whatever groups an exclusion emptied."""
+    return [(g["name"], r) for g in doc["spec"]["groups"] for r in g["rules"]
+            if r.get("alert") not in less]
+
+
+@pytest.mark.usefixtures("da_guard_env")
+def test_migrating_the_shipped_configmaps_gives_operator_generates_objects(generated, tmp_path):
+    """#4041: `migrate-to-operator` on the ConfigMaps this repo ships gives,
+    pack by pack, the object `operator-generate` gives — the same NAME (a
+    cluster moved to the generator later has one object per pack, not two
+    loading the same rules), the same groups in the same order, and the
+    same rules less what the generator leaves out of a platform pack.
+
+    Before it, every pack's object was named `da-rule-pack-prometheus-rules-
+    <pack>`, and the packs with two rule file keys kept the later key only.
+    """
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    shipped = cr.CONFIGMAP_RULES.files_under(REPO)
+    assert len(shipped) == len(_packs()), "a pack without its ConfigMap (or the reverse)"
+    for path in shipped:
+        (src / path.name).write_bytes(path.read_bytes())
+    proc = subprocess.run(
+        [sys.executable, str(REPO / "scripts" / "tools" / "ops" / "migrate_to_operator.py"),
+         "--source-dir", str(src), "--output-dir", str(out)],
+        capture_output=True, text=True, encoding="utf-8", timeout=300, check=False)
+    assert proc.returncode == 0, proc.stderr[-1500:]
+    theirs = {p.name: p for p in generated.rglob("*.yaml") if cr.OPERATOR_RULES.member(p)}
+    ours = {p.name: p for p in out.iterdir() if cr.OPERATOR_RULES.member(p)}
+    assert sorted(ours) == sorted(theirs) and len(ours) == len(shipped)
+    two_keys = 0
+    for name in sorted(ours):
+        mine = yaml.safe_load(ours[name].read_text(encoding="utf-8"))
+        gen = yaml.safe_load(theirs[name].read_text(encoding="utf-8"))
+        assert mine["metadata"]["name"] == gen["metadata"]["name"], name
+        less = _excluded(theirs[name])
+        assert less == _EXPECTED_EXCLUDED.get(cr.OPERATOR_RULES.member(name), []), name
+        assert _rules(mine, less) == _rules(gen, []), name
+        if not less:
+            assert mine["spec"] == gen["spec"], name
+        source = yaml.safe_load((src / cr.CONFIGMAP_RULES.file_name(
+            cr.OPERATOR_RULES.member(name))).read_text(encoding="utf-8"))
+        two_keys += len(source["data"]) > 1
+    assert two_keys, "no shipped ConfigMap has two rule file keys — the merge was not measured"
+
+
 def test_every_prometheus_rule_carries_both_selector_labels(generated):
     for f in sorted(generated.iterdir()):
         labels = yaml.safe_load(f.read_text(encoding="utf-8"))["metadata"]["labels"]

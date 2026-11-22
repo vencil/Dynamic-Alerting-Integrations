@@ -299,6 +299,7 @@ def source_objects(found: List[dict]) -> List[dict]:
         if obj is None:
             obj = merged[ident] = {
                 "name": item["name"], "file": item["file"], "kind": item.get("kind"),
+                "document": item.get("document"),
                 "already_crd": item["already_crd"], "keys": [], "rule_groups": [],
                 "groups_by_key": [],
             }
@@ -308,8 +309,41 @@ def source_objects(found: List[dict]) -> List[dict]:
     return list(merged.values())
 
 
-#: A Kubernetes object name (RFC 1123 subdomain), as the API server takes it.
-_OBJECT_NAME = re.compile(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?")
+def source_label(obj: dict) -> str:
+    """How a refusal names the source object *obj*: its file, and for a
+    manifest object which document of the file it is — two ConfigMaps `rules`
+    in one file (two namespaces of a `kind: List`) are told apart by it."""
+    if not obj["kind"]:
+        return obj["file"]
+    return f"{obj['file']} ({obj['kind']} {obj['name']}, document {obj['document']})"
+
+
+#: A Kubernetes object name (RFC 1123 subdomain), as the API server takes it:
+#: labels joined by `.`, EACH starting and ending alphanumeric (`a..b`,
+#: `a-.b` are refused there — review of #4041: a check of the whole string's
+#: two ends let them through).
+_LABEL = r"[a-z0-9]([-a-z0-9]*[a-z0-9])?"
+_OBJECT_NAME = re.compile(rf"{_LABEL}(\.{_LABEL})*")
+_OBJECT_NAME_MAX = 253
+#: The longest file name a directory takes (bytes; NAME_MAX on the file
+#: systems this runs on): the object name is the output file's stem.
+_FILE_NAME_MAX = 255
+
+
+def output_file_name(object_name: str) -> str:
+    """The file a PrometheusRule named *object_name* is written to."""
+    return f"{object_name}.yaml"
+
+
+def object_name_problem(name: str) -> "str | None":
+    """Why *name* cannot be a PrometheusRule this tool writes, else None."""
+    if len(name) > _OBJECT_NAME_MAX or not _OBJECT_NAME.fullmatch(name):
+        return i18n_text("不是合法的 Kubernetes 名稱", "is not one Kubernetes takes")
+    if len(output_file_name(name).encode("utf-8")) > _FILE_NAME_MAX:
+        return i18n_text(
+            f"輸出檔名超過 {_FILE_NAME_MAX} bytes，寫不出來",
+            f"makes an output file name over {_FILE_NAME_MAX} bytes, which cannot be written")
+    return None
 
 
 def rule_pack_name_of(obj: dict) -> str:
@@ -320,22 +354,23 @@ def rule_pack_name_of(obj: dict) -> str:
     (`rule-pack-<pack>.yaml`) give `<pack>`: the object is then named as
     `operator-generate` names its copy of that pack, so a cluster moved to
     that generator later has ONE object for the pack, not two loading the
-    same rules. Any other source keeps its own name, lower-cased.
+    same rules. Any other source keeps its own name — less a leading
+    `rule-pack-`, which the object name's own prefix already says (a
+    ConfigMap `rule-pack-foo` is `da-rule-pack-foo`, as it always was).
+    Lower-cased first, so the prefixes are met in any case.
     ⛔ Anchored: `str.replace` of the prefix turned `my-rule-pack-foo` into
     `my-foo` — the name of another ConfigMap."""
-    name = obj["name"]
+    name = obj["name"].lower()
     if obj.get("kind") == "ConfigMap":
         pack = _lib_consumer_read.configmap_rules_pack(name)
-        if pack is not None:
-            return pack.lower()
     else:
-        pack = _lib_consumer_read.RULE_PACKS.member(obj["file"])
-        if pack is not None:
-            return pack.lower()
+        pack = _lib_consumer_read.RULE_PACKS.member(obj["file"].lower())
+    if pack is not None:
+        return pack
     prefix = _lib_consumer_read.RULE_PACKS.prefix
     if name.startswith(prefix) and len(name) > len(prefix):
         name = name[len(prefix):]
-    return name.lower()
+    return name
 
 
 def planned_rules(found: List[dict], namespace: str) -> List[dict]:
@@ -346,9 +381,12 @@ def planned_rules(found: List[dict], namespace: str) -> List[dict]:
 
     * two source objects would give one object name (the same output file,
       and for `kubectl apply` the same object: the later one wins);
-    * a name is the name of a PrometheusRule already in the sources (applied,
-      it would replace that object);
-    * a name is not a Kubernetes object name (`My_Rules.yml`);
+    * a name is the name of a PrometheusRule already in the sources (applied
+      to that one's namespace it would replace the object; the namespace is
+      not compared — the plan is made before --namespace is the cluster's);
+    * a name is not a Kubernetes object name (`My_Rules.yml`, `a..b.yml`), is
+      one whose output file name the directory cannot take, or cannot be
+      made at all (`a/b`);
     * the keys of one ConfigMap repeat a group name. Prometheus takes that —
       they are different rule files — and one PrometheusRule cannot say it:
       the operator writes one rule file per object, and the loader refuses a
@@ -361,7 +399,7 @@ def planned_rules(found: List[dict], namespace: str) -> List[dict]:
     for obj in objects:
         if obj["already_crd"]:
             continue
-        where = f"{obj['file']}" + (f" ({obj['kind']} {obj['name']})" if obj["kind"] else "")
+        where = source_label(obj)
         seen: "dict[str, object]" = {}
         for key, groups in obj["groups_by_key"]:
             for group in groups:
@@ -373,19 +411,27 @@ def planned_rules(found: List[dict], namespace: str) -> List[dict]:
                         f"{where}: group `{gname}` is in key `{seen[gname]}` and in `{key}`; "
                         "one PrometheusRule cannot hold a group name twice"))
                 seen.setdefault(gname, key)
-        crd = convert_rules_to_crd(obj["rule_groups"], rule_pack_name_of(obj), namespace)
-        name = crd["metadata"]["name"]
-        if len(name) > 253 or not _OBJECT_NAME.fullmatch(name):
+        try:
+            crd = convert_rules_to_crd(obj["rule_groups"], rule_pack_name_of(obj), namespace)
+        except ValueError as exc:
+            # The declaration makes no file name of it (`a/b`): a name no
+            # object has, refused here with the rest and not as a crash.
             refused.append(i18n_text(
-                f"{where}: 產出的物件名稱 `{name}` 不是合法的 Kubernetes 名稱",
-                f"{where}: the object name it gives, `{name}`, is not one Kubernetes takes"))
+                f"{where}: 產出不了合法的物件名稱（{exc}）",
+                f"{where}: it gives no object name ({exc})"))
+            continue
+        name = crd["metadata"]["name"]
+        problem = object_name_problem(name)
+        if problem is not None:
+            refused.append(i18n_text(
+                f"{where}: 產出的物件名稱 `{name}` {problem}",
+                f"{where}: the object name it gives, `{name}`, {problem}"))
         by_name.setdefault(name, []).append(obj)
         planned.append({"name": name, "file": obj["file"], "keys": obj["keys"], "crd": crd,
                         "where": where})
     for name, objs in by_name.items():
         if len(objs) > 1:
-            sources = ", ".join(f"{o['file']}" + (f" ({o['kind']} {o['name']})" if o["kind"] else "")
-                                for o in objs)
+            sources = ", ".join(source_label(o) for o in objs)
             refused.append(i18n_text(
                 f"{len(objs)} 個來源都會產出 PrometheusRule `{name}`（同一個輸出檔）: {sources}",
                 f"{len(objs)} sources give the PrometheusRule `{name}` (one output file): "
@@ -395,13 +441,60 @@ def planned_rules(found: List[dict], namespace: str) -> List[dict]:
         if plan["name"] in existing:
             refused.append(i18n_text(
                 f"{plan['where']}: 產出的 `{plan['name']}` 與來源裡已有的 PrometheusRule 同名"
-                f"（{existing[plan['name']]}），套用後會取代它",
+                f"（{existing[plan['name']]}），套用到同一個 namespace 會取代它",
                 f"{plan['where']}: the `{plan['name']}` it gives is the name of a "
                 f"PrometheusRule already in the sources ({existing[plan['name']]}); "
-                "applied, it would replace that object"))
+                "applied to the same namespace, it would replace that object"))
     if refused:
         raise MigrationRefused(refused)
     return planned
+
+
+def other_rule_files(output_dir: Path, written: "list[str]") -> "list[str]":
+    """The PrometheusRule files of this tool's naming already in *output_dir*
+    that this run does not write, sorted (#4041 review).
+
+    The checklist applies `{output_dir}/*-rule-pack-*.yaml`: a file a run of
+    an earlier version left there under the old name (`da-rule-pack-
+    prometheus-rules-<pack>.yaml`), or one from sources since removed, is
+    applied with this run's — the same rules loaded twice. The listing is
+    the declaration's (`OPERATOR_RULES.named_in`): no directory there, or a
+    file in its place, holds none — the write says what is wrong with it —
+    and one that cannot be listed raises `SourcesUnlisted`. So does an
+    entry of that naming that is no regular file — unless it is one this
+    run writes: the write names that (`cannot write …`), as it always has."""
+    mine = set(written)
+    try:
+        named = _lib_consumer_read.OPERATOR_RULES.named_in(output_dir)
+    except _lib_consumer_read.SourcesUnlisted as exc:
+        if any(Path(path).name not in mine or Path(path) == output_dir
+               for path, _why in exc.files):
+            raise
+        return []
+    return sorted(p.name for p in named if p.name not in mine)
+
+
+def refuse_other_rule_files(output_dir: Path, result: dict) -> None:
+    """Exit 2 naming what `other_rule_files` finds, before anything is
+    written — in --dry-run too, so a plan it prints is one the write makes."""
+    written = [output_file_name(item["crd"]["metadata"]["name"])
+               for item in result["prometheus_rules"]]
+    try:
+        others = other_rule_files(output_dir, written)
+    except _lib_consumer_read.SourcesUnlisted as exc:
+        die_caller_error(f"ERROR: --output-dir: {_lib_consumer_read.error_text(exc)}",
+                         reason="output_dir_unlistable")
+    if others:
+        shown = ", ".join(safe_label(n) for n in others)
+        die_caller_error("ERROR: " + i18n_text(
+            f"--output-dir {safe_label(output_dir)} 裡有這次不會寫的 PrometheusRule 檔: {shown}。"
+            "checklist 的套用步驟會連它們一起套用（舊版留下的舊名檔會讓同一批規則載入兩次）；"
+            "先移除它們，或換一個 --output-dir。未寫任何檔。",
+            f"--output-dir {safe_label(output_dir)} holds PrometheusRule files this run does "
+            f"not write: {shown}. The checklist's apply step would apply them too (a file an "
+            "earlier version left under its old name loads the same rules twice); remove "
+            "them, or give another --output-dir. Nothing was written."),
+            reason="output_dir_holds_other_rules")
 
 
 def already_crd_notice(item: dict) -> str:
@@ -554,6 +647,9 @@ def build_migration_checklist(
     # name operator-generate gives. A cluster that applied the old ones has
     # both after applying these, each loading the same rules. Both prefixes
     # come from the declarations, as the names themselves do.
+    # ⛔ Not a grep for one old prefix: the anchored naming also renamed
+    # `my-rule-pack-foo` (`…my-foo` → `…my-rule-pack-foo`). The step lists
+    # every object this tool made — the label says so — against this set.
     new_prefix = _lib_consumer_read.OPERATOR_RULES.prefix
     old_prefix = new_prefix + _lib_consumer_read.CONFIGMAP_RULES_OBJECT_PREFIX
     # #3426: PrometheusRules found in --source-dir are named here — they are
@@ -632,7 +728,7 @@ Alertmanager 路由不以 AlertmanagerConfig CRD 產生（#3572）：Prometheus 
 
 - [ ] 確認所有規則都已成功遷移
 - [ ] 刪除舊 ConfigMap: `kubectl delete configmap -n monitoring <configmap-names>`
-- [ ] 若曾套用過本工具舊版的輸出：舊版把規則包的 PrometheusRule 命名為 `{old_prefix}<pack>`，現在是 `{new_prefix}<pack>`（與 operator-generate 相同）。兩者並存時同一批規則會載入兩次。列出舊名的物件並刪除: `kubectl get prometheusrule -A -l migrated-from=configmap -o name | grep '/{old_prefix}'`
+- [ ] 若曾套用過本工具舊版的輸出：舊版把規則包的 PrometheusRule 命名為 `{old_prefix}<pack>`，現在是 `{new_prefix}<pack>`（與 operator-generate 相同）。兩者並存時同一批規則會載入兩次。列出本工具產生過的全部物件: `kubectl get prometheusrule -A -l migrated-from=configmap`；名稱不在本次輸出檔名裡的就是舊名物件，逐一 `kubectl delete prometheusrule -n <namespace> <name>`
 - [ ] 刪除舊 Projected Volume 設定（如適用）
 - [ ] 驗證 Prometheus 仍正常運作
 
@@ -736,7 +832,7 @@ synthetic probe, sentinel) could not come first. See {_ROUTING_DOC_URL}
 
 - [ ] Confirm all rules successfully migrated
 - [ ] Delete old ConfigMaps: `kubectl delete configmap -n monitoring <configmap-names>`
-- [ ] If output of an earlier version of this tool was applied: it named a rule pack's PrometheusRule `{old_prefix}<pack>`; the name is now `{new_prefix}<pack>` (operator-generate's). With both in the cluster the same rules load twice. List the old ones and delete them: `kubectl get prometheusrule -A -l migrated-from=configmap -o name | grep '/{old_prefix}'`
+- [ ] If output of an earlier version of this tool was applied: it named a rule pack's PrometheusRule `{old_prefix}<pack>`; the name is now `{new_prefix}<pack>` (operator-generate's). With both in the cluster the same rules load twice. List every object this tool has made: `kubectl get prometheusrule -A -l migrated-from=configmap`; one whose name is not a file name of this output is an old one — `kubectl delete prometheusrule -n <namespace> <name>` each
 - [ ] Delete old Projected Volume settings (if applicable)
 - [ ] Verify Prometheus still works normally
 
@@ -1119,6 +1215,11 @@ def main():
             source_listing=source_listing,
         )
 
+        # #4041 review: rule files already there that this run would leave
+        # beside its own are refused before the first write.
+        if output_dir is not None:
+            refuse_other_rule_files(output_dir, result)
+
     # The checklist is rendered once here (pure string) and reused by both the
     # write-mode file and whatever stdout documents plan_stdout() selects.
     checklist = build_migration_checklist(source_dir, output_dir, result)
@@ -1138,7 +1239,7 @@ def main():
             for item in result["prometheus_rules"]:
                 crd = item["crd"]
                 name = crd["metadata"]["name"]
-                output_path = output_dir / f"{name}.yaml"
+                output_path = output_dir / output_file_name(name)
                 write_yaml_crd(output_path, crd, gitops=False, flag="--output-dir")
                 print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
 

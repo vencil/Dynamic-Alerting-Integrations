@@ -1639,10 +1639,11 @@ da-tools migrate-to-operator [options]
 
 **一個來源物件產出一個 PrometheusRule**（[#4041](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4041)）
 
-- 一個 ConfigMap 不論有幾個 rule 檔 key，都合併成**一個** PrometheusRule，group 依 manifest 裡 key 的順序串接；一個純 rule 檔是一個。`configmap_files` 與總結那行數的是這些來源物件。
-- 物件名稱：`prometheus-rules-<pack>` 這種名稱的 ConfigMap（本平台規則包的 ConfigMap）與 `rule-pack-<pack>.yaml` 產出 `da-rule-pack-<pack>`，與 `operator-generate` 對同一個規則包的物件同名；其他來源是 `da-rule-pack-<來源名稱小寫>`。
-- 以下情形結束碼 `2`，不寫任何檔、也不印預覽（`--dry-run`、`--json`、`--checklist-only` 相同），每一筆都點名：兩個來源會產出同名的物件；產出的名稱不是合法的 Kubernetes 物件名稱；產出的名稱與來源目錄裡已有的 PrometheusRule 同名；同一個 ConfigMap 的兩個 key 有同名的 group（Prometheus 允許，因為是不同的 rule 檔；一個 PrometheusRule 裝不下）。
-- ⚠️ 舊版把規則包的物件命名為 `da-rule-pack-prometheus-rules-<pack>`。套用過舊版輸出的叢集，套用新輸出後兩個物件並存、同一批規則載入兩次；checklist 的 Phase 5 有列出並刪除舊名物件的指令。
+- 一個 ConfigMap 不論有幾個 rule 檔 key，都合併成**一個** PrometheusRule，group 依 manifest 裡 key 的順序串接（從叢集匯出的 manifest，key 是字母序，group 的順序因此可能與 repo 裡的檔不同；規則內容相同）；一個純 rule 檔是一個。`configmap_files` 與總結那行數的是這些來源物件。
+- 物件名稱：`prometheus-rules-<pack>` 這種名稱的 ConfigMap（本平台規則包的 ConfigMap）與 `rule-pack-<pack>.yaml` 產出 `da-rule-pack-<pack>`，與 `operator-generate` 對同一個規則包的物件同名；其他來源是 `da-rule-pack-<來源名稱小寫>`（名稱開頭的 `rule-pack-` 不重複）。
+- 以下情形結束碼 `2`，不寫任何檔、也不印預覽（`--dry-run`、`--json`、`--checklist-only` 相同），每一筆都點名：兩個來源會產出同名的物件；產出的名稱不是合法的 Kubernetes 物件名稱，或長到輸出檔名寫不出來；產出的名稱與來源目錄裡已有的 PrometheusRule 同名；同一個 ConfigMap 的兩個 key 有同名的 group（Prometheus 允許，因為是不同的 rule 檔；一個 PrometheusRule 裝不下）。
+- `--output-dir` 裡已有本工具命名的 PrometheusRule 檔（`da-rule-pack-*.yaml`）而這次不會寫它時，結束碼 `2`、不寫任何檔（`--dry-run` 相同）：checklist 的套用步驟會連它一起套用。這次會寫的檔照舊覆寫。
+- ⚠️ 舊版把規則包的物件命名為 `da-rule-pack-prometheus-rules-<pack>`，也會把名稱中間的 `rule-pack-` 切掉（`my-rule-pack-foo` 舊名 `da-rule-pack-my-foo`，現在是 `da-rule-pack-my-rule-pack-foo`）。套用過舊版輸出的叢集，套用新輸出後新舊物件並存、同一批規則載入兩次；checklist 的 Phase 5 有一步列出本工具產生過的全部物件（依 `migrated-from=configmap` 標籤），名稱不在這次輸出裡的要自行刪除。
 
 **範例**
 

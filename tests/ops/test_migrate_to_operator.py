@@ -1226,11 +1226,14 @@ def test_the_keys_of_one_configmap_are_one_prometheusrule():
     found = [_rule_file("prometheus-rules-zdb", "cm.yaml", [_group("zrec1"), _group("zrec2")],
                         key="zdb-recording.yml"),
              _rule_file("prometheus-rules-zdb", "cm.yaml", [_group("zalerts")],
-                        key="zdb-alert.yml")]
+                        key="zdb-alert.yml"),
+             # a THIRD key: "the first two" is not "every one"
+             _rule_file("prometheus-rules-zdb", "cm.yaml", [_group("zextra")],
+                        key="zdb-extra.yml")]
     planned = mto.planned_rules(found, "zns")
     # One object, every group, in the order the manifest gives the keys.
-    assert _names(planned) == [("da-rule-pack-zdb", ["zrec1", "zrec2", "zalerts"])]
-    assert planned[0]["keys"] == ["zdb-recording.yml", "zdb-alert.yml"]
+    assert _names(planned) == [("da-rule-pack-zdb", ["zrec1", "zrec2", "zalerts", "zextra"])]
+    assert planned[0]["keys"] == ["zdb-recording.yml", "zdb-alert.yml", "zdb-extra.yml"]
     assert planned[0]["crd"]["metadata"]["namespace"] == "zns"
 
 
@@ -1240,15 +1243,34 @@ def test_merging_is_by_the_objects_identity_not_by_its_name():
     collide on the OUTPUT name, and that is refused, naming both."""
     found = [_rule_file("zrules", "one.yaml", [_group("g1")]),
              _rule_file("zrules", "two.yaml", [_group("g2")]),            # another file
+             _rule_file("zrules", "four.yaml", [_group("g5")]),           # …and a third
              _rule_file("zother", "three.yaml", [_group("g3")], document=1),
              _rule_file("zother", "three.yaml", [_group("g4")], document=2)]  # another document
-    assert len(mto.source_objects(found)) == 4
+    assert len(mto.source_objects(found)) == 5
     with pytest.raises(mto.MigrationRefused) as exc:
         mto.planned_rules(found, "zns")
     lines = exc.value.lines
     assert len(lines) == 2, lines
-    assert "one.yaml (ConfigMap zrules), two.yaml (ConfigMap zrules)" in lines[0]
-    assert "`da-rule-pack-zother`" in lines[1] and lines[1].count("three.yaml") == 2
+    # every source of a name is named — three of them, not the first two
+    assert lines[0].startswith("3 sources give the PrometheusRule `da-rule-pack-zrules`")
+    assert ("one.yaml (ConfigMap zrules, document 1), two.yaml (ConfigMap zrules, document 1), "
+            "four.yaml (ConfigMap zrules, document 1)") in lines[0]
+    # two objects of one name in ONE file are told apart by their document
+    assert ("three.yaml (ConfigMap zother, document 1), "
+            "three.yaml (ConfigMap zother, document 2)") in lines[1]
+
+
+def test_plain_rule_files_are_never_merged_whatever_their_names():
+    """`X.yml` and `x.yml` give one object name; they are two sources and the
+    set is refused — merged by (lower-cased) name they would be one
+    PrometheusRule made of two files."""
+    found = [_rule_file("X", "X.yml", [_group("g1")], kind=None),
+             _rule_file("x", "x.yml", [_group("g2")], kind=None)]
+    assert len(mto.source_objects(found)) == 2
+    with pytest.raises(mto.MigrationRefused) as exc:
+        mto.planned_rules(found, "zns")
+    assert "2 sources give the PrometheusRule `da-rule-pack-x`" in exc.value.lines[0]
+    assert "X.yml, x.yml" in exc.value.lines[0]
 
 
 @pytest.mark.parametrize("obj, expected", [
@@ -1259,6 +1281,11 @@ def test_merging_is_by_the_objects_identity_not_by_its_name():
     ({"name": "rule-pack-zdb", "file": "rule-pack-zdb.yaml", "kind": None}, "zdb"),
     # anything else keeps its own name, lower-cased
     ({"name": "My-Rules", "file": "x.yaml", "kind": "ConfigMap"}, "my-rules"),
+    # …a pack's too (a ConfigMap pack that kept its case was a name refused)
+    ({"name": "prometheus-rules-ZDB", "file": "x.yaml", "kind": "ConfigMap"}, "zdb"),
+    ({"name": "Prometheus-Rules-ZDB", "file": "x.yaml", "kind": "ConfigMap"}, "zdb"),
+    # a leading `rule-pack-` is what the object's own prefix says already
+    ({"name": "rule-pack-zdb", "file": "x.yaml", "kind": "ConfigMap"}, "zdb"),
     # ⛔ anchored: `str.replace` cut the prefix out of the MIDDLE
     ({"name": "my-rule-pack-zdb", "file": "x.yaml", "kind": "ConfigMap"}, "my-rule-pack-zdb"),
     ({"name": "my-prometheus-rules-zdb", "file": "x.yaml", "kind": "ConfigMap"},
@@ -1302,10 +1329,40 @@ def test_the_configmap_generator_names_its_objects_through_the_declaration():
     # a name Kubernetes does not take (a plain rule file is named after its stem)
     ([_rule_file("My_Rules", "My_Rules.yml", [_group("g")], kind=None)],
      "`da-rule-pack-my_rules`, is not one Kubernetes takes"),
+    # …judged for a ConfigMap's name as for a file's
+    ([_rule_file("z_cm", "cm.yaml", [_group("g")])],
+     "`da-rule-pack-z_cm`, is not one Kubernetes takes"),
+    # each LABEL of the name starts and ends alphanumeric, not the whole string only
+    ([_rule_file("a..b", "a..b.yml", [_group("g")], kind=None)],
+     "`da-rule-pack-a..b`, is not one Kubernetes takes"),
+    ([_rule_file("c-.d", "c-.d.yml", [_group("g")], kind=None)],
+     "`da-rule-pack-c-.d`, is not one Kubernetes takes"),
+    ([_rule_file("e.-f", "e.-f.yml", [_group("g")], kind=None)],
+     "`da-rule-pack-e.-f`, is not one Kubernetes takes"),
+    # 254 characters: one over what an object name may be
+    ([_rule_file("z" * (254 - len("da-rule-pack-")), "cm.yaml", [_group("g")])],
+     "is not one Kubernetes takes"),
+    # 253 is a name, and `<name>.yaml` is then no file name a directory takes
+    ([_rule_file("z" * (253 - len("da-rule-pack-")), "cm.yaml", [_group("g")])],
+     "makes an output file name over 255 bytes"),
+    # no name can be made of it at all: refused with the rest, not a crash
+    ([_rule_file("a/b", "cm.yaml", [_group("g")])], "it gives no object name"),
     # the keys of one ConfigMap repeat a group name
     ([_rule_file("zsame", "cm.yaml", [_group("zdup")], key="a.yml"),
       _rule_file("zsame", "cm.yaml", [_group("zdup")], key="b.yml")],
      "group `zdup` is in key `a.yml` and in `b.yml`"),
+    # …in the first key and the THIRD
+    ([_rule_file("zsame", "cm.yaml", [_group("zdup")], key="a.yml"),
+      _rule_file("zsame", "cm.yaml", [_group("zmid")], key="b.yml"),
+      _rule_file("zsame", "cm.yaml", [_group("zdup")], key="c.yml")],
+     "group `zdup` is in key `a.yml` and in `c.yml`"),
+    # the SECOND planned object is the one that meets a PrometheusRule of the sources
+    ([_rule_file("da-rule-pack-zlst", "crd.yaml", [_group("g")], kind="PrometheusRule",
+                 key="spec"),
+      _rule_file("zfirst", "first.yaml", [_group("g1")]),
+      _rule_file("zlst", "cm.yaml", [_group("g2")])],
+     "cm.yaml (ConfigMap zlst, document 1): the `da-rule-pack-zlst` it gives is the name of "
+     "a PrometheusRule already in the sources (crd.yaml); applied to the same namespace"),
     # the output would replace a PrometheusRule that is already in the sources
     ([_rule_file("da-rule-pack-zlst", "crd.yaml", [_group("g")], kind="PrometheusRule",
                  key="spec"),
@@ -1316,6 +1373,14 @@ def test_a_set_that_would_not_stay_distinct_is_refused(found, needle):
     with pytest.raises(mto.MigrationRefused) as exc:
         mto.planned_rules(found, "zns")
     assert needle in "\n".join(exc.value.lines), exc.value.lines
+
+
+def test_the_longest_name_that_is_written_is_taken():
+    """The control of the two length rows above: one byte under the file
+    name bound is planned."""
+    longest = "z" * (255 - len(".yaml") - len("da-rule-pack-"))
+    planned = mto.planned_rules([_rule_file(longest, "cm.yaml", [_group("g")])], "zns")
+    assert len(mto.output_file_name(planned[0]["name"]).encode()) == 255
 
 
 def test_a_group_name_repeated_inside_one_key_is_not_this_tools_refusal():
@@ -1333,13 +1398,13 @@ def _write_cm(path, name, keys, namespace="zns"):
                     f"  namespace: {namespace}\ndata:\n{data}", encoding="utf-8")
 
 
-def _cli(*argv):
+def _cli(*argv, lang="en"):
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'scripts',
                           'tools', 'ops', 'migrate_to_operator.py')
     import subprocess
     return subprocess.run([sys.executable, script, *argv], capture_output=True, text=True,
                           encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
-                          timeout=300)
+                          timeout=300, env={**os.environ, "DA_LANG": lang})
 
 
 @pytest.mark.usefixtures("da_guard_env")
@@ -1350,24 +1415,72 @@ def test_cli_two_keys_end_as_one_file_and_the_summary_says_one(tmp_path):
     src, out = tmp_path / "src", tmp_path / "out"
     src.mkdir()
     _write_cm(src / "cm.yaml", "prometheus-rules-zdb",
-              [("zdb-recording.yml", "zrec"), ("zdb-alert.yml", "zalerts")])
+              [("zdb-recording.yml", "zrec"), ("zdb-alert.yml", "zalerts"),
+               ("zdb-extra.yml", "zextra")])
     done = _cli("--source-dir", str(src), "--output-dir", str(out))
     assert done.returncode == 0, done.stderr
     written = sorted(p.name for p in out.iterdir())
     assert written == ["MIGRATION-CHECKLIST.md", "da-rule-pack-zdb.yaml"]
     crd = yaml.safe_load((out / "da-rule-pack-zdb.yaml").read_text(encoding="utf-8"))
-    assert [g["name"] for g in crd["spec"]["groups"]] == ["zrec", "zalerts"]
+    assert [g["name"] for g in crd["spec"]["groups"]] == ["zrec", "zalerts", "zextra"]
     assert done.stderr.count("Generated:") == 2
     assert "1 ConfigMaps → 1 PrometheusRule CRDs" in done.stderr
     checklist = (out / "MIGRATION-CHECKLIST.md").read_text(encoding="utf-8")
-    assert "**ConfigMap Files**: 1" in checklist and "**Output CRDs**: 1 " in checklist
-    # the breaking rename: the checklist says how to find what the old name left
-    assert "grep '/da-rule-pack-prometheus-rules-'" in checklist
-    # …and the JSON summary of the same run counts the same objects
+    for counts in ("**ConfigMap Files**: 1", "**Output CRDs**: 1 ", "**Rule Groups**: 3"):
+        assert counts in checklist, counts
+    # the breaking rename: the checklist of EITHER language says how to find
+    # what an old name left — by the label, so a rename the one prefix does
+    # not describe (`my-rule-pack-foo`) is found too
+    zh = _cli("--source-dir", str(src), "--checklist-only", lang="zh").stdout
+    assert "**ConfigMap 檔案數**: 1" in zh and "**Rule 群組數**: 3" in zh, zh
+    for text in (checklist, zh):
+        assert text.count("kubectl get prometheusrule -A -l migrated-from=configmap`") == 1
+        assert text.count("kubectl delete prometheusrule -n <namespace> <name>") == 1
+        assert "`da-rule-pack-prometheus-rules-<pack>`" in text
+    # …and every other route to the counts gives the same ones
     summary = json.loads(_cli("--source-dir", str(src), "--output-dir", str(tmp_path / "o2"),
                               "--json").stdout)
-    assert (summary["configmap_files"], summary["prometheus_rules"], summary["total_crds"]) \
-        == (1, 1, 1)
+    assert (summary["configmap_files"], summary["prometheus_rules"], summary["total_crds"],
+            summary["rule_groups"]) == (1, 1, 1, 3), summary
+    only = _cli("--source-dir", str(src), "--checklist-only")
+    assert only.returncode == 0, only.stderr
+    only_json = json.loads(_cli("--source-dir", str(src), "--checklist-only", "--json").stdout)
+    assert (only_json["configmap_files"], only_json["rule_groups"]) == (1, 3), only_json
+    assert "**ConfigMap Files**: 1" in only.stdout and "**Rule Groups**: 3" in only.stdout
+
+
+@pytest.mark.usefixtures("da_guard_env")
+@pytest.mark.parametrize("mode", [[], ["--dry-run"], ["--json"]],
+                         ids=lambda m: " ".join(m) or "write")
+def test_cli_a_rule_file_this_run_does_not_write_is_refused_in_the_output_dir(tmp_path, mode):
+    """Review of #4041: the rename left the OLD name's file beside the new
+    one in a directory written before, and the checklist's apply step globs
+    both — the same rules loaded twice. What this run writes is replaced as
+    before; a rule file it does not write stops it, nothing written."""
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    _write_cm(src / "cm.yaml", "prometheus-rules-zdb", [("a.yml", "zg")])
+    (out / "da-rule-pack-zdb.yaml").write_text("old run, same name\n", encoding="utf-8")
+    (out / "notes.yaml").write_text("mine\n", encoding="utf-8")  # not a rule file: left be
+    ok = _cli("--source-dir", str(src), "--output-dir", str(out), *mode)
+    assert ok.returncode == 0, ok.stderr
+    stale = out / "da-rule-pack-prometheus-rules-zdb.yaml"
+    stale.write_text("old name\n", encoding="utf-8")
+    before = {p.name: p.read_bytes() for p in out.iterdir()}
+    done = _cli("--source-dir", str(src), "--output-dir", str(out), *mode)
+    assert done.returncode == 2, (done.stdout, done.stderr)
+    assert "holds PrometheusRule files this run does not write: " \
+           "da-rule-pack-prometheus-rules-zdb.yaml." in done.stderr, done.stderr
+    assert "notes.yaml" not in done.stderr and "Traceback" not in done.stderr
+    assert "kind: PrometheusRule" not in done.stdout
+    assert {p.name: p.read_bytes() for p in out.iterdir()} == before
+    # an entry of the naming that is no file is named too, not passed over
+    stale.unlink()
+    (out / "da-rule-pack-zgone.yaml").mkdir()
+    done = _cli("--source-dir", str(src), "--output-dir", str(out), *mode)
+    assert done.returncode == 2 and "Traceback" not in done.stderr, done.stderr
+    assert "da-rule-pack-zgone.yaml: not a regular file" in done.stderr, done.stderr
 
 
 @pytest.mark.usefixtures("da_guard_env")
@@ -1386,7 +1499,8 @@ def test_cli_a_collision_is_exit_2_in_every_mode_and_writes_and_prints_nothing(t
     done = _cli("--source-dir", str(src), *[a.replace("{out}", str(out)) for a in mode])
     assert done.returncode == 2, (done.stdout, done.stderr)
     assert "2 sources give the PrometheusRule `da-rule-pack-zrules`" in done.stderr
-    assert "one.yaml (ConfigMap zrules), two.yaml (ConfigMap zrules)" in done.stderr
+    assert ("one.yaml (ConfigMap zrules, document 1), "
+            "two.yaml (ConfigMap zrules, document 1)") in done.stderr, done.stderr
     assert "Traceback" not in done.stderr
     if "--json" in mode:
         # the one JSON document a refusal leaves is the error envelope
