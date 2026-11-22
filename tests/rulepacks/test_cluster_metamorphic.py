@@ -68,6 +68,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "tools" / "lint"))
 sys.path.insert(0, str(ROOT / "scripts" / "tools"))
 import check_cluster_identity as cci  # noqa: E402
+import _lib_consumer_read  # noqa: E402
 
 PROMTOOL = shutil.which("promtool")
 TESTS = sorted((ROOT / "tests" / "rulepacks").glob("*_test.yaml"))
@@ -92,7 +93,7 @@ _NAMES_CLUSTER = re.compile(r"\{\{\s*with\s+\$labels\.da_cluster\s*\}\}")
 
 def _cluster_naming() -> "set[str]":
     out = set()
-    for path in sorted((ROOT / "rule-packs").glob("rule-pack-*.yaml")):
+    for path in _lib_consumer_read.RULE_PACKS.files_under(ROOT):
         doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for group in doc.get("groups") or []:
             for rule in group.get("rules") or []:
