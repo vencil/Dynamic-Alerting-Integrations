@@ -8,7 +8,7 @@ token is contained here by rate limiting and the revoked-set check.
 Built on **Envoy** (`envoyproxy/envoy:distroless-v1.38.0`).
 
 Source issue: [#507](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/507) (IV-2b) ·
-Design: [ADR-020](../../docs/adr/020-tenant-federation.md) §Blast radius Layer 2.
+Design: [ADR-020](../../docs/adr/020-tenant-federation.md) §Gateway 驗章、撤銷與限流.
 
 Tenant-side usage — how a tenant gets a token and points its Prometheus /
 Grafana at this gateway — is [`docs/integration/tenant-federation.md`](../../docs/integration/tenant-federation.md).

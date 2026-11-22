@@ -1,4 +1,4 @@
-federation-proxy installed — ADR-020 §代理注入租戶標籤 (federation read-path isolation).
+federation-proxy installed — ADR-020 (tenant label injection; federation read-path isolation).
 
   Service : {{ include "federation-proxy.name" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
   Upstream: {{ .Values.upstream.url }}

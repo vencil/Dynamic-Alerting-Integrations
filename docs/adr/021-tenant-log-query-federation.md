@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-24
-updated_at: 2026-11-21
+updated_at: 2026-11-22
 ---
 
 # ADR-021: 租戶在平台上查自己的日誌 — 平台只管查詢授權，日誌進入端另以契約約束
@@ -107,7 +107,7 @@ gateway 轉送時，`Authorization` header 換成 gateway 自己連日誌庫的�
 
 gateway 在查詢路徑上強制 `AccountID=X`，若寫入端蓋錯或可被偽造，查詢端會「忠實地」把錯租戶的日誌送出去，而且沒有任何錯誤訊號。
 
-開放租戶應用日誌之前，還要先硬化節點隔離：依 namespace 蓋章的前提是 Kubernetes 的 pod 邊界可信。租戶工作負載若逃出容器（特權逃逸、掛載節點 socket），可以在節點層干擾 Vector 或偽造別的 namespace 的標籤。所以先決條件包含對租戶工作負載強制 Pod Security Standards 與 AppArmor／Seccomp。這與既有的殘餘風險相關：Vector DaemonSet 以 root 加 `DAC_READ_SEARCH` 讀取整個節點的 pod 日誌。
+開放租戶應用日誌之前，還要先硬化節點隔離：依 namespace 蓋章的前提是 Kubernetes 的 pod 邊界可信。租戶工作負載若逃出容器（特權逃逸、掛載節點 socket），可以在節點層干擾 Vector 或偽造別的 namespace 的標籤。所以先決條件包含對租戶工作負載強制 Pod Security Standards（Kubernetes 內建的 pod 權限分級，例如禁止特權容器與掛載節點路徑）與 AppArmor／Seccomp（Linux 核心限制程序能存取哪些檔案、能呼叫哪些系統呼叫的機制）。這與既有的殘餘風險相關：Vector DaemonSet 以 root 加 `DAC_READ_SEARCH`（略過檔案讀取權限檢查的 Linux capability）讀取整個節點的 pod 日誌。
 
 ### AccountID 配發規則
 
@@ -137,7 +137,7 @@ gateway 在查詢路徑上強制 `AccountID=X`，若寫入端蓋錯或可被偽�
   已有 id 的租戶照常取得原 id：它在帳本裡的配發不是倒退弄丟的那部分。
 - **開機另比對仍有效的日誌 token**：token 的 `account_id` 大於等於計數器、或與帳本對該租戶的配發不一致，就拒絕啟動。
 
-還原備份一律經 `tenant-api state restore`，帳本只合併、不覆蓋：配發取現行帳本、備份、有效日誌 token 三者的聯集，同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次拒絕、不寫入。計數器取下列最大值，只升不降：現行計數器、備份計數器加上安全邊際、聯集中最大 id + 1、高水位 + 1。安全邊際預設是 conf.d 租戶數的兩倍、至少 10000，可用 `--account-id-margin` 指定。它涵蓋「兩份 ConfigMap 一起從同一份備份還原」的情況：這時高水位與 token 紀錄也一樣舊，備份之後配發的 id 沒有任何地方記得，只能整段跳過（etcd 還原快照時用 `--bump-revision` 處理同一個問題）。邊際加在備份的計數器上，所以同一份備份以同樣的邊際還原兩次，第二次不會再變。帳本空白但高水位還在（重新安裝）時，用 `state restore --no-backup` 只合併現行帳本、token 與高水位。
+還原備份一律經 `tenant-api state restore`，帳本只合併、不覆蓋：配發取現行帳本、備份、有效日誌 token 三者的聯集，同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次拒絕、不寫入。計數器取下列最大值，只升不降：現行計數器、備份計數器加上安全邊際、聯集中最大 id + 1、高水位 + 1。安全邊際預設是 conf.d 租戶數的兩倍、至少 10000，可用 `--account-id-margin` 指定。它涵蓋「兩份 ConfigMap 一起從同一份備份還原」的情況：這時高水位與 token 紀錄也一樣舊，備份之後配發的 id 沒有任何地方記得，只能整段跳過（etcd 還原快照時用 `--bump-revision` 把版本號往前跳一大段，處理的是同一個問題）。邊際加在備份的計數器上，所以同一份備份以同樣的邊際還原兩次，第二次不會再變。帳本空白但高水位還在（重新安裝）時，用 `state restore --no-backup` 只合併現行帳本、token 與高水位。
 
 **範例**：
 
@@ -166,13 +166,15 @@ PASS
 ok  	github.com/vencil/tenant-api/internal/federation/account	0.019s
 ```
 
+這套檢查有四個已知的缺口，列在「已知限制」。
+
 ### 寫入時只留白名單欄位
 
 平台營運日誌含基礎設施拓樸，**預設不對租戶可見**。
 
 - Vector 在寫入租戶分區**之前**，只照白名單 `tenantProjectionKeepFields`（`helm/vector/values.yaml`）從零重建每一列，不在清單上的欄位一律不帶。這裡用黑名單會失效：gateway 的稽核 JSON 被整份合併進事件，原始 `.message` 字串也還帶著每個欄位（包括後端 IP:port），將來新增的欄位也會默默跟進來。白名單由 `helm/vector/tests/projection_tests.yaml` 的 `vector test` 在 CI 驗證：餵進帶有各種拓樸欄位的列，斷言這些欄位在租戶副本中**不存在**。
 - **可見的只是一部分**：只有 `log_type=federation_audit`、且 `tenant_id` 非空並對應得到 AccountID 的列會進租戶分區。`gateway_operational`（Envoy 操作層錯誤，不屬於任何租戶）、JWT 驗證失敗的列等其他類別永遠只在平台分區（`0:0`）。哪些類別、哪些欄位對租戶可見的目錄見 [`log-visibility-2tier-catalogue.md`](../internal/log-visibility-2tier-catalogue.md)。
-- 寫入時就丟掉，代表**事後無法復原**：改白名單只影響之後寫入的列。對「本來就不該給租戶看」的拓樸欄位可以接受。
+- 寫入時就丟掉，代表**事後無法復原**：改白名單只影響之後寫入的列。對「本來就不該給租戶看」的拓樸欄位可以接受。可見度規則若需要頻繁調整，替代做法是在查詢時才剝除欄位（可隨時改、但漏濾的風險落到查詢路徑上），目前延後。
 
 這份白名單與目錄是**治理**，不是安全邊界：跨租戶隔離完全來自 VictoriaLogs 的 `(AccountID, ProjectID)` 分區，租戶查得到的恆等於自己分區裡的列。
 
@@ -184,7 +186,7 @@ ok  	github.com/vencil/tenant-api/internal/federation/account	0.019s
 - **租戶淨化副本**：Vector 對符合條件的稽核列，淨化後寫進對應的 `AccountID:X`（`ProjectID=0`）。租戶只有開始投影之後的歷史，不回填舊資料。
 - **關聯鍵**：淨化**之前**，Vector 為每一列注入全域唯一、無語意的 `log_event_id`（UUIDv7，帶時間序的隨機識別碼），兩份副本都帶它。值班拿到租戶的截圖時，可以用它回 `0:0` 找到含節點資訊的完整那一列。
 - **`tenant_id` 到 AccountID 的對映**：不能直接拿字串當 AccountID。Helm 值 `tenantProjections` 列出每個租戶的對映（從帳本抄過來）；查不到的 `tenant_id` 不進任何租戶分區，只留在 `0:0`。Vector 啟動前由 init container（主容器啟動前先跑完的容器；這裡稱投影閘門）比對 `tenantProjections` 與 tenant-api 的帳本，不一致時預設不啟用租戶投影（只寫 `0:0`），可設成直接讓 pod 啟動失敗。
-- **為什麼每個租戶一個固定的 sink**：Vector 的 `http` sink 一個 batch 一個請求，header 是請求層級的屬性；用每筆事件的模板設 header，混了多個租戶的 batch 會互相污染（[vectordotdev/vector#21402](https://github.com/vectordotdev/vector/issues/21402) 是同構的失敗），而它不支援依鍵分批。所以用 `route` 分流到 N 個 sink，各帶固定的 `AccountID` header。
+- **為什麼每個租戶一個固定的 sink**（sink 是 Vector 把事件送出去的輸出端）：Vector 的 `http` sink 一個 batch 一個請求，header 是請求層級的屬性；用每筆事件的模板設 header，混了多個租戶的 batch 會互相污染（[vectordotdev/vector#21402](https://github.com/vectordotdev/vector/issues/21402) 是同構的失敗），而它不支援依鍵分批。所以用 `route` 分流到 N 個 sink，各帶固定的 `AccountID` header。
 - **退回**：投影是疊加層，移除 `tenantProjections` 就停止寫租戶分區，`0:0` 不受影響；已寫進租戶分區的零星資料等保留期回收（VictoriaLogs 不支援刪單筆）。
 
 ### Token
@@ -251,7 +253,7 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 
 **已知限制**
 
-- **已決定、尚未實作：偵測「該蓋章卻落進 `0:0`」的告警。** 本 ADR 決定在查詢端保留一個結構性的檢查：偵測本該帶租戶身分、卻掉進平台分區的日誌（進入端蓋章失效的訊號），發標準的 Alertmanager 告警（`warning`，通知平台維運），而**不**自動切斷租戶的查詢（誤判會切斷合法租戶、引發 SLA 事故），也不做依內容的異常偵測或自動斷流。rule pack 目前沒有這條告警；現有的投影告警只涵蓋淨化時的執行錯誤與丟列。
+- **已決定、尚未實作：偵測「該蓋章卻落進 `0:0`」的告警。** 本 ADR 決定在查詢端保留一個結構性的檢查：偵測本該帶租戶身分、卻掉進平台分區的日誌（進入端蓋章失效的訊號），發標準的 Alertmanager 告警（`warning`，通知平台維運），而**不**自動切斷租戶的查詢（誤判會切斷合法租戶、引發 SLA 事故），也不做依內容的異常偵測或自動斷流。rule pack 目前沒有完整涵蓋它的告警。`TenantProjectionFanoutDiscardSpike` 涵蓋一部分：`federation_audit` 列的 `tenant_id` 空白或對映不到 AccountID、因此只留在 `0:0` 的量，比自己一天的平均高出三倍時告警；量小或長期存在的落差會被併入基準而不觸發，其他日誌類別也不在範圍內。
 - **已決定、尚未實作：租戶自選的可見度子集。** 本 ADR 決定可見度分兩層：平台策展哪些日誌類別與欄位可以給租戶看，租戶再從中選自己要看的子集。目前只有平台那一層（`tenantProjectionKeepFields` 與只投影 `federation_audit`），沒有租戶自選子集的機制。
 - **已決定、尚未實作：在 gateway 強制 `/query` 帶 `limit`。** 本 ADR 決定 `/query` 除了時間範圍上限，還要強制帶 `limit` 收斂串流回傳量；gateway 目前不檢查也不補上 `limit`，只靠時間範圍上限與租戶指南。
 - **VictoriaLogs 本身的分區沒有被平台測試驗證。** 選原生分區的理由之一是它同樣套在 metadata 類端點（`field_values`、`stream_field_values` 等）上，不像 ADR-020 要顯式開 `-enable-label-apis`。但 gateway 的 E2E（`tests/federation-e2e/test_victorialogs_e2e.py`）用的是模擬日誌庫，驗證的是 gateway 送出的 header，不是 VictoriaLogs 對每個端點的隔離。
@@ -259,6 +261,10 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 - **不同日誌類別無法有不同保留期。** 社群版 VictoriaLogs 的 `-retentionPeriod` 是全域單一值（`helm/victorialogs` 預設 30 天）；應用日誌若需要更長的合規保留，要另起一個 VictoriaLogs 實例或用企業版。
 - **不能跨 `ProjectID` 一次查詢。** VictoriaLogs 沒有多租戶查詢（[VictoriaLogs#492](https://github.com/VictoriaMetrics/VictoriaLogs/issues/492)），租戶要同時看營運與應用日誌得分兩次查。
 - **單 pod 日誌庫。** `helm/victorialogs` 預設單副本加 ReadWriteOnce PVC，容量是按寫入量估的。租戶查詢是疊上去的新讀取負載，單 pod 同時是查詢的單點故障與擴展上限；開放更多租戶前要重估容量與高可用（runbook 的容量公式只算寫入）。
+- **升級後第一次啟動以當下的帳本為基準。** 高水位從那時起才存在，而且高水位落後於帳本時只會往上補齊；升級當下帳本若已經倒退，這套檢查救不回來。
+- **安全邊際是估計。** 兩份 ConfigMap 一起從同一份備份還原時，只有在備份之後配發的 id 數不超過邊際時才安全。
+- **直接編輯 ConfigMap 看不出來。** 能直接改 `tenant-api-state` 或 token store ConfigMap 的人，可以把計數器或高水位改小，上述檢查都察覺不到。chart 的 Role 以 `resourceNames` 只給 tenant-api 的 ServiceAccount 對這兩個物件的 get／update；其他能改 ConfigMap 的人由叢集自己的 RBAC 決定。
+- **跳號後的租戶可能換 id。** 帳本剛好倒退一次寫入時，被倒退掉的租戶下次要 token 會拿到新的 id，舊 id 保留不重發。這是身分漂移（同一個租戶前後兩個 AccountID，舊分區的日誌不再查得到），不是外洩。
 - **限流在多副本下會放大**，只靠儲存後端的並發上限兜底（見「Gateway 限流」）。持續觸發時再評估以 Redis 為後端的全域限流。
 - 每個 AccountID 一組的查詢指標基數會隨租戶數成長；需要時以 recording rule 降維。
 

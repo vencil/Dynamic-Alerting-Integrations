@@ -235,7 +235,7 @@ class TestProjectionEnabledShape:
     def test_transforms_render_with_failclosed_error_handling(self, repo_root: Path) -> None:
         """tenant_project must be drop_on_error + NOT reroute_dropped — a VRL
         error drops the event from the tenant branch (never default-allows it
-        into a partition). This is the Gemini 1c / §Fork B invariant."""
+        into a partition). This is the ADR-021 §寫入時只留白名單欄位 invariant."""
         cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
         tp = cfg["transforms"]["tenant_project"]
         assert tp["type"] == "remap"

@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-11
-updated_at: 2026-11-21
+updated_at: 2026-11-22
 ---
 
 # ADR-020: 租戶把自己的指標拉回自家系統 — 用現成的標籤注入代理，不自寫端點
@@ -17,6 +17,9 @@ updated_at: 2026-11-21
 ## 狀態
 
 ✅ **Accepted**（v2.9.0）。
+
+- 2026-05-17 修訂：撤銷集取代本 ADR 起初「不做伺服器端撤銷清單、只靠短效期與限流」的決定。`DELETE` token 把 `token_id` 寫進 token store 的撤銷集，gateway 定期重讀並拒絕清單內的 token；限流仍是必備的補償控制。見「Token」。
+- 2026-10-11 修訂：白名單與租戶子集移出 conf.d（平台存放租戶設定的 git 目錄），改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap），不再 commit。強制通過收錄檢查的紀錄因此只在 tenant-api 的日誌裡，見「已知限制」。
 
 > 依語言政策，本 ADR 不另製 `.en.md`。
 
@@ -160,14 +163,14 @@ prom-label-proxy 是很輕的中介層：解析 PromQL、注入標籤、把請�
 
 #### Gateway 驗章、撤銷與限流
 
-gateway 是 Envoy（distroless 映像），交付為 `helm/federation-gateway`。選 Envoy 的關鍵：最不能錯的 RS256 驗章交給原生的 `jwt_authn` filter，純設定、不必自己寫驗章邏輯。
+gateway 是 Envoy（distroless 映像：只含執行檔與必要函式庫、沒有 shell 與套件管理器的容器映像），交付為 `helm/federation-gateway`。選 Envoy 的關鍵：最不能錯的 RS256 驗章交給原生的 `jwt_authn` filter，純設定、不必自己寫驗章邏輯。
 
 filter 依「便宜的先做」排序：
 
 ```
 每 IP 限流
   → jwt_authn（RS256 驗章，按 kid 選鑰）
-  → Lua（查撤銷集；以驗證過的 claim 覆寫租戶 header）
+  → Lua（Envoy 內嵌的腳本 filter：查撤銷集；以驗證過的 claim 覆寫租戶 header）
   → 每 token 限流 → 每租戶限流
   → buffer → 稽核用 Lua
   → router
@@ -186,7 +189,7 @@ prom-label-proxy 在這一層只做一件事：把 `{tenant="<X>"}` 強制注入
 
 注入必須同時涵蓋**查詢 API** 與 **metadata API**。Grafana 的變數下拉選單（例如 `label_values(pod)`）走的是 `/api/v1/series`、`/api/v1/labels`、`/api/v1/label/<name>/values`；沒擋住，租戶 A 會在自家 Grafana 的下拉選單裡看到租戶 B 的 pod 名稱、instance、主機名。chart 寫死 `-enable-label-apis`，把注入延伸到 `/api/v1/labels` 與 `/api/v1/label/<name>/values`（`/api/v1/series` 不論這個旗標都會注入），而且不開放覆寫。
 
-上面三個是最常用的，不是全部。完整的 HTTP API 面由 federation E2E（`tests/federation-e2e/test_federation_e2e.py` 的 metadata API 情境）守住：proxy 服務的端點（查詢、metadata、rules、alerts）都限縮到該租戶；它不服務的端點（`/api/v1/targets`、`/api/v1/metadata`、`/api/v1/status/*`、admin API、`/api/v1/write`）一律不回 200。
+上面三個是最常用的，不是全部。完整的 HTTP API 面由 federation E2E（`tests/federation-e2e/test_federation_e2e.py` 的 metadata API 情境）守住：proxy 服務的端點（查詢、metadata、rules、alerts）都限縮到該租戶；它不服務的端點（`/api/v1/targets`、`/api/v1/metadata`、`/api/v1/status/config` 與 `/api/v1/status/tsdb`、admin API、`/api/v1/write`）一律不回 200。
 
 ### 稽核日誌與指標
 
@@ -197,7 +200,7 @@ prom-label-proxy 在這一層只做一件事：把 `{tenant="<X>"}` 強制注入
 - `query`：Envoy 的存取日誌沒有讀取請求本文的變數，所以由稽核用的 Lua 統一抽出 PromQL：GET 取自查詢字串、POST 取自表單本文，格式一致。buffer 與稽核 Lua 排在限流**之後**，被限流拒絕的請求不會被緩衝進 Envoy 記憶體。
 - 刻意不記「回傳了幾條 series」：那要 Envoy 緩衝並解析回應本文，成本太高；資源上限靠儲存後端執行，不靠日誌統計。也沒有「命中哪條白名單規則」：白名單不在查詢路徑上執行。
 
-日誌寫兩份：一份到 stdout（給日誌採集器，持久度等同節點的容器日誌輪替）；一份到 pod 內的 emptyDir，給 gateway pod 裡的 audit-metrics sidecar（Vector）讀取並產生指標，這份是暫存的指標來源，不是正式紀錄。裝了平台的 Vector 與 VictoriaLogs chart 後，stdout 那份會被收進中央日誌庫的平台分區（`0:0`），可以查詢超過 pod 生命週期的歷史。
+日誌寫兩份：一份到 stdout（給日誌採集器，持久度等同節點的容器日誌輪替）；一份到 pod 內的 emptyDir（隨 pod 建立、隨 pod 刪除的暫存目錄），給 gateway pod 裡的 audit-metrics sidecar（與 gateway 同 pod 執行的輔助容器，這裡是 Vector）讀取並產生指標，這份是暫存的指標來源，不是正式紀錄。裝了平台的 Vector 與 VictoriaLogs chart 後，stdout 那份會被收進中央日誌庫的平台分區（`0:0`），可以查詢超過 pod 生命週期的歷史。
 
 指標 **`tenant_federation_requests_total{tenant,status}`** 由 sidecar 產生（Envoy 原生的 stats 產生不了每租戶的高基數標籤）。`status` 是 HTTP 碼的分桶：
 
@@ -281,7 +284,8 @@ batch_job_failures -> state=warn pii=[] err=<nil>
 **已知限制**
 
 - **已決定、尚未實作：每個 token 的並發上限。** 本 ADR 決定在 gateway 限制每個 token 同時進行的查詢數（起始值 4：一個租戶的 Grafana、自管告警評估、值班查詢並行通常不超過 3）。`helm/federation-gateway` 目前只有速率限流，沒有每 token 的並發限制；並發目前只受儲存後端與限流間接約束。
-- **chart 的每 token 限流預設值低於本 ADR 原先決定的值。** 本 ADR 決定每 token 持續約每分鐘 30 次（對應 Grafana 預設 30 秒刷新、多面板的看板），可調範圍每分鐘 15 到 60 次；chart 預設是每分鐘 15 次，落在範圍的下緣。
+- **每 token 限流的實際上限隨 gateway 副本數變動。** 本 ADR 決定每 token 持續約每分鐘 30 次（對應 Grafana 預設 30 秒刷新、多面板的看板），可調範圍每分鐘 15 到 60 次。chart 的設定是每個 Envoy 實例每分鐘 15 次：預設 2 個副本時合計約每分鐘 30 次，與決定相符；自動擴展到上限 8 個副本時約每分鐘 120 次，超出 15 到 60 的範圍。要固定上限，得改用全域限流（例如以 Redis 為後端），目前沒有。
+- **強制通過收錄檢查的稽核只在 tenant-api 的日誌裡。** 操作者、理由、指標寫在 tenant-api 的警告日誌與 `state_write` 稽核事件；白名單存在 state store，沒有 git 歷史。這份紀錄能保留多久，等於 tenant-api 日誌的保留期。
 - **稽核日誌沒有中央、可長期查詢的合規儲存。** stdout 那份的保留等同節點的容器日誌輪替；裝了平台的 Vector 與 VictoriaLogs 才收進中央日誌庫，但它的保留期與合規查詢需求沒有在本 ADR 定義。不寫每個 pod 自己的 PVC：ReadWriteOnce 的 PVC 在 gateway 多副本時無法同時掛載，ReadWriteMany 又引入 NFS／EFS 依賴。
 - **租戶內不再細分。** 白名單與子集只有兩層，沒有「租戶內的子團隊範圍」。需要時 schema 要從 `{平台白名單, 租戶子集}` 擴成三層，等有租戶提出再做。
 - **沒有合規角色分離。** 合規、稽核、操作者的權限沒有分開，等有合規客戶（SOX、ISO 27001、SOC 2）要求時再做。

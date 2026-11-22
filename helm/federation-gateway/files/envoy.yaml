@@ -60,7 +60,7 @@ static_resources:
                 # path-segment route guards cannot be bypassed. Both
                 # prom-label-proxy (the /api/v1/read 403 guard) and
                 # victorialogs (the default-deny endpoint allowlist; ADR-021
-                # §Blast radius Layer 3 — `/select/logsql%2Fquery` must not
+                # §查詢端點白名單 — `/select/logsql%2Fquery` must not
                 # slip past the allowlist into the catch-all) carry route-layer
                 # guards and need a fully canonical path. vm-cluster does its
                 # own Lua path rewrite and is left untouched (hardens #542;

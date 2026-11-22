@@ -446,7 +446,7 @@ federation:
     acknowledgeDataMove: false
 
   # Federation token lifetime, passed as --federation-token-ttl (Go duration).
-  # Matches the binary default; with Posture B server-side revocation an
+  # Matches the binary default; with server-side revocation (the revoked set) an
   # operator may safely raise this.
   tokenTTL: 4h
 

@@ -21,4 +21,4 @@ revoked token stops working within that window + the ConfigMap sync lag.
 
 The rate limits are per-Envoy-instance — with N replicas the effective
 ceiling is N x the configured value. They are a SOFT control; the hard
-blast-radius cap is Layer-1 storage (ADR-020 §三層資源防護).
+blast-radius cap is the storage backend's per-query limits (ADR-020).

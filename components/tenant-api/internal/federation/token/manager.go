@@ -89,8 +89,7 @@ func audienceFor(c Capability) string {
 
 // clockSkewLeeway backdates the JWT `iat` claim. A signer clock a few
 // seconds ahead of the verifier would otherwise place `iat` in the
-// verifier's future and get a just-issued token rejected (ADR-020;
-// Gemini round-7 review). The gateway verifier sets a matching leeway.
+// verifier's future and get a just-issued token rejected. The gateway verifier sets a matching leeway.
 const clockSkewLeeway = time.Minute
 
 // tokenIDPrefix namespaces the public token handle. The audit log

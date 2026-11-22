@@ -693,7 +693,7 @@ data:
           # NOT demux: the projection must only ever see rows tenant_eligible
           # passed. test_vector_projection_vrl.py pins this input list.
           - tenant_eligible
-        # Fail-closed error handling (§Fork B / Gemini 1c): a row that aborts
+        # Fail-closed error handling (ADR-021 §寫入時只留白名單欄位): a row that aborts
         # (eligibility/enrichment miss) OR hits a runtime VRL error is DROPPED
         # from this branch — NOT sent onward, NOT rerouted to a tenant sink.
         # Both knobs are load-bearing and set EXPLICITLY:
@@ -975,7 +975,7 @@ data:
           headers:
             # Verified, server-side-derived tenant partition. NEVER trust a
             # tenant_id carried in the payload (zero-trust ingestion, ADR-021
-            # §contract) — this AccountID comes from the Git-registry-derived
+            # §日誌進入端的契約) — this AccountID comes from the Git-registry-derived
             # tenantProjections map, not the log line.
             AccountID: {{ $p.accountId | quote }}
             ProjectID: {{ $.Values.tenantProjectionProjectId | quote }}

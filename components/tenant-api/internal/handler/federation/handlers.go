@@ -141,7 +141,7 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 		}
 
 		// Federation token issuance is data egress — require admin on
-		// the target tenant (ADR-020 §Token). Org-scope-aware
+		// the target tenant (ADR-020). Org-scope-aware
 		// (ADR-027 §7): an org-scoped rule only grants admin on
 		// a tenant inside the caller's org.
 		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), req.TenantID, rbac.PermAdmin, handler.WriteScopeMeta(d.ConfigDir)) {

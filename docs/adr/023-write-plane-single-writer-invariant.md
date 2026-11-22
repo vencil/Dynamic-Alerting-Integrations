@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-30
-updated_at: 2026-11-21
+updated_at: 2026-11-22
 ---
 # ADR-023: tenant-api 的寫入只能有一個寫者，讀取可以水平擴展
 
@@ -29,7 +29,7 @@ tenant-api 把租戶設定以 GitOps 方式寫回 git（見 [ADR-009](009-tenant
 2. conf.d 是單一個 git 工作目錄（working tree）；PR 模式「每個租戶同時只有一個待審 PR」的去重紀錄也只存在記憶體裡。
 3. 部署是單副本（`replicaCount: 1`）；conf.d 預設是 emptyDir，可改成 ReadWriteOnce 的 PVC。本地的 base 分支只在 pod 啟動時由 init container（主容器啟動前先跑完的容器）同步一次。
 
-所以第二個副本不是水平擴展，而是兩個寫者對同一個 git 工作目錄並發操作：各自的鎖互相看不見，結果是工作目錄損毀、同一租戶出現重複 PR，而且資料遺失時沒有任何錯誤訊號。在本 ADR 之前，唯一擋住這件事的是「沒有人去動 `replicaCount`」。
+所以第二個副本不是水平擴展，而是兩個寫者對同一個 git 工作目錄並發操作：各自的鎖互相看不見，結果是工作目錄損毀、同一租戶出現重複 PR，而且資料遺失時沒有任何錯誤訊號。
 
 對照之下，federation 相關元件（[ADR-020](020-tenant-federation.md)）刻意做成無狀態、可多副本，和寫入路徑是兩種東西。
 

@@ -133,7 +133,7 @@ type Deps struct {
 
 	// AdmissionValidator runs the data-layer label-enrichment check
 	// when a metric is added to the federation whitelist (ADR-020
-	// IV-2e). Optional — nil when --federation-prometheus-url is unset,
+	// §白名單收錄檢查). Optional — nil when --federation-prometheus-url is unset,
 	// in which case PutFederationPolicy skips admission and the
 	// whitelist edit is schema-checked only.
 	AdmissionValidator *fedpolicy.AdmissionValidator

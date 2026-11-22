@@ -511,7 +511,7 @@ projectionGate:
         memory: 64Mi
 
 # ⛔ ALLOWLIST of the ONLY fields projected into a tenant partition (ADR-021
-# §Fork B; fail-CLOSED sanitization). The tenant copy is rebuilt from scratch
+# §寫入時只留白名單欄位; fail-CLOSED sanitization). The tenant copy is rebuilt from scratch
 # containing ONLY these fields (+ the trusted `account_id`) — everything else
 # is structurally absent. This is a DENYLIST→ALLOWLIST inversion (adversarial
 # review): demux deep-merges the whole gateway audit JSON to the event root, so

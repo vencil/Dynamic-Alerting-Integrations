@@ -489,7 +489,7 @@ func main() {
 
 	// v2.9.0 ADR-020 §Token: federation token signer. Optional — when
 	// --federation-key is unset wireFederation returns nil and the
-	// /federation routes below stay unregistered. Posture B: token
+	// /federation routes below stay unregistered. Token
 	// records live in a Kubernetes ConfigMap so tenant-api stays
 	// stateless and can run multi-replica.
 	ff.TTL = *federationTTL

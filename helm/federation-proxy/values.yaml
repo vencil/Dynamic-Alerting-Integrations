@@ -95,7 +95,7 @@ networkPolicy:
 # Horizontal autoscaling. prom-label-proxy parses PromQL into an AST,
 # injects the matcher, and re-serialises — a CPU-bound operation. On a
 # shared pod a tenant sending complex queries within its rate limit can
-# still starve neighbours, so scale on CPU (ADR-020 §三層資源防護).
+# still starve neighbours, so scale on CPU.
 autoscaling:
   enabled: true
   minReplicas: 2

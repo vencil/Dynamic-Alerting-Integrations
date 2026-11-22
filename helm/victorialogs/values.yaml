@@ -62,7 +62,7 @@ search:
   maxQueryDuration: "25s"
   # Concurrent query cap — the real RAM/CPU backstop. Also the per-pod
   # rate-limit backstop for the multi-replica gateway asymmetry (ADR-021
-  # Layer 2 note): no matter how many gateway replicas wave a single token
+  # §Gateway 限流): no matter how many gateway replicas wave a single token
   # through, actual concurrent execution here is bounded. Conservative
   # start; raise once steady-state read load is understood.
   maxConcurrentRequests: 6

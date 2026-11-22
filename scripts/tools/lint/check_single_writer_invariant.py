@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Single-writer invariant lint for the tenant-api write plane (ADR-023).
 
-Codifies ADR-023's "機制強制（三層）" as a commit/CI-time STATIC guard
-(ADR-023 §設定守衛). The other half is the Helm `fail` guard inside the chart template, which
+Codifies the first of ADR-023's three defences as a commit/CI-time STATIC
+guard (ADR-023 §設定守衛). The other half is the Helm `fail` guard inside the chart template, which
 only fires when helm actually renders; this lint catches the same breach
 earlier, at commit time, so a drift is a red CI rather than a latent production
 foot-gun. The Helm chart (`helm/tenant-api`) is tenant-api's only deployment
@@ -24,7 +24,7 @@ WHAT THIS CHECKS (the two halves of the runtime invariant):
      the default RollingUpdate surges a second Ready pod during a rollout, a
      phantom-writer window where two pods each hold their own write lock
      (ADR-023 §滾動更新期間的交疊). The Helm template must pin it.
-  3. The Helm template still carries the layer-1 `fail` guard (so removing the
+  3. The Helm template still carries the config-guard `fail` check (so removing the
      guard, not just bumping the value, is also caught).
   4. No autoscaler manifest (native HPA or KEDA ScaledObject/ScaledJob) is
      shipped under the chart's templates — it would drive replicas>1 and

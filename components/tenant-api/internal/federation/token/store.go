@@ -9,8 +9,7 @@ import (
 )
 
 // store is the JSON-file-backed Record store. Federation token records
-// are operational state, not GitOps configuration (ADR-020
-// §Token): they are machine-written on every issuance and must not
+// are operational state, not GitOps configuration (ADR-020): they are machine-written on every issuance and must not
 // generate a git commit each time. The whole file is rewritten under a
 // mutex on each mutation — one tenant holds at most a handful of live
 // 4h tokens, so the rewrite cost is negligible.

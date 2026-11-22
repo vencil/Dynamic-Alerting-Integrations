@@ -52,9 +52,9 @@ tests:
                 ADR-023 assumed when it accepted a brief read outage on every
                 `strategy: Recreate` deploy. This is the codified RE-TRIGGER for the
                 deferred read/write split (#678 / #788, closed deferred; see ADR-023
-                Deferred A4). NOT an outage. Action: reopen the CQRS split, and
-                sequence it WITH the write-plane K8s Lease (#787 / A3) — A4 alone
-                leaves writes (Save) dropping on deploy. Details:
+                §讀寫拆分部署). NOT an outage. Action: reopen the CQRS split, and
+                sequence it WITH the write-plane K8s Lease (ADR-023 §Lease) — the
+                split alone leaves writes (Save) dropping on deploy. Details:
                 docs/api/tenant-api-hardening.md §5.6. Dashboard: tenant_api_sse_clients.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
               summary: "tenant-api read load sustained — revisit read/write CQRS split (ADR-023 §讀寫拆分部署)"

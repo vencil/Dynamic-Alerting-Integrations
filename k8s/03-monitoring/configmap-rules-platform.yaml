@@ -501,10 +501,11 @@ data:
     \       ADR-023 assumed when it accepted a brief read outage on every\n\n    \
     \    `strategy: Recreate` deploy. This is the codified RE-TRIGGER for the\n\n\
     \        deferred read/write split (#678 / #788, closed deferred; see ADR-023\n\
-    \n        Deferred A4). NOT an outage. Action: reopen the CQRS split, and\n\n\
-    \        sequence it WITH the write-plane K8s Lease (#787 / A3) — A4 alone\n\n\
-    \        leaves writes (Save) dropping on deploy. Details:\n\n        docs/api/tenant-api-hardening.md\
-    \ §5.6. Dashboard: tenant_api_sse_clients.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md\n\
+    \n        §讀寫拆分部署). NOT an outage. Action: reopen the CQRS split, and\n\n    \
+    \    sequence it WITH the write-plane K8s Lease (ADR-023 §Lease) — the\n\n   \
+    \     split alone leaves writes (Save) dropping on deploy. Details:\n\n      \
+    \  docs/api/tenant-api-hardening.md §5.6. Dashboard: tenant_api_sse_clients.\n\
+    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md\n\
     \      summary: tenant-api read load sustained — revisit read/write CQRS split\
     \ (ADR-023 §讀寫拆分部署)\n  - alert: TenantApiSingleWriterBreach\n    expr: \"max by\
     \ (namespace, deployment, da_cluster) (\\n  kube_deployment_spec_replicas{deployment=\\\

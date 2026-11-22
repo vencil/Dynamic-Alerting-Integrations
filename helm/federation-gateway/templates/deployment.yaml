@@ -158,7 +158,7 @@ spec:
               mountPath: /etc/jwks
               readOnly: true
             # Whole-ConfigMap mount (NOT subPath) so kubelet keeps the
-            # projected revoked.txt updated — Posture B revocation depends
+            # projected revoked.txt updated — token revocation depends
             # on it (subPath mounts do not receive updates).
             - name: revoked
               mountPath: /etc/revoked

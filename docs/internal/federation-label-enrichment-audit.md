@@ -24,7 +24,7 @@ audit 最重要的發現不是「某些 metric 缺 label」，而是 **label 的
 |---|---|---|
 | Data layer（實際） | **`tenant`** | `k8s/03-monitoring/configmap-prometheus.yaml` job `tenant-exporters` relabel `target_label: tenant`；`components/threshold-exporter/app/collector.go` `labelNames := []string{"tenant", ...}`；`k8s/03-monitoring/configmap-rules-*.yaml` 中 DB / middleware 類 rule pack（13/15）一律 `on(tenant)` join / `by(tenant)` 聚合（其餘 2 個 `operational` / `platform` 為不分租戶的平台內部規則，亦不用 `tenant_id`） |
 | Federation proxy（IV-2a #506 已 merge） | `tenant_id` | `helm/federation-proxy/values.yaml` `tenant.label: tenant_id` → `prom-label-proxy -label=tenant_id` |
-| ADR-020 prose | `tenant_id` | §前提約束 / 四層路由圖 / §實作計畫 多處寫 `{tenant_id="<X>"}` |
+| ADR-020 prose | `tenant_id` | （改寫前的）前提約束、四層路由圖、實作計畫多處寫 `{tenant_id="<X>"}` |
 
 `tenant_id` 在整個 `k8s/` data-layer 設定裡 **一次都沒出現**。
 
@@ -39,7 +39,7 @@ Federation **對齊平台既有的 `tenant`**。反方向（把平台的 relabel
 issue #505 的 PR 一併處理：
 
 - `helm/federation-proxy/values.yaml`：`tenant.label` `tenant_id` → `tenant`（+ chart README / chart version）。
-- `docs/adr/020-tenant-federation.md` §前提約束：label 名對齊 `tenant` + 本 audit 的修正註記。
+- `docs/adr/020-tenant-federation.md`（現 §資料層的租戶標籤）：label 名對齊 `tenant` + 本 audit 的修正註記。
 
 ## 現況盤點表
 

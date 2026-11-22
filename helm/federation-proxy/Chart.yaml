@@ -1,6 +1,6 @@
 apiVersion: v2
 name: federation-proxy
-description: Tenant federation label-injection proxy (ADR-020 §代理注入租戶標籤) — prom-label-proxy that force-injects a per-tenant matcher into every PromQL query and metadata-API call
+description: Tenant federation label-injection proxy (ADR-020) — prom-label-proxy that force-injects a per-tenant matcher into every PromQL query and metadata-API call
 type: application
 # version: Helm Chart 版本（隨 Chart 結構/模板變更升級）
 # 0.1.2 — #902 L2: pin prom-label-proxy by digest (image.digest knob) — supply-chain

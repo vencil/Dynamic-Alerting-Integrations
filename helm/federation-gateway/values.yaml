@@ -69,7 +69,7 @@ jwt:
   audience: tenant-federation
   # Clock-skew leeway — tenant-api may sign a few seconds ahead of the
   # gateway's clock; without leeway a just-issued token's iat lands in
-  # the verifier's future and 401s (ADR-020 §Token).
+  # the verifier's future and 401s.
   clockSkewSeconds: 60
   # Verified-JWT cache size — repeat presentations of the same token skip
   # the RSA signature check (the expensive step).
