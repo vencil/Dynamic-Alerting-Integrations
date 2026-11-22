@@ -2,47 +2,46 @@
 # §日誌進入端的契約 — audit rows with a verified account_id that reached only 0:0).
 # Run: promtool test rules tests/rulepacks/platform-tenant-projection-stamp-missing_test.yaml
 #
-# The input series model what helm/vector's prometheus_exporter really serves
-# for a log_to_metric counter (measured on Vector 0.61.0): the series appears
-# at the first miss already at >= 1, carries no earlier sample, and DISAPPEARS
-# 60-120s after its last increment (flush_period_secs default 60, with
-# internal_metrics feeding the same exporter); the next miss re-creates it at
-# 1. So most series below are short-lived — the shape `increase()`/`rate()`
-# cannot see (testing-playbook §PromQL rule-test traps). The scrape labels
+# The input series model what helm/vector's prometheus_exporter serves: the
+# chart pre-initialises the counter to 0 for every reason (static_metrics
+# source tenant_stamp_zero), so each series exists from Vector's start at 0,
+# a miss is a step up, and the series stays exported between misses. A pod
+# restart either restarts the counter at 0 under the same labels (container
+# restart) or starts a new series at 0 (new pod). The scrape labels
 # (pod / instance / job) are the real per-pod target shape.
 #
+# The rendered value is asserted in every firing case, so a rate() in place
+# of increase() (same firing times, per-second value) is caught too.
+#
 # Validates:
-#   1) ONE miss (a two-sample series) fires at once, with the description
-#      rendered, and keeps firing for the 1h window.
-#   2) It clears once that sample has left the 1h window.
-#   3) Two lives of one pod's series (vanished, re-created at 1) and a second
-#      pod are summed per reason into ONE alert; the two reasons are separate
-#      alerts; the per-pod labels (pod / instance) are aggregated away and the
-#      job is kept.
+#   1) ONE miss (0 -> 1) fires at once with the description rendered, holds
+#      while the last 0 sample is inside the 1h window, and clears after.
+#   2) The same with a 5m scrape interval.
+#   3) Two pods and two increments are summed per reason into ONE alert; the
+#      two reasons are separate alerts; pod / instance are aggregated away and
+#      the job is kept.
 #   4) Two Vector installs (different namespace label) stay two alerts — the
 #      aggregation drops only instance / pod / host (`sum without`, like the
 #      sibling Vector alerts), not the topology.
-#   5) A steady stream keeps one series alive past the window: the value is
-#      cumulative (720 after 2h), and the description does not call it a
-#      last-hour count.
-#   6) No series at all (a healthy pipeline: Vector up, nothing missed) → no
-#      alert.
+#   5) A steady stream: the value is the last hour's count, not the counter.
+#   6) A restart is not a miss: a container restart (counter back to 0, same
+#      labels) and a new pod (new series at 0) do not fire, and a restart
+#      after a miss does not hold the alert past the miss's hour.
+#   7) A healthy pipeline: series at 0 for hours → no alert.
 rule_files:
   - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
 tests:
-  # 1 + 2) A single miss at 5m on one pod; the exporter served it twice
-  # (5m, 6m), then expired it. The last sample is at 6m, so the 1h window
-  # (t-1h, t] still holds it at 65m and no longer at 66m.
+
+  # 1) A single miss at 5m on one pod, scraped every 1m. The last 0 sample is
+  #    at 4m; the 1h range is left-open, so it holds that sample up to 63m.
   - interval: 1m
-    name: single-short-lived-miss-fires-for-the-window-then-clears
+    name: single-miss-fires-for-the-window-then-clears
     input_series:
       - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
-        values: '_x5 1 1 _x80'
-      - series: 'vector_uptime_seconds{pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
-        values: '0+60x86'
+        values: '0x4 1x90'
     alert_rule_test:
       - eval_time: 4m
         alertname: TenantProjectionStampMissing
@@ -58,14 +57,11 @@ tests:
             exp_annotations: &one_not_projected
               summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store (not_projected)"
               description: |
-                Within the last hour Vector counted gateway audit rows
-                carrying a valid `account_id` (the verified claim of a
-                tenant's logs token) for a request that reached the log store,
-                which ended up in the platform 0:0 store but in no tenant
-                partition (reason=not_projected). The counter reads
-                1: rows counted since each Vector pod's
-                series was last created, which under a steady stream reaches
-                back more than an hour — not a last-hour count. A tenant whose
+                Within the last hour Vector counted about 1
+                gateway audit rows carrying a valid `account_id` (the verified
+                claim of a tenant's logs token) for a request that reached the
+                log store, which ended up in the platform 0:0 store but in no
+                tenant partition (reason=not_projected). A tenant whose
                 token is forwarded holds an AccountID, so it should see these rows.
                 not_projected: federation_audit rows whose tenant_id is blank or
                 missing from helm/vector `tenantProjections` — usually a tenant
@@ -93,7 +89,7 @@ tests:
               severity: warning
               alert_source: platform
             exp_annotations: *one_not_projected
-      - eval_time: 65m
+      - eval_time: 63m
         alertname: TenantProjectionStampMissing
         exp_alerts:
           - exp_labels:
@@ -102,24 +98,108 @@ tests:
               severity: warning
               alert_source: platform
             exp_annotations: *one_not_projected
-      - eval_time: 66m
+      - eval_time: 64m
         alertname: TenantProjectionStampMissing
         exp_alerts: []
 
-  # 3) vector-a: a life counting to 3 (2m-4m), expired, then a new life at 1
-  #    (10m-11m). vector-b: a life counting to 2 (8m-9m). Both not_projected:
-  #    per pod the max over the window is 3 and 2, summed to 5 (a lower bound
-  #    — the two lives of vector-a are not added). vector-c: origin_rejected,
-  #    a separate alert with its own value.
-  - interval: 1m
-    name: lives-and-pods-sum-per-reason-reasons-stay-separate
+  # 2) The same with a 5m scrape interval (a slow scrape still sees it): samples at
+  #    0m/5m/10m read 0, from 15m on 1. Fires at the first scrape that sees the
+  #    step, clears once the 10m sample has left the window (left-open: 70m).
+  #    At 69m the last sample is 4m old and increase() extrapolates to the
+  #    window's end, so the value reads 1.073 (hence "about" in the text).
+  - interval: 5m
+    name: five-minute-scrape-sees-the-miss
     input_series:
       - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
-        values: '_x2 1 2 3 _x5 1 1 _x10'
+        values: '0x2 1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TenantProjectionStampMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantProjectionStampMissing
+        exp_alerts:
+          - exp_labels:
+              reason: not_projected
+              job: vector-metrics
+              severity: warning
+              alert_source: platform
+            exp_annotations: &slow_scrape_15m
+              summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store (not_projected)"
+              description: |
+                Within the last hour Vector counted about 1
+                gateway audit rows carrying a valid `account_id` (the verified
+                claim of a tenant's logs token) for a request that reached the
+                log store, which ended up in the platform 0:0 store but in no
+                tenant partition (reason=not_projected). A tenant whose
+                token is forwarded holds an AccountID, so it should see these rows.
+                not_projected: federation_audit rows whose tenant_id is blank or
+                missing from helm/vector `tenantProjections` — usually a tenant
+                issued a logs token before its projection was added; add it
+                (copy the AccountID from `_account_registry.yaml`) and upgrade
+                the chart. If the tenant was just offboarded, its token was not
+                revoked (or the revocation has not reached the gateway yet):
+                revoke it first.
+                origin_rejected: suspicious_audit rows — demux reclassified them
+                because their pod_owner fails `audit.gatewayPodOwnerPrefix`:
+                either forged rows from a gateway-labelled pod, or a prefix
+                that no longer matches the real gateway (which empties every
+                tenant partition). Find the rows in 0:0 with
+                `log_type:federation_audit OR log_type:suspicious_audit`, a
+                non-empty account_id and upstream, grouped by tenant_id /
+                pod_name. Nothing is cut off automatically (ADR-021
+                §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+      - eval_time: 69m
+        alertname: TenantProjectionStampMissing
+        exp_alerts:
+          - exp_labels:
+              reason: not_projected
+              job: vector-metrics
+              severity: warning
+              alert_source: platform
+            exp_annotations:
+              summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store (not_projected)"
+              description: |
+                Within the last hour Vector counted about 1.073
+                gateway audit rows carrying a valid `account_id` (the verified
+                claim of a tenant's logs token) for a request that reached the
+                log store, which ended up in the platform 0:0 store but in no
+                tenant partition (reason=not_projected). A tenant whose
+                token is forwarded holds an AccountID, so it should see these rows.
+                not_projected: federation_audit rows whose tenant_id is blank or
+                missing from helm/vector `tenantProjections` — usually a tenant
+                issued a logs token before its projection was added; add it
+                (copy the AccountID from `_account_registry.yaml`) and upgrade
+                the chart. If the tenant was just offboarded, its token was not
+                revoked (or the revocation has not reached the gateway yet):
+                revoke it first.
+                origin_rejected: suspicious_audit rows — demux reclassified them
+                because their pod_owner fails `audit.gatewayPodOwnerPrefix`:
+                either forged rows from a gateway-labelled pod, or a prefix
+                that no longer matches the real gateway (which empties every
+                tenant partition). Find the rows in 0:0 with
+                `log_type:federation_audit OR log_type:suspicious_audit`, a
+                non-empty account_id and upstream, grouped by tenant_id /
+                pod_name. Nothing is cut off automatically (ADR-021
+                §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+      - eval_time: 70m
+        alertname: TenantProjectionStampMissing
+        exp_alerts: []
+
+  # 3) vector-a: two misses (0 -> 1 at 2m, -> 3 at 10m). vector-b: one miss at
+  #    8m. Both not_projected, summed to 4. vector-c: origin_rejected, a
+  #    separate alert with its own value.
+  - interval: 1m
+    name: pods-sum-per-reason-reasons-stay-separate
+    input_series:
+      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '0 0 1x7 3x10'
       - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-b", instance="10.0.0.2:9598", job="vector-metrics"}'
-        values: '_x8 1 2 _x12'
+        values: '0x7 1x12'
       - series: 'vector_tenant_projection_stamp_missed_events_total{reason="origin_rejected", pod="vector-c", instance="10.0.0.3:9598", job="vector-metrics"}'
-        values: '_x9 4 _x12'
+        values: '0x8 4x10'
     alert_rule_test:
       - eval_time: 15m
         alertname: TenantProjectionStampMissing
@@ -132,14 +212,11 @@ tests:
             exp_annotations:
               summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store (not_projected)"
               description: |
-                Within the last hour Vector counted gateway audit rows
-                carrying a valid `account_id` (the verified claim of a
-                tenant's logs token) for a request that reached the log store,
-                which ended up in the platform 0:0 store but in no tenant
-                partition (reason=not_projected). The counter reads
-                5: rows counted since each Vector pod's
-                series was last created, which under a steady stream reaches
-                back more than an hour — not a last-hour count. A tenant whose
+                Within the last hour Vector counted about 4
+                gateway audit rows carrying a valid `account_id` (the verified
+                claim of a tenant's logs token) for a request that reached the
+                log store, which ended up in the platform 0:0 store but in no
+                tenant partition (reason=not_projected). A tenant whose
                 token is forwarded holds an AccountID, so it should see these rows.
                 not_projected: federation_audit rows whose tenant_id is blank or
                 missing from helm/vector `tenantProjections` — usually a tenant
@@ -166,14 +243,11 @@ tests:
             exp_annotations:
               summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store (origin_rejected)"
               description: |
-                Within the last hour Vector counted gateway audit rows
-                carrying a valid `account_id` (the verified claim of a
-                tenant's logs token) for a request that reached the log store,
-                which ended up in the platform 0:0 store but in no tenant
-                partition (reason=origin_rejected). The counter reads
-                4: rows counted since each Vector pod's
-                series was last created, which under a steady stream reaches
-                back more than an hour — not a last-hour count. A tenant whose
+                Within the last hour Vector counted about 4
+                gateway audit rows carrying a valid `account_id` (the verified
+                claim of a tenant's logs token) for a request that reached the
+                log store, which ended up in the platform 0:0 store but in no
+                tenant partition (reason=origin_rejected). A tenant whose
                 token is forwarded holds an AccountID, so it should see these rows.
                 not_projected: federation_audit rows whose tenant_id is blank or
                 missing from helm/vector `tenantProjections` — usually a tenant
@@ -199,10 +273,10 @@ tests:
   - interval: 1m
     name: two-installs-stay-separate
     input_series:
-      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", namespace="vector-east", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
-        values: '_x2 1 1 _x10'
-      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", namespace="vector-west", pod="vector-z", instance="10.9.0.1:9598", job="vector-metrics"}'
-        values: '_x2 1 1 _x10'
+      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics", namespace="vector-east"}'
+        values: '0 0 1x10'
+      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-z", instance="10.9.0.1:9598", job="vector-metrics", namespace="vector-west"}'
+        values: '0 0 1x10'
     alert_rule_test:
       - eval_time: 5m
         alertname: TenantProjectionStampMissing
@@ -216,14 +290,11 @@ tests:
             exp_annotations: &two_installs_one
               summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store (not_projected)"
               description: |
-                Within the last hour Vector counted gateway audit rows
-                carrying a valid `account_id` (the verified claim of a
-                tenant's logs token) for a request that reached the log store,
-                which ended up in the platform 0:0 store but in no tenant
-                partition (reason=not_projected). The counter reads
-                1: rows counted since each Vector pod's
-                series was last created, which under a steady stream reaches
-                back more than an hour — not a last-hour count. A tenant whose
+                Within the last hour Vector counted about 1
+                gateway audit rows carrying a valid `account_id` (the verified
+                claim of a tenant's logs token) for a request that reached the
+                log store, which ended up in the platform 0:0 store but in no
+                tenant partition (reason=not_projected). A tenant whose
                 token is forwarded holds an AccountID, so it should see these rows.
                 not_projected: federation_audit rows whose tenant_id is blank or
                 missing from helm/vector `tenantProjections` — usually a tenant
@@ -250,15 +321,13 @@ tests:
               alert_source: platform
             exp_annotations: *two_installs_one
 
-  # 5) Steady stream: one miss every 10s for 2h keeps one series alive the
-  #    whole time (it never goes 60s without an increment), so at 2h it reads
-  #    720 although the last hour held 360. It fires, and the description
-  #    renders the cumulative value without calling it a last-hour count.
+  # 5) Steady stream: 6 misses a minute for 2h. At 119m the counter reads 714,
+  #    the alert reads the last hour's 360.
   - interval: 1m
-    name: steady-stream-value-is-cumulative-not-last-hour
+    name: steady-stream-value-is-the-last-hour
     input_series:
       - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
-        values: '6+6x119'
+        values: '0+6x119'
     alert_rule_test:
       - eval_time: 119m
         alertname: TenantProjectionStampMissing
@@ -271,14 +340,11 @@ tests:
             exp_annotations:
               summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store (not_projected)"
               description: |
-                Within the last hour Vector counted gateway audit rows
-                carrying a valid `account_id` (the verified claim of a
-                tenant's logs token) for a request that reached the log store,
-                which ended up in the platform 0:0 store but in no tenant
-                partition (reason=not_projected). The counter reads
-                720: rows counted since each Vector pod's
-                series was last created, which under a steady stream reaches
-                back more than an hour — not a last-hour count. A tenant whose
+                Within the last hour Vector counted about 360
+                gateway audit rows carrying a valid `account_id` (the verified
+                claim of a tenant's logs token) for a request that reached the
+                log store, which ended up in the platform 0:0 store but in no
+                tenant partition (reason=not_projected). A tenant whose
                 token is forwarded holds an AccountID, so it should see these rows.
                 not_projected: federation_audit rows whose tenant_id is blank or
                 missing from helm/vector `tenantProjections` — usually a tenant
@@ -298,18 +364,109 @@ tests:
                 §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
 
-  # 6) Healthy pipeline: Vector is up and scraped, the counter never existed.
+  # 6) Restarts. vector-a: a miss at 5m (-> 3), then its container restarts at
+  #    36m (counter back to 0, same labels). It fires while the miss is in the
+  #    window and clears at 64m exactly as without the restart. vector-b: a
+  #    miss counted long ago (1 since 1m), container restart at 82m: never
+  #    fires after the first hour. vector-d: a new pod (new series at 0) at
+  #    30m: never fires.
   - interval: 1m
-    name: no-miss-series-no-alert
+    name: a-restart-is-not-a-miss
     input_series:
-      - series: 'vector_uptime_seconds{pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
-        values: '0+60x90'
-      - series: 'vector_component_discarded_events_total{component_id="tenant_stamp_check", intentional="true", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
-        values: '0+100x90'
+      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '0x4 3x30 0x80'
+      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="origin_rejected", pod="vector-b", instance="10.0.0.2:9598", job="vector-metrics"}'
+        values: '0 1x80 0x40'
+      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-d", instance="10.0.0.4:9598", job="vector-metrics"}'
+        values: '_x30 0x90'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: TenantProjectionStampMissing
+        exp_alerts:
+          - exp_labels:
+              reason: not_projected
+              job: vector-metrics
+              severity: warning
+              alert_source: platform
+            exp_annotations:
+              summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store (not_projected)"
+              description: |
+                Within the last hour Vector counted about 3
+                gateway audit rows carrying a valid `account_id` (the verified
+                claim of a tenant's logs token) for a request that reached the
+                log store, which ended up in the platform 0:0 store but in no
+                tenant partition (reason=not_projected). A tenant whose
+                token is forwarded holds an AccountID, so it should see these rows.
+                not_projected: federation_audit rows whose tenant_id is blank or
+                missing from helm/vector `tenantProjections` — usually a tenant
+                issued a logs token before its projection was added; add it
+                (copy the AccountID from `_account_registry.yaml`) and upgrade
+                the chart. If the tenant was just offboarded, its token was not
+                revoked (or the revocation has not reached the gateway yet):
+                revoke it first.
+                origin_rejected: suspicious_audit rows — demux reclassified them
+                because their pod_owner fails `audit.gatewayPodOwnerPrefix`:
+                either forged rows from a gateway-labelled pod, or a prefix
+                that no longer matches the real gateway (which empties every
+                tenant partition). Find the rows in 0:0 with
+                `log_type:federation_audit OR log_type:suspicious_audit`, a
+                non-empty account_id and upstream, grouped by tenant_id /
+                pod_name. Nothing is cut off automatically (ADR-021
+                §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+          - exp_labels:
+              reason: origin_rejected
+              job: vector-metrics
+              severity: warning
+              alert_source: platform
+            exp_annotations:
+              summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store (origin_rejected)"
+              description: |
+                Within the last hour Vector counted about 1
+                gateway audit rows carrying a valid `account_id` (the verified
+                claim of a tenant's logs token) for a request that reached the
+                log store, which ended up in the platform 0:0 store but in no
+                tenant partition (reason=origin_rejected). A tenant whose
+                token is forwarded holds an AccountID, so it should see these rows.
+                not_projected: federation_audit rows whose tenant_id is blank or
+                missing from helm/vector `tenantProjections` — usually a tenant
+                issued a logs token before its projection was added; add it
+                (copy the AccountID from `_account_registry.yaml`) and upgrade
+                the chart. If the tenant was just offboarded, its token was not
+                revoked (or the revocation has not reached the gateway yet):
+                revoke it first.
+                origin_rejected: suspicious_audit rows — demux reclassified them
+                because their pod_owner fails `audit.gatewayPodOwnerPrefix`:
+                either forged rows from a gateway-labelled pod, or a prefix
+                that no longer matches the real gateway (which empties every
+                tenant partition). Find the rows in 0:0 with
+                `log_type:federation_audit OR log_type:suspicious_audit`, a
+                non-empty account_id and upstream, grouped by tenant_id /
+                pod_name. Nothing is cut off automatically (ADR-021
+                §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+      - eval_time: 64m
+        alertname: TenantProjectionStampMissing
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: TenantProjectionStampMissing
+        exp_alerts: []
+
+  # 7) Healthy pipeline: both reasons held at 0 for hours, nothing missed.
+  - interval: 1m
+    name: zero-series-no-alert
+    input_series:
+      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '0x180'
+      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="origin_rejected", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '0x180'
     alert_rule_test:
       - eval_time: 30m
         alertname: TenantProjectionStampMissing
         exp_alerts: []
       - eval_time: 90m
+        alertname: TenantProjectionStampMissing
+        exp_alerts: []
+      - eval_time: 180m
         alertname: TenantProjectionStampMissing
         exp_alerts: []

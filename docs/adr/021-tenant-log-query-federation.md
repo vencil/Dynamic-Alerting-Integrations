@@ -130,9 +130,10 @@ gateway 在查詢路徑上強制 `AccountID=X`，若寫入端蓋錯或可被偽�
 {"tenant_id":"tenant-gamma","account_id":"1002","status":403,"upstream":null}                → gateway 自己回掉，不計
 
 vector_tenant_projection_stamp_missed_events_total{reason="not_projected"} 1
+vector_tenant_projection_stamp_missed_events_total{reason="origin_rejected"} 0
 ```
 
-rule pack 的 `TenantProjectionStampMissing` 在一小時內出現任何一列就告警，一列就維持一小時，所以少查日誌的租戶不會在兩次查詢之間時響時停。處置寫在 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §8.7。它看不到的範圍列在「已知限制」。
+兩種 `reason` 的計數在 Vector 啟動時就以 0 出現並一直保留，沒有漏蓋章時也一樣，第一列才看得出是計數的增加。rule pack 的 `TenantProjectionStampMissing` 在一小時內計數有任何增加就告警，一列就維持一小時，所以少查日誌的租戶不會在兩次查詢之間時響時停。處置寫在 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §8.7。它看不到的範圍列在「已知限制」。
 
 開放租戶應用日誌之前，還要先硬化節點隔離：依 namespace 蓋章的前提是 Kubernetes 的 pod 邊界可信。租戶工作負載若逃出容器（特權逃逸、掛載節點 socket），可以在節點層干擾 Vector 或偽造別的 namespace 的標籤。所以先決條件包含對租戶工作負載強制 Pod Security Standards（Kubernetes 內建的 pod 權限分級，例如禁止特權容器與掛載節點路徑）與 AppArmor／Seccomp（Linux 核心限制程序能存取哪些檔案、能呼叫哪些系統呼叫的機制）。這與既有的殘餘風險相關：Vector DaemonSet 以 root 加 `DAC_READ_SEARCH`（略過檔案讀取權限檢查的 Linux capability）讀取整個節點的 pod 日誌。
 

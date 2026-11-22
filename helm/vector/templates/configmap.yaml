@@ -1,3 +1,16 @@
+{{- /* ── ADR-021 stamp-miss counter: the one definition (#2789) ───────────────
+       $stampReasons is the bounded label set of
+       vector_tenant_projection_stamp_missed_events_total. tenant_stamp_check
+       assigns its reasons from it and tenant_stamp_zero pre-initialises every
+       value of it to 0, so the two cannot drift (test_vector_projection_vrl.py
+       pins that the rendered sets are equal).
+       $promFlushSecs is the exporter's flush_period_secs; the zero source
+       re-sends its 0 at a quarter of it, so every series is refreshed several
+       times inside one flush period and the exporter never expires it. */}}
+{{- $stampReasons := dict "notProjected" "not_projected" "originRejected" "origin_rejected" }}
+{{- $stampMetric := "tenant_projection_stamp_missed_events_total" }}
+{{- $promFlushSecs := 60 }}
+{{- $stampZeroIntervalSecs := div $promFlushSecs 4 }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,6 +37,7 @@ data:
   #            │                   └─▶ tenant_stamp_check ─▶ tenant_stamp_missed(log_to_metric)
   #            │                          └─▶ prometheus(sink) — read-only; counts rows with a
   #            │                              verified account_id that reach no tenant partition
+  #            │                              (tenant_stamp_zero(static_metrics) holds each reason at 0)
   #            │
   #            └─▶ .evidence ─▶ federation_evidence(transform, VRL)
   #                                │ parse_json(.message) + deep merge  ⛔ load-bearing
@@ -86,6 +100,25 @@ data:
       {{- if .Values.metrics.enabled }}
       internal_metrics:
         type: internal_metrics
+      # ADR-021 stamp-miss counter, pre-initialised: one 0 per reason, so every
+      # series exists from boot and stays exported between misses, and the
+      # alert can use increase() (a series born at its first miss would start
+      # at 1, which increase() cannot see). Same name, namespace and tags as
+      # tenant_stamp_missed; the exporter adds the two streams.
+      tenant_stamp_zero:
+        type: static_metrics
+        interval_secs: {{ $stampZeroIntervalSecs }}
+        namespace: vector
+        metrics:
+        {{- range $r := values $stampReasons | sortAlpha }}
+          - name: {{ $stampMetric }}
+            kind: incremental
+            value:
+              counter:
+                value: 0
+            tags:
+              reason: {{ $r }}
+        {{- end }}
       {{- end }}
 
     transforms:
@@ -972,7 +1005,7 @@ data:
           }
           reason = ""
           if .log_type == "suspicious_audit" {
-            reason = "origin_rejected"
+            reason = {{ $stampReasons.originRejected | quote }}
           } else if .log_type == "federation_audit" {
             # ⛔ Must be the SAME map tenant_project stamps from (a test pins
             # that both render identically): "stamped" means exactly
@@ -986,7 +1019,7 @@ data:
             if (get(account_map, [tid]) ?? null) != null {
               abort
             }
-            reason = "not_projected"
+            reason = {{ $stampReasons.notProjected | quote }}
           } else {
             abort
           }
@@ -1003,30 +1036,10 @@ data:
         metrics:
           - type: counter
             field: reason
-            # Exported as vector_tenant_projection_stamp_missed_events_total.
-            # ⚠️ The exporter keeps its default flush_period_secs (60s): this
-            # series disappears 1-2 minutes after its last increment and comes
-            # back at 1. The alert reads its presence with max_over_time, not
-            # increase/rate, for that reason.
-            # ⛔ Coupling: that expiry (or, failing it, the sample timestamp =
-            # time of the last increment, when the scraper honours timestamps)
-            # is what lets the alert clear an hour after the last miss. The
-            # expiry only happens because internal_metrics also feeds this
-            # exporter: measured on 0.61.0 with this counter as the exporter's
-            # ONLY input and flush_period_secs 5, the series was still served
-            # 30s after its last increment; with internal_metrics beside it, it
-            # vanished. So if internal_metrics is ever removed from the
-            # exporter, or it gets a huge flush_period_secs (as the gateway's
-            # audit-metrics sidecar uses), or suppress_timestamp, and the
-            # scraper sets honor_timestamps=false, the series stays at its last
-            # value until the pod restarts and the alert never clears. Change
-            # TenantProjectionStampMissing together with any of those.
-            # ⛔ The other side of the same lifetime: a scrape slower than it
-            # can miss a first miss entirely. templates/servicemonitor.yaml
-            # refuses serviceMonitor.interval above 30s for that reason (two
-            # scrapes inside the shortest 60s lifetime); a raw scrape job has
-            # to keep the same bound (k8s/03-monitoring scrapes at 15s).
-            name: tenant_projection_stamp_missed_events_total
+            # Exported as vector_tenant_projection_stamp_missed_events_total;
+            # tenant_stamp_zero (sources) keeps each reason's series at 0
+            # until the first miss.
+            name: {{ $stampMetric }}
             namespace: vector
             tags:
               reason: "{{ "{{" }} reason {{ "}}" }}"
@@ -1134,9 +1147,12 @@ data:
         type: prometheus_exporter
         inputs:
           - internal_metrics
-          # Not an internal metric: the ADR-021 stamp-miss counter above.
+          # Not internal metrics: the ADR-021 stamp-miss counter above and
+          # its zero initialiser.
           - tenant_stamp_missed
+          - tenant_stamp_zero
         address: 0.0.0.0:{{ .Values.metrics.port }}
+        flush_period_secs: {{ $promFlushSecs }}
       {{- end }}
 
   30-tenant-routing.yaml: |

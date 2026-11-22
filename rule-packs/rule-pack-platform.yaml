@@ -2616,9 +2616,10 @@ groups:
       # on. STRUCTURAL, not a baseline: every counted row is wrong on its own.
       #
       # Input: vector_tenant_projection_stamp_missed_events_total{reason}, a
-      # log_to_metric counter helm/vector (0.13.1+) exports beside its
-      # internal_metrics. Without that chart version the series never exists
-      # and this alert can never fire. Vector increments it for an audit row
+      # log_to_metric counter helm/vector exports beside its internal_metrics
+      # (0.13.1+; pre-initialised to 0 per reason from 0.14.1, which this
+      # expression needs — see below). Without it the series never exists and
+      # this alert can never fire. Vector increments it for an audit row
       # that (1) carries a VALID gateway-logged `account_id` — Envoy writes
       # that field from the verified claim of a logs token, which tenant-api
       # only signs for a tenant it allocated an AccountID to; (2) was
@@ -2636,24 +2637,13 @@ groups:
       # verified identity (forged/malformed payloads, metrics-token traffic),
       # which this counter ignores by construction.
       #
-      # ⛔ Why max_over_time and not increase/rate: Vector's prometheus_exporter
-      # expires a log_to_metric series 60-120s after its last increment
-      # (flush_period_secs default 60, measured on 0.61.0: the series vanished,
-      # and the next increment re-created it at 1), and stamps each sample with
-      # the time it last changed. A miss therefore shows as a short-lived
-      # series with value >= 1, never as a growing counter, and `increase`
-      # over a window that holds one such sample returns 0. Presence within
-      # the window is the signal. ⚠️ The VALUE is not a windowed count: it is
-      # each pod's counter since that series was last (re)created, summed.
-      # A steady stream (a miss every few seconds) keeps a series alive for
-      # hours, so the value can count rows older than the 1h window; and two
-      # lives of one pod's series are not added. The description says so.
-      # A windowed count is not clean here: `increase` misses short-lived
-      # series (above), and patching that with an `unless ... offset` arm
-      # (as TenantProjectionMappingErrors does) only works for counters that
-      # persist. Detection needs presence only. ⚠️ The expiry depends on
-      # internal_metrics feeding the same exporter (see the coupling note at
-      # `tenant_stamp_missed` in helm/vector templates/configmap.yaml).
+      # Why increase() sees the first miss: helm/vector 0.14.1+ pre-initialises
+      # the counter to 0 for every reason (a static_metrics source feeding the
+      # same exporter), so each series exists from Vector's start and a miss is
+      # a step up that increase() measures. Without that, a series would be
+      # born at 1 and increase() could not see its first row. A Vector restart
+      # starts the counter at 0 again: increase() reads that as a counter
+      # reset, not a miss.
       # The 1h window is how long one miss keeps the alert up, so a tenant
       # that queries rarely does not flap between queries; `for: 0m` because
       # the window already holds it.
@@ -2668,7 +2658,7 @@ groups:
       - alert: TenantProjectionStampMissing
         expr: |
           sum without (instance, pod, host) (
-            max_over_time(vector_tenant_projection_stamp_missed_events_total[1h])
+            increase(vector_tenant_projection_stamp_missed_events_total[1h])
           ) > 0
         for: 0m
         labels:
@@ -2677,14 +2667,11 @@ groups:
         annotations:
           summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store ({{ $labels.reason }})"
           description: |
-            Within the last hour Vector counted gateway audit rows
-            carrying a valid `account_id` (the verified claim of a
-            tenant's logs token) for a request that reached the log store,
-            which ended up in the platform 0:0 store but in no tenant
-            partition (reason={{ $labels.reason }}). The counter reads
-            {{ $value | humanize }}: rows counted since each Vector pod's
-            series was last created, which under a steady stream reaches
-            back more than an hour — not a last-hour count. A tenant whose
+            Within the last hour Vector counted about {{ $value | humanize }}
+            gateway audit rows carrying a valid `account_id` (the verified
+            claim of a tenant's logs token) for a request that reached the
+            log store, which ended up in the platform 0:0 store but in no
+            tenant partition (reason={{ $labels.reason }}). A tenant whose
             token is forwarded holds an AccountID, so it should see these rows.
             not_projected: federation_audit rows whose tenant_id is blank or
             missing from helm/vector `tenantProjections` — usually a tenant
