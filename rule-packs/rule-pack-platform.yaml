@@ -2603,11 +2603,15 @@ groups:
       #
       # Input: vector_tenant_projection_stamp_missed_events_total{reason}, a
       # log_to_metric counter helm/vector (0.12.6+) exports beside its
-      # internal_metrics. Vector increments it for an audit row that carries a
-      # VALID gateway-logged `account_id` — Envoy writes that field from the
-      # verified claim of a logs token, which tenant-api only signs for a
-      # tenant it allocated an AccountID to — and that still reaches no tenant
-      # partition:
+      # internal_metrics. Without that chart version the series never exists
+      # and this alert can never fire. Vector increments it for an audit row
+      # that (1) carries a VALID gateway-logged `account_id` — Envoy writes
+      # that field from the verified claim of a logs token, which tenant-api
+      # only signs for a tenant it allocated an AccountID to; (2) was
+      # forwarded by the gateway to the log store (non-empty `upstream`) —
+      # requests the gateway answered itself, e.g. the 403 for a revoked token
+      # of an offboarded tenant, read no log data and do not count; and (3)
+      # still reaches no tenant partition:
       #   reason="not_projected"   tenant_id blank or not in tenantProjections
       #   reason="origin_rejected" demux reclassified the row to suspicious_audit
       # Metrics-token rows have no account_id and never count, which is what
@@ -2626,17 +2630,23 @@ groups:
       # series with value >= 1, never as a growing counter, and `increase`
       # over a window that holds one such sample returns 0. Presence within
       # the window is the signal; the max is a lower bound on the rows (two
-      # lives of one pod's series are not added).
+      # lives of one pod's series are not added). ⚠️ The expiry depends on
+      # internal_metrics feeding the same exporter (see the coupling note at
+      # `tenant_stamp_missed` in helm/vector templates/configmap.yaml).
       # The 1h window is how long one miss keeps the alert up, so a tenant
       # that queries rarely does not flap between queries; `for: 0m` because
-      # the window already holds it. Not covered here (each has its own
-      # alert): VRL runtime errors in tenant_project, the projection gate
-      # leaving the tenant sinks out, a tenant sink dropping batches, and
-      # tenants that never query logs (no row, nothing to count). No auto
-      # cut-off: ADR-021 keeps the response with the operator.
+      # the window already holds it.
+      # `sum without (instance, pod, host)`: per-pod series are summed, other
+      # topology (job, namespace, cluster) is kept — same as the two sibling
+      # alerts above, so an evaluator that sees several Vector installs keeps
+      # them apart. Not covered here (each has its own alert): VRL runtime
+      # errors in tenant_project, the projection gate leaving the tenant sinks
+      # out, a tenant sink dropping batches; and tenants that never query logs
+      # (no row, nothing to count). No auto cut-off: ADR-021 keeps the response
+      # with the operator.
       - alert: TenantProjectionStampMissing
         expr: |
-          sum by (reason) (
+          sum without (instance, pod, host) (
             max_over_time(vector_tenant_projection_stamp_missed_events_total[1h])
           ) > 0
         for: 0m
@@ -2646,24 +2656,28 @@ groups:
         annotations:
           summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store ({{ $labels.reason }})"
           description: |
-            In the last hour at least {{ $value | humanize }} federation
+            In the last hour at least {{ $value | humanize }} gateway
             audit row(s) carrying a valid `account_id` (the verified claim of
-            a tenant's logs token) reached the platform 0:0 store but no
-            tenant partition (reason={{ $labels.reason }}). The tenant holds
-            an AccountID, so it should see these rows and does not.
-            not_projected: the tenant_id is blank or missing from helm/vector
-            `tenantProjections` — usually a tenant issued a logs token
-            before its projection was added; add it (copy the AccountID
-            from `_account_registry.yaml`) and upgrade the chart.
-            origin_rejected: demux reclassified the row to suspicious_audit
-            because its pod_owner fails `audit.gatewayPodOwnerPrefix` —
-            either a forged row from a gateway-labelled pod, or a prefix
+            a tenant's logs token) for a request that reached the log store
+            ended up in the platform 0:0 store but in no tenant partition
+            (reason={{ $labels.reason }}). A tenant whose token is
+            forwarded holds an AccountID, so it should see these rows.
+            not_projected: federation_audit rows whose tenant_id is blank or
+            missing from helm/vector `tenantProjections` — usually a tenant
+            issued a logs token before its projection was added; add it
+            (copy the AccountID from `_account_registry.yaml`) and upgrade
+            the chart. If the tenant was just offboarded, its token was not
+            revoked (or the revocation has not reached the gateway yet):
+            revoke it first.
+            origin_rejected: suspicious_audit rows — demux reclassified them
+            because their pod_owner fails `audit.gatewayPodOwnerPrefix`:
+            either forged rows from a gateway-labelled pod, or a prefix
             that no longer matches the real gateway (which empties every
             tenant partition). Find the rows in 0:0 with
-            `log_type:federation_audit OR log_type:suspicious_audit` and a
-            non-empty account_id, grouped by tenant_id / pod_name. Nothing
-            is cut off automatically (ADR-021 §日誌進入端的契約). See
-            platform-log-aggregation-runbook §8.7.
+            `log_type:federation_audit OR log_type:suspicious_audit`, a
+            non-empty account_id and upstream, grouped by tenant_id /
+            pod_name. Nothing is cut off automatically (ADR-021
+            §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
 
       # ── Projection gate: unique-but-wrong accountId, DEGRADED (#908 PR-3a) ──

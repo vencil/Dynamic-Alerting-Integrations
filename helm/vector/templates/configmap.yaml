@@ -815,9 +815,10 @@ data:
       {{- end }}
       {{- if .Values.metrics.enabled }}
       # ── Should-have-been-stamped detector (ADR-021 §日誌進入端的契約) ──────────
-      # Counts audit rows that carry a VERIFIED tenant identity yet reach only
-      # the platform 0:0 copy. TenantProjectionStampMissing alerts on any of
-      # them.
+      # Counts audit rows that carry a VERIFIED tenant identity, were forwarded
+      # by the gateway to the log store (a non-empty `upstream`), yet reach
+      # only the platform 0:0 copy. TenantProjectionStampMissing alerts on any
+      # of them.
       #
       # "Verified tenant identity" = the `account_id` field of the gateway's
       # audit line. Envoy writes it from the jwt_authn-verified claim of a
@@ -862,15 +863,21 @@ data:
         drop_on_error: true
         reroute_dropped: false
         source: |
-          # The account_id the gateway logged, accepted ONLY in the form the
-          # gateway's own Lua accepts before injecting it (revoked_check.lua):
-          # a whole number in [1000, 2^32-1]. Anything else (empty for metrics
-          # tokens, malformed claims the Lua 403'd) is "no verified identity".
+          # The account_id the gateway logged: a whole number in [1000, 2^32-1],
+          # as a JSON number or a plain decimal string. That is what tenant-api
+          # signs (a uint32 JSON number) and a subset of what the gateway's Lua
+          # admits (its tonumber also takes "1000.0", "0x3E8", " 1000" — forms
+          # tenant-api never emits). Anything else (empty for metrics tokens,
+          # malformed claims) is "no verified identity".
+          # ⛔ No dollar sign anywhere in this template: the vector container
+          # runs with VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION, which
+          # would read it as an env var (test_helm_chart_log_aggregation.py
+          # pins that). The end anchor is therefore `\z`.
           acct = .account_id
           aid = null
           if is_string(acct) {
             s = to_string(acct) ?? ""
-            if match(s, r'^[0-9]{1,10}$') {
+            if match(s, r'^[0-9]{1,10}\z') {
               aid = to_int(s) ?? null
             }
           } else if is_integer(acct) {
@@ -887,6 +894,18 @@ data:
           }
           n = int!(aid)
           if n < 1000 || n > 4294967295 {
+            abort
+          }
+          # Only rows the gateway FORWARDED to the log store count. A request
+          # the gateway answered itself (Lua 403 for a revoked token, a 429
+          # rate limit, an endpoint outside the allowlist) has no upstream
+          # host, read no log data, and is not a stamping failure. This keeps
+          # an offboarded tenant out: removed from tenantProjections, its
+          # revoked-but-unexpired logs token still carries account_id in the
+          # audit row, but every such request is a local 403. Envoy writes
+          # %UPSTREAM_HOST% as null (or "-") when no upstream was chosen.
+          up = to_string(.upstream) ?? ""
+          if up == "" || up == "-" {
             abort
           }
           reason = ""
@@ -927,6 +946,19 @@ data:
             # series disappears 1-2 minutes after its last increment and comes
             # back at 1. The alert reads its presence with max_over_time, not
             # increase/rate, for that reason.
+            # ⛔ Coupling: that expiry (or, failing it, the sample timestamp =
+            # time of the last increment, when the scraper honours timestamps)
+            # is what lets the alert clear an hour after the last miss. The
+            # expiry only happens because internal_metrics also feeds this
+            # exporter: measured on 0.61.0 with this counter as the exporter's
+            # ONLY input and flush_period_secs 5, the series was still served
+            # 30s after its last increment; with internal_metrics beside it, it
+            # vanished. So if internal_metrics is ever removed from the
+            # exporter, or it gets a huge flush_period_secs (as the gateway's
+            # audit-metrics sidecar uses), or suppress_timestamp, and the
+            # scraper sets honor_timestamps=false, the series stays at its last
+            # value until the pod restarts and the alert never clears. Change
+            # TenantProjectionStampMissing together with any of those.
             name: tenant_projection_stamp_missed_events_total
             namespace: vector
             tags:

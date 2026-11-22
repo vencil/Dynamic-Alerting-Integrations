@@ -73,6 +73,10 @@ git rm <上一步列出的每個路徑>
 
 步驟 3（以及步驟 2 提到的舊 subset 檔）在同一個 commit、走同一次 PR review。
 
+### 3b. 有日誌投影的租戶：從 `tenantProjections` 移除
+
+租戶若有日誌 AccountID（ADR-021），把它從 `helm/vector` 的 `tenantProjections` 拿掉、升級 chart；AccountID 留在帳本 `_account_registry.yaml`、**永不回收**（ADR-021 §AccountID 配發規則）。⚠️ **順序：先做完步驟 1，等過最終一致性窗口（見下）再移除**。撤銷還沒傳到 gateway 時，舊 logs token 的請求仍會被轉給日誌庫，它們的稽核列帶著 `account_id` 卻已沒有分區，會觸發 `TenantProjectionStampMissing`（`not_projected`）。撤銷生效後的請求由 gateway 直接回 403、沒有 upstream，不計入該告警（[`platform-log-aggregation-runbook.md`](platform-log-aggregation-runbook.md) §8.7）。
+
 ### 4. 驗證
 
 - portal 的 **Federation tokens（依租戶 ID）** 輸入 `<tenant>`，顯示沒有未過期的 token。

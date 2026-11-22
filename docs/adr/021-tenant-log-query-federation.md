@@ -110,7 +110,7 @@ gateway 在查詢路徑上強制 `AccountID=X`，若寫入端蓋錯或可被偽�
 
 **蓋章失效的偵測。** 平台保留一個結構性的檢查：本該帶租戶身分、卻只落進平台分區 `0:0` 的日誌，發標準的 Alertmanager 告警（`warning`，通知平台維運）。它**不**自動切斷租戶的查詢（誤判會切斷合法租戶、引發 SLA 事故），也不做依內容的異常偵測或自動斷流。
 
-「本該帶租戶身分」要有一個不靠猜的判準。目前會進租戶分區的只有 gateway 的 `federation_audit` 列，而這些列有一個欄位就是判準：`account_id`。gateway 的 Envoy 把它從 logs token **已驗章**的 claim 寫進稽核 JSON；tenant-api 只為配發過 AccountID 的租戶簽這個 claim；指標 token 沒有這個 claim，那一欄是空的。所以一列帶著合法 `account_id`（與 gateway 注入前的檢查同一規則：1000 到 2³²−1 的整數）就表示「這個租戶有分區」，這列沒進分區每一次都是錯，不必跟歷史量比較。
+「本該帶租戶身分」要有一個不靠猜的判準。目前會進租戶分區的只有 gateway 的 `federation_audit` 列，而這些列有一個欄位就是判準：`account_id`。gateway 的 Envoy 把它從 logs token **已驗章**的 claim 寫進稽核 JSON；tenant-api 只為配發過 AccountID 的租戶簽這個 claim；指標 token 沒有這個 claim，那一欄是空的。所以一列帶著合法 `account_id`（1000 到 2³²−1 的整數，寫成 JSON 數字或純十進位字串；tenant-api 簽的是 uint32 的 JSON 數字。gateway 注入前的檢查還接受 `"1000.0"`、`"0x3E8"` 這類寫法，這裡不接受，所以這個判準比 gateway 嚴、但與它相容）就表示「這個租戶有分區」。再加一個條件：請求要真的被 gateway 轉給日誌庫（稽核列的 `upstream` 有值）。gateway 自己回掉的請求，例如退租租戶拿已撤銷、還沒到期的 token 打進來得到的 403，沒有讀到任何日誌，不算。符合這兩個條件、卻沒進分區的列，每一次都是錯，不必跟歷史量比較。
 
 做法是在 Vector 的寫入管線上，從分流後的同一份事件旁接一個只讀不寫的檢查，數出兩種情況，交給 rule pack：
 
@@ -122,9 +122,10 @@ gateway 在查詢路徑上強制 `AccountID=X`，若寫入端蓋錯或可被偽�
 輸入與輸出的對照（`tenantProjections` 只有 `tenant-alpha → 1000`，三列 gateway 稽核 JSON 依序送進渲染出的 Vector 設定）：
 
 ```text
-{"tenant_id":"tenant-alpha","account_id":"1000","status":200}   → 進 AccountID 1000，不計
-{"tenant_id":"tenant-gamma","account_id":"1002","status":200}   → 只在 0:0，計為 not_projected
-{"tenant_id":"tenant-gamma","account_id":"","status":200}       → 指標 token 的列，不計
+{"tenant_id":"tenant-alpha","account_id":"1000","status":200,"upstream":"10.42.7.13:9428"}   → 進 AccountID 1000，不計
+{"tenant_id":"tenant-gamma","account_id":"1002","status":200,"upstream":"10.42.7.13:9428"}   → 只在 0:0，計為 not_projected
+{"tenant_id":"tenant-gamma","account_id":"","status":200,"upstream":"10.42.7.13:9428"}       → 指標 token 的列，不計
+{"tenant_id":"tenant-gamma","account_id":"1002","status":403,"upstream":null}                → gateway 自己回掉，不計
 
 vector_tenant_projection_stamp_missed_events_total{reason="not_projected"} 1
 ```
@@ -277,7 +278,7 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 
 **已知限制**
 
-- **蓋章失效的偵測只看得到帶已驗證 AccountID 的列。** `TenantProjectionStampMissing`（見「日誌進入端的契約」）的判準是 logs token 寫進稽核列的 `account_id`，所以：從不查日誌的租戶沒有列可數；同一租戶用指標 token 產生的列不計；列被投影到**錯的**分區（`tenantProjections` 的號碼與 claim 不符時，Vector 照對映表蓋章）不算「落進 `0:0`」，那是啟動時投影閘門比對帳本的範圍。投影 VRL 執行錯誤、閘門把租戶 sink 拿掉、租戶 sink 丟棄 batch 也不在它的範圍，各有自己的告警。目前會進租戶分區的只有 `federation_audit`，所以它涵蓋的也只有這個類別；將來開放其他類別時，判準要跟著那個類別的可信身分來源一起設計。偽造者若能在 gateway 的命名空間起 pod，可以寫出帶 `account_id` 的假列，只會造成誤報（`origin_rejected`），不會影響蓋章。沒有已驗證身分、卻對映不到 AccountID 的列（指標 token 的流量、偽造或畸形 payload）仍只由 `TenantProjectionFanoutDiscardSpike` 以「高於自己一天平均三倍」偵測，量小或長期存在的落差會被併入基準而不觸發。
+- **蓋章失效的偵測只看得到帶已驗證 AccountID 的列。** `TenantProjectionStampMissing`（見「日誌進入端的契約」）的判準是 logs token 寫進稽核列的 `account_id`，所以：從不查日誌的租戶沒有列可數；同一租戶用指標 token 產生的列不計；列被投影到**錯的**分區（`tenantProjections` 的號碼與 claim 不符時，Vector 照對映表蓋章）不算「落進 `0:0`」，那是啟動時投影閘門比對帳本的範圍。投影 VRL 執行錯誤、閘門把租戶 sink 拿掉、租戶 sink 丟棄 batch 也不在它的範圍，各有自己的告警。目前會進租戶分區的只有 `federation_audit`，所以它涵蓋的也只有這個類別；將來開放其他類別時，判準要跟著那個類別的可信身分來源一起設計。`account_id` 本身不影響蓋章（蓋章只看 `tenant_id` 與 `tenantProjections`），所以偽造它最多造成誤報。但能在 gateway 的命名空間起 pod、帶 gateway 標籤的人，能做的不只誤報：pod 的 owner 名稱不符 gateway 的 workload 前綴時，列被改判 `suspicious_audit`，計為 `origin_rejected`；owner 名稱符合（例如一個叫 `federation-gateway-x` 的 Deployment）時，列就是 `federation_audit`，`tenant_id` 對映不到時計為 `not_projected`，對映得到時會照常蓋進那個租戶的分區。最後這種是既有的風險，不是這個偵測造成的，也不是它能擋的（見「日誌進入端的契約」對節點與命名空間隔離的前提）。沒有已驗證身分、卻對映不到 AccountID 的列（指標 token 的流量、偽造或畸形 payload）仍只由 `TenantProjectionFanoutDiscardSpike` 以「高於自己一天平均三倍」偵測，量小或長期存在的落差會被併入基準而不觸發。
 - **已決定、尚未實作：租戶自選的可見度子集。** 本 ADR 決定可見度分兩層：平台策展哪些日誌類別與欄位可以給租戶看，租戶再從中選自己要看的子集。目前只有平台那一層（`tenantProjectionKeepFields` 與只投影 `federation_audit`），沒有租戶自選子集的機制。
 - **已決定、尚未實作：在 gateway 強制 `/query` 帶 `limit`。** 本 ADR 決定 `/query` 除了時間範圍上限，還要強制帶 `limit` 收斂串流回傳量；gateway 目前不檢查也不補上 `limit`，只靠時間範圍上限與租戶指南。
 - **VictoriaLogs 本身的分區沒有被平台測試驗證。** 選原生分區的理由之一是它同樣套在 metadata 類端點（`field_values`、`stream_field_values` 等）上，不像 ADR-020 要顯式開 `-enable-label-apis`。但 gateway 的 E2E（`tests/federation-e2e/test_victorialogs_e2e.py`）用的是模擬日誌庫，驗證的是 gateway 送出的 header，不是 VictoriaLogs 對每個端點的隔離。
