@@ -31,6 +31,7 @@ if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
     sys.path.append(str(_HERE / "ops"))
 
 from generate_rule_pack_split import extract_metrics_from_expr  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#4137: label_flow; it does not import this module)
 
 # ── the charts behind the helm-service families ─────────────────────────────
 # A chart is what a helm-service family's target comes from: its Service carries
@@ -228,6 +229,68 @@ TENANT_EXPORTER_JOB = "tenant-exporters"
 #: `up` per scrape target, `ALERTS` per alert. `up` carries the target's job,
 #: so its source is whatever job its selector names.
 MANUFACTURED = frozenset({"up", "ALERTS"})
+
+#: Series every scrape target yields with its target's labels and no others
+#: of its own (#4137): Prometheus' per-scrape series and the families the
+#: Prometheus client libraries register in every process. The platform's
+#: own jobs (prometheus, kube-state-metrics, alertmanager, the charts') yield
+#: them too, without `tenant`, so a family the table does not list is no
+#: proof the series carry it: which jobs a selector reads decides.
+PER_TARGET_EXACT = frozenset({"up"})
+PER_TARGET_PREFIXES = ("scrape_", "go_", "process_", "promhttp_", "net_conntrack_")
+
+#: Series Prometheus writes per alert, labelled as the alert is (#4137):
+#: whether they carry `tenant` is each alert's business.
+ALERT_SERIES = frozenset({"ALERTS", "ALERTS_FOR_STATE"})
+
+#: The label the scrape writes per tenant: the tenant exporters' job writes it
+#: from the namespace (k8s/03-monitoring/configmap-prometheus.yaml; the
+#: scrape gate's TENANT-* checks pin it).
+TENANT_LABEL = "tenant"
+
+
+def tenant_presence(metric: str) -> "str | None":
+    """⛔ THE one answer to "do the series of this raw metric carry
+    ``tenant``" (#4137), as ``da-read promql-label-flow`` takes it:
+    ``"without"`` — a family of a static or service source (prometheus,
+    alertmanager, kube-state-metrics: jobs that write no tenant, pinned by
+    tests/lint/test_check_scrape_reachability.py); ``"by-job"`` — a per-target
+    series (``PER_TARGET_*``); ``"unknown"`` — an alert's series; ``None`` —
+    taken to carry it: the tenant exporters' job writes it on every series
+    (the scrape contract), and a chart's own families are the exporter's
+    business, per metric (the residual this answer does not model). A
+    recording rule's name is not a raw metric's."""
+    if metric in ALERT_SERIES:
+        return "unknown"
+    if metric in PER_TARGET_EXACT or metric.startswith(PER_TARGET_PREFIXES):
+        return "by-job"
+    fam = resolve_family(metric)
+    if fam is not None and fam[1] in ("static", "service"):
+        return "without"
+    return None
+
+
+def label_flow(label: str, exprs: "list[str]", records: "dict[str, list[dict]] | None" = None):
+    """``_lib_consumer_read.promql_label_flow`` with what the scrape says
+    about *label* (#4137): for ``tenant``, every raw metric the expressions
+    and *records* read (their ``__name__`` matchers, read off the parse by
+    ``promql_reads``) judged by ``tenant_presence``, and the tenant
+    exporters' job as the one whose every target carries it. Any other label
+    is told nothing: every raw metric is taken to carry it."""
+    metrics: dict[str, str] = {}
+    jobs: tuple[str, ...] = ()
+    if label == TENANT_LABEL:
+        jobs = (TENANT_EXPORTER_JOB,)
+        read = list(exprs) + [d.get("expr", "") for defs in (records or {}).values() for d in defs]
+        for reading in _lib_consumer_read.promql_reads(read) if read else []:
+            for sel in reading["selectors"]:
+                for m in sel["matchers"]:
+                    if m["name"] == "__name__" and m["op"] == "=" and m["value"] not in (records or {}):
+                        presence = tenant_presence(m["value"])
+                        if presence is not None:
+                            metrics[m["value"]] = presence
+    return _lib_consumer_read.promql_label_flow(label, exprs, records, metrics=metrics, jobs=jobs)
+
 
 _MATCHER_RE = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"')
 

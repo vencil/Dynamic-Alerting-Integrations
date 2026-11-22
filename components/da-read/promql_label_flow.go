@@ -24,7 +24,9 @@ import (
 //
 //	{"expressions": [<expr>, …],
 //	 "records": {<record name>: [{"expr": <its expr>, "labels": {…}}, …]},
-//	 "aliases": [<label whose whole value is <label>'s value>, …]}
+//	 "aliases": [<label whose whole value is <label>'s value>, …],
+//	 "metrics": {<raw metric name>: "without"|"by-job"|"unknown"},
+//	 "jobs": [<scrape job every target of which carries <label>>, …]}
 //
 // "records" are the recording rules of the same rule files: a selector that
 // names one is judged by that rule's expression (every definition of it)
@@ -32,7 +34,19 @@ import (
 // record cannot hide a dropped label from the expression reading it.
 // "aliases" name the labels a `label_replace` may copy into <label> whole
 // (tenant from namespace in the kubernetes pack); a copy from any other
-// label proves nothing — it would hold another label's values. stdout is
+// label proves nothing — it would hold another label's values.
+//
+// "metrics" and "jobs" are what the scrape says about <label> (#4137): a raw
+// metric named in "metrics" is "without" (no series of it carries <label>),
+// "by-job" (series Prometheus writes per target — `up`, `scrape_*`, the
+// client library's own families — carry its target's labels: <label> when
+// the selector's `job` is an equality to one of "jobs", none when it names
+// another job or no job, unknown when `job` is a regex or a negation) or
+// "unknown". A raw metric not named is taken to carry <label> (the scrape
+// contract: the tenant exporters' job writes it on every series). Whatever
+// the metric, a selector whose own matcher on <label> does not match the
+// empty string (`tenant="db-a"`, `tenant=~".+"`, `tenant!=""`) selects only
+// series that carry it. stdout is
 //
 //	{"documents": [[{"result": "kept"|"dropped"|"unknown",
 //	                 "set_matches": [{"op": "and"|"unless", "start": <byte offset>,
@@ -48,10 +62,10 @@ import (
 // cycle, a record named but not given) — a caller that needs a proof
 // refuses it.
 //
-// ⛔ What it cannot see (#4098): the series a selector of a raw metric reads
-// are TAKEN to carry the label — whether a metric has it at all is the
-// scrape's business, not the expression's (`up{job="x"}` reads series
-// without tenant and is "kept"). A metric name with a colon is a recording
+// ⛔ What it cannot see (#4098): whether a raw metric carries the label at
+// all is the scrape's business, not the expression's — it knows only what
+// "metrics" and "jobs" tell it, and a raw metric they do not name is TAKEN to
+// carry it. A metric name with a colon is a recording
 // rule's (Prometheus' naming rule): one not among "records" is "unknown",
 // never taken for a raw metric.
 //
@@ -63,6 +77,11 @@ func readPromQLLabelFlow(label string, in *labelFlowRequest) ([]byte, error) {
 		aliases: map[string]bool{}}
 	for _, a := range in.Aliases {
 		f.aliases[a] = true
+	}
+	f.metrics = in.Metrics
+	f.jobs = map[string]bool{}
+	for _, j := range in.Jobs {
+		f.jobs[j] = true
 	}
 	for name, defs := range in.Records {
 		for _, d := range defs {
@@ -93,8 +112,17 @@ type labelFlowRequest struct {
 		Expr   string            `json:"expr"`
 		Labels map[string]string `json:"labels"`
 	} `json:"records"`
-	Aliases []string `json:"aliases"`
+	Aliases []string          `json:"aliases"`
+	Metrics map[string]string `json:"metrics"`
+	Jobs    []string          `json:"jobs"`
 }
+
+// The values of a promql-label-flow request's "metrics" (#4137).
+const (
+	metricWithout = "without"
+	metricByJob   = "by-job"
+	metricUnknown = "unknown"
+)
 
 // labelFlowRequestOf reads the caller's part of a promql-label-flow run: the
 // <label> argument and the JSON framing of standard input. ⛔ Both are the
@@ -110,7 +138,7 @@ func labelFlowRequestOf(label string, data []byte) (*labelFlowRequest, error) {
 		in.Expressions, err = labelFlowFraming(data)
 	}
 	if err != nil {
-		return nil, fmt.Errorf(`standard input is not {"expressions": [...], "records": {...}, "aliases": [...]}: %v`, err)
+		return nil, fmt.Errorf(`standard input is not {"expressions": [...], "records": {...}, "aliases": [...], "metrics": {...}, "jobs": [...]}: %v`, err)
 	}
 	return &in, nil
 }
@@ -121,7 +149,9 @@ func labelFlowRequestOf(label string, data []byte) (*labelFlowRequest, error) {
 // "expr" of a record would reach the parser and refuse the input over the
 // caller's framing, a null alias would pass unseen. So "expressions" must be
 // an array of strings, every record's "expr" a string, and "aliases", when
-// given, an array of strings; anything else is the caller's error. A label
+// given, an array of strings, "metrics", when given, an object whose every
+// value is one of "without" / "by-job" / "unknown", and "jobs", when given,
+// an array of strings; anything else is the caller's error. A label
 // value of a record's "labels" is left as json.Unmarshal reads it: null is
 // "", which is what Prometheus reads `labels: {x: ~}` as (remove x).
 func labelFlowFraming(data []byte) ([]string, error) {
@@ -131,6 +161,8 @@ func labelFlowFraming(data []byte) ([]string, error) {
 			Expr json.RawMessage `json:"expr"`
 		} `json:"records"`
 		Aliases json.RawMessage `json:"aliases"`
+		Metrics json.RawMessage `json:"metrics"`
+		Jobs    json.RawMessage `json:"jobs"`
 	}
 	if err := json.Unmarshal(data, &framing); err != nil {
 		return nil, err
@@ -151,6 +183,28 @@ func labelFlowFraming(data []byte) ([]string, error) {
 			return nil, fmt.Errorf("aliases: %w", err)
 		}
 	}
+	var metrics map[string]json.RawMessage
+	if framing.Metrics != nil {
+		// null decodes to a nil map: no facts, every raw metric taken to
+		// carry the label — the caller's framing error, not an answer.
+		if err := json.Unmarshal(framing.Metrics, &metrics); err != nil || metrics == nil {
+			return nil, fmt.Errorf("metrics: not an object: %s", framing.Metrics)
+		}
+	}
+	for name, raw := range metrics {
+		v, err := jsonString(raw)
+		if err == nil && v != metricWithout && v != metricByJob && v != metricUnknown {
+			err = fmt.Errorf("%q is none of %q, %q, %q", v, metricWithout, metricByJob, metricUnknown)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("metrics[%q]: %w", name, err)
+		}
+	}
+	if framing.Jobs != nil {
+		if _, err := jsonStrings(framing.Jobs); err != nil {
+			return nil, fmt.Errorf("jobs: %w", err)
+		}
+	}
 	return exprs, nil
 }
 
@@ -160,6 +214,11 @@ type flowReader struct {
 	records  map[string][]recordDef
 	visiting map[string]bool
 	aliases  map[string]bool
+	// metrics and jobs: what the scrape says about label (#4137). Only the
+	// reader of the request's own label has them; one judging an alias
+	// (forLabel) takes every raw metric to carry its label, as before.
+	metrics map[string]string
+	jobs    map[string]bool
 }
 
 // recordDef is one definition of a recording rule: its expression and the
@@ -447,7 +506,7 @@ func (f *flowReader) selectorCarries(vs *parser.VectorSelector) flow {
 			// them) that the caller did not give: what it yields is unseen.
 			return flowUnknown
 		}
-		return flowKept
+		return f.rawCarries(name, vs)
 	}
 	if f.visiting[name] {
 		return flowUnknown
@@ -471,6 +530,50 @@ func (f *flowReader) selectorCarries(vs *parser.VectorSelector) flow {
 		out = both(out, f.carries(d.expr))
 	}
 	return out
+}
+
+// rawCarries: whether the series a selector of the raw metric *name* reads
+// carry the label, by what the request says of it (#4137).
+//
+// The selector's own matchers on the label come first, whatever the metric
+// (labels.Matcher: an absent label reads as ""): one that does not match ""
+// selects only series that have it; `=""` / `=~""` select only series that
+// do not. Only for a raw metric: a record's "kept" is a claim about where
+// the value came from (a non-alias copy or a literal in its labels is not
+// kept, #4098 review), which a non-empty matcher does not make (#4137 review).
+func (f *flowReader) rawCarries(name string, vs *parser.VectorSelector) flow {
+	for _, m := range vs.LabelMatchers {
+		if m.Name == f.label && !m.Matches("") {
+			return flowKept
+		}
+	}
+	for _, m := range vs.LabelMatchers {
+		if m.Name == f.label && m.Value == "" && (m.Type == labels.MatchEqual || m.Type == labels.MatchRegexp) {
+			return flowDropped
+		}
+	}
+	switch f.metrics[name] {
+	case metricWithout:
+		return flowDropped
+	case metricUnknown:
+		return flowUnknown
+	case metricByJob:
+		var job *labels.Matcher
+		for _, m := range vs.LabelMatchers {
+			if m.Name == model.JobLabel {
+				if job != nil || m.Type != labels.MatchEqual {
+					return flowUnknown
+				}
+				job = m
+			}
+		}
+		if job != nil && f.jobs[job.Value] {
+			return flowKept
+		}
+		// Another job, or every job: some target's series lack it.
+		return flowDropped
+	}
+	return flowKept
 }
 
 // copiesWhole: `label_replace(v, dst, "$1", src, "(.*)")` (or `(.+)`, or

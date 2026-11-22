@@ -17,3 +17,7 @@ data:
   query_limit.lua: |
     {{- tpl (.Files.Get "files/query_limit.lua") . | nindent 4 }}
   {{- end }}
+  {{- if include "federation-gateway.inflightEnabled" . }}
+  inflight_limit.lua: |
+    {{- tpl (.Files.Get "files/inflight_limit.lua") . | nindent 4 }}
+  {{- end }}

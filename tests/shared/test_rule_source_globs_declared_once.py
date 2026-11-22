@@ -459,8 +459,6 @@ ALLOWED: "tuple[tuple[str, str, str], ...]" = (
      "a message to a person"),
     ("scripts/tools/lint/check_configmap_mount_completeness.py", r"configmap-rules-\*(\.yaml)?",
      "messages to a person"),
-    ("scripts/tools/ops/migrate_to_operator.py", r"/\*-rule-pack-\*\.yaml",
-     "checklist prose for people (`kubectl apply -f <dir>/*-rule-pack-*.yaml`)"),
     ("scripts/tools/ops/lint_custom_rules.py", r"rule-pack-\*\.yaml\|yml",
      "--rule-pack-dir help text"),
     ("scripts/tools/ops/silencer_drift_check.py", r"rule-pack-\*\.yaml\|yml",

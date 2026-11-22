@@ -21,7 +21,7 @@ updated_at: 2026-11-22
 - 2026-10-11 修訂：AccountID 帳本與 federation 白名單、子集移出 conf.d 的 git 樹，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap，單機是一個目錄），寫入改為 compare-and-swap（先比對版本、相同才寫入），不再 commit。原因：那些 commit 從不 push，chart 預設的 emptyDir 一重啟就沒了，帳本遺失正是本 ADR 要防的 AccountID 重發。同日另一項修訂：開機時比對仍有效的日誌 token 與帳本，不一致就拒絕啟動；備份改經 `tenant-api state restore` 合併還原，不再直接覆蓋。
 - 2026-10-13 修訂：AccountID 的高水位另記在 federation token store ConfigMap，運行中被蓋回的舊帳本會被擋下；`state restore` 的計數器加上安全邊際。見「單調性靠什麼守」。
 - 2026-11-07 修訂：日誌庫前方加上依消費端授權的 vmauth，gateway 以自己的帳密連線；它不做租戶路由，與「不用 vmauth 做租戶路由」的決定不衝突，見替代方案。
-- 2026-11-22 修訂：gateway 開始限制 `/select/logsql/query`、`field_values`、`stream_field_values` 的 `limit`。不合法、超過上限或重複出現一律拒絕（`400`）；缺少時 `/query` 拒絕，另外兩個端點補上上限值。見「查詢端點白名單」。
+- 2026-11-22 修訂：兩項 gateway 變更。其一，gateway 開始限制 `/select/logsql/query`、`field_values`、`stream_field_values` 的 `limit`：不合法、超過上限或重複出現一律拒絕（`400`），缺少時 `/query` 拒絕、另外兩個端點補上上限值，見「查詢端點白名單」。其二，ADR-020 新增的每 token 並發上限在日誌查詢模式同樣生效，「Gateway 限流」與「已知限制」改寫為限流加並發上限。
 
 **範圍**：租戶查「平台**關於它**的營運日誌」（目前是它自己的 federation 查詢稽核紀錄）已實作。租戶查**自己工作負載的應用日誌**延後，要等日誌進入端的另一份設計（見「已知限制」）。
 
@@ -217,9 +217,9 @@ ok  	github.com/vencil/tenant-api/internal/federation/account	0.019s
 
 #### Gateway 限流
 
-完全沿用 ADR-020 的每 IP、每 token、每租戶限流。gateway 的 audit-metrics sidecar 另產生 `tenant_log_query_requests_total{account_id,project_id,status}`，與 ADR-020 的 `tenant_federation_requests_total` 對稱。
+完全沿用 ADR-020 的每 IP、每 token、每租戶限流，以及每個 token 同時進行的查詢數上限（chart 預設每個 gateway 實例 4 個；超過回 429，記成 `rate_limited`）。並發上限在日誌查詢模式特別有用：VictoriaLogs 的查詢邊掃邊回傳結果，名額要到回應傳完才釋放，一個 token 同時掛著的長查詢因此有上限。gateway 的 audit-metrics sidecar 另產生 `tenant_log_query_requests_total{account_id,project_id,status}`，與 ADR-020 的 `tenant_federation_requests_total` 對稱。
 
-限流是每個 Envoy 實例各算各的：gateway 自動擴展到 2–8 個副本時，單一 token 實際放行的量約是設定值乘上副本數，惡意租戶平行傾倒歷史日誌時可能放大。後盾是儲存後端的 `-search.maxConcurrentRequests`：不論 gateway 有幾個副本，實際同時執行的查詢數都有上限。這是緩解，不是根治。
+限流與並發上限都是每個 Envoy 實例各算各的：gateway 自動擴展到 2–8 個副本時，單一 token 實際放行的量約是設定值乘上副本數（並發上限的細節，包括每個 worker 各自計數，見 ADR-020「Gateway 驗章、撤銷與限流」），惡意租戶平行傾倒歷史日誌時可能放大。叢集層級的後盾是儲存後端的 `-search.maxConcurrentRequests`：不論 gateway 有幾個副本，實際同時執行的查詢數都有上限。這是緩解，不是根治。
 
 #### 查詢端點白名單
 
@@ -239,7 +239,7 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 
   - **為什麼 `/query` 拒絕、不補上預設值或調降**：補值或調降會讓租戶拿到被截斷的結果卻無從得知，容易被當成完整的稽核紀錄；直接拒絕讓請求者自己決定要縮小範圍還是分批查，也與 gateway 其他檢查一致：不確定的請求不轉送。
   - **為什麼另外兩個端點補值**：Grafana 的 VictoriaLogs data source（v0.34.0）只在 `limit` 大於 0 時才帶上它；變數查詢把筆數設成 `0`（介面上寫的是「移除上限」）或舊的變數沒有設定時，就不帶 `limit` 呼叫 `field_values`。拒絕會讓這些變數與下拉選單直接失效；被截斷的候選值清單可以接受，被截斷的稽核紀錄不行。補值寫進 URL：VictoriaLogs 在 body 沒有 `limit` 時讀 URL，所以補完後日誌庫只會看到一個 `limit`。body 裡的 `limit=0` 會壓過 URL 的值，gateway 不改寫 body，所以這種情況拒絕。
-  - **為什麼也看 POST body**：VictoriaLogs 用 Go 的 `Request.FormValue` 讀參數，POST 的 form body 優先於 URL，租戶指南的 curl 範例也是以 form body 送出。只看 URL 的話，「URL 帶小 `limit`、body 帶大 `limit`」就能繞過。檢查放在 body 緩衝之後的第三個 Lua filter（`files/query_limit.lua`），URL 與 body 一起數；gateway 讀不懂的 body（multipart、壓縮過的）直接拒絕，不留 gateway 與日誌庫各讀到不同值的空間。重複的 `limit` 也因此拒絕：Go 取第一個，別的解析器可能取最後一個。
+  - **為什麼也看 POST body**：VictoriaLogs 用 Go 的 `Request.FormValue` 讀參數，POST 的 form body 優先於 URL，租戶指南的 curl 範例也是以 form body 送出。只看 URL 的話，「URL 帶小 `limit`、body 帶大 `limit`」就能繞過。檢查放在 body 緩衝之後、每 token 並發上限之前的 Lua filter（`files/query_limit.lua`；被它拒絕的請求不佔並發名額），URL 與 body 一起數；gateway 讀不懂的 body（multipart、壓縮過的）直接拒絕，不留 gateway 與日誌庫各讀到不同值的空間。重複的 `limit` 也因此拒絕：Go 取第一個，別的解析器可能取最後一個。
   - **查詢文字裡的 `| limit N` 不必檢查**：VictoriaLogs 把請求的 `limit` 以 `| offset … | limit …` 接在租戶自己所有 pipe 的**最後面**，回傳筆數一定不超過它；租戶的 `| limit` 不論寫在哪裡，都只能讓結果更少。
   - 被拒的請求仍會寫進稽核日誌（檢查排在稽核擷取之後），並計入 `tenant_log_query_requests_total{status="bad_request"}`。
 - 路由前先把路徑正規化（包括解碼 `%2F`），`/select/logsql%2Fquery` 這類變形無法繞過白名單。
@@ -288,7 +288,7 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 - **安全邊際是估計。** 兩份 ConfigMap 一起從同一份備份還原時，只有在備份之後配發的 id 數不超過邊際時才安全。
 - **直接編輯 ConfigMap 看不出來。** 能直接改 `tenant-api-state` 或 token store ConfigMap 的人，可以把計數器或高水位改小，上述檢查都察覺不到。chart 的 Role 以 `resourceNames` 只給 tenant-api 的 ServiceAccount 對這兩個物件的 get／update；其他能改 ConfigMap 的人由叢集自己的 RBAC 決定。
 - **跳號後的租戶可能換 id。** 帳本剛好倒退一次寫入時，被倒退掉的租戶下次要 token 會拿到新的 id，舊 id 保留不重發。這是身分漂移（同一個租戶前後兩個 AccountID，舊分區的日誌不再查得到），不是外洩。
-- **限流在多副本下會放大**，只靠儲存後端的並發上限兜底（見「Gateway 限流」）。持續觸發時再評估以 Redis 為後端的全域限流。
+- **限流與每 token 並發上限在多副本下都會放大**：gateway 的兩者都是每實例計算，叢集層級只有儲存後端的並發上限兜底（見「Gateway 限流」）。持續觸發時再評估以 Redis 為後端的全域計數。
 - 每個 AccountID 一組的查詢指標基數會隨租戶數成長；需要時以 recording rule 降維。
 
 ## 考慮過的替代方案

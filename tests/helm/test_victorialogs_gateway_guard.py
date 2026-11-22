@@ -155,10 +155,10 @@ def test_victorialogs_wrong_audience_aborts(repo_root: Path):
 
 # ── /select/logsql/query limit cap (ADR-021 §查詢端點白名單) ───────────────
 # The behaviour (400/415 per case) is exercised against real Envoy in
-# tests/federation-e2e/test_victorialogs_e2e.py VL11. These pin the wiring
+# tests/federation-e2e/test_victorialogs_e2e.py VL13/VL14. These pin the wiring
 # that behaviour depends on: the filter exists only in victorialogs mode, sits
 # after the body buffer (or it cannot see a POST form body) and before the
-# router, its file ships in the ConfigMap, and the max is a validated number.
+# in-flight limit (a request it refuses must not take an in-flight slot), its file ships in the ConfigMap, and the max is a validated number.
 _VL = {"mode": "victorialogs", "jwt.audience": "tenant-federation-logs"}
 _QUERY_LIMIT_FILTER = "envoy.filters.http.lua.query_limit"
 _LIMIT_POLICY = {
@@ -192,8 +192,11 @@ def test_victorialogs_query_limit_filter_wired_after_buffer(repo_root: Path):
     i = names.index(_QUERY_LIMIT_FILTER)
     assert names.index("envoy.filters.http.buffer") < i, (
         f"query-limit filter must run after the buffer to read POST form bodies: {names}")
-    assert i == len(names) - 2 and names[-1] == "envoy.filters.http.router", (
-        f"query-limit filter must be the last filter before the router: {names}")
+    assert names[-1] == "envoy.filters.http.router", names
+    # Before the in-flight limit (which must stay last before the router): a
+    # request refused here with 400/415 must not take an in-flight slot.
+    assert names[i + 1:] == ["envoy.filters.http.lua.inflight", "envoy.filters.http.router"], (
+        f"query-limit filter must sit right before the in-flight limit and the router: {names}")
     lua = data.get("query_limit.lua", "")
     default = yaml.safe_load((repo_root / _CHART / "values.yaml").read_text(encoding="utf-8"))[
         "victorialogs"]["maxQueryLimit"]

@@ -1258,3 +1258,83 @@ def test_the_gate_itself_reports_a_missing_cluster_identity(monkeypatch):
     monkeypatch.setattr(gate, "load_repo_prometheus_text", lambda: bare)
     assert [e for e in gate.run_check(consumed={}, outputs=set(), services=[])["errors"]
             if e.startswith("CLUSTER-IDENTITY:")]
+
+
+# ── #4137: what label flow is told about tenant, held to the scrape ─────────
+
+def _may_write_tenant(raw_job: dict) -> list[str]:
+    """Every way the job (Prometheus' reading of its scrape_config) could put
+    `tenant` on a series: a replace writing it (target or metric relabel), a
+    labelmap (it writes whatever label names its regex yields — a node or
+    Service label named `tenant` included), honor_labels (the target's own)."""
+    found = []
+    if raw_job.get("honor_labels"):
+        found.append("honor_labels")
+    for key in ("relabel_configs", "metric_relabel_configs"):
+        for rc in raw_job.get(key) or []:
+            action = rc.get("action", "replace")
+            if action in ("replace", "lowercase", "uppercase") and rc.get("target_label") == "tenant":
+                found.append(f"{key}: {action} into tenant")
+            elif action == "labelmap":
+                found.append(f"{key}: labelmap {rc.get('regex')}")
+    return found
+
+
+def test_families_told_without_tenant_are_scraped_by_jobs_that_cannot_write_it():
+    """`tenant_presence` answers "without" for the static and service families;
+    every job that admits one (the gate's own admission) must have no way to
+    write tenant, or label flow would call a kept tenant dropped — and, the
+    other way, a job learning to write it must move the family off "without"."""
+    import _lib_consumer_read
+    ms = gate._lib_metric_sources
+    raw = {sc["job_name"]: sc for sc in
+           _lib_consumer_read.prometheus_config(gate.load_repo_prometheus_text())["scrape_configs"]}
+    jobs, services = gate.load_repo_jobs(), gate.load_repo_services()
+    rows = [(k, kind, spec) for k, kind, spec in ms.FAMILY_TABLE]
+    rows += [(k, kind, spec) for k, (kind, spec) in ms.FAMILY_EXACT.items()]
+    checked = 0
+    for key, kind, spec in rows:
+        sample = key + "x" if key.endswith("_") else key
+        told_without = ms.tenant_presence(sample) == "without"
+        assert told_without == (kind in ("static", "service")), (key, kind)
+        if not told_without:
+            continue
+        if kind == "static":
+            admitting = [j for j in jobs if j["job"] == spec and j["static"]]
+        else:
+            ns, name = spec
+            svc = next(s for s in services if s["namespace"] == ns and s["name"] == name)
+            admitting = [j for j in jobs if gate._service_admitted(svc, j)]
+        assert admitting, f"{key}: no job admits it — the fact speaks of nothing"
+        for j in admitting:
+            assert _may_write_tenant(raw[j["job"]]) == [], (key, j["job"])
+            checked += 1
+    assert checked >= 3  # prometheus, alertmanager, kube-state-metrics
+
+
+def test_the_one_job_told_to_carry_tenant_writes_it_on_every_target():
+    """label_flow tells da-read that every target of TENANT_EXPORTER_JOB
+    carries tenant (its `up`, `scrape_*`, `go_*` …): the job writes it from
+    the namespace, which a target always has."""
+    ms = gate._lib_metric_sources
+    job = next(j for j in gate.load_repo_jobs() if j["job"] == ms.TENANT_EXPORTER_JOB)
+    assert job["writes_tenant"]
+    import _lib_consumer_read
+    raw = next(sc for sc in _lib_consumer_read.prometheus_config(gate.load_repo_prometheus_text())["scrape_configs"]
+               if sc["job_name"] == ms.TENANT_EXPORTER_JOB)
+    writes = [rc for rc in raw.get("relabel_configs") or []
+              if rc.get("action", "replace") == "replace" and rc.get("target_label") == "tenant"]
+    assert [rc.get("source_labels") for rc in writes] == [["__meta_kubernetes_namespace"]]
+
+
+def test_a_per_target_or_alert_series_is_never_taken_to_carry_tenant():
+    """`up`, Prometheus' per-scrape series, the client libraries' families
+    and the alert series are no family of any one source (#4137 review)."""
+    ms = gate._lib_metric_sources
+    for name in ("up", "scrape_samples_scraped", "go_goroutines", "process_open_fds",
+                 "promhttp_metric_handler_requests_total", "net_conntrack_dialer_conn_failed_total"):
+        assert ms.tenant_presence(name) == "by-job", name
+    for name in ("ALERTS", "ALERTS_FOR_STATE"):
+        assert ms.tenant_presence(name) == "unknown", name
+    for name in ("mysql_up", "container_cpu_usage_seconds_total", "user_threshold", "my_own_app_total"):
+        assert ms.tenant_presence(name) is None, name

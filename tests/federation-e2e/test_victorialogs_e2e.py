@@ -28,7 +28,9 @@ import http.client
 import json
 import os
 import re
+import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
@@ -466,7 +468,7 @@ def test_vl10_gateway_rereads_a_rotated_password(vl_gateway_url, logs_signer):
     assert recovered == 200, f"the gateway did not recover after the password was restored: last status {recovered}"
 
 
-# ── VL11 — mandatory, bounded `limit` on /select/logsql/query ─────────────────
+# ── VL13 — mandatory, bounded `limit` on /select/logsql/query ─────────────────
 # query_limit.lua (ADR-021 §查詢端點白名單): exactly one `limit`, 1..max, in the
 # query string or a form-urlencoded POST body; anything else is answered by the
 # gateway (400/415) and never reaches the store. The harness renders the chart
@@ -519,12 +521,12 @@ def _assert_gateway_rejected(resp, status, label, endpoint=_QUERY_PATH):
     ("query=*&limit=5&%6Cimit=6", "duplicate with a percent-encoded key"),
     ("query=*&limit=5&limit=5", "duplicate, same value"),
 ])
-def test_vl11_query_limit_rejected_in_query_string(vl_gateway_url, logs_signer, raw_qs, label):
+def test_vl13_query_limit_rejected_in_query_string(vl_gateway_url, logs_signer, raw_qs, label):
     _, token = logs_signer(*TENANT_A)
     _assert_gateway_rejected(_limit_req(vl_gateway_url, token, raw_qs=raw_qs), 400, label)
 
 
-def test_vl11b_query_limit_trailing_slash_is_checked_too(vl_gateway_url, logs_signer):
+def test_vl13b_query_limit_trailing_slash_is_checked_too(vl_gateway_url, logs_signer):
     """The allowlist admits /select/logsql/query/ — the limit check must as well."""
     _, token = logs_signer(*TENANT_A)
     _assert_gateway_rejected(
@@ -533,7 +535,7 @@ def test_vl11b_query_limit_trailing_slash_is_checked_too(vl_gateway_url, logs_si
 
 
 @pytest.mark.parametrize("value", ["1", str(_MAX_LIMIT), "0050"])
-def test_vl11c_query_limit_within_bounds_reaches_store(vl_gateway_url, logs_signer, value):
+def test_vl13c_query_limit_within_bounds_reaches_store(vl_gateway_url, logs_signer, value):
     """Control: 1, the max itself, and a zero-padded value (Go's Atoi reads 50)
     are forwarded unchanged — the 400s above are the cap, not a blanket deny."""
     _, token = logs_signer(*TENANT_A)
@@ -545,7 +547,7 @@ def test_vl11c_query_limit_within_bounds_reaches_store(vl_gateway_url, logs_sign
     assert received.get("limit") == [value], resp.json()
 
 
-def test_vl11d_query_limit_in_post_form_body(vl_gateway_url, logs_signer):
+def test_vl13d_query_limit_in_post_form_body(vl_gateway_url, logs_signer):
     """VictoriaLogs reads POST form params with Go's FormValue, which prefers
     the BODY; the tenant guide's own curl example posts the form. A limit in the
     body is honoured; a missing, over-max or second limit in the body is not —
@@ -576,7 +578,7 @@ def test_vl11d_query_limit_in_post_form_body(vl_gateway_url, logs_signer):
         _assert_gateway_rejected(resp, 400, label)
 
 
-def test_vl11e_post_bodies_the_gateway_cannot_read_are_refused(vl_gateway_url, logs_signer):
+def test_vl13e_post_bodies_the_gateway_cannot_read_are_refused(vl_gateway_url, logs_signer):
     """A body the filter cannot parse but Go's form parser could (multipart), or
     one it would have to decode first (Content-Encoding), could hide a limit:
     415, even with a valid limit in the URL."""
@@ -600,7 +602,7 @@ def test_vl11e_post_bodies_the_gateway_cannot_read_are_refused(vl_gateway_url, l
     assert ok.status_code == 200, (ok.status_code, ok.text[:200])
 
 
-def test_vl11f_in_query_pipe_and_other_endpoints_are_not_gated(vl_gateway_url, logs_signer):
+def test_vl13f_in_query_pipe_and_other_endpoints_are_not_gated(vl_gateway_url, logs_signer):
     """A `| limit N` pipe in the LogsQL text is forwarded as-is: VictoriaLogs
     appends the URL limit as the query's last pipe, so the tenant's pipe cannot
     raise the cap (an upstream property this mock cannot show). An endpoint
@@ -614,7 +616,7 @@ def test_vl11f_in_query_pipe_and_other_endpoints_are_not_gated(vl_gateway_url, l
     assert "limit" not in parse_qs(urlsplit(resp.json()["received_path"]).query), resp.json()
 
 
-# -- VL12 -- field_values / stream_field_values: limit injected when missing ---
+# -- VL14 -- field_values / stream_field_values: limit injected when missing ---
 # Same counting and validation as /query, but a missing (or single zero) limit
 # is replaced by limit=<max> in the URL instead of rejected: Grafana's
 # VictoriaLogs data source omits `limit` here when a variable's limit is 0 or
@@ -638,7 +640,7 @@ def _received_limits(resp):
     ("query=*&field=_msg&limit=5", "5"),
     (f"query=*&field=_msg&limit={_MAX_LIMIT}", str(_MAX_LIMIT)),
 ])
-def test_vl12_value_endpoints_forward_exactly_one_bounded_limit(
+def test_vl14_value_endpoints_forward_exactly_one_bounded_limit(
         vl_gateway_url, logs_signer, endpoint, raw_qs, expect):
     _, token = logs_signer(*TENANT_A)
     resp = _limit_req(vl_gateway_url, token, path=endpoint, raw_qs=raw_qs)
@@ -659,14 +661,14 @@ def test_vl12_value_endpoints_forward_exactly_one_bounded_limit(
     ("query=*&field=_msg&limit=-1", "negative"),
     ("query=*&field=_msg&limit=abc", "non-numeric"),
 ])
-def test_vl12b_value_endpoints_reject_bad_limits(vl_gateway_url, logs_signer, endpoint, raw_qs, label):
+def test_vl14b_value_endpoints_reject_bad_limits(vl_gateway_url, logs_signer, endpoint, raw_qs, label):
     _, token = logs_signer(*TENANT_A)
     _assert_gateway_rejected(
         _limit_req(vl_gateway_url, token, path=endpoint, raw_qs=raw_qs), 400, label, endpoint)
 
 
 @pytest.mark.parametrize("endpoint", _VALUE_ENDPOINTS)
-def test_vl12c_value_endpoints_post(vl_gateway_url, logs_signer, endpoint):
+def test_vl14c_value_endpoints_post(vl_gateway_url, logs_signer, endpoint):
     """POST: a body limit is honoured and counted with the URL; a body without
     one gets the default injected into the URL (Go reads the URL when the body
     has none); a zero limit in the body is refused because the body would win
@@ -707,3 +709,129 @@ def test_vl12c_value_endpoints_post(vl_gateway_url, logs_signer, endpoint):
     resp = _limit_req(vl_gateway_url, token, method="POST", path=endpoint, raw_qs="query=*&field=_msg",
                       headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, body=multipart)
     _assert_gateway_rejected(resp, 415, "multipart/form-data", endpoint)
+
+
+# ── VL11 / VL12 — per-token in-flight limit (ADR-020 §Gateway 驗章、撤銷與限流) ──
+# The limit is mode-agnostic Lua; it is exercised here because only this stack
+# has an upstream the driver can make SLOW (mock_logstore.py `e2e-hold:<s>`),
+# and a query has to stay in flight for the limit to have anything to count.
+_INFLIGHT_LUA = os.path.join(os.path.dirname(__file__), "rendered", "victorialogs", "inflight_limit.lua")
+
+
+def _inflight_settings():
+    """(slots per worker, lease TTL seconds) as the harness actually rendered
+    them. The compose file runs ONE Envoy worker and the runner renders
+    concurrency=1, so the per-worker count is the per-instance cap."""
+    with open(_INFLIGHT_LUA, encoding="utf-8") as fh:
+        src = fh.read()
+    cap = re.search(r"^local MAX_PER_WORKER = (\d+)$", src, re.M)
+    ttl = re.search(r"^local LEASE_TTL = (\d+)$", src, re.M)
+    assert cap and ttl, "could not read MAX_PER_WORKER / LEASE_TTL out of the rendered filter"
+    return int(cap.group(1)), int(ttl.group(1))
+
+
+def _hold_query(url, token, secs):
+    return requests.get(
+        url + "/select/logsql/query", params={"query": f"e2e-hold:{secs}", "limit": "10"},
+        headers={"Authorization": "Bearer " + token}, timeout=35)
+
+
+def _gateway_audit_lines():
+    """The victorialogs gateway's stdout audit log, one dict per JSON line.
+    The compose project is the runner's `-p fedvl` (E2E_VL_COMPOSE_PROJECT
+    overrides it for a stack brought up under another name)."""
+    project = os.environ.get("E2E_VL_COMPOSE_PROJECT", "fedvl")
+    out = subprocess.run(
+        ["docker", "compose", "-p", project, "logs", "--no-log-prefix", "federation-gateway-logs"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60, check=True).stdout
+    lines = []
+    for raw in out.splitlines():
+        raw = raw.strip()
+        if raw.startswith("{"):
+            try:
+                lines.append(json.loads(raw))
+            except ValueError:
+                pass
+    return lines
+
+
+def test_vl11_inflight_limit_refuses_the_query_over_the_cap(vl_gateway_url, logs_signer):
+    """`cap` slow queries in flight on one token: the next query on that token is
+    429, a forbidden path on that token still gets its own 403 (routes the
+    gateway answers itself take no slot), a second token of the SAME tenant
+    is not affected (the limit is per token), the refusal is in the audit log as status 429 with the token id (the
+    audit sidecar buckets 429 as `rate_limited`), and once the slow queries
+    complete the token is admitted again (slots are released on completion)."""
+    cap, _ = _inflight_settings()
+    tenant, acct = TENANT_A
+    token_id, token = logs_signer(tenant, acct)
+    _, other = logs_signer(tenant, acct)
+    with ThreadPoolExecutor(max_workers=cap) as pool:
+        holds = [pool.submit(_hold_query, vl_gateway_url, token, 6) for _ in range(cap)]
+        time.sleep(2.0)  # let all `cap` reach the store and sit there
+        assert not any(h.done() for h in holds), "a held query finished early — nothing is in flight"
+        over = _query(vl_gateway_url, token)
+        assert over.status_code == 429, \
+            f"query #{cap + 1} on a token with {cap} in flight was not refused: {over.status_code} {over.text[:200]}"
+        assert "too many concurrent queries" in over.text
+        # A path the gateway answers itself takes no slot: the token at its
+        # cap still gets the default-deny 403, not 429.
+        denied = _query(vl_gateway_url, token, path="/select/logsql/tail")
+        assert denied.status_code == 403, \
+            f"a forbidden path on a token at its cap answered {denied.status_code}, not the route's 403"
+        assert _query(vl_gateway_url, other).status_code == 200, \
+            "a different token of the same tenant was refused — the limit must be per token"
+        statuses = [h.result().status_code for h in holds]
+    assert statuses == [200] * cap, f"the held queries themselves did not succeed: {statuses}"
+    after = _query(vl_gateway_url, token)
+    assert after.status_code == 200, \
+        f"the token is still refused after its queries completed — slots were not released: {after.status_code}"
+
+    # Envoy flushes its access-log file on an interval (1s by default), so poll.
+    refused = []
+    deadline = time.monotonic() + 15.0
+    while not refused and time.monotonic() < deadline:
+        refused = [ln for ln in _gateway_audit_lines()
+                   if ln.get("token_id") == token_id and str(ln.get("status")) == "429"]
+        if not refused:
+            time.sleep(1.0)
+    assert refused, "the in-flight refusal is not in the gateway audit log"
+    assert refused[-1].get("tenant_id") == tenant
+
+
+def test_vl12_a_client_reset_slot_is_reclaimed_by_lease_expiry(vl_gateway_url, logs_signer):
+    """Envoy's Lua filter gets no callback when the client resets a stream, so a
+    slot taken by a query whose client disconnected is NOT released on the spot:
+    right after the reset the token is still at its cap (429). It must come back
+    by lease expiry — LEASE_TTL after the slots were taken, not before the TTL
+    and not never. A counter without the expiry path stays at 429 forever."""
+    cap, ttl = _inflight_settings()
+    tenant, acct = TENANT_B
+    _, token = logs_signer(tenant, acct)
+    host = vl_gateway_url.rsplit(":", 1)[0].replace("http://", "")
+    port = int(vl_gateway_url.rsplit(":", 1)[1])
+    qs = urlencode({"query": "e2e-hold:20", "limit": "10"})
+    conns = []
+    taken_at = time.monotonic()
+    for _ in range(cap):
+        conn = http.client.HTTPConnection(host, port, timeout=35)
+        conn.putrequest("GET", "/select/logsql/query?" + qs, skip_accept_encoding=True)
+        conn.putheader("Authorization", "Bearer " + token)
+        conn.endheaders()
+        conns.append(conn)
+    time.sleep(2.0)  # all `cap` in flight at the store
+    for conn in conns:
+        conn.close()  # client goes away mid-query: Envoy resets the stream
+    time.sleep(1.0)
+    held = _query(vl_gateway_url, token)
+    assert held.status_code == 429, (
+        f"expected the reset queries to still hold their slots right after the reset "
+        f"(no Lua callback for a client reset), got {held.status_code} — if Envoy now "
+        f"reports resets to Lua, update inflight_limit.lua and this test")
+
+    freed = _gateway_status_until(vl_gateway_url, token, lambda s: s == 200, timeout_s=ttl + 15.0)
+    elapsed = time.monotonic() - taken_at
+    assert freed == 200, f"slots leaked: still {freed} {elapsed:.0f}s after a client reset (lease TTL {ttl}s)"
+    # Lease timestamps are whole seconds, so expiry can come up to 1s early.
+    assert elapsed >= ttl - 2, f"slots came back after {elapsed:.0f}s, before the {ttl}s lease TTL"

@@ -6,7 +6,8 @@
 #   per-IP rate limit -> JWT verify -> Lua (revoked + tenant wiring)
 #   -> per-token rate limit -> per-tenant rate limit -> buffer
 #   -> Lua (audit-query extraction)
-#   -> Lua (query limit; victorialogs mode only, 7b) -> router
+#   -> Lua (query limit; victorialogs mode only, 7b)
+#   -> Lua (per-token in-flight limit) -> router
 # The body buffer sits AFTER the rate limiters so a rejected request is
 # never buffered into Envoy memory — the rate limit bounds buffer cost.
 admin:
@@ -146,6 +147,15 @@ static_resources:
                         # the switch flips back cleanly. See the chart README.
                         - match:
                             prefix: "/"
+                          metadata:
+                            # Read by inflight_limit.lua: a route Envoy answers
+                            # itself takes no in-flight slot, so a token at its
+                            # cap still gets this route's own status, not 429.
+                            # EVERY direct_response route carries it (the chart
+                            # tests check); a forwarding route must never.
+                            filter_metadata:
+                              envoy.filters.http.lua.inflight:
+                                direct_response: true
                           direct_response:
                             status: 503
                             body:
@@ -167,6 +177,10 @@ static_resources:
                         # so a sibling like /api/v1/readiness is NOT over-matched.
                         - match:
                             path_separated_prefix: "/api/v1/read"
+                          metadata:
+                            filter_metadata:
+                              envoy.filters.http.lua.inflight:
+                                direct_response: true
                           direct_response:
                             status: 403
                             body:
@@ -231,7 +245,7 @@ static_resources:
                                     regex: "^(GET|POST)$"
                           route:
                             cluster: federation_upstream
-                            timeout: 30s
+                            timeout: {{ include "federation-gateway.routeTimeoutSeconds" . }}s
                           # x-fed-token-id is the internal per-token rate-limit
                           # key — stripped here so it never reaches the upstream
                           # (the rate-limit filters ran earlier and already
@@ -257,6 +271,10 @@ static_resources:
                         # 403 here and the shared route is never reached.
                         - match:
                             prefix: "/"
+                          metadata:
+                            filter_metadata:
+                              envoy.filters.http.lua.inflight:
+                                direct_response: true
                           direct_response:
                             status: 403
                             body:
@@ -266,7 +284,9 @@ static_resources:
                             prefix: "/"
                           route:
                             cluster: federation_upstream
-                            timeout: 30s
+                            # One definition, shared with the in-flight lease
+                            # TTL (_helpers.tpl routeTimeoutSeconds).
+                            timeout: {{ include "federation-gateway.routeTimeoutSeconds" . }}s
                           # x-fed-token-id is an internal rate-limit key —
                           # never let it reach the upstream.
                           request_headers_to_remove:
@@ -429,15 +449,30 @@ static_resources:
                   #    the form body — else 400/415; a missing one is 400 on
                   #    /query and injected as the max on the other two. After
                   #    the buffer (it reads POST form bodies) and after the
-                  #    audit filter (a rejected query is still audited). See
-                  #    query_limit.lua.
+                  #    audit filter (a rejected query is still audited); BEFORE
+                  #    the in-flight limit, so a request refused here takes no
+                  #    in-flight slot. See query_limit.lua.
                   - name: envoy.filters.http.lua.query_limit
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
                       default_source_code:
                         filename: /etc/envoy/query_limit.lua
                   {{- end }}
-                  # 8. Router — must be the last HTTP filter.
+                  {{- if include "federation-gateway.inflightEnabled" . }}
+                  # 8. Per-token in-flight limit — at most
+                  #    inflightLimit.maxPerToken queries per token in flight
+                  #    on this instance (split over the workers; see
+                  #    inflight_limit.lua for what it bounds and how a slot is
+                  #    released). LAST before the router so a slot is taken at
+                  #    the moment the request is forwarded — the same moment
+                  #    the route timeout starts, which the lease TTL relies on.
+                  - name: envoy.filters.http.lua.inflight
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        filename: /etc/envoy/inflight_limit.lua
+                  {{- end }}
+                  # 9. Router — must be the last HTTP filter.
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
