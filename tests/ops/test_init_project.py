@@ -7403,6 +7403,14 @@ class TestDuplicateKeyIsNamed:
         # a narrower run under --force: nothing it drops is removed
         run = self._cli(out, '--ci', 'github', '--force')
         assert run.returncode == 0, run.stderr[-800:]
-        assert named in run.stdout and 'none is removed' in run.stdout
+        assert named in run.stdout and 'none was removed' in run.stdout
+        # the marker is rewritten by this run: the repeated key is gone, so
+        # the summary must not ask for it to be merged; it must say that what
+        # init generated before can no longer be traced, and what to check
+        assert 'can no longer be traced' in run.stdout, run.stdout[-2000:]
+        assert 'check conf.d/ and the CI and kustomize files' in run.stdout
+        assert 're-run' not in run.stdout.split(named, 1)[1].split('\n', 1)[0]
+        assert 'Merge the duplicate' not in run.stdout
+        assert ip._read_ownership(str(out)).state == ip._OWN_LEDGER
         for rel in listed:
             assert (out / rel).exists(), rel

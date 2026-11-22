@@ -24,7 +24,9 @@ safe_load as sl`, a constant `getattr`, a star import, a rebound module).
 `yaml.dump` / `yaml.safe_dump`, `yaml.YAMLError`, node classes are not
 readers. The files are the repository's (`tests/_tree.py` `repo_files`),
 whatever directory they are in — `scripts/`, `helm/`, `components/`,
-`docs/`, `.claude/`, anything added later.
+`docs/`, `.claude/`, anything added later. Python embedded in other files
+(a workflow's `python3 -c`, a shell heredoc, a doc snippet) is held by a
+token check at the end of this file, with its own allow-list for prose.
 
 WHY `tests/` IS NOT SCANNED. A test is not a reader of anyone's data: it
 reads fixtures it wrote, and the strict loader's own tests need the lax
@@ -50,6 +52,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 import sys
 
 import pytest
@@ -194,3 +197,88 @@ def test_each_lax_reading_is_caught(src) -> None:
 ])
 def test_what_is_not_a_lax_reading(src) -> None:
     assert violations(src) == [], src
+
+
+# ── Python embedded in other files (workflows, shell, docs) ──────────
+#
+# A `python3 -c "…"` in a workflow or a heredoc in a shell script reads YAML
+# as surely as a `.py` file, and the AST above never sees it. These files
+# are not Python, so the check is a token one: in a tracked file that is not
+# `*.py`, not under tests/ (same reason as above) and not a symlink (its
+# target is scanned), a PyYAML reading spelled `yaml.safe_load`, `yaml.load`,
+# `yaml.full_load`, `yaml.unsafe_load`, `yaml.compose` (each also `_all`) or
+# `safe_load_all` is red unless `TOKEN_ALLOWED` lists the file with its count
+# and the reason. Embedded code reads through the lib instead:
+# `sys.path.insert(0, "scripts/tools"); from _lib_yaml_strict import
+# strict_safe_load`.
+#
+# ⚠️ A token, not a parse: `from yaml import safe_load` then `safe_load(…)`
+# in embedded code is not seen; prose naming the call is (hence the list).
+
+TOKEN = re.compile(r"\byaml\.(?:safe_load|load|full_load|unsafe_load|compose)(?:_all)?\b"
+                   r"|\bsafe_load_all\b")
+
+#: path -> (count, why the token is there and is not a reading)
+TOKEN_ALLOWED: "dict[str, tuple[int, str]]" = {
+    ".coderabbit.yaml": (1, "a comment quoting what PyYAML makes of a bare `off`"),
+    ".github/workflows/ci.yml": (1, "a comment describing what an old test asserted"),
+    "CHANGELOG.md": (1, "a released entry; history is not rewritten"),
+    "changelog.d/2335-crd-loader-no-global-mutation.md": (
+        1, "a changelog fragment describing a past change, not a reading"),
+    "tools/portal/src/interactive/tools/cicd-setup-wizard.jsx": (
+        1, "a comment on how a customer's YAML parser rejects a folded include"),
+    "tools/portal/tests/cicdGenerators.test.ts": (
+        1, "a comment on what the generated workflow must survive in a customer's repo"),
+}
+
+
+def _token_counts() -> "dict[str, int]":
+    out = {}
+    for p in repo_files():
+        rel = p.relative_to(REPO).as_posix()
+        if rel.endswith(".py") or rel.split("/", 1)[0] == "tests" or p.is_symlink():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        n = len(TOKEN.findall(text))
+        if n:
+            out[rel] = n
+    return out
+
+
+def test_embedded_python_reads_yaml_strictly() -> None:
+    got = _token_counts()
+    want = {k: v[0] for k, v in TOKEN_ALLOWED.items()}
+    new = {k: n for k, n in got.items() if want.get(k) != n}
+    stale = {k: n for k, n in want.items() if got.get(k) != n}
+    assert not new and not stale, (
+        "a PyYAML reading spelled in a non-.py file (#4111):\n"
+        + "".join(f"  {k}: {n} occurrence(s), allowed {want.get(k, 0)}\n"
+                  for k, n in sorted(new.items()))
+        + "".join(f"  stale TOKEN_ALLOWED row: {k} (allowed {n}, found {got.get(k, 0)})\n"
+                  for k, n in sorted(stale.items()))
+        + "Embedded code reads through scripts/tools/_lib_yaml_strict "
+          "(strict_safe_load); prose that only names the call goes in "
+          "TOKEN_ALLOWED with its reason.")
+
+
+def test_every_token_row_says_why() -> None:
+    bad = {k: v for k, v in TOKEN_ALLOWED.items()
+           if not (v[0] > 0 and len(v[1].split()) >= 5)}
+    assert not bad, bad
+
+
+def test_the_token_scan_sees_workflows_and_shell() -> None:
+    """Anti-vacuity: the files the embedded readings lived in are scanned,
+    and the token matches the shapes they had."""
+    seen = {p.relative_to(REPO).as_posix() for p in repo_files()}
+    for must in (".github/workflows/bench-record.yaml", ".github/workflows/validate.yaml",
+                 "scripts/benchmark.sh", "scripts/ops/federation_e2e_run.sh"):
+        assert must in seen, must
+    for src in ("python3 -c \"import yaml; yaml.safe_load(open('a'))\"",
+                "d = yaml.load(f, Loader=L)", "list(yaml.safe_load_all(t))",
+                "yaml.full_load(x)"):
+        assert TOKEN.search(src), src
+    assert not TOKEN.search("yaml.safe_dump(d)") and not TOKEN.search("strict_safe_load(t)")

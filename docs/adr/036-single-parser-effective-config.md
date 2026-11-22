@@ -48,7 +48,7 @@ updated_at: 2026-11-21
 - **2026-11-15 修訂**：da-read 與 da-crdecode 拒收輸入時在標準輸出印一份固定形狀的被拒文件；結束碼 2 而沒有這份文件（用法錯、打不開檔、讀寫標準輸入輸出失敗、Go 當機、舊版程式）算沒跑成，不再當成拒收（§3）。
 - **2026-11-15 修訂**：產生器容器對 `POST /v1/validate` 的回應不帶自由文字：拿掉 `message` 與 `stderr_tail`，只留封閉的 `error`／`reason` 與結構化欄位（`result`、`rc`、`findings`、`validated`、`cache`、`key_verdict`，503 `tool_fault` 另帶結構化的 `tool_fault`，與 `GET /v1/status` 的同形）；容器知道的細節寫進它自己的 log。回應以 ASCII 編碼，任何值都編得出來。tenant-api 給呼叫端的文字本來就由 reason 組出（§3、§5）。
 - **2026-11-15 修訂**：產生器容器只在 da-guard、da-read、da-crdecode 內建的自檢都通過之後才回報就緒；判定或暖機的工具故障只由通過的自檢清除，跑完全程的判定不再清除（§3）。
-- **2026-11-21 修訂**：§12 的第二條邊界改為只有一種讀法：Python 讀 YAML 一律經嚴格讀法，不再有「照消費者讀法」的例外清單，客戶檔案的重複鍵也是回報給客戶修的錯；lint 範圍擴到 repo 裡所有 Python 檔（測試除外）。
+- **2026-11-21 修訂**：§12 的第二條邊界改為只有一種讀法：Python 讀 YAML 一律經嚴格讀法，不再有「照消費者讀法」的例外清單，客戶檔案的重複鍵也是回報給客戶修的錯；lint 範圍擴到 repo 裡所有 Python 檔（測試除外）與嵌在其他檔裡的 Python。原則 6、決策對照表與 §12 首段同步限定：消費者的讀取器能呼叫時才以它為準，否則照規格嚴格讀。
 - **2026-11-15 修訂**：§6 多一種會放行的版本落差：平台預設啟用的閾值內建在讀取端之後，檢查端比部署中的 exporter 新時，靠內建值的樹在檢查端通過、exporter 卻不送那些列；決策不變。
 
 ## 摘要
@@ -62,7 +62,7 @@ updated_at: 2026-11-21
 3. **寫 conf.d 也只有一個寫者。** 改寫既有檔與產生新檔都由 da-guard 完成，Python 工具只送「要改什麼」（§2）。
 4. **語意各只有一個實作。** 路由、domain policy、租戶清單的語意只由產生器（Python）判定；閾值與 exporter 送出的值只由 exporter（Go）判定。
 5. tenant-api 的 pod 加一個容器跑產生器，每一筆會改變檔案內容的寫入都先問它。tenant-api 不再自己判定路由與 policy。
-6. **conf.d 以外的 YAML，以它的消費者為準。** 檔案有 Go 或其他程式在讀、照它行事時，Python 端以那個消費者的讀法取得內容，不自己用 PyYAML 讀（§12）。
+6. **conf.d 以外的 YAML：消費者的讀取器能呼叫時以它為準，否則照 YAML 規格嚴格讀。** 檔案由 repo 自己的 Go 程式或有子命令可問的程式（例如 tenant-api）讀、照它行事時，Python 端呼叫那個讀取器取得內容，不自己用 PyYAML 讀。沒有讀取器可呼叫的檔（客戶的 `.gitlab-ci.yml`、GitHub workflow、repo 自己的資料檔），一律以 `_lib_yaml_strict` 照規格讀：重複的鍵即拒收，不模仿消費者比規格寬鬆的地方（§12）。
 7. **在 main 上依序合併，每一步合併後 main 都可以發布。** 順序見 §7：tenant-api 先改問產生器容器，da-guard 接著不再判定路由與 policy，然後刪除 Go 端的模仿程式，產生器與 Python 工具再改讀 JSON，所以不論哪一個 commit 被發布，都不會出現「產生器已用 yaml.v3 讀、Go 端仍模仿 PyYAML」的版本；之後 Go 端的讀取者改經共用的判定、寫入改由 Go、conf.d 以外的 YAML 改以消費者為準。不設新舊並行期，也不設切換開關。
 
 **對使用者與維運的影響**（都是 breaking change）：
@@ -151,7 +151,7 @@ policy 檔的完整清單見 [#2759](https://github.com/vencil/Dynamic-Alerting-
 | 寫 conf.d：改寫既有檔、產生新檔 | Go（da-guard 的 `write`） | Python 工具送「要改什麼」 |
 | 路由（`_routing_defaults`、`routing_profiles`、租戶的 `_routing`）、domain policy、租戶清單的語意 | 路由產生器（Python） | 讀產生器輸出的 finding（產生器回報的每一筆問題，見 §4）與狀態端點（§5） |
 | 閾值與 exporter 實際提供的值 | exporter（Go） | 不變：讀 `da-guard served-values`／`effective` 的 JSON |
-| conf.d 以外、有其他程式在讀的 YAML | 那個消費者 | 以消費者的讀法取得（§12） |
+| conf.d 以外、有其他程式在讀的 YAML | 那個消費者 | 它的讀取器能呼叫時以它的讀法取得；否則照 YAML 規格嚴格讀（§12） |
 
 「閾值」那一列是現成的先例：閾值早就是「一個實作，其他工具讀它的輸出」。本 ADR 把同樣的做法套到 YAML 語法層、檔名規則、寫入與路由、policy 語意。
 
@@ -590,9 +590,9 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 
 重複鍵、多份文件、白名單外的型別標記：原本由產生器的 loader 與 Go 端模仿套件擋下（部分 Python 工具刻意只讀第一份文件）。刪除 Go 端的檢查之前，`parse-tree` 要已經把這些判為讀不了（§2），並由固定語料確認；所以 `parse-tree` 最先發布（§7）。
 
-### 12. conf.d 以外的 YAML：以它的消費者為準
+### 12. conf.d 以外的 YAML：能問消費者就問，否則照規格嚴格讀
 
-一份 YAML 的意思，由讀它、照它行事的那個程式決定。Python 工具需要讀這類檔的內容時，問那個消費者的讀法，不自己用 PyYAML 讀；PyYAML 與 yaml.v3 都不是這些檔的權威讀者。
+一份 YAML 的意思，由讀它、照它行事的那個程式決定。那個消費者的讀取器能被呼叫時（repo 自己的 Go 程式、tenant-api 的子命令），Python 工具問它，不自己用 PyYAML 讀；PyYAML 與 yaml.v3 都不是這些檔的權威讀者。沒有讀取器可呼叫的檔，Python 照 YAML 規格以嚴格讀法讀（見本節的第二條邊界）：這是規格的語意，不是哪個消費者的語意，消費者比規格寬鬆的地方（例如重複的鍵取後者）不模仿。
 
 | 檔案 | 權威讀者 | Python 端怎麼取得 |
 |---|---|---|
@@ -644,7 +644,7 @@ $ da-crdecode --any-shape values.yaml
 
 **邊界與怎麼守住**：檔案有 Go 消費者，Python 就不得以 PyYAML 讀它。CI 以 AST lint（解析 Python 原始碼的語法樹，找出呼叫 YAML 解析器的地方）列出每個呼叫點；呼叫點所在的檔要列在白名單（或下述的棘輪 baseline）裡，白名單逐檔附上理由（例如「只讀 GitHub workflow，沒有 Go 消費者」）。白名單只收沒有 Go 消費者的讀者。有 Go 消費者但還沒遷移的呼叫點不進白名單，列在另一份棘輪 baseline：新增呼叫點讓 CI 失敗，已遷移的呼叫點沒從 baseline 刪掉也讓 CI 失敗，所以 baseline 只會縮小，遷移完成時是空的。
 
-另一條、與上面互相獨立的邊界：**Python 讀 YAML 只有一種讀法，就是 YAML 規格的讀法**——同一個 mapping 裡的鍵必須唯一。讀法只有一處（`_lib_yaml_strict`：重複的鍵即拒收，鍵的比對方式同 yaml.v3）。PyYAML 預設遇到重複鍵會不出聲地取後者，前面那一份就消失了。另一支 AST lint（`tests/shared/test_yaml_strict_only.py`）掃 repo 裡每個被追蹤的 Python 檔（測試除外），在 `_lib_yaml_strict` 以外，凡是引用 PyYAML 或 ruamel.yaml 的讀取入口（`safe_load`、`load`、`compose`、各個 Loader 類別等）或 `construct_object` 就失敗；沒有例外清單，也沒有只減不增的債務清單。客戶的檔案也不例外：即使它的消費者本身取後者（例如 GitLab 讀 `.gitlab-ci.yml`），重複鍵也是要回報給客戶修的錯，不是照消費者的讀法讀下去——init 遇到時點名重複的鍵與行號、說明 GitLab 會靜默取後者，不給接線片段，請客戶修正後重跑。測試不掃：測試讀的是自己寫的 fixture，嚴格讀法自己的測試也需要寬鬆讀法當對照組。
+另一條、與上面互相獨立的邊界：**Python 讀 YAML 只有一種讀法，就是 YAML 規格的讀法**——同一個 mapping 裡的鍵必須唯一。讀法只有一處（`_lib_yaml_strict`：重複的鍵即拒收，鍵的比對方式同 yaml.v3）。PyYAML 預設遇到重複鍵會不出聲地取後者，前面那一份就消失了。另一支 AST lint（`tests/shared/test_yaml_strict_only.py`）掃 repo 裡每個被追蹤的 Python 檔（測試除外），在 `_lib_yaml_strict` 以外，凡是引用 PyYAML 或 ruamel.yaml 的讀取入口（`safe_load`、`load`、`compose`、各個 Loader 類別等）或 `construct_object` 就失敗；嵌在其他檔裡的 Python（workflow 的 `python3 -c`、shell 的 heredoc、文件片段）由同一支測試以字串比對守，只有點名該呼叫的說明文字可列入附理由的允許清單；沒有例外清單，也沒有只減不增的債務清單。客戶的檔案也不例外：即使它的消費者本身取後者（例如 GitLab 讀 `.gitlab-ci.yml`），重複鍵也是要回報給客戶修的錯，不是照消費者的讀法讀下去——init 遇到時點名重複的鍵與行號、說明 GitLab 會靜默取後者，不給接線片段，請客戶修正後重跑。測試不掃：測試讀的是自己寫的 fixture，嚴格讀法自己的測試也需要寬鬆讀法當對照組。
 
 範例：
 

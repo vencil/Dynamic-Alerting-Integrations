@@ -4582,9 +4582,33 @@ def _stale_files(config: dict, output_dir: str, plan: '_ConfdPlan',
     return _Stale(True, remove, keep)
 
 
-def _marker_duplicate_key_text(exc: DuplicateKeyError, is_zh: bool) -> str:
-    """#4111: what a run says when `.da-init.yaml` repeats a key."""
+def _marker_duplicate_key_text(exc: DuplicateKeyError, is_zh: bool, *,
+                               done: bool = False) -> str:
+    """#4111: what a run says when `.da-init.yaml` repeats a key.
+
+    Before any write (the refusal, the preview: `done=False`) it asks for the
+    key to be merged and the run repeated. After a `--force` run (`done=True`)
+    the marker has been rewritten — the repeated key is gone and the new
+    ledger lists only this run's files — so "merge and re-run" would point at
+    nothing; it says instead that what init generated before can no longer
+    be traced, and what to check by hand.
+    """
     where = _duplicate_key_where(exc, is_zh)
+    if done:
+        if is_zh:
+            return (f"⚠️ {_MARKER_REL} 原本{where}，init 無法採信其中任何一段清冊："
+                    f"先前產生、這次不再產生的檔量不到，一個都沒刪。{_MARKER_REL} "
+                    f"已依這次的結果重寫，新清冊只記這次寫的檔，所以那些檔從此無法"
+                    f"追溯，之後的執行也找不到——請自行檢查 conf.d/ 與 CI、"
+                    f"kustomize 檔裡有沒有已不需要的。")
+        return (f"⚠️ {_MARKER_REL} {where}, so init could trust neither copy of "
+                f"its file ledger: files it generated before and no longer "
+                f"generates cannot be found, and none was removed. "
+                f"{_MARKER_REL} has been rewritten from this run, and the new "
+                f"ledger lists only what this run wrote, so those files can no "
+                f"longer be traced and later runs cannot find them either: check "
+                f"conf.d/ and the CI and kustomize files for ones you no longer "
+                f"need.")
     if is_zh:
         return (f"⚠️ {_MARKER_REL} {where}。YAML 不允許同一個 mapping 裡有重複"
                 f"的鍵（寬鬆的讀法會靜默只取後者，前一段等於消失）；init 不猜"
@@ -4604,7 +4628,7 @@ def _stale_lines(stale: Optional[_Stale], is_zh: bool, *,
     if stale is None:
         return []
     if not stale.known and stale.dup is not None:
-        return [_marker_duplicate_key_text(stale.dup, is_zh)]
+        return [_marker_duplicate_key_text(stale.dup, is_zh, done=done)]
     if not stale.known:
         return [("⚠️ .da-init.yaml 沒有可讀的檔案清冊：無法得知 init 先前產生過"
                  "哪些檔，這次不再產生的檔量不到，一個都不刪。之後的執行也"
