@@ -1195,14 +1195,18 @@ def test_an_old_socket_is_replaced_and_a_file_is_refused(tmp_path, world):
         (tmp_path / "b").mkdir()
         svc = h.Service(tmp_path / "b", world["repo"], bin_dir=world["bin"],
                         socket_path=plain, wait=False)
-        assert svc.proc.wait(60) == 2
-        assert plain.read_text(encoding="utf-8") == "keep me"
-        assert "not a socket" in svc.log.read_text(encoding="utf-8")
+        try:
+            assert svc.proc.wait(60) == 2
+            assert plain.read_text(encoding="utf-8") == "keep me"
+            assert "not a socket" in svc.log.read_text(encoding="utf-8")
+        finally:
+            svc.stop()
     finally:
         shutil.rmtree(sdir, ignore_errors=True)
 
 
-@pytest.mark.parametrize("shape", ["file", "directory", "fifo", "link_to_a_socket"])
+@pytest.mark.parametrize("shape", ["file", "directory", "fifo", "link_to_a_socket",
+                                   "under_a_file"])
 def test_what_is_at_the_socket_path_and_is_no_socket_is_left_as_it_was(tmp_path, world, shape):
     """#3983: the manifest's ``runtime`` kind pins --socket here. Whatever is
     there that is not a socket — a file, a directory with something in it, a
@@ -1211,6 +1215,7 @@ def test_what_is_at_the_socket_path_and_is_no_socket_is_left_as_it_was(tmp_path,
     --socket, is left as it was, and costs --work-dir nothing: the refusal
     comes before the work directory's `jobs` is emptied."""
     sdir = h.short_dir()
+    svc = None  # a skip or a failed set-up below must not become an UnboundLocalError
     try:
         path = sdir / "there"
         target = sdir / "real.sock"
@@ -1221,12 +1226,16 @@ def test_what_is_at_the_socket_path_and_is_no_socket_is_left_as_it_was(tmp_path,
             (path / "inside").write_text("keep me", encoding="utf-8")
         elif shape == "fifo":
             os.mkfifo(path)
-        else:
+        elif shape == "link_to_a_socket":
             s = socket.socket(socket.AF_UNIX)
             s.bind(str(target))
             s.close()
             symlink_or_skip(target, path)
-        before = os.lstat(path)
+        else:
+            (sdir / "plain").write_text("keep me", encoding="utf-8")
+            path = sdir / "plain" / "g.sock"
+        there = shape != "under_a_file"
+        before = os.lstat(path) if there else None
         inflight = tmp_path / "s" / "work" / "jobs" / "inflight"
         inflight.parent.mkdir(parents=True)
         inflight.write_text("a judgement's tree", encoding="utf-8")
@@ -1234,10 +1243,14 @@ def test_what_is_at_the_socket_path_and_is_no_socket_is_left_as_it_was(tmp_path,
                         socket_path=path, wait=False)
         assert svc.proc.wait(60) == 2
         log = svc.log.read_text(encoding="utf-8")
-        assert f"ERROR: --socket {str(path)!r} exists and is not a socket" in log, log
+        why = ": Not a directory" if shape == "under_a_file" else " exists and is not a socket"
+        assert f"ERROR: --socket {str(path)!r}{why}" in log, log
         assert "Traceback" not in log, log
-        after = os.lstat(path)
-        assert (after.st_mode, after.st_ino) == (before.st_mode, before.st_ino)
+        if there:
+            after = os.lstat(path)
+            assert (after.st_mode, after.st_ino) == (before.st_mode, before.st_ino)
+        else:
+            assert (sdir / "plain").read_text(encoding="utf-8") == "keep me"
         if shape == "file":
             assert path.read_text(encoding="utf-8") == "keep me"
         elif shape == "directory":
@@ -1246,7 +1259,43 @@ def test_what_is_at_the_socket_path_and_is_no_socket_is_left_as_it_was(tmp_path,
             assert stat.S_ISSOCK(os.lstat(target).st_mode)
         assert inflight.read_text(encoding="utf-8") == "a judgement's tree"
     finally:
+        # A product that STARTS here is the regression this test is for: it
+        # must not be left running (blind review of #4192).
+        if svc is not None:
+            svc.stop()
         shutil.rmtree(sdir, ignore_errors=True)
+
+
+def test_a_socket_under_a_work_dir_not_made_yet_starts(tmp_path, world):
+    """Second blind review: a check that --socket's directory is there, put
+    before --work-dir is prepared, refused this — the directory is the one
+    that start creates. It worked before #3983 and works."""
+    sdir = h.short_dir()  # the socket path must fit AF_UNIX; tmp_path may not
+    try:
+        work = sdir / "s" / "work"
+        assert not work.exists()
+        with h.Service(sdir / "s", world["repo"], bin_dir=world["bin"],
+                       socket_path=work / "g.sock") as svc:
+            assert svc.call("GET", "/v1/status")[0] == 200
+            assert stat.S_ISSOCK(os.lstat(work / "g.sock").st_mode)
+    finally:
+        shutil.rmtree(sdir, ignore_errors=True)
+
+
+def test_limits_that_contradict_each_other_cost_the_work_dir_nothing(tmp_path, world):
+    """Blind review of #4192: `_check_limits` has no side effect, and ran
+    after --work-dir's `jobs` was emptied."""
+    inflight = tmp_path / "s" / "work" / "jobs" / "inflight"
+    inflight.parent.mkdir(parents=True)
+    inflight.write_text("a judgement's tree", encoding="utf-8")
+    svc = h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"], wait=False,
+                    args=("--max-inflight-body-bytes", "1"))
+    try:
+        assert svc.proc.wait(60) == 2
+        assert "--max-inflight-body-bytes 1 is below" in svc.log.read_text(encoding="utf-8")
+        assert inflight.read_text(encoding="utf-8") == "a judgement's tree"
+    finally:
+        svc.stop()
 
 
 _WORK_DIR_SHAPES = {
@@ -1256,8 +1305,9 @@ _WORK_DIR_SHAPES = {
     "under_a_file": "Not a directory",
     "through_a_link_loop": "Too many levels of symbolic links",
     "a_name_too_long": "File name too long",
-    "jobs_is_a_file": "File exists",
-    "jobs_is_a_link": "File exists",
+    # `rmtree`'s own reason: swallowed, it was `mkdir`'s "File exists" for both
+    "jobs_is_a_file": "Not a directory",
+    "jobs_is_a_link": "a symbolic link, not a directory",
 }
 
 
@@ -1300,6 +1350,7 @@ def test_a_work_dir_that_cannot_be_one_is_named_and_nothing_there_is_removed(
     if work != tmp_path / "s" / "work":
         args = ("--work-dir", str(work))  # the last one given is the one taken
     sdir = h.short_dir()
+    svc = None
     try:
         old = sdir / "old.sock"
         s = socket.socket(socket.AF_UNIX)
@@ -1317,6 +1368,8 @@ def test_a_work_dir_that_cannot_be_one_is_named_and_nothing_there_is_removed(
         assert (outside / "keep").exists()
         assert stat.S_ISSOCK(os.lstat(old).st_mode), "the old socket went with a refused start"
     finally:
+        if svc is not None:
+            svc.stop()
         shutil.rmtree(sdir, ignore_errors=True)
 
 
@@ -1328,11 +1381,14 @@ def test_a_work_dir_path_cannot_forge_a_log_line(tmp_path, world):
     work = f"{plain}/ev\nERROR: forged"
     svc = h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
                     args=("--work-dir", work), wait=False)
-    assert svc.proc.wait(60) == 2
-    lines = svc.log.read_text(encoding="utf-8").splitlines()
-    assert [ln for ln in lines if ln.startswith("ERROR:")] == [
-        ln for ln in lines if "--work-dir" in ln], lines
-    assert len([ln for ln in lines if ln.startswith("ERROR:")]) == 1, lines
+    try:
+        assert svc.proc.wait(60) == 2
+        lines = svc.log.read_text(encoding="utf-8").splitlines()
+        assert [ln for ln in lines if ln.startswith("ERROR:")] == [
+            ln for ln in lines if "--work-dir" in ln], lines
+        assert len([ln for ln in lines if ln.startswith("ERROR:")]) == 1, lines
+    finally:
+        svc.stop()
 
 
 def test_a_work_dir_in_use_keeps_everything_but_its_jobs(tmp_path, world):
