@@ -166,7 +166,7 @@ graph LR
     end
 
     subgraph Day1["Day-1: GitOps Governance"]
-        MIG -->|customer's own PR| PR2["conf.d PR<br/>(_defaults.yaml + &lt;id&gt;.yaml)"]
+        MIG -->|the customer PR| PR2["conf.d PR<br/>(_defaults.yaml + &lt;id&gt;.yaml)"]
         PR2 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Cardinality / Redundant-override<br/>+ route generator: Routing)"]
     end
 
