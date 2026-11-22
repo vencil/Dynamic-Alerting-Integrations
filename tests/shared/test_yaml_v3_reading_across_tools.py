@@ -256,6 +256,9 @@ _NOT_PROBED: dict[str, str] = {
     "validate_all.py": _PROSE_ONLY + ("; runs other tools as subprocesses — the "
                                        "conf.d readers among them have their own rows"),
     "ops/byo_check.py": _PROSE_ONLY + "; reads Alertmanager's /api/v2/status config",
+    "_lib_output.py": _PROSE_ONLY + ("; the output entries (#4223): a docstring names "
+                                     "`ops/assemble_config_dir`'s copy as an example, and it "
+                                     "reads no file"),
     "_lib_validation.py": _PROSE_ONLY + ("; the validation library: `shown_file` and "
                                          "`configmap_key_problem` judge a conf.d path's "
                                          "name it is handed (#3703), and it reads no "

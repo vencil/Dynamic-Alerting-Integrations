@@ -1096,7 +1096,7 @@ lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerp
 .PHONY: lint-docs
 lint-docs: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"；platform_data 需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；規則檔經 da-read：DA_READ_BINARY，未設就建 .build/da-read（DA_READ_PREREQ／DA_READ_ENV 已含 da-crdecode）；platform_data／byo_rulepack_table 經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
 	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/validate_all.py \
-		--only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,platform_data,tool_consistency,alerts,cli_default_drift,cli_contract,frontmatter_versions \
+		--only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,includes,platform_data,tool_consistency,alerts,cli_default_drift,cli_contract,frontmatter_versions \
 		$(ARGS)
 
 .PHONY: lint-image-caveats

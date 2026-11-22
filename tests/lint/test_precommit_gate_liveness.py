@@ -63,8 +63,6 @@ pytestmark = pytest.mark.skipif(
 
 _BAT = "scripts/ops/dx-run.bat"
 _ARIA_PROBE = "tools/portal/src/interactive/tools/zz_liveness_probe_aria.jsx"
-_GLOSSARY_ANCHOR = "**ADR (Architecture Decision Record)**"
-_GLOSSARY_PLANT = "**ZZQ (Zeta Zulu Quebec)**\n:   liveness probe term.\n\n" + _GLOSSARY_ANCHOR
 _AUDIENCE_ANCHOR = "  file: getting-started/wizard.jsx\n  audience:\n  - platform\n"
 
 
@@ -96,12 +94,6 @@ def _configmap_unmounted(root: Path) -> None:
     src = (root / "k8s/03-monitoring/configmap-rules-liveness.yaml").read_text(encoding="utf-8")
     _write(root, "k8s/03-monitoring/configmap-rules-zzprobe.yaml",
            src.replace("prometheus-rules-liveness", "prometheus-rules-zzprobe"))
-
-
-def _glossary_synced(root: Path) -> None:
-    _replace_once(root, "docs/glossary.md", _GLOSSARY_ANCHOR, _GLOSSARY_PLANT)
-    subprocess.run([sys.executable, "-X", "utf8", "scripts/tools/dx/sync_glossary_abbr.py"],
-                   cwd=root, check=True, capture_output=True, timeout=120)
 
 
 @dataclass(frozen=True)
@@ -165,9 +157,6 @@ CASES = [
          lambda r: _write(r, _ARIA_PROBE, '<p aria-describedby="zz-probe-missing">x</p>\n'),
          lambda r: _write(r, _ARIA_PROBE,
                           '<p id="zz-probe-note">n</p>\n<p aria-describedby="zz-probe-note">x</p>\n')),
-    Case("glossary-check",
-         lambda r: _replace_once(r, "docs/glossary.md", _GLOSSARY_ANCHOR, _GLOSSARY_PLANT),
-         _glossary_synced),
 ]
 
 

@@ -129,7 +129,6 @@ lang: en
 | `scaffold_lint.py` | generate a new pre-commit lint script from template. |
 | `scan_component_health.py` | JSX 元件健康快照（v2.7.0 Phase .a A-1 首發） |
 | `suggest_related.py` | 基於 audience 重疊 + tags 相似度推薦 related tools |
-| `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |
 | `sync_schema.py` | Generate the reserved `_` key lists from the one registry. |
 | `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP |
 | `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
@@ -271,6 +270,7 @@ lang: en
 - `scripts/tools/_lib_kubectl.py`: Run kubectl: the one place that starts it, for reads and writes (#3207, #3210, #3539).
 - `scripts/tools/_lib_label.py`: `safe_label`: neutralise control characters in a value before it is printed.
 - `scripts/tools/_lib_metric_sources.py`: Where each metric a rule reads comes from — and whether a Prometheus Operator install has that source.
+- `scripts/tools/_lib_output.py`: The output entry points: every write to an output path goes through here.
 - `scripts/tools/_lib_parse_cache.py`: the conf.d reader of the routing tools, with a cache.
 - `scripts/tools/_lib_parse_tree.py`: read `da-guard parse-tree`'s document (ADR-036 §2).
 - `scripts/tools/_lib_paths.py`: The one judgement of a path the caller gave (#3276).

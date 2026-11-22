@@ -3,7 +3,7 @@
 WHAT THIS GATE IS FOR
 ---------------------
 A tool's file writes are meant to go through the two entries of
-``_lib_io.OUTPUT_ENTRY_POINTS`` — an operator output or a repo artifact
+``_lib_output.OUTPUT_ENTRY_POINTS`` — an operator output or a repo artifact
 (``docs/internal/lint-policy.md``). The run-time write gate
 (``test_output_path_write_failure``) holds the tools that take an output
 flag to that, per flag. It never sees a tool with no such flag, or one that
@@ -101,8 +101,8 @@ def entry_homes() -> frozenset[str]:
     be the entry itself (class ``entry``), and nowhere else. Read off
     ``OUTPUT_ENTRY_POINTS``. They are in the population like any other
     file: a helper added to one with a bare write is unlisted, and red."""
-    import _lib_io
-    modules = {name.split(".")[0] for names in _lib_io.OUTPUT_ENTRY_POINTS.values()
+    import _lib_output
+    modules = {name.split(".")[0] for names in _lib_output.OUTPUT_ENTRY_POINTS.values()
                for name in names}
     return frozenset(f"scripts/tools/{module}.py" for module in modules)
 
@@ -173,7 +173,7 @@ def verdict(scanned: dict[str, Counter[str]], want: dict[str, Counter[str]]) -> 
                 faults.append(
                     f"{rel}: {have[site] - said[site]} unlisted raw write(s) at `{site}` — "
                     "write a tracked file or a flag-named path through its entry "
-                    "(_lib_io.write_repo_artifact / write_operator_output); only a "
+                    "(_lib_output.write_repo_artifact / write_operator_output); only a "
                     "write under a temporary directory the code made, or a marker / "
                     "lock / cache, is added to REGISTERED, with its class — a tracked "
                     "file listed there is a mislabel nothing here catches")
@@ -382,7 +382,7 @@ REGISTERED: dict[str, dict[str, int]] = {
         "_write_in_place .write_text [entry]": 1,
         "_write_in_place os.chmod [entry]": 1,
     },
-    "scripts/tools/_lib_io.py": {
+    "scripts/tools/_lib_output.py": {
         "_kernel_open_operator_output os.chmod [entry]": 1,
         "ensure_dir .mkdir [entry]": 1,
         "open_operator_output io.open(w) [entry]": 1,
@@ -678,7 +678,7 @@ def test_debt_does_not_grow_since_the_base_commit():
 def test_the_base_comparison_says_no():
     base = ({"scripts/x.py": {"main .write_text [artifact]": 2}},
             {"scripts/x.py": {"main open(w) [scratch]": 1},
-             "scripts/tools/_lib_io.py": {"ensure_dir .mkdir [entry]": 1}})
+             "scripts/tools/_lib_output.py": {"ensure_dir .mkdir [entry]": 1}})
     assert debt_regressions(base, base) == []
     # paid: one site moved to an entry
     paid = {"scripts/x.py": {"main .write_text [artifact]": 1}}
@@ -705,7 +705,7 @@ def test_the_base_comparison_says_no():
     assert len(debt_regressions(base, (swapped, {**base[1], "scripts/z.py":
                                                  {"run .write_text [scratch]": 1}}))) == 1
     # an entry module's own sink added while debt is paid is not a relabel
-    entry = {**base[1], "scripts/tools/_lib_io.py": {"ensure_dir .mkdir [entry]": 2}}
+    entry = {**base[1], "scripts/tools/_lib_output.py": {"ensure_dir .mkdir [entry]": 2}}
     assert debt_regressions(base, (paid, entry)) == []
 
 
@@ -782,7 +782,7 @@ def test_an_entry_class_site_is_in_an_entry_module_and_only_there():
     ``OUTPUT_ENTRY_POINTS`` names. Those modules are in the population like
     any other file, so a helper added to one with a bare write is unlisted."""
     homes = entry_homes()
-    assert {"scripts/tools/_lib_io.py", "scripts/tools/_lib_atomic_write.py"} <= homes
+    assert {"scripts/tools/_lib_output.py", "scripts/tools/_lib_atomic_write.py"} <= homes
     assert homes <= set(population()), "an entry module is missing from the population"
     for rel, sites in REGISTERED.items():
         classes = {_split(key)[1] for key in sites}
@@ -832,7 +832,7 @@ def test_a_file_with_a_scratch_site_names_a_temporary_location():
 _SNIPPET = """
 import os, shutil, tempfile
 from pathlib import Path
-from _lib_io import write_repo_artifact
+from _lib_output import write_repo_artifact
 def gen(out):
     Path(out).write_text("x")
     write_repo_artifact(out, "x")          # an entry: not a sink

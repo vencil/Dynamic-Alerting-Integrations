@@ -9,9 +9,9 @@ Devices, FIFOs and fd 1's file are not decidable from the string; the write
 
 ⚠️ The list is the flags that declare it, written out (as in
 ``test_output_dir_flag``). Every one must be an ``artifact`` file row of the
-write gate; the other artifact rows (``sync_glossary_abbr --output``,
-``configmap_assemble --output``, ``state-reconcile --manifest-path``) do not
-declare it yet, and this file holds them to nothing.
+write gate; the other artifact rows (``configmap_assemble --output``,
+``state-reconcile --manifest-path``) do not declare it yet, and this file
+holds them to nothing.
 """
 from __future__ import annotations
 
@@ -30,7 +30,6 @@ from test_output_path_write_failure import ROWS, TOOLS_DIR, Ctx
 ARTIFACT_FILE_FLAGS = [
     ("dx/compile_custom_alerts.py", "--out"),  # #3982, owner 2026-11-18
     ("dx/generate_tenant_metadata.py", "--output"),  # #3982, owner 2026-11-18
-    ("dx/sync_glossary_abbr.py", "--output"),  # #3107 ④
     ("../ops/configmap_assemble.py", "--output"),  # #3107 ④, owner 2026-10-24
     ("ops/state_reconcile.py", "--manifest-path"),  # #3107 ④, owner 2026-11-15
     ("ops/generate_alertmanager_routes.py", "-o/--output"),

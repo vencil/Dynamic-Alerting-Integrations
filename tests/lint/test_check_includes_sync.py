@@ -273,13 +273,3 @@ class TestMainCLI:
         result = cis.main()
         assert result == 0
 
-    def test_abbreviations_md_ignored(self, tmp_path, monkeypatch, capsys, cli_argv):
-        """abbreviations.md should be ignored."""
-        includes = tmp_path / "docs" / "includes"
-        includes.mkdir(parents=True)
-        (includes / "abbreviations.md").write_text("content",
-                                                    encoding="utf-8")
-        monkeypatch.setattr(cis, "INCLUDES_DIR", includes)
-        cli_argv('check_includes_sync')
-        result = cis.main()
-        assert result == 0

@@ -2,7 +2,7 @@
 
 WHAT THIS FILE IS FOR, AND WHAT IT IS NOT
 -----------------------------------------
-The output entries in ``_lib_io`` close the write-failure class at the
+The output entries in ``_lib_output`` close the write-failure class at the
 helper: they raise ``OutputWriteError`` and their ``_or_die`` forms end the
 run with one line at rc=2 (``test_write_failure_class``); whether each
 tool's flag reaches that line is measured per flag by
@@ -12,7 +12,7 @@ The raw sinks are the other half and they have no helper to close them. A
 tool that writes with a bare ``open(..., "w")``, ``Path.mkdir``,
 ``os.makedirs``, ``shutil.copy2`` or ``os.replace`` cannot move to an entry
 without changing the bytes or the permissions it emits, so #1789
-WRAPS those sites in ``_lib_io.output_write`` instead. A wrapper is not a
+WRAPS those sites in ``_lib_output.output_write`` instead. A wrapper is not a
 helper: nothing stops the next edit from adding a raw sink beside a wrapped
 one, or from deleting the ``with`` line. That is what this file watches.
 
@@ -1145,9 +1145,9 @@ def test_guarded_files_are_real_and_have_sinks():
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 # The helper's own module defines the name; it does not call it.
 _SHARED_WRITER_HOME = "scripts/tools/_lib_atomic_write.py"
-# #3107: `_lib_io.write_repo_artifact` is the helper's entry point; its callers
+# #3107: `_lib_output.write_repo_artifact` is the helper's entry point; its callers
 # are found by the `_CLOSED_WRITERS` name instead.
-_SHARED_WRITER_ENTRY = "scripts/tools/_lib_io.py"
+_SHARED_WRITER_ENTRY = "scripts/tools/_lib_output.py"
 
 
 def shared_writer_import_lines(source: str, label: str = "<snippet>") -> list[int]:
@@ -1230,7 +1230,7 @@ class TestSharedWriterCallerDetection:
 
 def test_no_tool_calls_the_shared_atomic_writer_itself(monkeypatch):
     """#2128, closed by #3981. The shared atomic writer has one caller: its
-    entry, ``_lib_io.write_repo_artifact``. The four generators that called
+    entry, ``_lib_output.write_repo_artifact``. The four generators that called
     it directly (and had to be pinned in ``GUARDED_FILES`` for it) go
     through the entry now, so the caller population this test used to close
     is EMPTY, and it holds it there: any file under ``scripts/`` that
@@ -1255,7 +1255,7 @@ def test_no_tool_calls_the_shared_atomic_writer_itself(monkeypatch):
         "the walk read no file outside scripts/tools/"
     assert not callers, (
         "the shared atomic writer is called outside its entry — use "
-        "_lib_io.write_repo_artifact:\n"
+        "_lib_output.write_repo_artifact:\n"
         + "\n".join(f"  {f}:{','.join(map(str, lines))}" for f, lines in sorted(callers.items())))
 
 
@@ -1267,7 +1267,7 @@ def test_no_tool_calls_the_shared_atomic_writer_itself(monkeypatch):
 #: ⚠️ A module name assembled at run time ("_lib_" + "atomic_write") is not
 #: seen by this either; it is not a mistake anyone makes by accident.
 _MAY_NAME_THE_ATOMIC_WRITER = frozenset({
-    "scripts/tools/_lib_io.py",
+    "scripts/tools/_lib_output.py",
     "scripts/tools/lint/_lint_helpers.py",
     "scripts/tools/lint/check_structure.py",
     "scripts/session-guards/preflight_bash.py",
@@ -1286,7 +1286,7 @@ def test_only_the_listed_files_name_the_atomic_writers_module(tmp_path):
     namers = atomic_writer_namers()
     assert namers == _MAY_NAME_THE_ATOMIC_WRITER, (
         "names _lib_atomic_write without being listed (write through "
-        f"_lib_io.write_repo_artifact): {sorted(namers - _MAY_NAME_THE_ATOMIC_WRITER)}; "
+        f"_lib_output.write_repo_artifact): {sorted(namers - _MAY_NAME_THE_ATOMIC_WRITER)}; "
         f"listed but no longer naming it: {sorted(_MAY_NAME_THE_ATOMIC_WRITER - namers)}")
     # The reader says yes on the shape the AST detector misses.
     (tmp_path / "x.py").write_text(
