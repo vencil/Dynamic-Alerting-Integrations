@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import textwrap
 from datetime import datetime, timezone
@@ -205,7 +206,9 @@ def parse_configmap_rules(source_dir: Path,
         listing: its `list_source_dir` (taken here when None)
 
     Returns:
-        List of dicts: {name, file, rule_groups, cm_data_key, already_crd}.
+        List of dicts, one per RULE FILE: {name, file, rule_groups,
+        cm_data_key, already_crd, kind, document}. A ConfigMap with two rule
+        file keys is two of them; `source_objects` puts them back together.
         ``already_crd`` is True for a PrometheusRule's ``spec`` (#3426): it
         is already the CRD this tool writes, so it is not converted — the
         callers name it on stderr and in the checklist (never a silent skip,
@@ -252,8 +255,153 @@ def parse_configmap_rules(source_dir: Path,
             "cm_data_key": rf.key if rf.kind == "ConfigMap" else None,
             "rule_groups": rf.groups,
             "already_crd": rf.kind == "PrometheusRule",
+            # Which object delivered it: the manifest kind (None: a plain
+            # rule file) and its position in kubectl's reading of the file.
+            "kind": rf.kind,
+            "document": rf.document,
         })
     return results
+
+
+class MigrationRefused(Exception):
+    """The sources were read, and no CRD set can be made of them that says
+    what they say (#4041): two outputs would carry one name, a name is not
+    one Kubernetes takes, or a source's keys repeat a group name. ``lines``
+    names every such case. The run stops on it (rc 2) before anything is
+    written or printed as a plan — the tool used to write the files one over
+    the other and report the count it had meant to write."""
+
+    def __init__(self, lines: "list[str]") -> None:
+        self.lines = list(lines)
+        shown = "; ".join(safe_label(line) for line in self.lines)
+        super().__init__(i18n_text(
+            f"--source-dir 的來源轉不成一組各自獨立的 PrometheusRule，遷移中止、不寫任何檔: {shown}",
+            f"--source-dir: the sources make no set of distinct PrometheusRules; "
+            f"nothing is written: {shown}"))
+
+
+def source_objects(found: List[dict]) -> List[dict]:
+    """*found* (`parse_configmap_rules`: one item per rule file) as one item
+    per SOURCE OBJECT, in the order first met: a ConfigMap is one object
+    whatever number of rule file keys it has, its groups the keys' groups in
+    the order the manifest gives the keys (#4041 — each key used to become a
+    PrometheusRule of the same name, written to the same file).
+
+    ⛔ By the object's identity — which file, which document of it — never
+    by its name: two files that each hold a ConfigMap `rules` are two
+    objects, and so are `team-a/rules` and `team-b/rules` in one file.
+    A plain rule file is its own object."""
+    merged: "dict[tuple, dict]" = {}
+    for item in found:
+        ident = ((item["file"], item["document"]) if item.get("kind") is not None
+                 else (item["file"], None, id(item)))
+        obj = merged.get(ident)
+        if obj is None:
+            obj = merged[ident] = {
+                "name": item["name"], "file": item["file"], "kind": item.get("kind"),
+                "already_crd": item["already_crd"], "keys": [], "rule_groups": [],
+                "groups_by_key": [],
+            }
+        obj["keys"].append(item.get("cm_data_key"))
+        obj["groups_by_key"].append((item.get("cm_data_key"), list(item.get("rule_groups") or [])))
+        obj["rule_groups"].extend(item.get("rule_groups") or [])
+    return list(merged.values())
+
+
+#: A Kubernetes object name (RFC 1123 subdomain), as the API server takes it.
+_OBJECT_NAME = re.compile(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?")
+
+
+def rule_pack_name_of(obj: dict) -> str:
+    """What stands for the pack in the PrometheusRule made from *obj*.
+
+    A rules ConfigMap of this repo's naming (`prometheus-rules-<pack>`,
+    `_lib_consumer_read.configmap_rules_pack`) and a rule pack file
+    (`rule-pack-<pack>.yaml`) give `<pack>`: the object is then named as
+    `operator-generate` names its copy of that pack, so a cluster moved to
+    that generator later has ONE object for the pack, not two loading the
+    same rules. Any other source keeps its own name, lower-cased.
+    ⛔ Anchored: `str.replace` of the prefix turned `my-rule-pack-foo` into
+    `my-foo` — the name of another ConfigMap."""
+    name = obj["name"]
+    if obj.get("kind") == "ConfigMap":
+        pack = _lib_consumer_read.configmap_rules_pack(name)
+        if pack is not None:
+            return pack.lower()
+    else:
+        pack = _lib_consumer_read.RULE_PACKS.member(obj["file"])
+        if pack is not None:
+            return pack.lower()
+    prefix = _lib_consumer_read.RULE_PACKS.prefix
+    if name.startswith(prefix) and len(name) > len(prefix):
+        name = name[len(prefix):]
+    return name.lower()
+
+
+def planned_rules(found: List[dict], namespace: str) -> List[dict]:
+    """The PrometheusRules *found* migrates to: `[{name, file, keys, crd}]`,
+    one per source object that is not already a PrometheusRule.
+
+    Raises `MigrationRefused` — every case named, nothing returned — when:
+
+    * two source objects would give one object name (the same output file,
+      and for `kubectl apply` the same object: the later one wins);
+    * a name is the name of a PrometheusRule already in the sources (applied,
+      it would replace that object);
+    * a name is not a Kubernetes object name (`My_Rules.yml`);
+    * the keys of one ConfigMap repeat a group name. Prometheus takes that —
+      they are different rule files — and one PrometheusRule cannot say it:
+      the operator writes one rule file per object, and the loader refuses a
+      repeated group name in one file.
+    """
+    objects = source_objects(found)
+    refused: "list[str]" = []
+    planned: "list[dict]" = []
+    by_name: "dict[str, list[dict]]" = {}
+    for obj in objects:
+        if obj["already_crd"]:
+            continue
+        where = f"{obj['file']}" + (f" ({obj['kind']} {obj['name']})" if obj["kind"] else "")
+        seen: "dict[str, object]" = {}
+        for key, groups in obj["groups_by_key"]:
+            for group in groups:
+                gname = group.get("name") if isinstance(group, dict) else None
+                if gname in seen and seen[gname] != key:
+                    refused.append(i18n_text(
+                        f"{where}: group `{gname}` 同時在 key `{seen[gname]}` 與 `{key}`，"
+                        "合併成一個 PrometheusRule 後 group 名稱重複",
+                        f"{where}: group `{gname}` is in key `{seen[gname]}` and in `{key}`; "
+                        "one PrometheusRule cannot hold a group name twice"))
+                seen.setdefault(gname, key)
+        crd = convert_rules_to_crd(obj["rule_groups"], rule_pack_name_of(obj), namespace)
+        name = crd["metadata"]["name"]
+        if len(name) > 253 or not _OBJECT_NAME.fullmatch(name):
+            refused.append(i18n_text(
+                f"{where}: 產出的物件名稱 `{name}` 不是合法的 Kubernetes 名稱",
+                f"{where}: the object name it gives, `{name}`, is not one Kubernetes takes"))
+        by_name.setdefault(name, []).append(obj)
+        planned.append({"name": name, "file": obj["file"], "keys": obj["keys"], "crd": crd,
+                        "where": where})
+    for name, objs in by_name.items():
+        if len(objs) > 1:
+            sources = ", ".join(f"{o['file']}" + (f" ({o['kind']} {o['name']})" if o["kind"] else "")
+                                for o in objs)
+            refused.append(i18n_text(
+                f"{len(objs)} 個來源都會產出 PrometheusRule `{name}`（同一個輸出檔）: {sources}",
+                f"{len(objs)} sources give the PrometheusRule `{name}` (one output file): "
+                f"{sources}"))
+    existing = {obj["name"]: obj["file"] for obj in objects if obj["already_crd"]}
+    for plan in planned:
+        if plan["name"] in existing:
+            refused.append(i18n_text(
+                f"{plan['where']}: 產出的 `{plan['name']}` 與來源裡已有的 PrometheusRule 同名"
+                f"（{existing[plan['name']]}），套用後會取代它",
+                f"{plan['where']}: the `{plan['name']}` it gives is the name of a "
+                f"PrometheusRule already in the sources ({existing[plan['name']]}); "
+                "applied, it would replace that object"))
+    if refused:
+        raise MigrationRefused(refused)
+    return planned
 
 
 def already_crd_notice(item: dict) -> str:
@@ -285,7 +433,10 @@ def convert_rules_to_crd(
         "kind": "PrometheusRule",
         "metadata": {
             # #3471: the shipped PrometheusRule naming, the declaration's
-            # (`OPERATOR_RULES`): the same name operator-generate gives its copy.
+            # (`OPERATOR_RULES`): the same name operator-generate gives its
+            # copy — for *pack_name* a pack's name, which `rule_pack_name_of`
+            # derives (#4041: it was the ConfigMap's name with a substring
+            # cut out, so the claim here was not true of any shipped pack).
             "name": _lib_consumer_read.OPERATOR_RULES.file_stem(pack_name),
             "namespace": namespace,
             # #3427: the selector labels operator-generate puts on its copy,
@@ -324,12 +475,19 @@ def analyze_migration(source_dir: Path,
     }
 
     found = parse_configmap_rules(source_dir, source_listing)
-    cm_rules = [item for item in found if not item["already_crd"]]
-    analysis["already_crd"] = [{"file": i["file"], "name": i["name"]}
-                               for i in found if i["already_crd"]]
+    objects = source_objects(found)
+    cm_rules = [obj for obj in objects if not obj["already_crd"]]
+    analysis["already_crd"] = [{"file": o["file"], "name": o["name"]}
+                               for o in objects if o["already_crd"]]
+    # #4041: the SOURCE OBJECTS to migrate (a ConfigMap is one, whatever
+    # number of rule file keys it has; a plain rule file is one) — this
+    # counted rule files, so two keys read as two ConfigMaps.
     analysis["configmap_files"] = len(cm_rules)
     for item in cm_rules:
         analysis["rule_groups"] += len(item.get("rule_groups", []))
+    # The checklist is a plan of the same migration: what `generate_migration`
+    # refuses is refused here, not described.
+    planned_rules(found, "default")
     # #3426: a rule file the rule loader refuses, an unreadable source file
     # and a missing da-read / da-crdecode are no `issues` entry beside a
     # partial count: they reach `main` (`_sources_or_exit`), rc 2. #3721: a
@@ -391,6 +549,13 @@ def build_migration_checklist(
         output_dir = "<--output-dir>"
     timestamp = datetime.now(timezone.utc).isoformat()
     total = len(result.get("prometheus_rules", []))
+    # #4041: before it, this tool named a rule pack's PrometheusRule after the
+    # ConfigMap (`<operator prefix><configmap prefix><pack>`); now it is the
+    # name operator-generate gives. A cluster that applied the old ones has
+    # both after applying these, each loading the same rules. Both prefixes
+    # come from the declarations, as the names themselves do.
+    new_prefix = _lib_consumer_read.OPERATOR_RULES.prefix
+    old_prefix = new_prefix + _lib_consumer_read.CONFIGMAP_RULES_OBJECT_PREFIX
     # #3426: PrometheusRules found in --source-dir are named here — they are
     # already the CRD, so nothing was converted from them.
     already = result.get("already_crd", [])
@@ -467,6 +632,7 @@ Alertmanager 路由不以 AlertmanagerConfig CRD 產生（#3572）：Prometheus 
 
 - [ ] 確認所有規則都已成功遷移
 - [ ] 刪除舊 ConfigMap: `kubectl delete configmap -n monitoring <configmap-names>`
+- [ ] 若曾套用過本工具舊版的輸出：舊版把規則包的 PrometheusRule 命名為 `{old_prefix}<pack>`，現在是 `{new_prefix}<pack>`（與 operator-generate 相同）。兩者並存時同一批規則會載入兩次。列出舊名的物件並刪除: `kubectl get prometheusrule -A -l migrated-from=configmap -o name | grep '/{old_prefix}'`
 - [ ] 刪除舊 Projected Volume 設定（如適用）
 - [ ] 驗證 Prometheus 仍正常運作
 
@@ -570,6 +736,7 @@ synthetic probe, sentinel) could not come first. See {_ROUTING_DOC_URL}
 
 - [ ] Confirm all rules successfully migrated
 - [ ] Delete old ConfigMaps: `kubectl delete configmap -n monitoring <configmap-names>`
+- [ ] If output of an earlier version of this tool was applied: it named a rule pack's PrometheusRule `{old_prefix}<pack>`; the name is now `{new_prefix}<pack>` (operator-generate's). With both in the cluster the same rules load twice. List the old ones and delete them: `kubectl get prometheusrule -A -l migrated-from=configmap -o name | grep '/{old_prefix}'`
 - [ ] Delete old Projected Volume settings (if applicable)
 - [ ] Verify Prometheus still works normally
 
@@ -641,31 +808,18 @@ def generate_migration(
 
     # Parse ConfigMap rules
     found = parse_configmap_rules(source_dir, source_listing)
-    cm_rules = [item for item in found if not item["already_crd"]]
-    result["already_crd"] = [{"file": i["file"], "name": i["name"]}
-                             for i in found if i["already_crd"]]
-    result["configmap_files"] = len(cm_rules)
-
-    for cm_item in cm_rules:
-        try:
-            rule_groups = cm_item.get("rule_groups", [])
-            result["rule_group_count"] += len(rule_groups)
-            rule_pack_name = cm_item["name"].replace(
-                _lib_consumer_read.RULE_PACKS.prefix, "").lower()
-
-            crd = convert_rules_to_crd(rule_groups, rule_pack_name, namespace)
-            result["prometheus_rules"].append({
-                "name": crd["metadata"]["name"],
-                "file": cm_item["file"],
-                "crd": crd,
-            })
-        except Exception as exc:
-            result["errors"].append(
-                i18n_text(
-                    f"轉換 {cm_item['file']} 失敗: {exc}",
-                    f"Failed to convert {cm_item['file']}: {exc}",
-                )
-            )
+    objects = source_objects(found)
+    result["already_crd"] = [{"file": o["file"], "name": o["name"]}
+                             for o in objects if o["already_crd"]]
+    # #4041: one PrometheusRule per source object, every key of a ConfigMap
+    # in it; `planned_rules` refuses a set whose members would not stay
+    # distinct (`MigrationRefused` reaches `main`: rc 2, nothing written).
+    planned = planned_rules(found, namespace)
+    result["configmap_files"] = len(planned)
+    for plan in planned:
+        result["rule_group_count"] += len(plan["crd"]["spec"]["groups"])
+        result["prometheus_rules"].append(
+            {"name": plan["name"], "file": plan["file"], "crd": plan["crd"]})
     # ConsumerReadError (a refused rule file, no da-read / da-crdecode)
     # reaches `main`: rc 2 before any write (#3426); so does a source
     # directory gone since it was judged (#3721: no `is_dir` to catch).
@@ -812,6 +966,9 @@ def _sources_or_exit(fn, *args, **kwargs):
         # #3426: a source file no reader reads stops the run before anything
         # is written, every such file named.
         die_caller_error(f"ERROR: {exc}", reason="source_files_unreadable")
+    except MigrationRefused as exc:
+        # #4041: outputs that would not stay distinct, every case named.
+        die_caller_error(f"ERROR: {exc}", reason="outputs_not_distinct")
     except _lib_consumer_read.ConsumerReadError as exc:
         # #3426: a rule file Prometheus' rule loader refuses, or no
         # da-read / da-crdecode — no answer about the sources, so no CRD set:

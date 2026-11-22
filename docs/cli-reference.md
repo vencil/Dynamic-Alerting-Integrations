@@ -1637,6 +1637,13 @@ da-tools migrate-to-operator [options]
 >
 > ⛔ 三者鍵名重疊而型別不同。消費端要按上面的順序判，**不能只看 `--output-dir`**——`--output-dir DIR --dry-run` 給的是預覽信封，不是報告。
 
+**一個來源物件產出一個 PrometheusRule**（[#4041](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4041)）
+
+- 一個 ConfigMap 不論有幾個 rule 檔 key，都合併成**一個** PrometheusRule，group 依 manifest 裡 key 的順序串接；一個純 rule 檔是一個。`configmap_files` 與總結那行數的是這些來源物件。
+- 物件名稱：`prometheus-rules-<pack>` 這種名稱的 ConfigMap（本平台規則包的 ConfigMap）與 `rule-pack-<pack>.yaml` 產出 `da-rule-pack-<pack>`，與 `operator-generate` 對同一個規則包的物件同名；其他來源是 `da-rule-pack-<來源名稱小寫>`。
+- 以下情形結束碼 `2`，不寫任何檔、也不印預覽（`--dry-run`、`--json`、`--checklist-only` 相同），每一筆都點名：兩個來源會產出同名的物件；產出的名稱不是合法的 Kubernetes 物件名稱；產出的名稱與來源目錄裡已有的 PrometheusRule 同名；同一個 ConfigMap 的兩個 key 有同名的 group（Prometheus 允許，因為是不同的 rule 檔；一個 PrometheusRule 裝不下）。
+- ⚠️ 舊版把規則包的物件命名為 `da-rule-pack-prometheus-rules-<pack>`。套用過舊版輸出的叢集，套用新輸出後兩個物件並存、同一批規則載入兩次；checklist 的 Phase 5 有列出並刪除舊名物件的指令。
+
 **範例**
 
 ```bash

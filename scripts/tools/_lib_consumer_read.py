@@ -2204,6 +2204,31 @@ def tenant_rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathli
 #: by ``tests/ops/test_operator_generate_rule_copies.py``.
 OPERATOR_RULES = RuleSource(
     "", ("da-rule-pack-*.yaml", "da-rule-pack-*.yml"), ())
+#: The OBJECT name of a rule pack's generated rules ConfigMap
+#: (``prometheus-rules-<pack>``; the FILE is ``CONFIGMAP_RULES``'). ⛔ Declared
+#: here (#4041) for the two tools that must agree on it: the generator that
+#: writes the ConfigMaps and ``migrate-to-operator``, which turns one back into
+#: the PrometheusRule ``operator-generate`` would have written for the pack —
+#: a ``str.replace`` of another prefix there gave ``da-rule-pack-prometheus-
+#: rules-<pack>``, a second object beside operator-generate's.
+CONFIGMAP_RULES_OBJECT_PREFIX = "prometheus-rules-"
+
+
+def configmap_rules_object_name(pack: str) -> str:
+    """The object name of the rules ConfigMap generated for *pack*."""
+    return CONFIGMAP_RULES_OBJECT_PREFIX + pack
+
+
+def configmap_rules_pack(object_name: "str | None") -> "str | None":
+    """The pack a rules ConfigMap named *object_name* carries, or None when
+    the name is not of that shape. Anchored at the start, and something must
+    follow the prefix."""
+    if (isinstance(object_name, str) and object_name.startswith(CONFIGMAP_RULES_OBJECT_PREFIX)
+            and len(object_name) > len(CONFIGMAP_RULES_OBJECT_PREFIX)):
+        return object_name[len(CONFIGMAP_RULES_OBJECT_PREFIX):]
+    return None
+
+
 #: The labels a Prometheus Operator's ``ruleSelector`` selects a
 #: PrometheusRule by (#2075; installs differ on which one, so both:
 #: docs/integration/operator-prometheus-integration.md § ruleSelector). ⛔ The

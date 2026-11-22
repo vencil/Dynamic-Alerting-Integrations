@@ -1078,7 +1078,7 @@ ROWS: list[Row] = [
       lambda c, out: ["--source-dir", str(_jsc.K8S_MONITORING), "--output-dir", str(out)],
       reach="same; a CRD file is blocked so the run dies in write_yaml_crd",
       shapes=("artifact_is_dir",), variant="crd",
-      artifact="da-rule-pack-prometheus-rules-mariadb.yaml"),
+      artifact="da-rule-pack-mariadb.yaml"),
     R("ops/onboard_platform.py", "-o/--output-dir", "dir", "operator",
       lambda c, out: ["--alertmanager-config", str(_jsc.ALERTMANAGER_YML), "-o", str(out)],
       reach="in-repo try-local alertmanager.yml",

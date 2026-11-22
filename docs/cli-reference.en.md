@@ -1641,6 +1641,13 @@ da-tools migrate-to-operator [options]
 >
 > ⛔ The key names overlap but the types differ. Consumers must branch in that order — **not on `--output-dir` alone**: `--output-dir DIR --dry-run` yields the preview envelope, not the report.
 
+**One source object gives one PrometheusRule** ([#4041](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4041))
+
+- A ConfigMap becomes **one** PrometheusRule whatever number of rule-file keys it has, its groups in the order the manifest gives the keys; a plain rule file is one. `configmap_files` and the summary line count these source objects.
+- Object names: a ConfigMap named `prometheus-rules-<pack>` (this platform's rule-pack ConfigMaps) and a `rule-pack-<pack>.yaml` file give `da-rule-pack-<pack>`, the name `operator-generate` gives its object for the same pack; any other source gives `da-rule-pack-<its name, lower-cased>`.
+- Exit code `2`, with nothing written and no preview printed (`--dry-run`, `--json` and `--checklist-only` alike), each case named: two sources would give one object name; a resulting name is not a valid Kubernetes object name; a resulting name is the name of a PrometheusRule already in the source directory; two keys of one ConfigMap hold a group of the same name (Prometheus takes that, since they are different rule files; one PrometheusRule cannot hold it).
+- ⚠️ Earlier versions named a rule pack's object `da-rule-pack-prometheus-rules-<pack>`. A cluster that applied that output has both objects after applying the new one, and the same rules load twice; Phase 5 of the checklist has the command that lists the old-named objects for deletion.
+
 **Examples**
 
 ```bash
