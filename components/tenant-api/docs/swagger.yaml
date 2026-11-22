@@ -375,6 +375,9 @@ definitions:
         items:
           type: string
         type: array
+        x-nullable: true
+    required:
+    - fields
     type: object
   github_com_vencil_tenant-api_internal_generator.Finding:
     properties:
@@ -1798,6 +1801,7 @@ definitions:
         items:
           type: string
         type: array
+        x-nullable: true
       selectable_fields:
         description: SelectableFields are the fields a selection may name.
         items:

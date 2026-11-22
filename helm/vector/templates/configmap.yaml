@@ -653,7 +653,11 @@ data:
              set is written next to tenantProjectionKeepFields and read by
              tenant-api's vocabulary test; any other set fails the render. */}}
       {{- $alwaysWant := list "log_event_id" "log_type" "tenant_id" "timestamp" }}
-      {{- $alwaysGot := .Values.tenantProjectionAlwaysVisibleFields | default list }}
+      {{- /* A missing key (`helm upgrade --reuse-values` from a chart before
+             the value existed) means the fixed set; only an explicit value is
+             checked, so an explicit [] or another set still fails. */}}
+      {{- $alwaysGot := $alwaysWant }}
+      {{- if not (kindIs "invalid" .Values.tenantProjectionAlwaysVisibleFields) }}{{ $alwaysGot = .Values.tenantProjectionAlwaysVisibleFields }}{{ end }}
       {{- if ne (sortAlpha $alwaysGot | toJson) (toJson $alwaysWant) }}{{- fail (printf "tenantProjectionAlwaysVisibleFields must be exactly %s (got %s): tenant-api offers tenants the rest of tenantProjectionKeepFields as selectable, so changing this set would silently override their selections. It is not configurable." (toJson $alwaysWant) (toJson $alwaysGot)) }}{{- end }}
       # ── (b) Tenant-sanitized projection — ADR-021 §平台副本與租戶副本 / #609 ────────
       # FAN-OUT, not a move: the platform full copy keeps flowing to the
@@ -797,7 +801,10 @@ data:
           {{- range $p := .Values.tenantProjections }}
           {{-   if kindIs "slice" $p.visibleFields }}{{ $narrowing = true }}{{ end }}
           {{- end }}
-          {{- $always := .Values.tenantProjectionAlwaysVisibleFields | default list }}
+          {{- /* The fixed set, not the raw value: the guard above already
+                 refused any explicit value that differs, and a missing key
+                 (reuse-values upgrade) must not read as "nothing always visible". */}}
+          {{- $always := list "log_event_id" "log_type" "tenant_id" "timestamp" }}
           {{- if $narrowing }}
           # ── Tenant-selected visibility (ADR-021 §租戶自選的可見度子集) ──────────
           # A tenant may keep a SUBSET of the allowlist below in its own copy;

@@ -36,7 +36,7 @@ type LogVisibilityResponse struct {
 	TenantID string `json:"tenant_id"`
 	// Fields is the tenant's selection; null means no selection — the
 	// platform default, every curated field (including ones added later).
-	Fields *[]string `json:"fields"`
+	Fields *[]string `json:"fields" extensions:"x-nullable"`
 	// SelectedVisibleFields is every field a projected row would keep under
 	// Fields once the platform applies this selection to Vector's tenant
 	// projection. tenant-api does not track whether it has been applied, so
@@ -140,9 +140,10 @@ func PutTenantLogVisibility(d *handler.Deps) http.HandlerFunc {
 		}
 		email := rbac.RequestEmail(r)
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
-		if err != nil {
-			handler.WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		// Not io.LimitReader: it stops at the cap without an error, so a body
+		// padded to the cap would be parsed from its truncated prefix.
+		body, ok := handler.ReadLimitedBody(w, r, d)
+		if !ok {
 			return
 		}
 		sel, err := decodeLogVisibilityBody(body)

@@ -400,6 +400,26 @@ class TestProjectionEnabledShape:
         assert r.returncode == 0, r.stderr
 
     @_needs_helm
+    def test_missing_always_visible_key_renders_like_default(self, repo_root: Path) -> None:
+        """`helm upgrade --reuse-values` from a chart before
+        tenantProjectionAlwaysVisibleFields existed carries no such key. That
+        must mean the fixed set — the render (narrowing VRL included, the
+        fixture has a visibleFields tenant) is identical to the default one —
+        not "nothing is always visible" and not a render failure. `--set
+        key=null` deletes the key, which is the state reuse-values leaves."""
+        default = _render_result(repo_root / "helm/vector", sets=_PROJECTION_SETS)
+        missing = _render_result(repo_root / "helm/vector", sets={
+            **_PROJECTION_SETS, "tenantProjectionAlwaysVisibleFields": "null"})
+        assert default.returncode == 0, default.stderr
+        assert missing.returncode == 0, missing.stderr
+        assert missing.stdout == default.stdout
+        # ...and with no visibleFields anywhere it also renders (no guard trip).
+        plain = {k: v for k, v in _PROJECTION_SETS.items() if "visibleFields" not in k}
+        r = _render_result(repo_root / "helm/vector", sets={
+            **plain, "tenantProjectionAlwaysVisibleFields": "null"})
+        assert r.returncode == 0, r.stderr
+
+    @_needs_helm
     def test_visible_fields_narrowing_only_iterates_the_allowlist(self, repo_root: Path) -> None:
         """The narrowing condition is attached to allowlist copies only: every
         `kept.<f> = .<f>` line still comes from tenantProjectionKeepFields, and

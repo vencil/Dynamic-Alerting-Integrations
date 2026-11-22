@@ -135,6 +135,24 @@ func TestPutTenantLogVisibility_MalformedBodyNeverResetsToDefault(t *testing.T) 
 	}
 }
 
+// TestPutTenantLogVisibility_OverCapBodyIs413: a body padded with whitespace
+// to the cap and followed by more JSON must not be parsed from its truncated
+// prefix (which would pass the trailing-data check and write a 200).
+func TestPutTenantLogVisibility_OverCapBodyIs413(t *testing.T) {
+	t.Parallel()
+	d, dir := logVisDeps(t, logVisAdminRBAC)
+	d.MaxBodyBytes = 64
+	head := `{"fields":["status"]}`
+	body := head + strings.Repeat(" ", 64-len(head)) + `{"fields":null}`
+	w := executeWithRBAC(t, PutTenantLogVisibility(d), fedReq(t, "PUT", logVisPath, "id", logVisTenant, body))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413, body: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, statestore.LogVisibilityKey(logVisTenant))); !os.IsNotExist(err) {
+		t.Error("an over-cap PUT must not write a record")
+	}
+}
+
 // TestGetTenantLogVisibility_DamagedRecordIs500: a stored record that does not
 // parse strictly is an error, never read as the default (every field).
 func TestGetTenantLogVisibility_DamagedRecordIs500(t *testing.T) {

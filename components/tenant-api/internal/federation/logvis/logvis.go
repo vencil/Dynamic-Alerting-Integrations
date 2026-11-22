@@ -45,7 +45,7 @@ var SelectableFields = []string{"status", "method", "path", "query", "token_id",
 // tenant has made no selection (the platform default); a non-nil empty list
 // keeps only AlwaysVisibleFields.
 type Selection struct {
-	Fields *[]string `yaml:"fields" json:"fields"`
+	Fields *[]string `yaml:"fields" json:"fields" binding:"required" extensions:"x-nullable"`
 }
 
 // Violation is a single validation failure, shaped like the API's

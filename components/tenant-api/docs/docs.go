@@ -2619,12 +2619,16 @@ const docTemplate = `{
         },
         "github_com_vencil_tenant-api_internal_federation_logvis.Selection": {
             "type": "object",
+            "required": [
+                "fields"
+            ],
             "properties": {
                 "fields": {
                     "type": "array",
                     "items": {
                         "type": "string"
-                    }
+                    },
+                    "x-nullable": true
                 }
             }
         },
@@ -4171,7 +4175,8 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "type": "string"
-                    }
+                    },
+                    "x-nullable": true
                 },
                 "selectable_fields": {
                     "description": "SelectableFields are the fields a selection may name.",

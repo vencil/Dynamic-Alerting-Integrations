@@ -150,7 +150,7 @@ ADR-021 [§租戶自選的可見度子集](../adr/021-tenant-log-query-federatio
 | 讓某 `log_type` 對租戶可見 / 不可見 | Vector `tenant_route` 邏輯 + ADR review | 本文件 §Tier-1 表 | `vector test`（runbook §8.6 negative assertion）|
 | 改 stream field 維度 | `tenantProjectionStreamFields` | 本文件 §Stream fields | `test_vector_projection_vrl.py` |
 | 套用某租戶的可見度選擇 | `tenantProjections[].visibleFields`（從 tenant-api 的 `GET .../federation/log-visibility` 抄 `fields`）| — | render-time `{{ fail }}`（不在 keepFields 的欄位）+ `vector test`（projection_tests.yaml 的 visibleFields 案例）|
-| 改永遠保留的欄位 | `tenantProjectionAlwaysVisibleFields` + tenant-api `logvis.AlwaysVisibleFields`（同一個 PR）| 本文件 §租戶自選子集 | `TestVocabularyMatchesVectorChart` |
+| 改永遠保留的欄位 | `tenantProjectionAlwaysVisibleFields` + `templates/configmap.yaml` 裡寫死的 `$alwaysWant` 與 `$always`（chart 拒絕任何其他集合）+ tenant-api `logvis.AlwaysVisibleFields`，同一個 PR，chart 要升版 | 本文件 §租戶自選子集 | `TestVocabularyMatchesVectorChart`（只比對 values 與 Go）**加上** `helm template`／`test_vector_projection_vrl.py` 的渲染測試：只改 values 與 Go 時詞彙測試會過，但 chart 渲染會失敗 |
 
 > 所有變更走 GitOps commit 歷史（控制平面 audit；ADR-021 §稽核）。
 
