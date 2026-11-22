@@ -107,7 +107,10 @@ def test_a_blank_line_matches_only_a_blank_line():
 
 # ── elisions ────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("marker", sorted(guard.ELISION_MARKERS) + ["    # ...", "# ...   "])
+@pytest.mark.parametrize("marker", [
+    "# ...", "// ...", "-- ...", "; ...", "# …", "// …", "-- …", "; …",   # the eight, literally
+    "    # ...", "# ...   ",
+])
 def test_a_marked_elision_skips_lines(marker):
     assert _match(f"source: seed\n{marker}\nfault_level: 96") is None
 
@@ -129,11 +132,34 @@ def test_a_bare_ellipsis_in_the_source_is_quoted_like_any_line():
                              src) is not None
 
 
+def test_the_markers_are_exactly_eight():
+    assert guard.ELISION_MARKERS == {"# ...", "// ...", "-- ...", "; ...",
+                                     "# …", "// …", "-- …", "; …"}
+
+
 def test_a_source_holding_a_marker_line_makes_an_elided_quote_ambiguous():
     src = ["a: 1", "b: 2", "# ...", "c: 3", "d: 4"]
     off, msg = guard.match_quote(["a: 1", "# ...", "d: 4"], src)
     assert "ambiguous elision marker: source line 3" in msg, msg
+    assert "this file can only be quoted without elisions" in msg, msg
     assert guard.match_quote(["a: 1", "b: 2"], src) is None   # no elision: nothing ambiguous
+
+
+@pytest.mark.parametrize("block", [["# ...", "b: 2"], ["b: 2", "# ..."]])
+def test_a_lone_leading_or_trailing_elision_is_ambiguous_too(block):
+    src = ["a: 1", "b: 2", "// ...", "c: 3"]
+    off, msg = guard.match_quote(block, src)
+    assert "ambiguous" in msg, msg
+
+
+def test_a_blank_block_line_does_not_stand_for_a_source_line():
+    src = ["a: 1", "x: 9", "b: 2"]
+    assert guard.match_quote(["a: 1", "", "b: 2"], src) is not None
+
+
+def test_a_segment_of_blank_lines_only_is_red():
+    off, msg = guard.match_quote(["a: 1", "# ...", "", "# ...", "b: 2"], ["a: 1", "", "", "x", "b: 2"])
+    assert "blank lines only" in msg, msg
 
 
 def test_a_mid_elision_must_skip_at_least_one_line():
@@ -252,6 +278,11 @@ def test_the_search_starts_at_the_anchor_line(tmp_path):
     assert _quote(root, "source: seed", anchor="metric:").errors
 
 
+def test_trailing_whitespace_in_the_source_is_off(tmp_path):
+    root = _root(tmp_path, {"src.yaml": "a: 1   \nb: 2\t\n"})
+    assert not _quote(root, "a: 1\nb: 2").errors
+
+
 def test_a_final_newline_adds_no_source_line(tmp_path):
     """A trailing elision after the source's last line stands for nothing,
     whether or not the file ends with a newline."""
@@ -271,9 +302,12 @@ def test_a_final_newline_adds_no_source_line(tmp_path):
     ("docs", "does not exist"),
     ("docs/x.md", "Markdown page"),
     ("docs/x.en.MD", "Markdown page"),
+    ("a/b.markdown", "Markdown page"),
+    ("a/b.MDX", "Markdown page"),
 ])
 def test_src_must_be_a_regular_non_markdown_file_in_the_repository(tmp_path, src, needle):
-    root = _root(tmp_path, {"docs/x.md": "a: 1\n", "docs/x.en.MD": "a: 1\n"})
+    root = _root(tmp_path, {"docs/x.md": "a: 1\n", "docs/x.en.MD": "a: 1\n",
+                            "a/b.markdown": "a: 1\n", "a/b.MDX": "a: 1\n"})
     q = _quote(root, "a: 1", src=src)
     assert any(needle in e for e in q.errors), q.errors
 
@@ -374,6 +408,23 @@ def test_the_container_prefix_is_off_but_the_lines_own_indentation_is_kept(
     assert rc == 1 and "'dropout: \"every:10\"' != source line 11" in out, out
 
 
+def test_a_tab_indented_fence_with_space_indented_lines_and_a_blank_line(tmp_path, capsys):
+    """N1: the container prefix is compared with tabs expanded; the rest as written."""
+    src = {"src/s.yaml": "a:\n  b: 1\n\n  c: 2\n"}
+    doc = '- item\n\n\t```yaml {.quote src="src/s.yaml"}\n    a:\n      b: 1\n\n      c: 2\n\t```\n'
+    rc, out = _run(_root(tmp_path, {**src, "docs/x.md": doc}), capsys, "--report")
+    assert rc == 0 and "1 declared .quote block(s)" in out, out
+
+
+def test_a_lone_blockquote_marker_line_is_a_blank_line(tmp_path, capsys):
+    src = {"src/s.yaml": "a: 1\n\nb: 2\n"}
+    doc = '> ```yaml {.quote src="src/s.yaml"}\n> a: 1\n>\n> b: 2\n> ```\n'
+    rc, out = _run(_root(tmp_path, {**src, "docs/x.md": doc}), capsys, "--report")
+    assert rc == 0 and "1 declared .quote block(s)" in out, out
+    bad = '> ```yaml {.quote src="src/s.yaml"}\n> a: 1\n>\n> c: 2\n> ```\n'
+    assert _run(_root(tmp_path, {**src, "docs/x.md": bad}), capsys)[0] == 1
+
+
 def test_a_tab_in_the_doc_is_compared_as_written(tmp_path, capsys):
     root = _root(tmp_path, {"src/Makefile": "all:\n\tgo build\n",
                             "docs/x.md": '```make {.quote src="src/Makefile"}\nall:\n\tgo build\n```\n'})
@@ -412,15 +463,44 @@ def test_a_quote_class_with_a_value_is_read_as_a_quote_fence(tmp_path, capsys):
 
 @pytest.mark.parametrize("fence", [
     '```yaml .quote src="src/demo.yaml"',      # no braces: no code block on the site
-    '```text {.Quote src="src/demo.yaml"}',    # wrong case
+    '```yaml .Quote',                          # no braces, wrong case
+    '```yaml src="src/demo.yaml"',             # no braces, src= alone
+    '```text {.Quote src="src/demo.yaml"}',    # wrong case, with src: the vocabulary's error
+    '```text {.Quote}',                        # wrong case alone
+    '```text {src2="src/demo.yaml"}',          # a src… key without .quote
+    '```text {.text anchor="pack:"}',          # anchor without .quote
     '```text {.quote src2="src/demo.yaml"}',   # wrong key: a vocabulary error
-    '```text {.Quote src2="src/demo.yaml"}',
 ])
 def test_a_fence_that_looks_like_a_quote_declaration_is_never_skipped(tmp_path, capsys, fence):
     """S4."""
     root = _root(tmp_path, {**SOURCE, "docs/x.md": f"T\n\n{fence}\nfabricated: 1\n```\n\nT\n"})
     rc, out = _run(root, capsys)
     assert rc == 1 and "docs/x.md:3:" in out, out
+
+
+@pytest.mark.parametrize("fence", [
+    '```python title="quote_utils.py"',
+    '```yaml title="blockquote example"',
+    "```text {.qoute}",                        # not caught: no edit distance is guessed
+    '```text bogus title="my.quote file"',     # unrendered: a quoted value is no attribute
+])
+def test_a_title_or_an_unrelated_class_is_no_look_alike(tmp_path, capsys, fence):
+    root = _root(tmp_path, {**SOURCE, "docs/x.md": f"T\n\n{fence}\nplain: 1\n```\n"})
+    rc, out = _run(root, capsys)
+    assert rc == 0, out
+
+
+def test_src_inside_an_html_block_is_content(tmp_path, capsys):
+    root = _root(tmp_path, {**SOURCE, "docs/x.md": (
+        '```html\n<script src="a.js"></script>\n<img src="b.png">\n```\n')})
+    assert _run(root, capsys)[0] == 0
+
+
+def test_a_leftover_declaration_in_an_html_comment_is_reported(tmp_path, capsys):
+    root = _root(tmp_path, {**SOURCE, "docs/x.md": (
+        'T\n\n<!--\n```yaml {.quote src="src/demo.yaml"}\nfabricated: 1\n```\n-->\n')})
+    rc, out = _run(root, capsys)
+    assert rc == 1 and "docs/x.md:4:" in out, out
 
 
 def test_a_look_alike_inside_a_rendered_code_block_is_content(tmp_path, capsys):

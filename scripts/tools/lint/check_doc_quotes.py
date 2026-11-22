@@ -49,16 +49,25 @@ The rules (one place: `match_quote`):
   no regex.
 * `src` is a path relative to the repository root, of a regular file, with
   no symlink on its path (the file itself or a directory above it), and not
-  a Markdown page (`.md`): a page that repeats another page verbatim uses
+  a Markdown page (`MARKDOWN_SUFFIXES`, any case): a page that repeats another page verbatim uses
   pymdownx.snippets, and a quote of a page — the doc itself, its
   translation — would vouch for nothing.
 * The `.quote` vocabulary is closed: `.quote`, `src` (mandatory), `anchor`;
   any other attribute is an error. It is read by the docs' YAML inventory's
   `parse_declaration` (the one reading of fence attributes), and on a YAML
-  block it excludes every consumer attribute of md-yaml-fence-check. A
-  fence opening line whose info mentions `quote` (any case) or `src=` but
-  that is no `.quote` block the site renders (`{.Quote}`, `src2=`, an info
-  without braces) is an error too, not a block silently skipped.
+  block it excludes every consumer attribute of md-yaml-fence-check.
+* A declaration that misses the vocabulary is an error, not a block
+  silently skipped (`look_alikes`). Caught: a block the site renders whose
+  attributes (as the renderer reads them; the highlighter's `title=` is not
+  one) hold a class equal to `quote` in another case (`{.Quote}`), or a key
+  starting with `src` (`{src2=…}`, `{source=…}`) without `.quote`; `src=` /
+  `anchor=` without `.quote` are the vocabulary's own errors. A fence
+  opening line the site does NOT render as a block (no braces: ```` ```yaml
+  .quote src=… ````; a leftover in an HTML comment) when its info, with
+  quoted values removed, holds `.quote` (any case) or a `src…=` key. Not
+  caught: a misspelt class or key that shares neither (`{.qoute}`,
+  `{from=…}`) — no edit distance is guessed — and a look-alike line inside
+  another rendered block's body, which is that block's content.
 * A page `foo.md` and its translation `foo.en.md` carry the same number of
   `.quote` blocks with the same multiset of `src` (a quote updated in one
   language and not the other is the drift this pairing catches).
@@ -115,7 +124,11 @@ ELISION_MARKERS = frozenset(f"{lead} {dots}" for lead in ("#", "//", "--", ";")
 _PRE_RE = re.compile(r"<pre\b.*?</pre>", re.S)
 #: A fence opening, once the container prefix is off: its info text after it.
 _FENCE_OPEN_RE = re.compile(r"^(?:`{3,}|~{3,})(?P<info>.*)$")
-_LOOKS_LIKE_QUOTE_RE = re.compile(r"quote|src\s*=", re.I)
+#: In an unrendered fence's info, quoted values removed: `.quote` or a `src…=` key.
+_QUOTED_VALUE_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
+_LOOKS_LIKE_QUOTE_RE = re.compile(r"\.quote\b|\bsrc[\w-]*\s*=", re.I)
+#: A `src` naming one of these is a page, not a source file (any case).
+MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdx")
 
 
 @dataclass
@@ -203,8 +216,8 @@ def match_quote(body: "list[str]", src: "list[str]", start: int = 0):
         marker = next((n for n, s in enumerate(src) if is_elision(s)), None)
         if marker is not None:
             return (0, f"ambiguous elision marker: source line {marker + 1} is itself an "
-                       f"elision marker ({src[marker].strip()!r}); quote this file without "
-                       "elisions, or quote another part of it")
+                       f"elision marker ({src[marker].strip()!r}); this file can only be "
+                       "quoted without elisions")
     first = segments[0][1]
     tried: "set[str]" = set()
     best = (0, start, None)   # (segments placed, the lowest line the next one was searched from, P)
@@ -292,7 +305,7 @@ def resolve_src(root: Path, src: str) -> "tuple[Path | None, str | None]":
     parts = src.split("/")
     if any(p in ("", ".", "..") for p in parts):
         return None, "it must be a plain repo path (no '.', '..' or empty part)"
-    if parts[-1].lower().endswith(".md"):
+    if parts[-1].lower().endswith(MARKDOWN_SUFFIXES):
         return None, ("it is a Markdown page: a page repeated verbatim is embedded "
                       "with pymdownx.snippets (--8<--), not quoted")
     for k in range(1, len(parts) + 1):
@@ -314,18 +327,24 @@ def read_lines(path: Path) -> "list[str]":
     return [line.rstrip() for line in lines]
 
 
-def _strip_container(lines: "list[str]", i: int, n: int, prefix: str):
-    """The block's *n* lines from line *i*, its container *prefix* off, or
-    (None, line) for a line that does not carry it."""
+def _strip_container(lines: "list[str]", i: int, n: int, prefix: str, tab: int = 4):
+    """The block's *n* lines from line *i*, the opening fence's container
+    *prefix* off, or (None, line) for a line that does not carry it. The
+    prefix is compared with tabs expanded (a fence indented with a tab, its
+    lines with spaces, is one list item); what is left is kept as written."""
+    target = prefix.expandtabs(tab)
     out = []
     for k in range(i, i + n):
         line = lines[k]
-        if line.startswith(prefix):
-            out.append(line[len(prefix):])
-        elif line.strip() == "" or line.rstrip() == prefix.rstrip():
+        if line.strip() == "" or line.expandtabs(tab).rstrip() == target.rstrip():
             out.append("")
-        else:
+            continue
+        j = 0
+        while j < len(line) and len(line[:j].expandtabs(tab)) < len(target):
+            j += 1
+        if line[:j].expandtabs(tab) != target:
             return None, k
+        out.append(line[j:])
     return out, None
 
 
@@ -350,7 +369,7 @@ def collect(root: Path, renderer: "inventory.Renderer"):
             n = block.source.count("\n") + 1
             opening = lines[i - 1]
             prefix = inventory._CONTAINER_PREFIX_RE.match(opening).group(0)
-            body, bad = _strip_container(lines, i, n, prefix)
+            body, bad = _strip_container(lines, i, n, prefix, tab)
             q = Quote(rel, i, body or [], src=block.attrs.get("src"))
             decl = inventory.parse_declaration(
                 block, inventory._info_text(opening.expandtabs(tab)[len(prefix.expandtabs(tab)):]))
@@ -364,27 +383,43 @@ def collect(root: Path, renderer: "inventory.Renderer"):
             else:
                 q.src, q.anchor = decl.quote
             quotes.append(q)
-        errors.extend(_unrecognised(rel, lines, blocks, openings, tab))
+        errors.extend(look_alikes(rel, lines, blocks, openings, tab))
     stats["quotes"] = len(quotes)
     return quotes, errors, stats
 
 
-def _unrecognised(rel, lines, blocks, openings, tab):
-    """A fence opening whose info mentions `quote` or `src=` that is no
-    `.quote` block, outside every rendered code block's body."""
-    inside: "set[int]" = set()
+def _misdeclared(block: "inventory.CodeBlock") -> bool:
+    """A rendered block with no `.quote` vocabulary whose attributes look
+    like a quote declaration: a class `quote` in another case, or a key
+    starting with `src`."""
+    if inventory.is_quote_fence(block):
+        return False
+    names = [c.lower() for c in block.classes] + [k.lstrip(".").lower() for k in block.attrs]
+    return "quote" in names or any(k.lower().startswith("src") for k in block.attrs)
+
+
+def look_alikes(rel, lines, blocks, openings, tab):
+    """Errors for declarations that miss the vocabulary (module docstring)."""
+    out = []
+    for block, i in inventory.locate_blocks(rel, lines, blocks, tab_length=tab, errors=out,
+                                            select=_misdeclared, kind="look-alike"):
+        out.append((rel, i, (
+            f"this block's attributes {block.classes + sorted(block.attrs)} look like a quote "
+            "declaration but are none: write ```<lang> {.quote src=\"<repo path>\"} "
+            "(lower-case .quote, src= and anchor= only)")))
+    rendered: "set[int]" = set(openings)
     for block, i in inventory.locate_blocks(rel, lines, blocks, tab_length=tab, errors=[],
                                             select=lambda b: True, kind="code"):
-        inside.update(range(i, i + block.source.count("\n") + 1))
-    out = []
+        rendered.update(range(i - 1, i + block.source.count("\n") + 1))
     for k, line in enumerate(lines):
+        if k in rendered:
+            continue
         m = _FENCE_OPEN_RE.match(inventory._CONTAINER_PREFIX_RE.sub("", line, count=1))
-        if (m and _LOOKS_LIKE_QUOTE_RE.search(m.group("info")) and k not in openings
-                and k not in inside):
+        if m and _LOOKS_LIKE_QUOTE_RE.search(_QUOTED_VALUE_RE.sub("", m.group("info"))):
             out.append((rel, k + 1, (
                 f"this fence's info {m.group('info').strip()!r} looks like a quote declaration, "
-                "but the site renders no `.quote` block here: write "
-                "```<lang> {.quote src=\"<repo path>\"} (lower-case .quote, braces, src= / "
+                "but the site renders no code block from it: write "
+                "```<lang> {.quote src=\"<repo path>\"} (braces, lower-case .quote, src= and "
                 "anchor= only)")))
     return out
 
