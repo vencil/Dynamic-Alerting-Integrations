@@ -165,6 +165,11 @@ def run(check_only: bool) -> int:
     sources = decl.get("sources") or []
 
     previous = {}
+    # #3981: the lock is judged before it is read, as every target is — a
+    # FIFO there blocked the read in both modes, and a directory was read as
+    # "no lock" (the same-ref drift check silently off).
+    if is_special_file(LOCK):
+        raise OutputWriteError(LOCK, OSError(None, "not a regular file"), action="read")
     if LOCK.exists():
         try:
             previous = json.loads(LOCK.read_text(encoding="utf-8")).get("sources", {})
@@ -175,6 +180,10 @@ def run(check_only: bool) -> int:
     drifted: List[str] = []
     written = 0
     pending: List[Tuple[Path, str]] = []
+    # #3981 (review): two sources naming one (group, kind, version) are a
+    # declaration error — with the writes deferred, which one wins would
+    # depend on the file already on disk.
+    produced_by: Dict[str, str] = {}
 
     for src in sources:
         sid, url = src["id"], src["url"]
@@ -216,6 +225,12 @@ def run(check_only: bool) -> int:
             body = json.dumps(schema, separators=(",", ":"), sort_keys=True,
                               ensure_ascii=False) + "\n"
             rel = str(p.relative_to(REPO_ROOT)).replace(os.sep, "/")
+            if rel in produced_by:
+                print(f"ERROR: {sid}: {rel} is also produced by source {produced_by[rel]} — "
+                      f"one (group, kind, version) per output in {SOURCES.name}",
+                      file=sys.stderr)
+                return EXIT_CALLER_ERROR
+            produced_by[rel] = sid
             outputs.append(rel)
             if is_special_file(p):  # a FIFO would block the read (#3981)
                 raise OutputWriteError(p, OSError(None, "not a regular file"), action="read")

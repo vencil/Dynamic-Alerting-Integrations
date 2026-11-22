@@ -198,6 +198,7 @@ def offline(tmp_path, monkeypatch):
     class State:
         fail: set = set()
         root = crd
+        upstream = docs
     state = State()
 
     def fetch(url):
@@ -281,3 +282,89 @@ def test_a_refused_target_is_rc2_one_line_and_nothing_is_written(refused, offlin
     assert len(err.strip().splitlines()) == 1, err
     assert not (offline.root / "a.example").exists()
     assert not (offline.root / "GENERATED.json").exists()
+
+
+def _tree(root):
+    return {p.relative_to(root).as_posix(): p.read_bytes()
+            for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def _change_upstream(offline):
+    offline.upstream["one.yaml"]["spec"]["versions"][0]["schema"]["openAPIV3Schema"][
+        "description"] = "Alpha schema, changed upstream"
+
+
+@pytest.mark.parametrize("mode", [[], ["--check"]])
+def test_a_lock_that_is_a_fifo_is_rc2_one_line(mode, offline, capsys, monkeypatch):
+    """#3981 (reviews): the lock is read before any schema — a FIFO there
+    blocked both modes forever (rc 124 under `timeout`)."""
+    import os
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    lock = offline.root / "GENERATED.json"
+    os.mkfifo(lock)
+    monkeypatch.setattr(sys, "argv", ["generate_crd_schemas.py", *mode])
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        rc, err = _run(capsys)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert rc == 2 and str(lock) in err, err
+    assert len(err.strip().splitlines()) == 1, err
+    assert not (offline.root / "a.example").exists()
+
+
+def test_a_refused_lock_leaves_the_schemas_unwritten(offline, capsys):
+    """#3981 (review): the lock is judged with the schemas before the first
+    write. Upstream changed and the lock is this process's stdin: rc 2, one
+    line naming it, and neither schema is rewritten."""
+    import os
+    assert _run(capsys)[0] == 0
+    before = _tree(offline.root)
+    _change_upstream(offline)
+    lock = offline.root / "GENERATED.json"
+    saved = os.dup(0)
+    try:
+        with open(lock, "rb") as fh:
+            os.dup2(fh.fileno(), 0)
+        rc, err = _run(capsys)
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+    assert rc == 2 and str(lock) in err and "standard stream" in err, err
+    assert len(err.strip().splitlines()) == 1, err
+    assert _tree(offline.root) == before
+
+
+def test_check_reports_upstream_drift_and_writes_nothing(offline, capsys, monkeypatch):
+    """#3981 (review): `--check` is rc 1 on drift and leaves the tree as it
+    found it — the writes now sit after the check's return."""
+    assert _run(capsys)[0] == 0
+    before = _tree(offline.root)
+    _change_upstream(offline)
+    monkeypatch.setattr(sys, "argv", ["generate_crd_schemas.py", "--check"])
+    rc, err = _run(capsys)
+    assert rc == 1, err
+    assert _tree(offline.root) == before
+
+
+def test_two_sources_naming_one_output_are_a_caller_error(offline, capsys):
+    """#3981 (CodeRabbit): with the writes deferred, which of two sources
+    naming one (group, kind, version) wins would depend on the file on disk;
+    it is refused instead, before anything is written."""
+    (offline.root / "SOURCES.yaml").write_text(
+        "sources:\n"
+        "  - id: one\n    url: https://example.invalid/v1.0.0/one.yaml\n    ref: v1.0.0\n"
+        "    kinds: [{group: a.example, kind: Alpha, version: v1}]\n"
+        "  - id: again\n    url: https://example.invalid/v1.0.0/one.yaml\n    ref: v1.0.0\n"
+        "    kinds: [{group: a.example, kind: Alpha, version: v1}]\n", encoding="utf-8")
+    rc, err = _run(capsys)
+    assert rc == 2 and "also produced by source one" in err, err
+    assert len(err.strip().splitlines()) == 1, err
+    assert sorted(_tree(offline.root)) == ["SOURCES.yaml"]
