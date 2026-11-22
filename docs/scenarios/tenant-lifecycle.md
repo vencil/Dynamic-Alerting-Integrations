@@ -278,8 +278,9 @@ tenants:
 若租戶有特殊監控需求，不被預設 Rule Pack 涵蓋，可部署自訂規則。
 
 ```bash
-# 1. 編寫自訂規則 (Prometheus PromQL)
-cat > custom-rules.yaml <<'EOF'
+# 1. 編寫自訂規則 (Prometheus PromQL)：放在租戶目錄，目錄名即所屬租戶（#4136）
+mkdir -p rule-packs/custom/db-product-01
+cat > rule-packs/custom/db-product-01/custom-rules.yaml <<'EOF'
 groups:
   - name: custom-db-product-01
     rules:
@@ -294,10 +295,10 @@ groups:
 EOF
 
 # 2. 驗證自訂規則
-da-tools lint custom-rules.yaml
+da-tools lint rule-packs/custom/ --ci
 
 # 3. 部署
-kubectl apply -f custom-rules.yaml
+kubectl apply -f rule-packs/custom/db-product-01/custom-rules.yaml
 
 # 4. 驗證加載
 curl -s http://prometheus:9090/api/v1/rules | \
@@ -421,7 +422,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 | **baseline_discovery.py** | 閾值建議 | `--tenant <name> --duration 604800` |
 | **backtest_threshold.py** | 回測閾值變更 | `--tenant <name> --metric <key> --old-value 80 --new-value 75` |
 | **batch_diagnose.py** | 多租戶報告 | `--output report.json` |
-| **lint_custom_rules.py** | 自訂規則驗證 | `custom-rules.yaml` |
+| **lint_custom_rules.py** | 自訂規則驗證 | `rule-packs/custom/` |
 | **offboard_tenant.py** | 租戶下架 | `<name> --config-dir conf.d/ --state <tenant-api state show 的 JSON>`（預設只做預檢，加 `--execute` 才刪；沒有 `--state`、或用到的紀錄帶 `problem` 時 `--execute` 要另加 `--skip-state-check`；不做歸檔，先自己 `cp`，見 4.1） |
 | **deprecate_rule.py** | 規則下架 | `rule-name-1 rule-name-2 --config-dir conf.d/ --execute`（不帶 `--config-dir` 會指向 repo 內部路徑） |
 | **onboard_platform.py** | 遷移前掃描 | `--alertmanager-config <am.yml> --rule-files <rules-dir> --output-dir migration_input/`（v2.9.0 映像給目錄選不到檔，改給加引號的 glob） <!-- image-caveat: v2.9.0 --> |
