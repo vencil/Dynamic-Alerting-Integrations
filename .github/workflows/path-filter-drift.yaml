@@ -1,0 +1,50 @@
+name: Path filter drift
+
+# One check, on every push to main: are the generated `on.pull_request.paths`
+# regions of the traced workflows still what the committed read measurements
+# and the literal imports of those files give (#3756)?
+#
+# Why a workflow of its own, when Python Tests already runs the same check
+# (tests/ops/test_workflow_path_filter.py::test_the_real_workflows_are_in_sync):
+# two PRs that are each in sync can leave main out of sync together — one puts
+# a file into a region's import closure, the other adds an import to that
+# file, and each PR's CI ran before the other merged. On 2026-11-21 that
+# happened; the CI run of the merge that broke main was replaced while it
+# waited (`ci.yml` keeps one pending run on main), the next one took its full
+# length, and the tracking issue opened 83 minutes after main broke — after
+# the fix had merged. Meanwhile every PR that synced with main failed Python
+# Tests. This run does not wait in that queue and takes about a minute.
+#
+# It detects; it does not prevent. The fix is one command, in a PR:
+# `make workflow-path-filters`.
+#
+# .github/workflows/main-red-detector.yml watches this workflow and opens the
+# tracking issue when it fails (the reason it may, without reporting a
+# required check, is in tests/ops/test_main_red_report.py).
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Generated path filters are in sync
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install PyYAML
+        run: pip install pyyaml -c requirements/ci-constraints.txt
+
+      - name: Check the generated regions
+        run: python3 scripts/ops/workflow_path_filter.py generate --check
