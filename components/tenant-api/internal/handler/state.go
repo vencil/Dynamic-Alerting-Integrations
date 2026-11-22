@@ -136,7 +136,8 @@ func (e *stateReloadError) ErrorKind() errkind.Kind { return errkind.StateReload
 
 // msgStateReloadFailed is the fixed client text of STATE_RELOAD_FAILED.
 const msgStateReloadFailed = "the change was saved, but this server could not load it yet, so reads may not show it until the next reload; " +
-	"it needs no resend (a resend loads it at once, but a resent DELETE answers 404 once a reload has loaded it)"
+	"do not resend it, reload to check (a resent PUT overwrites changes made in between; " +
+	"a resent DELETE answers 404 once a reload has loaded it)"
 
 // reloadStateAsync is reloadState in the background, coalesced per record
 // (configwatcher.ReloadAsync: a call while a background reload of the same

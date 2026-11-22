@@ -187,7 +187,8 @@ tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}
 現在回 **503 `STATE_RELOAD_FAILED`**，帶 `committed: true`，處理方式是 `refresh`（不帶 `Retry-After`／`retry_after_s`）：
 
 - **寫入已經存了**，不是沒寫進去。`committed: true` 在這裡與 `BATCH_COMMITTED` 一樣表示「已存」，處理方式也一樣是 `refresh`：先重讀、確認現況，**不要盲目重送**。
-- **不需要重送**：下一次週期性重讀成功後就會生效。重送不是不行（這幾個端點都是依 id 整筆取代或刪除，重送會再觸發一次重讀），但有代價：重送 `PUT` 是整筆取代，這段期間若有別人改過同一項會被覆蓋；若週期性重讀已先成功，重送 `DELETE` 會得到 404（意思是刪除已經生效）。所以 client 收到它時，先 `GET` 重讀，看到的還是舊內容就等下一次重讀，而不是重送同一個請求。
+- **不要盲目重送，先重讀**：下一次週期性重讀成功後就會生效，不需要重送。client 收到它時先 `GET` 重讀確認現況；看到的還是舊內容就等下一次重讀，不要重送同一個請求——重送 `PUT` 是整筆取代，這段期間若有別人改過同一項會被覆蓋；若週期性重讀已先成功，重送 `DELETE` 會得到 404（意思是刪除已經生效）。
+- **狀態碼仍是 503**：ingress、Envoy 這類遇到 5xx 會自動重試的中介層，仍可能替 client 重送這些 `PUT`／`DELETE`。部署時應對這幾條路徑排除自動重試，或接受上述後果。
 - 不是 207：207 在 HTTP client 眼裡仍是成功（`fetch` 的 `res.ok` 為 true），等於沒改。
 
 重讀失敗本身照舊記在 `tenant_api_config_reload_failures_total` 與 `tenant_api_config_last_reload_successful`。
