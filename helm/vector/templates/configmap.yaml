@@ -1025,9 +1025,11 @@ data:
           }
           # Shrink the event to the one tag the counter needs. This also drops
           # `.timestamp`, so the exporter stamps the sample with the time it
-          # counted it rather than the log line's time: a backlog replayed
-          # after a restart then lands as a fresh sample instead of an old one
-          # Prometheus may refuse.
+          # counted it rather than the log line's time, never an old one
+          # Prometheus may refuse. A backlog replayed from the checkpoint after
+          # a restart is counted before the new series' first scrape, so that
+          # series is born above 0; TenantProjectionStampMissing has a
+          # new-series arm for exactly that.
           . = {"reason": reason}
       tenant_stamp_missed:
         type: log_to_metric

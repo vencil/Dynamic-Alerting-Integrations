@@ -28,6 +28,15 @@
 #      labels) and a new pod (new series at 0) do not fire, and a restart
 #      after a miss does not hold the alert past the miss's hour.
 #   7) A healthy pipeline: series at 0 for hours → no alert.
+#   8) A new series whose first sample is already > 0 (misses replayed from
+#      the node's checkpoint before the first scrape) fires.
+#   9) A collection that starts with counters already > 0 does not fire.
+#
+# Boundary instants are asserted one or more scrapes away from the window
+# edge: MetricsQL's increase() bases the window on the last sample before it
+# and does not extrapolate, so it holds one scrape longer than PromQL and
+# reads exact values where PromQL extrapolates. test_vm_alert_parity.py runs
+# this file on both engines.
 rule_files:
   - ../../rule-packs/rule-pack-platform.yaml
 
@@ -36,7 +45,9 @@ evaluation_interval: 1m
 tests:
 
   # 1) A single miss at 5m on one pod, scraped every 1m. The last 0 sample is
-  #    at 4m; the 1h range is left-open, so it holds that sample up to 63m.
+  #    at 4m: PromQL's left-open range holds it up to 63m; MetricsQL bases the
+  #    window on the last sample before it and holds one scrape longer, so the
+  #    clear is asserted at 66m, where both engines agree.
   - interval: 1m
     name: single-miss-fires-for-the-window-then-clears
     input_series:
@@ -98,15 +109,14 @@ tests:
               severity: warning
               alert_source: platform
             exp_annotations: *one_not_projected
-      - eval_time: 64m
+      - eval_time: 66m
         alertname: TenantProjectionStampMissing
         exp_alerts: []
 
-  # 2) The same with a 5m scrape interval (a slow scrape still sees it): samples at
-  #    0m/5m/10m read 0, from 15m on 1. Fires at the first scrape that sees the
-  #    step, clears once the 10m sample has left the window (left-open: 70m).
-  #    At 69m the last sample is 4m old and increase() extrapolates to the
-  #    window's end, so the value reads 1.073 (hence "about" in the text).
+  # 2) The same with a 5m scrape interval: samples at 0m/5m/10m read 0, from
+  #    15m on 1. Fires at the first scrape that sees the step and holds about
+  #    1h minus one scrape interval; the clear is asserted at 80m, past both
+  #    engines' boundary (PromQL 70m, MetricsQL one scrape later).
   - interval: 5m
     name: five-minute-scrape-sees-the-miss
     input_series:
@@ -150,7 +160,7 @@ tests:
                 pod_name. Nothing is cut off automatically (ADR-021
                 §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
-      - eval_time: 69m
+      - eval_time: 60m
         alertname: TenantProjectionStampMissing
         exp_alerts:
           - exp_labels:
@@ -158,33 +168,8 @@ tests:
               job: vector-metrics
               severity: warning
               alert_source: platform
-            exp_annotations:
-              summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store (not_projected)"
-              description: |
-                Within the last hour Vector counted about 1.073
-                gateway audit rows carrying a valid `account_id` (the verified
-                claim of a tenant's logs token) for a request that reached the
-                log store, which ended up in the platform 0:0 store but in no
-                tenant partition (reason=not_projected). A tenant whose
-                token is forwarded holds an AccountID, so it should see these rows.
-                not_projected: federation_audit rows whose tenant_id is blank or
-                missing from helm/vector `tenantProjections` — usually a tenant
-                issued a logs token before its projection was added; add it
-                (copy the AccountID from `_account_registry.yaml`) and upgrade
-                the chart. If the tenant was just offboarded, its token was not
-                revoked (or the revocation has not reached the gateway yet):
-                revoke it first.
-                origin_rejected: suspicious_audit rows — demux reclassified them
-                because their pod_owner fails `audit.gatewayPodOwnerPrefix`:
-                either forged rows from a gateway-labelled pod, or a prefix
-                that no longer matches the real gateway (which empties every
-                tenant partition). Find the rows in 0:0 with
-                `log_type:federation_audit OR log_type:suspicious_audit`, a
-                non-empty account_id and upstream, grouped by tenant_id /
-                pod_name. Nothing is cut off automatically (ADR-021
-                §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.
-              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
-      - eval_time: 70m
+            exp_annotations: *slow_scrape_15m
+      - eval_time: 80m
         alertname: TenantProjectionStampMissing
         exp_alerts: []
 
@@ -366,7 +351,7 @@ tests:
 
   # 6) Restarts. vector-a: a miss at 5m (-> 3), then its container restarts at
   #    36m (counter back to 0, same labels). It fires while the miss is in the
-  #    window and clears at 64m exactly as without the restart. vector-b: a
+  #    window and is clear by 66m, as without the restart. vector-b: a
   #    miss counted long ago (1 since 1m), container restart at 82m: never
   #    fires after the first hour. vector-d: a new pod (new series at 0) at
   #    30m: never fires.
@@ -445,7 +430,7 @@ tests:
                 pod_name. Nothing is cut off automatically (ADR-021
                 §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
-      - eval_time: 64m
+      - eval_time: 66m
         alertname: TenantProjectionStampMissing
         exp_alerts: []
       - eval_time: 100m
@@ -468,5 +453,97 @@ tests:
         alertname: TenantProjectionStampMissing
         exp_alerts: []
       - eval_time: 180m
+        alertname: TenantProjectionStampMissing
+        exp_alerts: []
+
+  # 8) A rollout replaces vector-a with vector-b at 70m. vector-b resumed
+  #    from the node's checkpoint and counted 2 replayed misses before its
+  #    first scrape, so its first sample is already 2 and increase() sees no
+  #    step. Prometheus held Vector data an hour earlier, so the new-series
+  #    arm fires with the whole value for the hour the series is new.
+  - interval: 1m
+    name: new-series-born-non-zero-fires
+    input_series:
+      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '0x70'
+      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-b", instance="10.0.0.2:9598", job="vector-metrics"}'
+        values: '_x70 2x70'
+      - series: 'vector_uptime_seconds{pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '0+60x70'
+      - series: 'vector_uptime_seconds{pod="vector-b", instance="10.0.0.2:9598", job="vector-metrics"}'
+        values: '_x70 0+60x70'
+    alert_rule_test:
+      - eval_time: 69m
+        alertname: TenantProjectionStampMissing
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: TenantProjectionStampMissing
+        exp_alerts:
+          - exp_labels:
+              reason: not_projected
+              job: vector-metrics
+              severity: warning
+              alert_source: platform
+            exp_annotations: &born_non_zero
+              summary: "Tenant audit rows with a verified account_id reached only the platform 0:0 store (not_projected)"
+              description: |
+                Within the last hour Vector counted about 2
+                gateway audit rows carrying a valid `account_id` (the verified
+                claim of a tenant's logs token) for a request that reached the
+                log store, which ended up in the platform 0:0 store but in no
+                tenant partition (reason=not_projected). A tenant whose
+                token is forwarded holds an AccountID, so it should see these rows.
+                not_projected: federation_audit rows whose tenant_id is blank or
+                missing from helm/vector `tenantProjections` — usually a tenant
+                issued a logs token before its projection was added; add it
+                (copy the AccountID from `_account_registry.yaml`) and upgrade
+                the chart. If the tenant was just offboarded, its token was not
+                revoked (or the revocation has not reached the gateway yet):
+                revoke it first.
+                origin_rejected: suspicious_audit rows — demux reclassified them
+                because their pod_owner fails `audit.gatewayPodOwnerPrefix`:
+                either forged rows from a gateway-labelled pod, or a prefix
+                that no longer matches the real gateway (which empties every
+                tenant partition). Find the rows in 0:0 with
+                `log_type:federation_audit OR log_type:suspicious_audit`, a
+                non-empty account_id and upstream, grouped by tenant_id /
+                pod_name. Nothing is cut off automatically (ADR-021
+                §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+      - eval_time: 125m
+        alertname: TenantProjectionStampMissing
+        exp_alerts:
+          - exp_labels:
+              reason: not_projected
+              job: vector-metrics
+              severity: warning
+              alert_source: platform
+            exp_annotations: *born_non_zero
+      - eval_time: 135m
+        alertname: TenantProjectionStampMissing
+        exp_alerts: []
+
+  # 9) Prometheus starts collecting at 0m (empty TSDB) while vector-a's
+  #    counter already reads 5 from before. Every series looks new, but
+  #    there was no Vector data an hour earlier, so the new-series arm is
+  #    muted and nothing fires; after the first hour the series is not new.
+  - interval: 1m
+    name: collection-start-with-non-zero-counter-does-not-fire
+    input_series:
+      - series: 'vector_tenant_projection_stamp_missed_events_total{reason="not_projected", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '5x90'
+      - series: 'vector_uptime_seconds{pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '0+60x90'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TenantProjectionStampMissing
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: TenantProjectionStampMissing
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: TenantProjectionStampMissing
+        exp_alerts: []
+      - eval_time: 90m
         alertname: TenantProjectionStampMissing
         exp_alerts: []

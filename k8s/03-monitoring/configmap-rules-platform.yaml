@@ -883,29 +883,32 @@ data:
     \ §8.7.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
     \      summary: Unprojected tenant audit rows surged above 3x their 1-day baseline\
     \ for 15m\n  - alert: TenantProjectionStampMissing\n    expr: \"sum without (instance,\
-    \ pod, host) (\\n  increase(vector_tenant_projection_stamp_missed_events_total[1h])\\\
-    n) > 0\\n\"\n    for: 0s\n    labels:\n      alert_source: platform\n      severity:\
-    \ warning\n    annotations:\n      description: 'Within the last hour Vector counted\
-    \ about {{ $value | humanize }}\n\n        gateway audit rows carrying a valid\
-    \ `account_id` (the verified\n\n        claim of a tenant''s logs token) for a\
-    \ request that reached the\n\n        log store, which ended up in the platform\
-    \ 0:0 store but in no\n\n        tenant partition (reason={{ $labels.reason }}).\
-    \ A tenant whose\n\n        token is forwarded holds an AccountID, so it should\
-    \ see these rows.\n\n        not_projected: federation_audit rows whose tenant_id\
-    \ is blank or\n\n        missing from helm/vector `tenantProjections` — usually\
-    \ a tenant\n\n        issued a logs token before its projection was added; add\
-    \ it\n\n        (copy the AccountID from `_account_registry.yaml`) and upgrade\n\
-    \n        the chart. If the tenant was just offboarded, its token was not\n\n\
-    \        revoked (or the revocation has not reached the gateway yet):\n\n    \
-    \    revoke it first.\n\n        origin_rejected: suspicious_audit rows — demux\
-    \ reclassified them\n\n        because their pod_owner fails `audit.gatewayPodOwnerPrefix`:\n\
-    \n        either forged rows from a gateway-labelled pod, or a prefix\n\n    \
-    \    that no longer matches the real gateway (which empties every\n\n        tenant\
-    \ partition). Find the rows in 0:0 with\n\n        `log_type:federation_audit\
-    \ OR log_type:suspicious_audit`, a\n\n        non-empty account_id and upstream,\
-    \ grouped by tenant_id /\n\n        pod_name. Nothing is cut off automatically\
-    \ (ADR-021\n\n        §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.\n\
-    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
+    \ pod, host) (\\n  (\\n    vector_tenant_projection_stamp_missed_events_total\\\
+    n    unless\\n    vector_tenant_projection_stamp_missed_events_total offset 1h\\\
+    n  ) * 1 > 0\\n  and on () count(vector_uptime_seconds offset 1h) > 0\\n  or\\\
+    n  increase(vector_tenant_projection_stamp_missed_events_total[1h])\\n) > 0\\\
+    n\"\n    for: 0s\n    labels:\n      alert_source: platform\n      severity: warning\n\
+    \    annotations:\n      description: 'Within the last hour Vector counted about\
+    \ {{ $value | humanize }}\n\n        gateway audit rows carrying a valid `account_id`\
+    \ (the verified\n\n        claim of a tenant''s logs token) for a request that\
+    \ reached the\n\n        log store, which ended up in the platform 0:0 store but\
+    \ in no\n\n        tenant partition (reason={{ $labels.reason }}). A tenant whose\n\
+    \n        token is forwarded holds an AccountID, so it should see these rows.\n\
+    \n        not_projected: federation_audit rows whose tenant_id is blank or\n\n\
+    \        missing from helm/vector `tenantProjections` — usually a tenant\n\n \
+    \       issued a logs token before its projection was added; add it\n\n      \
+    \  (copy the AccountID from `_account_registry.yaml`) and upgrade\n\n        the\
+    \ chart. If the tenant was just offboarded, its token was not\n\n        revoked\
+    \ (or the revocation has not reached the gateway yet):\n\n        revoke it first.\n\
+    \n        origin_rejected: suspicious_audit rows — demux reclassified them\n\n\
+    \        because their pod_owner fails `audit.gatewayPodOwnerPrefix`:\n\n    \
+    \    either forged rows from a gateway-labelled pod, or a prefix\n\n        that\
+    \ no longer matches the real gateway (which empties every\n\n        tenant partition).\
+    \ Find the rows in 0:0 with\n\n        `log_type:federation_audit OR log_type:suspicious_audit`,\
+    \ a\n\n        non-empty account_id and upstream, grouped by tenant_id /\n\n \
+    \       pod_name. Nothing is cut off automatically (ADR-021\n\n        §日誌進入端的契約).\
+    \ See platform-log-aggregation-runbook §8.7.\n\n        '\n      runbook_url:\
+    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
     \      summary: Tenant audit rows with a verified account_id reached only the\
     \ platform 0:0 store ({{ $labels.reason }})\n  - alert: VectorProjectionGateMismatch\n\
     \    expr: \"max by (mode, namespace) (\\n  vector_tenant_projection_gate_info{category=\\\

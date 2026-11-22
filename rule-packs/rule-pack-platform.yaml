@@ -2642,13 +2642,29 @@ groups:
       # verified identity (forged/malformed payloads, metrics-token traffic),
       # which this counter ignores by construction.
       #
-      # Why increase() sees the first miss: helm/vector 0.14.1+ pre-initialises
-      # the counter to 0 for every reason (a static_metrics source feeding the
-      # same exporter), so each series exists from Vector's start and a miss is
-      # a step up that increase() measures. Without that, a series would be
-      # born at 1 and increase() could not see its first row. A Vector restart
-      # starts the counter at 0 again: increase() reads that as a counter
-      # reset, not a miss.
+      # Two arms. `increase`: helm/vector 0.14.1+ pre-initialises the counter
+      # to 0 for every reason (a static_metrics source feeding the same
+      # exporter), so a series exists from Vector's start and a miss counted
+      # after its first scrape is a step up that increase() measures; a
+      # Vector restart under the same labels is a counter reset, not a miss.
+      # ⛔ The `unless … offset 1h` arm: a NEW series (a DaemonSet rollout or a
+      # rescheduled pod) can be non-zero at its very first sample, because
+      # kubernetes_logs resumes from its hostPath checkpoint and replays the
+      # gateway lines written while no Vector ran on that node; misses among
+      # them are counted before the first scrape, and increase() never sees
+      # that step. Every series now starts at 0, so "absent an hour ago and
+      # > 0 now" means exactly that; the arm contributes the series' whole
+      # value for the hour after it appears (`* 1` strips the name so the arms
+      # share a label set, as in TenantProjectionMappingErrors; `> 0` lets a
+      # new series still at 0 fall through to increase). It is muted unless
+      # Prometheus already held Vector data an hour ago
+      # (`count(vector_uptime_seconds offset 1h)`, Vector's always-on
+      # heartbeat): on an empty TSDB or a just-started collection every
+      # series looks new and would report counts from before collection.
+      # Still not seen: a replayed miss in that first hour of collection; a
+      # miss inside a series that lives less than one scrape; and, with a
+      # scrape interval I, a single miss holds the alert about 1h - I (two
+      # samples must fall inside the window, so I must stay well under 30m).
       # The 1h window is how long one miss keeps the alert up, so a tenant
       # that queries rarely does not flap between queries; `for: 0m` because
       # the window already holds it.
@@ -2663,6 +2679,13 @@ groups:
       - alert: TenantProjectionStampMissing
         expr: |
           sum without (instance, pod, host) (
+            (
+              vector_tenant_projection_stamp_missed_events_total
+              unless
+              vector_tenant_projection_stamp_missed_events_total offset 1h
+            ) * 1 > 0
+            and on () count(vector_uptime_seconds offset 1h) > 0
+            or
             increase(vector_tenant_projection_stamp_missed_events_total[1h])
           ) > 0
         for: 0m

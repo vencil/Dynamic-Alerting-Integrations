@@ -535,9 +535,17 @@ class TestStampMissCounter:
         move). Both sides are read from the render, so a reason added to the
         VRL by hand, or dropped from the template's $stampReasons, goes red."""
         cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
-        emitted = set(re.findall(r'^\s*reason = "([^"]+)"\s*$',
-                                 cfg["transforms"]["tenant_stamp_check"]["source"], re.M))
+        vrl = cfg["transforms"]["tenant_stamp_check"]["source"]
+        # Fail-closed: every assignment to `reason` must be a string literal,
+        # or the emitted set cannot be read off the render and this goes red.
+        assignments = re.findall(r'^\s*reason\s*=(?!=)\s*(.*?)\s*$', vrl, re.M)
+        assert assignments, "no `reason =` assignment found in tenant_stamp_check"
+        literals = [re.fullmatch(r'"([^"\\]*)"', a) for a in assignments]
+        assert all(literals), f"non-literal reason assignment(s): {assignments}"
+        emitted = {m.group(1) for m in literals} - {""}
         assert emitted == {"not_projected", "origin_rejected"}, emitted
+        # The event handed to the counter must carry `reason` itself, unchanged.
+        assert re.search(r'^\s*\. = \{"reason": reason\}\s*$', vrl, re.M), "reason not passed as-is"
         zero = cfg["sources"]["tenant_stamp_zero"]
         assert zero["type"] == "static_metrics"
         (counter,) = cfg["transforms"]["tenant_stamp_missed"]["metrics"]
@@ -568,9 +576,11 @@ class TestStampMissCounter:
     @pytest.mark.parametrize("interval", [None, "15s", "30s", "60s", "5m", "1m30s"])
     def test_servicemonitor_takes_any_scrape_interval(
             self, repo_root: Path, interval: str | None) -> None:
-        """The counter series no longer expires between misses, so the scrape
-        interval has no upper bound to keep (it used to be refused above 30s
-        and outside single-unit durations)."""
+        """The counter series no longer expires between misses, so the render
+        refuses no scrape interval. It still has to stay well under 30m:
+        increase(...[1h]) needs two samples in the window, so one miss holds
+        TenantProjectionStampMissing for about 1h minus one scrape interval.
+        That is documented, not enforced here."""
         sets = {"serviceMonitor.enabled": "true"}
         if interval is not None:
             sets["serviceMonitor.interval"] = interval
