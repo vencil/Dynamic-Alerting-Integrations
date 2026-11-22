@@ -514,8 +514,9 @@ def _gateway_audit_lines():
 
 def test_vl11_inflight_limit_refuses_the_query_over_the_cap(vl_gateway_url, logs_signer):
     """`cap` slow queries in flight on one token: the next query on that token is
-    429, a second token of the SAME tenant is not affected (the limit is per
-    token), the refusal is in the audit log as status 429 with the token id (the
+    429, a forbidden path on that token still gets its own 403 (routes the
+    gateway answers itself take no slot), a second token of the SAME tenant
+    is not affected (the limit is per token), the refusal is in the audit log as status 429 with the token id (the
     audit sidecar buckets 429 as `rate_limited`), and once the slow queries
     complete the token is admitted again (slots are released on completion)."""
     cap, _ = _inflight_settings()
@@ -530,6 +531,11 @@ def test_vl11_inflight_limit_refuses_the_query_over_the_cap(vl_gateway_url, logs
         assert over.status_code == 429, \
             f"query #{cap + 1} on a token with {cap} in flight was not refused: {over.status_code} {over.text[:200]}"
         assert "too many concurrent queries" in over.text
+        # A path the gateway answers itself takes no slot: the token at its
+        # cap still gets the default-deny 403, not 429.
+        denied = _query(vl_gateway_url, token, path="/select/logsql/tail")
+        assert denied.status_code == 403, \
+            f"a forbidden path on a token at its cap answered {denied.status_code}, not the route's 403"
         assert _query(vl_gateway_url, other).status_code == 200, \
             "a different token of the same tenant was refused — the limit must be per token"
         statuses = [h.result().status_code for h in holds]

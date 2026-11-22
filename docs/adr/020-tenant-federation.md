@@ -20,7 +20,7 @@ updated_at: 2026-11-22
 
 - 2026-05-17 修訂：撤銷集取代本 ADR 起初「不做伺服器端撤銷清單、只靠短效期與限流」的決定。`DELETE` token 把 `token_id` 寫進 token store 的撤銷集，gateway 定期重讀並拒絕清單內的 token；限流仍是必備的補償控制。見「Token」。
 - 2026-10-11 修訂：白名單與租戶子集移出 conf.d（平台存放租戶設定的 git 目錄），改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap），不再 commit。強制通過收錄檢查的紀錄因此只在 tenant-api 的日誌裡，見「已知限制」。
-- 2026-11-22 修訂：每個 token 的並發上限已在 gateway 實作（每實例預設 4，計數在每個 Envoy worker 各自進行），不再列為「已決定、尚未實作」。行為與實際限制見「Gateway 驗章、撤銷與限流」與「已知限制」。
+- 2026-11-22 修訂：每個 token 的並發上限已在 gateway 實作（每實例預設 4，計數在每個 Envoy worker 各自進行，單一連線只拿得到一個 worker 的份），不再列為「已決定、尚未實作」。行為與實際限制見「Gateway 驗章、撤銷與限流」與「已知限制」。
 
 > 依語言政策，本 ADR 不另製 `.en.md`。
 
@@ -185,8 +185,9 @@ filter 依「便宜的先做」排序：
 - 所有限流都是每個 Envoy 實例各算各的：N 個副本時實際上限是 N 倍。限流是軟性、近似的控制，硬上限在儲存後端。
 - **每個 token 的並發上限**：限流管的是每分鐘「開始」幾個查詢，管不到一個外洩 token 同時掛著好幾個慢查詢。gateway 因此另外限制每個 token 同時進行的查詢數，chart 預設每個實例 4 個（`inflightLimit.maxPerToken`；一個租戶的 Grafana、自管告警評估、值班查詢並行通常不超過 3）。超過的請求回 429，稽核日誌與指標記成 `rate_limited`，與限流同一桶。這道檢查排在 router 之前的最後一個 filter：名額在請求真正轉出去的那一刻才佔用，被拒的請求已經走過稽核用 Lua，日誌裡看得到它查的是什麼。
   - **它限制的是每個實例**，與限流相同：預設 2 個副本合計 8 個，自動擴展到 8 個副本時合計 32 個。
-  - **計數在每個 Envoy worker（處理請求的執行緒）各自進行**：Envoy 的 Lua filter 在 worker 之間沒有共用記憶體，同一個 token 的連線會被分到不同 worker。chart 把上限平均分給各 worker（每 worker `maxPerToken ÷ concurrency` 個），所以各 worker 加總不會超過上限；代價是同一個 token 的連線剛好落在同一個 worker 時，會在 `maxPerToken ÷ concurrency` 個就被拒（預設 2 個 worker，即 2 個）。上限不是 worker 數的倍數時 chart 拒絕 render，不讓實際生效的上限悄悄低於設定值。
-  - **名額在回應結束時釋放**，包括 gateway 自己產生的回應（路由逾時的 504、上游斷線的 503）。**client 中途斷線**（例如 Grafana 取消查詢）時，Envoy 的 Lua filter 收不到任何通知，名額改由租約到期釋放：每個名額在佔用 35 秒後失效（路由逾時 30 秒加 5 秒）。路由逾時涵蓋整個上游回應，超過 35 秒的名額不可能還對應一個在跑的查詢，所以計數不會洩漏；代價是 client 一次取消滿額的查詢後，這個 token 最多有 35 秒會被誤拒。
+  - **計數在每個 Envoy worker（處理請求的執行緒）各自進行**：Envoy 的 Lua filter 在 worker 之間沒有共用記憶體，同一個 token 的連線會被分到不同 worker。每個 worker 分到 `maxPerToken ÷ concurrency` 無條件捨去、至少 1 個名額，一個實例上一個 token 最多 `concurrency ×` 這個數。單一連線（HTTP/2，或一條 keep-alive 連線）只落在一個 worker，只拿得到一個 worker 的份。所以實際的每實例上限介於「一個 worker 的份」與「worker 數 × 一個 worker 的份」之間，看連線怎麼落在 worker 上：預設 4 個、2 個 worker 時，單一連線 2 個、整個實例 4 個。worker 數整除不了上限時，實例上限會偏離設定值：`concurrency` 3 時是 3 個，8 時是 8 個（每個 worker 至少要有 1 個，否則全部被拒）。chart 不拒絕這類設定，因為先前的 values 建議把 worker 數對齊 CPU 上限，升級不能因此失敗。
+  - **gateway 自己回應的路由不佔名額**：緊急封鎖的 503、`remote_read` 的 403、日誌查詢模式預設拒絕的 403 都帶路由 metadata，filter 讀到就略過；已達上限的 token 打這些路徑，拿到的仍是原本的 403／503，不是 429。
+  - **名額在回應結束時釋放**，也包括回應 header 送出**之前**由 gateway 產生的錯誤（路由逾時的 504、上游斷線的 503）；header 送出之後才發生的同類錯誤，對 client 是連線被重置，走下面斷線的路徑。**client 中途斷線**（例如 Grafana 取消查詢）時，Envoy 的 Lua filter 收不到任何通知，名額改由租約到期釋放：每個名額在佔用 35 秒後失效（路由逾時 30 秒加 5 秒）。路由逾時涵蓋整個上游回應，超過 35 秒的名額不可能還對應一個在跑的查詢，所以計數不會洩漏；代價是 client 一次取消滿額的查詢後，這個 token 最多有 35 秒會被誤拒。
 - `prom-label-proxy` 模式下，Prometheus 的 `remote_read`（`/api/v1/read`）回 403：prom-label-proxy 無法對它注入標籤。路由前先把路徑正規化（合併重複斜線、解析 `.`／`..`、解碼 `%2F`），`/api/v1//read`、`/api/v1%2Fread` 這類變形也擋得住。
 
 #### 代理注入租戶標籤
@@ -289,8 +290,9 @@ batch_job_failures -> state=warn pii=[] err=<nil>
 
 **已知限制**
 
-- **每 token 並發上限是每個實例、每個 worker 各自計算。** chart 的設定是每個實例 4 個：預設 2 個副本時一個 token 合計最多 8 個查詢同時進行，擴到 8 個副本時 32 個。實例內分給 2 個 worker 各 2 個，同一個 token 的連線都落在同一個 worker 時，第 3 個就會被拒；把 `concurrency` 設成 1 才是每實例精確的 4 個。要叢集層級的精確上限，得有跨實例共用的計數（例如外部的計數服務或 Redis），目前沒有。
+- **每 token 並發上限是每個實例、每個 worker 各自計算。** chart 的設定是每個實例 4 個：預設 2 個副本時一個 token 合計最多 8 個查詢同時進行，擴到 8 個副本時 32 個。實例內分給 2 個 worker 各 2 個，Grafana 這類只開一條連線的 client 只落在一個 worker，第 3 個就會被拒；把 `concurrency` 設成 1 才是每實例精確的 4 個。`concurrency` 整除不了 4 時，實例上限會低於或高於 4（3 個 worker 是 3，8 個 worker 是 8）。要叢集層級的精確上限，得有跨實例共用的計數（例如外部的計數服務或 Redis），目前沒有。
 - **client 中途斷線的查詢，名額最多 35 秒後才釋放。** Envoy 的 Lua filter 收不到 client 斷線的通知，只能靠租約到期回收。Grafana 一次取消滿額的查詢，這個 token 會被誤拒到租約到期為止；方向是多拒，不是漏擋。
+- **租約用的是牆上時鐘。** Envoy 的 Lua filter 沒有單調時鐘可用。系統時間往前跳超過 35 秒時，所有租約同時失效，短時間內會多放行；往回跳則把未來時間戳的租約當成失效，也是多放行，不會把名額鎖住。
 - **每 token 限流的實際上限隨 gateway 副本數變動。** 本 ADR 決定每 token 持續約每分鐘 30 次（對應 Grafana 預設 30 秒刷新、多面板的看板），可調範圍每分鐘 15 到 60 次。chart 的設定是每個 Envoy 實例每分鐘 15 次：預設 2 個副本時合計約每分鐘 30 次，與決定相符；自動擴展到上限 8 個副本時約每分鐘 120 次，超出 15 到 60 的範圍。要固定上限，得改用全域限流（例如以 Redis 為後端），目前沒有。
 - **強制通過收錄檢查的稽核只在 tenant-api 的日誌裡。** 操作者、理由、指標寫在 tenant-api 的警告日誌與 `state_write` 稽核事件；白名單存在 state store，沒有 git 歷史。這份紀錄能保留多久，等於 tenant-api 日誌的保留期。
 - **稽核日誌沒有中央、可長期查詢的合規儲存。** stdout 那份的保留等同節點的容器日誌輪替；裝了平台的 Vector 與 VictoriaLogs 才收進中央日誌庫，但它的保留期與合規查詢需求沒有在本 ADR 定義。不寫每個 pod 自己的 PVC：ReadWriteOnce 的 PVC 在 gateway 多副本時無法同時掛載，ReadWriteMany 又引入 NFS／EFS 依賴。

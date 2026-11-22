@@ -258,15 +258,21 @@ The per-WORKER slot count templated into inflight_limit.lua.
 
 The Lua counter lives in each Envoy worker thread's own Lua state (there is no
 memory shared between workers), and the kernel spreads a token's connections
-over the workers. So `inflightLimit.maxPerToken`, a per-INSTANCE value, is
-divided evenly over `.Values.concurrency` workers: the sum over all workers can
-then never exceed maxPerToken, which is what makes it a real per-instance upper
-bound. The price is that a token whose connections all land on one worker gets
-only maxPerToken / concurrency in flight. Both ways of making that division lie are
-refused at render time:
-  * maxPerToken < concurrency — a worker would get 0 slots (every request 429);
-  * maxPerToken not a multiple of concurrency — the enforced instance bound
-    would silently be lower than the configured one.
+over the workers. So `inflightLimit.maxPerToken`, a per-INSTANCE target, is
+divided over `.Values.concurrency` workers: perWorker =
+max(1, floor(maxPerToken / concurrency)).
+
+What that bounds, exactly: a token can have at most concurrency x perWorker
+queries in flight on one instance, and is always admitted while it has fewer
+than perWorker on the worker its connection landed on.
+  * concurrency divides maxPerToken (4/2, 4/1): the instance bound IS
+    maxPerToken; one connection alone gets maxPerToken / concurrency.
+  * otherwise the instance bound is below maxPerToken (4/3 -> 3x1 = 3) or,
+    once concurrency > maxPerToken, above it (4/8 -> 8x1 = 8): no worker can
+    get less than one slot without refusing every query.
+No render failure for the second case on purpose: earlier values advice was
+to align `concurrency` with the CPU limit, and an upgrade must not break for
+an operator who did. Only invalid input (non-integer, < 1) fails the render.
 */}}
 {{- define "federation-gateway.inflightPerWorker" -}}
 {{- $il := .Values.inflightLimit | default dict -}}
@@ -283,10 +289,7 @@ refused at render time:
 {{- if lt $w 1 -}}
 {{- fail (printf "federation-gateway: concurrency must be >= 1, got %v" .Values.concurrency) -}}
 {{- end -}}
-{{- if or (lt $maxI $w) (ne (mod $maxI $w) 0) -}}
-{{- fail (printf "federation-gateway: inflightLimit.maxPerToken (%d) must be a multiple of concurrency (%d). The limit is counted per Envoy worker (no memory is shared between workers) and split evenly over them, so %d cannot be enforced exactly with %d workers. Use a multiple of %d, or change concurrency." $maxI $w $maxI $w $w) -}}
-{{- end -}}
-{{- div $maxI $w -}}
+{{- max 1 (div $maxI $w) -}}
 {{- end }}
 
 {{/*

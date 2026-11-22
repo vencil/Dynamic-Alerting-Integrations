@@ -17,17 +17,19 @@
 -- ── What the number bounds ──────────────────────────────────────────────
 -- Module-scope state below lives in THIS worker thread's Lua state: Envoy's
 -- Lua filter has no memory shared between workers. MAX_PER_WORKER is
--- inflightLimit.maxPerToken divided by the worker count (the chart refuses a
--- value that does not divide evenly), so across all workers of ONE Envoy
--- instance a token never holds more than maxPerToken slots. Replicas do not
--- share anything either: cluster-wide the bound is maxPerToken x replicas,
+-- max(1, floor(inflightLimit.maxPerToken / concurrency)), so across all
+-- workers of ONE Envoy instance a token holds at most concurrency x
+-- MAX_PER_WORKER slots — maxPerToken when concurrency divides it, otherwise
+-- below it, or above it once concurrency > maxPerToken (see _helpers.tpl).
+-- Replicas share nothing either: cluster-wide it is that bound x replicas,
 -- exactly like the local rate limiters.
 --
 -- ── How a slot is released ──────────────────────────────────────────────
 --  1. Response completes   — envoy_on_response waits for the end of the
 --     response body (bodyChunks streams; nothing is buffered), then releases.
---     This also covers every reply Envoy generates itself after this filter:
---     a route-timeout 504, an upstream-reset 503, a direct_response route.
+--     This also covers a reply Envoy generates itself after this filter when
+--     it comes BEFORE response headers (a route-timeout 504, an upstream-reset
+--     503). After headers were sent, such an error is a stream reset — case 2.
 --  2. Client resets the stream (Grafana cancelling a query, a dropped
 --     connection), or the stream is reset mid-body — Envoy 1.38's Lua filter
 --     runs NO callback for that: envoy_on_response never fires, or fires and
@@ -58,10 +60,12 @@ local leases = {}
 local next_id = 0
 local swept_at = 0
 
--- A lease is dead once LEASE_TTL has passed. A wall clock stepped BACKWARDS
--- would make every lease look young forever, so a lease stamped in the future
--- counts as dead too: a clock step can only release slots early, never pin
--- them.
+-- A lease is dead once LEASE_TTL has passed. os.time() is the WALL clock (the
+-- Lua filter offers no monotonic one). A clock stepped BACKWARDS would make
+-- every lease look young forever, so a lease stamped in the future counts as
+-- dead too; a step FORWARD by more than LEASE_TTL expires every lease at once.
+-- Either way a clock step can only release slots early (brief
+-- over-admission), never pin them.
 local function dead(taken_at, now)
   return now - taken_at >= LEASE_TTL or now < taken_at
 end
@@ -93,6 +97,15 @@ local function sweep(now)
 end
 
 function envoy_on_request(handle)
+  -- A route Envoy answers itself (emergency 503, remote_read 403, the
+  -- victorialogs default-deny 403) reaches no upstream: it takes no slot, and
+  -- a token at its cap still gets that route's own status instead of 429.
+  -- envoy.yaml marks every direct_response route with this route metadata
+  -- (keyed by this filter's name); an unmarked one is merely counted.
+  if handle:metadata():get("direct_response") then
+    return
+  end
+
   -- Written by revoked_check.lua from the verified token_id claim (it 401s a
   -- request without one, so this is always set here). It is removed only by
   -- the router (request_headers_to_remove), which runs after this filter.

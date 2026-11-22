@@ -304,20 +304,23 @@ rateLimit:
     maxDynamicDescriptors: 1024
 
 # ── Per-token in-flight limit (ADR-020 §Gateway) ─────────────────────
-# At most maxPerToken queries per token in flight AT ONCE on one Envoy
-# instance; the next one gets 429 (audit status `rate_limited`, same as the
+# Caps how many queries one token has in flight AT ONCE on one Envoy
+# instance; over the cap gets 429 (audit status `rate_limited`, same as the
 # rate limiters). The rate limits above bound how many queries a token
 # starts per minute, not how many slow ones it keeps open together.
 #
 # What the number bounds:
-#  • per INSTANCE, like the rate limits: N replicas = N x maxPerToken
+#  • counted per Envoy WORKER (no memory is shared between workers): each
+#    worker allows perWorker = max(1, floor(maxPerToken / concurrency)).
+#    Per instance a token can have at most concurrency x perWorker in
+#    flight; one HTTP/2 or keep-alive connection (one worker) gets only
+#    perWorker. With the defaults (4, concurrency 2): 2 per connection,
+#    4 per instance. When concurrency does not divide maxPerToken the
+#    instance bound differs from it: concurrency 3 -> 3, concurrency 8 -> 8
+#    (a worker cannot get less than 1). concurrency: 1 makes it exact.
+#  • per INSTANCE, like the rate limits: N replicas = N x that bound
 #    cluster-wide (8 at the default 2 replicas, 32 at the HPA max of 8).
-#  • counted per Envoy WORKER (no memory is shared between workers) and
-#    split evenly: each worker allows maxPerToken / concurrency. The sum can
-#    never exceed maxPerToken, but a token whose connections all land on one
-#    worker gets only maxPerToken / concurrency in flight (2 by default).
-#    maxPerToken must therefore be a multiple of `concurrency` — the render
-#    fails otherwise. concurrency: 1 makes the per-instance count exact.
+#  • a route Envoy answers itself (403/503 direct responses) takes no slot.
 #  • a slot is freed when the response completes. A client that DISCONNECTS
 #    mid-query frees its slot only when the slot's lease expires, 35s after
 #    it was taken (the 30s route timeout + 5s): Envoy's Lua filter gets no
@@ -331,8 +334,8 @@ listenPort: 8080
 # Envoy worker-thread count. Envoy otherwise defaults to one worker per
 # NODE CPU — far more than a CPU-limited pod can use, which wastes context
 # switches and multiplies the per-worker revoked-set cache. Keep this
-# roughly aligned with resources.limits.cpu. inflightLimit.maxPerToken must
-# be a multiple of it (the in-flight count is split over the workers).
+# roughly aligned with resources.limits.cpu. The in-flight limit is split
+# over the workers (see inflightLimit), so this also changes what it bounds.
 concurrency: 2
 
 service:

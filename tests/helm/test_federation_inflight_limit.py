@@ -48,6 +48,13 @@ def test_the_lua_takes_its_numbers_from_the_chart(repo_root: Path):
     assert re.search(r'^local LEASE_TTL = \{\{ include "federation-gateway.inflightLeaseSeconds" \. \}\}$', lua, re.M)
 
 
+def test_the_lua_reads_the_direct_response_marker(repo_root: Path):
+    """The route metadata the render test below checks is only worth anything
+    if the filter actually reads that key."""
+    lua = (repo_root / _LUA).read_text(encoding="utf-8")
+    assert 'handle:metadata():get("direct_response")' in lua
+
+
 # ── render layer (helm-gated) ────────────────────────────────────────────────
 def _render(repo_root: Path, sets: dict[str, str] | None = None,
             set_strings: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -89,11 +96,52 @@ def test_the_filter_is_last_before_the_router(repo_root: Path):
 
 
 @_needs_helm
-@pytest.mark.parametrize("max_per_token,concurrency,per_worker", [(4, 2, 2), (4, 1, 4), (8, 4, 2), (6, 3, 2)])
-def test_the_cap_is_split_evenly_over_the_workers(repo_root: Path, max_per_token, concurrency, per_worker):
+@pytest.mark.parametrize("max_per_token,concurrency,per_worker", [
+    (4, 2, 2), (4, 1, 4), (8, 4, 2), (6, 3, 2),
+    (5, 2, 2),   # floor: instance bound 4, below the configured 5
+    (4, 3, 1),   # floor: instance bound 3
+    (4, 8, 1),   # floor would be 0 -> 1: instance bound 8, above the configured 4
+])
+def test_the_cap_is_split_over_the_workers(repo_root: Path, max_per_token, concurrency, per_worker):
+    """perWorker = max(1, floor(maxPerToken / concurrency)). No concurrency
+    may fail the render: older values advice was to align it with the CPU
+    limit, and `helm upgrade` must not break for an operator who did."""
     res = _render(repo_root, {"inflightLimit.maxPerToken": str(max_per_token), "concurrency": str(concurrency)})
     assert res.returncode == 0, res.stderr
     assert _lua_const(_envoy_cm(res.stdout)["inflight_limit.lua"], "MAX_PER_WORKER") == per_worker
+
+
+def _routes(envoy: dict) -> list[dict]:
+    return _hcm(envoy)["route_config"]["virtual_hosts"][0]["routes"]
+
+
+def _marked(route: dict) -> bool:
+    md = ((route.get("metadata") or {}).get("filter_metadata") or {}).get(_FILTER) or {}
+    return md.get("direct_response") is True
+
+
+@_needs_helm
+@pytest.mark.parametrize("sets", [
+    {},
+    {"emergencyGlobalBlock": "true"},
+    {"mode": "victorialogs", "jwt.audience": "tenant-federation-logs"},
+    {"mode": "vm-cluster"},
+])
+def test_only_direct_response_routes_skip_the_slot(repo_root: Path, sets):
+    """A route Envoy answers itself must carry the marker the Lua reads, or a
+    token at its cap gets 429 instead of the route's own 403/503. A FORWARDING
+    route carrying it would bypass the cap entirely, so that direction is the
+    one that must never happen."""
+    res = _render(repo_root, sets)
+    assert res.returncode == 0, res.stderr
+    routes = _routes(yaml.safe_load(_envoy_cm(res.stdout)["envoy.yaml"]))
+    for r in routes:
+        if "direct_response" in r:
+            assert _marked(r), f"direct_response route without the in-flight skip marker: {r['match']}"
+        else:
+            assert "route" in r
+            assert not _marked(r), f"forwarding route marked to skip the in-flight cap: {r['match']}"
+    assert any("route" in r for r in routes) or sets.get("emergencyGlobalBlock") == "true"
 
 
 @_needs_helm
@@ -112,7 +160,7 @@ def test_a_release_without_the_block_still_gets_the_limit(repo_root: Path):
     assert res.returncode == 0, res.stderr
     data = _envoy_cm(res.stdout)
     assert _lua_const(data["inflight_limit.lua"], "MAX_PER_WORKER") == 2
-    assert _FILTER in data["envoy.yaml"]
+    assert _FILTER in [f["name"] for f in _hcm(yaml.safe_load(data["envoy.yaml"]))["http_filters"]]
 
 
 @_needs_helm
@@ -138,17 +186,17 @@ def test_disabled_renders_neither_filter_nor_script(repo_root: Path):
     assert res.returncode == 0, res.stderr
     data = _envoy_cm(res.stdout)
     assert "inflight_limit.lua" not in data
-    assert _FILTER not in data["envoy.yaml"]
+    names = [f["name"] for f in _hcm(yaml.safe_load(data["envoy.yaml"]))["http_filters"]]
+    assert _FILTER not in names
 
 
 @_needs_helm
 @pytest.mark.parametrize("sets", [
-    {"inflightLimit.maxPerToken": "5"},                      # not a multiple of 2 workers
-    {"inflightLimit.maxPerToken": "1"},                      # fewer slots than workers -> 0 per worker
     {"inflightLimit.maxPerToken": "0"},
-    {"inflightLimit.maxPerToken": "6", "concurrency": "4"},
+    {"inflightLimit.maxPerToken": "-1"},
+    {"inflightLimit.maxPerToken": "2.5"},
 ])
-def test_a_cap_that_cannot_be_split_evenly_fails_the_render(repo_root: Path, sets):
+def test_an_invalid_cap_fails_the_render(repo_root: Path, sets):
     res = _render(repo_root, sets)
     assert res.returncode != 0, f"render accepted {sets}"
     assert "inflightLimit.maxPerToken" in res.stderr

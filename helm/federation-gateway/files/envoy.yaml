@@ -146,6 +146,15 @@ static_resources:
                         # the switch flips back cleanly. See the chart README.
                         - match:
                             prefix: "/"
+                          metadata:
+                            # Read by inflight_limit.lua: a route Envoy answers
+                            # itself takes no in-flight slot, so a token at its
+                            # cap still gets this route's own status, not 429.
+                            # EVERY direct_response route carries it (the chart
+                            # tests check); a forwarding route must never.
+                            filter_metadata:
+                              envoy.filters.http.lua.inflight:
+                                direct_response: true
                           direct_response:
                             status: 503
                             body:
@@ -167,6 +176,10 @@ static_resources:
                         # so a sibling like /api/v1/readiness is NOT over-matched.
                         - match:
                             path_separated_prefix: "/api/v1/read"
+                          metadata:
+                            filter_metadata:
+                              envoy.filters.http.lua.inflight:
+                                direct_response: true
                           direct_response:
                             status: 403
                             body:
@@ -254,6 +267,10 @@ static_resources:
                         # 403 here and the shared route is never reached.
                         - match:
                             prefix: "/"
+                          metadata:
+                            filter_metadata:
+                              envoy.filters.http.lua.inflight:
+                                direct_response: true
                           direct_response:
                             status: 403
                             body:
@@ -423,7 +440,7 @@ static_resources:
                   {{- if include "federation-gateway.inflightEnabled" . }}
                   # 8. Per-token in-flight limit — at most
                   #    inflightLimit.maxPerToken queries per token in flight
-                  #    on this instance (split evenly over the workers; see
+                  #    on this instance (split over the workers; see
                   #    inflight_limit.lua for what it bounds and how a slot is
                   #    released). LAST before the router so a slot is taken at
                   #    the moment the request is forwarded — the same moment
