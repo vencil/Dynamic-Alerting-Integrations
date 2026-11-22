@@ -4,35 +4,22 @@ package config
 // `<base>_critical` key depending on WHICH SECTION it is written in (#1218 /
 // TRK-344).
 //
-// This is a characterization pin, not a bug reproduction: the behaviour below
-// is the designed one (`resolveCriticalRows` iterates TENANT OVERRIDES;
-// `resolveBaseRows` iterates `defaults` and does not skip the suffix). It is
-// pinned here because several artifacts outside this package now assert it in
-// prose, and every one of them was written from reading the code rather than
-// from running it. A prose claim about a resolver is only as good as a test
-// that runs the resolver.
+// A characterization pin: `resolveCriticalRows` reads a `<base>_critical`
+// from the tenant's overrides and, since #4173, from the root `defaults:` as
+// every tenant's default; `resolveBaseRows` skips the suffix. Several
+// artifacts outside this package describe it in prose, so a change here has
+// to move with them:
 //
-// Enforced elsewhere, so a change here has to move with them:
-//
-//   - `check_threshold_reachability`'s defaults-tier face rejects a `_critical`
-//     key under `defaults:` across every `_defaults.yaml` surface — four
-//     enumerated GENERATORS plus every tracked ARTIFACT the predicate finds —
-//     on the strength of this behaviour. (Deliberately no number here: an
-//     earlier revision said "all six producers", which the same PR later had to
-//     retract once the artifact half became derived.)
+//   - `check_threshold_reachability`'s defaults-tier face keeps a `_critical`
+//     key out of every shipped `_defaults.yaml` — now a producer policy (a
+//     generator must not arm every tenant's critical alert), no longer a
+//     resolver limit; #3924 revisits it.
 //   - `TestDocsDefaultsSamplesHaveNoTenantOnlyKeys` (docs_defaults_sample_test.go)
-//     holds documentation samples to the same rule and describes the emitted
-//     series shape in its failure message.
-//   - `onboard_platform._render_critical_suggestion` prints this mechanism
-//     verbatim into a file a migrating customer reads.
-//
-// ⛔ And one that is DELIBERATELY unreachable, so do not read the list as "grep
-// and update": `_registry_lib._TENANT_STUB_CRITICAL_NOTE`'s "defaults ships the
-// critical value" branch describes a state the gate above now forbids. It used
-// to tell a customer "the critical row fires without you doing anything" — the
-// exact opposite of the first test below — and it is kept, corrected, only so
-// that a regression is described honestly rather than crashing a customer's
-// CLI. Nothing exercises it but its own unit tests.
+//     holds documentation samples to the same policy.
+//   - `_registry_lib._TENANT_STUB_CRITICAL_NOTE`'s "defaults ships the
+//     critical value" branch tells a customer the root value is every
+//     tenant's critical default; the gate above keeps the shipped generators
+//     out of that branch.
 
 import (
 	"testing"
@@ -142,5 +129,45 @@ func TestCriticalKeyAsTenantOverrideProducesTheCriticalTier(t *testing.T) {
 		if r.Metric == "connections_critical" {
 			t.Errorf("the suffix must not reach the metric label on this path: %+v", sigs(rows))
 		}
+	}
+}
+
+// #4173: a tenant `_critical` the reader refuses ("abc") falls back to the
+// root's critical value, as an unreadable base value falls back to the root
+// default — recorded as unparsed (served), not as dropped. With no root
+// critical value it is dropped (the control).
+func TestUnreadableTenantCriticalFallsBackToTheRootCriticalValue(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		rootCritical bool
+		want         []rowSig
+		reason       string
+	}{
+		"root critical": {true, []rowSig{{"pg", "connections", "critical", 90}}, NotServedValueUnparsed},
+		"no root value": {false, nil, NotServedValueUnparsedDropped},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			defaults := map[string]float64{placementBase: 80}
+			if tc.rootCritical {
+				defaults[placementCritical] = 90
+			}
+			cfg := ThresholdConfig{
+				Defaults: defaults,
+				Tenants:  map[string]map[string]ScheduledValue{"t-1": {placementCritical: {Default: "abc"}}},
+			}
+			var got []rowSig
+			for _, s := range sigs(cfg.ResolveAt(fixedNow)) {
+				if s.severity == "critical" {
+					got = append(got, s)
+				}
+			}
+			if len(got) != len(tc.want) || (len(got) == 1 && got[0] != tc.want[0]) {
+				t.Errorf("critical rows %+v, want %+v", got, tc.want)
+			}
+			if r := cfg.ValuesNotServed(fixedNow)["t-1"][placementCritical]; r != tc.reason {
+				t.Errorf("not served reason %q, want %q", r, tc.reason)
+			}
+		})
 	}
 }

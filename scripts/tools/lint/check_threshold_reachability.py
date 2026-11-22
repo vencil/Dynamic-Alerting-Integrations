@@ -71,9 +71,9 @@ Before this face existed the gate was green while describing face 1+2 as one
 number, so "how many shipped alerts cannot fire" was never measured by
 anything. ⚠️ Both faces use the same reachability rule, which means
 "chart-armed" says A TENANT CAN ARM IT — not that the alert fires out of the
-box. `_critical` keys count as reachable via their base, yet
-`resolveCriticalRows` iterates TENANT OVERRIDES: no `_critical` key is ever
-platform-supplied, and none is in the chart set today.
+box. `_critical` keys count as reachable via their base; since #4173 a root
+`defaults:` `<base>_critical` supplies one for every tenant, but the shipped
+producers write none (the fourth face), and none is in the chart set today.
 
 THIRD FACE — DECLARED-LIST CONTAINMENT (#1310). Face 3 above says the platform
 supplies no value for a KNOWN_UNWIRED key. That is a defensible posture ONLY
@@ -245,9 +245,9 @@ def _declared_only_critical_tag(base: str) -> str:
 #
 # ⚠️ "chart-armed" here means A TENANT CAN ARM IT, not "it fires out of the
 # box". A `_critical` key counts as reachable when its BASE is supplied (the
-# `resolveCriticalRows` path) — but `resolveCriticalRows` iterates TENANT
-# OVERRIDES, so no `_critical` key is ever platform-supplied: none of the
-# demanded `_critical` keys sits in the chart set, and structurally none can.
+# `resolveCriticalRows` path). Since #4173 a root `defaults:` `<base>_critical`
+# is a platform-supplied critical value, but the chart ships none: none of the
+# demanded `_critical` keys sits in the chart set.
 def _not_chart_armed() -> frozenset[str]:
     """The keys the registry says the chart does NOT ship (D-A A1).
 
@@ -418,17 +418,16 @@ def _written_faces() -> dict[str, set[str]]:
 # depends on WHICH FILE SECTION holds it, and where the wrong section fails
 # silently in both directions at once:
 #
-#   * `resolveCriticalRows` iterates TENANT OVERRIDES and admits on
-#     `defaults[<base>]` — a `_critical` key under `defaults:` is never even
-#     looked at, so the `*Critical` alert cannot fire;
-#   * `resolveBaseRows` walks `defaults` and does NOT skip the suffix, and
-#     `parseMetricKey` splits on the first underscore — so the same key emits
-#     `{component="<prefix>", metric="<rest>_critical", severity="warning"}`
-#     (the suffix rides inside the metric label; `metric="<whole key>"` is the
-#     #731 shape and names nothing), one unconsumed series per tenant per key.
-#
-# Both directions are measured in
-# `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`.
+# ⚠️ #4173 changed the mechanism this face was built on. Before it, a
+# `_critical` key under `defaults:` was never the critical tier
+# (resolveCriticalRows iterated tenant overrides only) and resolveBaseRows
+# served it as an unconsumed severity="warning" series. Now it IS the critical
+# tier — every tenant's critical default, served while its base has a value
+# (measured in
+# `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`).
+# The face stays as a PRODUCER POLICY: a shipped generator must not arm every
+# tenant's *Critical alert on the customer's behalf. Whether producers may ship
+# one is #3924's decision; until then the error text says why, truthfully.
 #
 # The dimensional shape is checked for SHAPE only (#3478): a FLAT
 # `metric{label="v"}` key under `defaults:` is served since #2031 — the
@@ -2949,9 +2948,8 @@ def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) ->
                 f"CRITICAL-IN-DEFAULTS: {face} puts {k!r} at the top level of "
                 "`defaults:` but gives it a MAPPING value or a list. `Defaults` is "
                 "`map[string]float64`, so this does not decode: the whole file "
-                "is rejected and NO series is emitted — not the critical one, "
-                "and not the warning-tier fallback the flat case would have "
-                "produced. Two independent repairs are needed: give this key a "
+                "is rejected and NO series is emitted — not even the critical "
+                "default the flat case would have served. Two independent repairs are needed: give this key a "
                 f"scalar value, and move the critical tier to a `<tenant>.yaml` "
                 f"override keyed {leaf!r} with "
                 f"{leaf[: -len(_CRITICAL_SUFFIX)]!r} present in the flat "
@@ -2973,21 +2971,15 @@ def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) ->
             # that split would just be a new echo chamber — so this does not
             # re-derive the labels either.
             errors.append(
-                f"CRITICAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:`, "
-                "which is not the critical tier and never becomes one: "
-                "resolveCriticalRows iterates TENANT OVERRIDES, so this key is "
-                "emitted by resolveBaseRows instead — as a "
-                'severity="warning" `user_threshold` series whose labels come '
-                "from parseMetricKey splitting on the FIRST underscore, so the "
-                "`_critical` text lands inside the component/metric labels "
-                "instead of becoming a severity (`cpu_critical` → "
-                '{component="cpu",metric="critical"}; a key with no underscore → '
-                'component="default"). See app/rulepack_contract_test.go for that '
-                f"contract. No recording rule joins it, tenant:alert_threshold:{k} "
-                "stays empty, and nothing says so. The *Critical alert cannot "
-                "fire. Move it to the tenant side (a `<tenant>.yaml` override), "
-                f"keeping {base!r} under `defaults:` so the critical tier is "
-                "admitted. (#1218 / TRK-344)"
+                f"CRITICAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:`. "
+                "Since #4173 that is every tenant's critical default — served as "
+                f"{base!r}'s severity=critical row for every tenant that writes "
+                f"no {k!r} of its own, while {base!r} has a value — so it arms the "
+                "*Critical alert for the whole platform at once. That is the "
+                "customer platform's choice, not one a shipped producer may make "
+                "for it: shipped producers keep the critical tier on the tenant "
+                "side. Move it to a `<tenant>.yaml` override, keeping "
+                f"{base!r} under `defaults:`. (#1218 / TRK-344)"
             )
             continue
         # Nested. ⛔ Do NOT describe the nesting's own consequence as if this key
@@ -3272,8 +3264,9 @@ def _report_defaults_writer_census(errors: list[str],
             f"UNCOVERED-DEFAULTS-WRITER: {module} writes a `defaults:` mapping "
             f"({', '.join(sorted(census[module]))}) and is neither a face of "
             "this gate nor exempt. A producer this gate cannot see may ship a "
-            "`<base>_critical` key under `defaults:`, where the resolver never "
-            "looks — #1218's silent failure, one producer over. "
+            "`<base>_critical` key under `defaults:`, arming every tenant's "
+            "critical alert on the customer's behalf (#4173) — the producer "
+            "policy this gate enforces, one producer over. "
             "Either add it as a generator face (feed it a probe, as "
             "`migration/onboard` does), or make the shape impossible at its "
             "input boundary and exempt it here with that mechanism named. "

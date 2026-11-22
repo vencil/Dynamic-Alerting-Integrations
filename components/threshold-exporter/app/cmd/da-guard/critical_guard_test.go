@@ -1,19 +1,15 @@
 package main
 
-// #2544 (owner decision: option b): da-guard's redundant-override advice on
-// `<metric>_critical` keys. The metric's severity=critical row comes only from
-// the tenant's override map (resolveCriticalRows); a subtree
-// `_defaults.yaml`, a platform `tenants:` entry and a profile fill that map,
-// the root `_defaults.yaml` does not — its `_critical` key is served as a
-// threshold of its own (metric `<metric>_critical`, severity=warning). So a
-// tenant key equal to a root-only `_critical` default is not redundant:
-// deleting it removes the critical row. The root key is reported by a warn
-// finding of its own (root_defaults_critical_key) instead.
+// da-guard's redundant-override advice on `<metric>_critical` keys. Since
+// #4173 a root `_defaults.yaml` `_critical` is every tenant's critical default
+// (resolveCriticalRows), so it is a fallback like any root threshold: a
+// tenant key equal to it is redundant, and deleting it keeps the critical
+// row. (Under #2544 the root key was a warning series of its own, and such a
+// tenant key was not redundant.) root_defaults_critical_key names a root
+// `_critical` whose base has no value, which serves nothing.
 //
 // The oracle is /metrics at the label level (servedSeries, the exporter's own
-// collector), never `served-values`: with the key at the root AND in the
-// tenant, served-values exits 2 (TestServedValues_RootAndTenantCriticalExits2),
-// so a test that read it would have no oracle for exactly the shape at issue.
+// collector).
 
 import (
 	"os"

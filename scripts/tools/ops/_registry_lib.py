@@ -2599,9 +2599,9 @@ _TENANT_STUB_CRITICAL_NOTE = {
     ),
     ("zh", True): (
         "# ⚠️ 第三類 <base>_critical：本次一起產出的 _defaults.yaml 把其中 {n} 個放進了",
-        "# defaults:，那是放錯區塊、不是可繼承的平台值 —— critical 層只認租戶覆寫，那 {n} 個",
-        "# 只會各發一條 warning 級的 <base>_critical series（無人消費），critical 列並不存在。",
-        "# 要 critical 列請在本檔填 <base>_critical，只要 <base> 在 defaults: 有值就會生效。",
+        "# defaults:，那是平台給每個租戶的 critical 預設值 —— 只要 <base> 在 defaults: 有值，",
+        "# 每個租戶都會送出 critical 列。要不同的值，在本檔填 <base>_critical 蓋過它；",
+        "# 不要 critical 列，在本檔寫 <base>_critical: disable。",
     ),
     ("en", False): (
         "# A third group is `<base>_critical`. The _defaults.yaml generated next to",
@@ -2612,12 +2612,11 @@ _TENANT_STUB_CRITICAL_NOTE = {
     ),
     ("en", True): (
         "# ⚠️ A third group is `<base>_critical`. The _defaults.yaml generated next",
-        "# to this file puts {n} of them under `defaults:` — the wrong section, not a",
-        "# platform value you can inherit: the critical tier reads tenant overrides",
-        "# only, so each of those {n} emits a warning-severity `<base>_critical`",
-        "# series that nothing consumes, and no critical row exists. Set",
-        "# `<base>_critical` HERE to get one; it takes effect while `<base>` has a",
-        "# value under `defaults:`.",
+        "# to this file puts {n} of them under `defaults:` — the platform's critical",
+        "# default for every tenant: each tenant gets a critical row while `<base>`",
+        "# has a value under `defaults:`. Set `<base>_critical` HERE to override",
+        "# it with another value, or write `<base>_critical: disable` here to have",
+        "# no critical row.",
     ),
 }
 
