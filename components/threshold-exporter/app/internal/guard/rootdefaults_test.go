@@ -2,11 +2,15 @@ package guard
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
@@ -346,4 +350,176 @@ func TestCheckRootDimensionsCriticalBase(t *testing.T) {
 	if err != nil || rep.Summary.Errors < 1 {
 		t.Fatalf("CheckDefaultsImpact: %+v, %v; want the error counted", rep, err)
 	}
+}
+
+// #4236: the disable advice of root_default_refused names exactly the keys
+// the root reads `disable` for (config.RootDisableText): every key of the
+// built-in layer — its table of values and its off table (#4163) — is told
+// to write `<key>: disable` for an alias, a retired spelling is pointed at
+// its current one, and a key the platform ships no value for is not sent to
+// `optional_overrides:`.
+func TestCheckRootDefaultsRefused_DisableAdviceFollowsTheReader(t *testing.T) {
+	t.Parallel()
+	msg := func(t *testing.T, y string) string {
+		t.Helper()
+		got := checkRootDefaultsRefused(CheckInput{DefaultsFiles: []config.DefaultsFile{
+			{Name: "_defaults.yaml", Data: []byte(y)}}})
+		if len(got) != 1 {
+			t.Fatalf("%q: %d findings, want 1: %+v", y, len(got), got)
+		}
+		return got[0].Message
+	}
+	keys := config.BuiltinOffKeys()
+	for k := range config.BuiltinDefaults() {
+		keys = append(keys, k)
+	}
+	for _, k := range keys {
+		if !config.RootDisableText(k, "disable") {
+			t.Fatalf("%s: the reader reads no root `disable` for a key of the built-in layer", k)
+		}
+		if n := len(checkRootDefaultsRefused(CheckInput{DefaultsFiles: []config.DefaultsFile{
+			{Name: "_defaults.yaml", Data: []byte("defaults:\n  " + k + ": disable\n")}}})); n != 0 {
+			t.Errorf("%s: disable got %d findings, want none (the reader takes it)", k, n)
+		}
+		m := msg(t, "defaults:\n  "+k+": \"off\"\n")
+		if !strings.Contains(m, "write `"+k+": disable`") || strings.Contains(m, "is not one") {
+			t.Errorf("%s: alias advice %q, want it to name `%s: disable`", k, m, k)
+		}
+		if config.BuiltinOff(k) && (strings.Contains(m, "optional_overrides") ||
+			!strings.Contains(m, "The platform ships no value for `"+k+"`")) {
+			t.Errorf("%s: off-key message %q", k, m)
+		}
+	}
+
+	// A retired spelling: the root reads `disable` under the current one only.
+	const retired = "mysql_cpu"
+	canon, _ := config.CanonicalKeyFor(retired)
+	if canon == retired || !config.BuiltinOff(canon) || config.RootDisableText(retired, "disable") {
+		t.Fatalf("fixture: %s → %s is no retired spelling of an off key", retired, canon)
+	}
+	if m := msg(t, "defaults:\n  "+retired+": disable\n"); !strings.Contains(m, "retired spelling of `"+canon+"`") ||
+		!strings.Contains(m, "write `"+canon+": disable`") || strings.Contains(m, "optional_overrides") {
+		t.Errorf("retired disable: %q", m)
+	}
+	if m := msg(t, "defaults:\n  "+retired+": abc\n"); !strings.Contains(m, "The platform ships no value for `"+canon+"`") {
+		t.Errorf("retired refused: %q", m)
+	}
+
+	// Outside the registry the root gives the key nothing to switch off.
+	if m := msg(t, "defaults:\n  nosuch_key: disable\n"); !strings.Contains(m, "is not one") ||
+		!strings.Contains(m, "optional_overrides:") {
+		t.Errorf("unregistered disable: %q", m)
+	}
+}
+
+// servedRows is every row the exporter serves for a tree of one root
+// `_defaults.yaml` (root) and one tenant that writes nothing, sorted.
+func servedRows(t *testing.T, root string) []string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range map[string]string{"_defaults.yaml": root, "t.yaml": "tenants:\n  tx: {}\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg, _, err := config.LoadDir(dir, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	var out []string
+	for _, r := range cfg.ResolveAt(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		out = append(out, fmt.Sprintf("%s/%s_%s %s %g", r.Tenant, r.Component, r.Metric, r.Severity, r.Value))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// #4236: what root_default_refused says the line does is what the exporter
+// does. Each case is a root `defaults:` of a refused line (first) and the
+// lines beside it; the tree is loaded with and without the refused line. A
+// message that says the line is as if not there, or ignored, must serve the
+// same rows both ways; one that says the line stands in place of another
+// spelling must not.
+func TestCheckRootDefaultsRefused_WhatItSaysTheLineDoesIsServed(t *testing.T) {
+	t.Parallel()
+	const retired = "mysql_cpu"
+	canon, _ := config.CanonicalKeyFor(retired)
+	if canon == retired {
+		t.Fatalf("fixture: %s is no retired spelling", retired)
+	}
+	type tc struct{ line, rest string }
+	var cases []tc
+	for k := range config.BuiltinDefaults() {
+		cases = append(cases, tc{k + `: "off"`, ""})
+	}
+	for _, k := range config.BuiltinOffKeys() {
+		cases = append(cases, tc{k + `: "off"`, ""})
+	}
+	cases = append(cases,
+		tc{retired + ": abc", ""},
+		tc{retired + ": disable", ""},
+		tc{retired + ": abc", canon + ": 7"},
+		tc{retired + ": disable", canon + ": 7"},
+		tc{canon + `: "off"`, retired + ": 7"},
+		tc{canon + ": abc", retired + ": 7"},
+		tc{retired + ": abc", canon + ": null"},
+		tc{canon + `: "off"`, retired + ": null"},
+		tc{canon + ": abc", retired + `: "off"`},
+		tc{retired + `: "off"`, canon + ": abc"},
+		tc{retired + ": abc", canon + `: "off"`},
+		tc{canon + `: "off"`, retired + ": abc"},
+	)
+	for _, c := range cases {
+		without := "defaults:\n"
+		if c.rest != "" {
+			without += "  " + c.rest + "\n"
+		}
+		with := without + "  " + c.line + "\n"
+		got := checkRootDefaultsRefused(CheckInput{DefaultsFiles: []config.DefaultsFile{
+			{Name: "_defaults.yaml", Data: []byte(with)}}})
+		key := strings.SplitN(c.line, ":", 2)[0]
+		var m string
+		for _, f := range got {
+			if f.Field == "_defaults.yaml:defaults."+key {
+				m = f.Message
+			}
+		}
+		same := strings.Join(servedRows(t, with), "\n") == strings.Join(servedRows(t, without), "\n")
+		absent := strings.Contains(m, "as if the line were not there") || strings.Contains(m, "ignores this line")
+		inPlace := strings.Contains(m, "reads this line in its place")
+		// Both spellings refused: the message claims no effect of the line.
+		both := strings.Contains(m, "and refuses it too")
+		switch {
+		case m == "":
+			t.Errorf("%q: no finding for `%s`", with, key)
+		case both:
+			if absent || inPlace {
+				t.Errorf("%q: a message on two refused spellings claims an effect: %q", with, m)
+			}
+		case absent == inPlace:
+			t.Errorf("%q: the message says neither or both of what the line does: %q", with, m)
+		case absent && !same:
+			t.Errorf("%q: the message says the line does nothing, the exporter serves otherwise: %q", with, m)
+		case inPlace && same:
+			t.Errorf("%q: the message says the line takes another's place, the exporter serves the same: %q", with, m)
+		}
+	}
+}
+
+// #4236: two refused spellings of one threshold still get the disable
+// advice when the line is an alias of it.
+func TestCheckRootDefaultsRefused_TwoRefusedSpellingsKeepTheDisableAdvice(t *testing.T) {
+	t.Parallel()
+	const retired = "mysql_cpu"
+	canon, _ := config.CanonicalKeyFor(retired)
+	got := checkRootDefaultsRefused(CheckInput{DefaultsFiles: []config.DefaultsFile{{Name: "_defaults.yaml",
+		Data: []byte("defaults:\n  " + canon + ": \"off\"\n  " + retired + ": disable\n")}}})
+	for _, f := range got {
+		if f.Field == "_defaults.yaml:defaults."+canon &&
+			strings.Contains(f.Message, "and refuses it too") &&
+			strings.Contains(f.Message, "write `"+canon+": disable`") {
+			return
+		}
+	}
+	t.Errorf("findings %+v: want the two-refused message on %s with its disable advice", got, canon)
 }

@@ -406,3 +406,26 @@ func readRootDefault(key string, vn *yaml.Node) (v float64, refused *string, err
 	text := vn.Value
 	return refusedDefault(refusedReason(text)), &text, nil
 }
+
+// RootSpellingKept is the spelling of key's threshold that the root decode
+// keeps from data (one file's bytes), the one every reader of the root
+// `defaults:` serves (#4236): ParseConfigFile's Defaults — where
+// dropNullShadowingSpellings has dropped a spelling that writes nothing
+// beside one that does — then the canonical-wins dedup of
+// canonicalizeDefaults (SpellingsOf lists the canonical spelling first). ""
+// when it keeps neither, or data does not parse. For da-guard's
+// root_default_refused, which must say which of two spellings written in one
+// file is served, and must not keep its own copy of that rule.
+func RootSpellingKept(data []byte, key string) string {
+	cfg, err := ParseConfigFile(data)
+	if err != nil {
+		return ""
+	}
+	_, spellings := SpellingsOf(key)
+	for _, s := range spellings {
+		if _, ok := cfg.Defaults[s]; ok {
+			return s
+		}
+	}
+	return ""
+}

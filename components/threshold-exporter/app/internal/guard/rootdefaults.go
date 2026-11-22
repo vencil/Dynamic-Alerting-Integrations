@@ -312,7 +312,13 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 		if doc == nil || !wrappedInMapping(doc) {
 			continue
 		}
-		for _, r := range config.RootDefaultRefusals(f.Data) {
+		block := config.ExtractDefaultsBlock(doc)
+		refusals := config.RootDefaultRefusals(f.Data)
+		refusedKeys := make(map[string]bool, len(refusals))
+		for _, r := range refusals {
+			refusedKeys[r.Key] = true
+		}
+		for _, r := range refusals {
 			if config.BaseRowsSkipKey(r.Key) {
 				continue
 			}
@@ -320,19 +326,75 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 			if r.Reason == config.RefusedNonFinite {
 				why = "is not a finite number: an alert compared against NaN or an infinity never fires or always fires"
 			}
+			// The built-in layer is both of its tables (#4163): the root reads
+			// `disable` for a key of either (config.RootDisableText), so the
+			// advice below names the same set. A retired spelling is read as
+			// its current one (#4236): a refused value under it reads as one
+			// under the current spelling, but `disable` is read under the
+			// current spelling only.
+			canon, _ := config.CanonicalKeyFor(r.Key)
+			v, armed := config.BuiltinDefault(canon)
+			offKey := config.BuiltinOff(canon)
 			off := ""
 			if config.IsDisabled(strings.ToLower(strings.TrimSpace(r.Text))) {
 				// #3832 decision 3: the root reads one opt-out word only,
-				// `disable`, and only for a default-armed key.
-				if _, armed := config.BuiltinDefault(r.Key); armed {
+				// `disable`, and only for a key of the built-in layer.
+				switch {
+				case (armed || offKey) && canon != r.Key:
+					off = fmt.Sprintf(" `%s` is a retired spelling of `%s`, and the root reads `disable` under "+
+						"the current spelling only: to switch it off for every tenant, write `%s: disable`.",
+						r.Key, canon, canon)
+				case armed || offKey:
 					off = fmt.Sprintf(" The root reads no alias of `disable`: to switch `%s` off for every "+
 						"tenant, write `%s: disable`.", r.Key, r.Key)
-				} else {
-					off = fmt.Sprintf(" `disable` under the root `defaults:` switches off only a key the platform "+
-						"arms by default, and `%s` is not one: the root gives it no value to switch off.", r.Key)
+				default:
+					off = fmt.Sprintf(" `disable` under the root `defaults:` switches off only a key of the "+
+						"platform's threshold registry, and `%s` is not one: the root gives it no value to "+
+						"switch off.", r.Key)
 				}
 			}
-			if v, armed := config.BuiltinDefault(r.Key); armed {
+			// #4236: another spelling of the threshold written beside this
+			// line (not null). The root decode then keeps one of the two
+			// (config.RootSpellingKept: a spelling that writes nothing is
+			// dropped beside one that does, else the current spelling wins),
+			// so the line is either ignored or stands in the other's place —
+			// neither of the messages below.
+			other := ""
+			if _, spellings := config.SpellingsOf(canon); len(spellings) > 1 {
+				for _, s := range spellings {
+					if s != r.Key && block[s] != nil {
+						other = s
+					}
+				}
+			}
+			if other != "" {
+				var msg string
+				if kept := config.RootSpellingKept(f.Data, r.Key); kept != r.Key {
+					msg = fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The root also writes "+
+						"`%s`, another spelling of the same threshold (`%s` is the current one): the exporter reads "+
+						"`%s` and ignores this line. Delete it.", f.Name, r.Key, r.Text, why, other, canon, other)
+				} else if refusedKeys[other] {
+					msg = fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The root also writes "+
+						"`%s`, another spelling of the same threshold (`%s` is the current one), and refuses it "+
+						"too. Write a finite number under one spelling and delete the other.%s",
+						f.Name, r.Key, r.Text, why, other, canon, off)
+				} else {
+					msg = fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The root also writes "+
+						"`%s`, another spelling of the same threshold (`%s` is the current one): the exporter reads "+
+						"this line in its place and ignores `%s`. Write a finite number here (a root default takes "+
+						"no `:severity`) and delete `%s`, or delete this line to serve the value of `%s`.%s",
+						f.Name, r.Key, r.Text, why, other, canon, other, other, other, off)
+				}
+				out = append(out, Finding{
+					Severity: SeverityError,
+					Kind:     findingkind.FindingRootDefaultRefused,
+					Field:    f.Name + ":defaults." + r.Key,
+					Message:  msg,
+				})
+				continue
+			}
+			switch {
+			case armed:
 				// #3832: a default-armed key falls to the built-in value.
 				out = append(out, Finding{
 					Severity: SeverityError,
@@ -341,19 +403,33 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 					Message: fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The exporter serves "+
 						"the platform's built-in value %s for `%s` instead, as if the line were not there. Write a "+
 						"finite number to serve your own value (a root default takes no `:severity`), or delete the "+
-						"line to keep the platform's.%s", f.Name, r.Key, r.Text, why, formatBuiltin(v), r.Key, off),
+						"line to keep the platform's.%s", f.Name, r.Key, r.Text, why, formatBuiltin(v), canon, off),
 				})
-				continue
+			case offKey:
+				// #4236: a key the platform ships no value for (#4163) reads
+				// as off, as if the line were not there; it needs no listing
+				// to be settable.
+				out = append(out, Finding{
+					Severity: SeverityError,
+					Kind:     findingkind.FindingRootDefaultRefused,
+					Field:    f.Name + ":defaults." + r.Key,
+					Message: fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The platform ships "+
+						"no value for `%s`, so the exporter serves no default row for it, as if the line were not "+
+						"there; a tenant's own value is served as before. Write a finite number to serve a default "+
+						"for every tenant (a root default takes no `:severity`), or delete the line.%s",
+						f.Name, r.Key, r.Text, why, canon, off),
+				})
+			default:
+				out = append(out, Finding{
+					Severity: SeverityError,
+					Kind:     findingkind.FindingRootDefaultRefused,
+					Field:    f.Name + ":defaults." + r.Key,
+					Message: fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The exporter serves no "+
+						"default row for `%s`; only a tenant's own value is served, as for an `optional_overrides:` "+
+						"key. Write a finite number (a root default takes no `:severity`), or list `%s` under "+
+						"`optional_overrides:` instead.%s", f.Name, r.Key, r.Text, why, r.Key, r.Key, off),
+				})
 			}
-			out = append(out, Finding{
-				Severity: SeverityError,
-				Kind:     findingkind.FindingRootDefaultRefused,
-				Field:    f.Name + ":defaults." + r.Key,
-				Message: fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The exporter serves no "+
-					"default row for `%s`; only a tenant's own value is served, as for an `optional_overrides:` "+
-					"key. Write a finite number (a root default takes no `:severity`), or list `%s` under "+
-					"`optional_overrides:` instead.%s", f.Name, r.Key, r.Text, why, r.Key, r.Key, off),
-			})
 		}
 	}
 	return out
