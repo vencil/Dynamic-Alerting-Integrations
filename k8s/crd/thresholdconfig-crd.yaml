@@ -76,8 +76,10 @@ spec:
                   description: >-
                     Optional defaults for this resource's tenants alone,
                     rendered as <name>/_defaults.yaml (the exporter's subtree
-                    defaults layer).  Only keys the root _defaults.yaml or
-                    optional_overrides declares are delivered.
+                    defaults layer).  Rule-pack keys are built into the
+                    exporter; any other key is delivered only if the root
+                    _defaults.yaml gives it a value or lists it under
+                    optional_overrides.
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
                 stateFilters:

@@ -532,9 +532,11 @@ _MUTE_GROUP = ("  - name: f2-shape\n    rules:\n      - alert: F2Shape\n        
 
 
 @pytest.mark.parametrize("lhs", [
-    'sum without(tenant) (up{job="clickhouse"} == 0)',
-    'sum(up{job="clickhouse"} == 0) > 0',
-    'max by(job) (up{job="clickhouse"}) == 0',
+    # #4137: a tenant exporter's family — `up` of a job other than the
+    # tenant exporters' carries no tenant, which would drop it on its own
+    'sum without(tenant) (clickhouse_up == 0)',
+    'sum(clickhouse_up == 0) > 0',
+    'max by(job) (clickhouse_up) == 0',
 ])
 def test_a_mute_clause_whose_left_side_dropped_tenant_fails_the_check(da_read_env, tmp_path, capsys, lhs):
     rp = _pack_with(tmp_path, _MUTE_GROUP.format(lhs=lhs))
@@ -544,8 +546,16 @@ def test_a_mute_clause_whose_left_side_dropped_tenant_fails_the_check(da_read_en
 
 def test_a_mute_clause_whose_left_side_keeps_tenant_passes(da_read_env, tmp_path):
     """Negative control: the aggregation keeps `tenant`."""
-    rp = _pack_with(tmp_path, _MUTE_GROUP.format(lhs='max by(tenant) (up{job="clickhouse"}) == 0'))
+    rp = _pack_with(tmp_path, _MUTE_GROUP.format(lhs='max by(tenant) (clickhouse_up) == 0'))
     assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 0
+
+
+def test_a_mute_clause_over_a_metric_scraped_without_tenant_fails_the_check(da_read_env, tmp_path, capsys):
+    """#4137: `up` of a platform job carries no tenant, so the clause never
+    matches it — the reader is told the scrape, not only the parse tree."""
+    rp = _pack_with(tmp_path, _MUTE_GROUP.format(lhs='up{job="threshold-exporter"} == 0'))
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
+    assert "drops `tenant`" in capsys.readouterr().err
 
 
 def test_a_left_side_the_parse_tree_cannot_prove_is_refused():

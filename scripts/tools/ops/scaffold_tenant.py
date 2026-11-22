@@ -48,21 +48,9 @@ import _lib_write_check  # noqa: E402  (the draft conf.d's name and layout check
 # writer names that flag; an unusable path is rc=2 + one line, not a
 # traceback at rc=1 (which reads as "invalid input").
 _OUTPUT_FLAG = "-o/--output-dir"
-# The predicate that decides which optional_overrides keys the PLATFORM ships
-# on the runtime `optional_overrides:` list (#1310). Imported rather than
-# re-spelled: the interactive prompt's behaviour below has to track shipped
-# list membership exactly, and a third hand-copy of `not endswith("_critical")`
-# is how the two contracts drifted apart in the first place (#1189).
 from _registry_lib import (  # noqa: E402
     counterexample_sentence,
-    defaults_counterexample_head,
-    is_shipped_optional_key,
-    render_tenant_critical_note_lines,
-    render_tenant_declared_note_lines,
-    root_written_defaults,
     shipped_dimensions_for_packs,
-    shipped_optional_keys_for_packs,
-    tenant_declared_foot,
 )
 from _registry_lib import counterexample_for_key as _registry_counterexample_for_key  # noqa: E402
 
@@ -207,6 +195,7 @@ def _h(key: str) -> str:
 # Rule Pack catalog — metric keys, defaults, descriptions
 # ============================================================
 from _rule_packs_generated import THRESHOLD_PACKS as _THRESHOLD_PACKS  # noqa: E402
+from _rule_packs_generated import BUILTIN_DEFAULT_KEYS as _BUILTIN_DEFAULT_KEYS  # noqa: E402
 
 # Scaffold-only per-pack data: what is not threshold identity (state-filter
 # definitions, a dimensional example for the generated tenant YAML). The
@@ -371,45 +360,39 @@ def counterexample_for_key(key: str, rule_packs: dict | None = None) -> dict | N
 
 
 def prompt_value(metric: str, info: dict[str, object], current: str | None = None,
-                 *, no_platform_default: bool = False) -> str | None:
+                 *, platform_value: bool = False) -> str | None:
     """Prompt for a threshold value. Returns string or None to skip.
 
-    ``no_platform_default`` marks the declared-without-value tier (#1310): the
-    platform ships the KEY NAME on `optional_overrides:` and deliberately
-    asserts no value for it, so pressing Enter must not adopt the registry
-    number. Before that list shipped, such a write was rejected outright
-    (`ValidateTenantKeys` saw an empty declared set), which means shipping the
-    list WITHOUT this change would have turned a harmless keystroke into a real
-    armed threshold. The number is still SHOWN, because it is the only starting
-    reference an operator has — but as a reference, not a default. Empty input
-    skips the key entirely, which is the correct end state for a tenant that has
-    not calibrated it: no value, no row, no alert.
+    #3924: pressing Enter writes nothing — the registry number is never copied
+    into the tenant's file by default. ``platform_value`` marks a key the
+    readers build in with the platform's number (``arming: default``):
+    omitting it serves that number and follows the platform's later
+    calibration, so Enter keeps it. Every other key (``arming: operator``, and
+    every ``<base>_critical``) has no platform value: the registry number is
+    SHOWN as a reference — the only starting point an operator has — and Enter
+    skips the key, which serves nothing for it.
 
-    A tenant's OWN prior value (``current``) is still a legitimate default even
-    here — that one is not a platform assertion.
+    A tenant's OWN prior value (``current``) is still the Enter-default: that
+    one is not a platform assertion.
 
-    ⛔ Any measured counter-example is printed FIRST, for BOTH branches — the
-    declared-tier keys are not the only ones that have them. `#1176` measured
-    counter-examples for two `defaults`-tier keys too, and those still take the
-    ``else`` branch, where the registry number IS the Enter-default: pressing
-    Enter arms a value the reference library has already contradicted. The text
-    is derived from ``value_counterexample`` rather than restated here, so this
-    docstring cannot drift away from the registry (it used to name two of them
-    in prose — that copy went stale the moment a third was recorded).
+    ⛔ Any measured counter-example is printed FIRST, for both kinds of key.
+    The text is derived from ``value_counterexample`` rather than restated
+    here, so this docstring cannot drift away from the registry.
     """
     for line in counterexample_prompt_lines(info):
         print(line)
-    if no_platform_default and current is None:
-        prompt = (f"  {metric} [{info['desc']}] (無平台預設，參考值 "
+    if current:
+        prompt = f"  {metric} [{info['desc']}] ({current} {info['unit']}): "
+    elif platform_value:
+        prompt = (f"  {metric} [{info['desc']}] (平台值 {info['value']} "
+                  f"{info['unit']}；留空沿用平台值): ")
+    else:
+        prompt = (f"  {metric} [{info['desc']}] (無平台值，參考值 "
                   f"{info['value']} {info['unit']}；須依自身 baseline 校準，"
                   "留空跳過): ")
-        default_val = None
-    else:
-        default_val = current if current else info["value"]
-        prompt = f"  {metric} [{info['desc']}] ({default_val} {info['unit']}): "
     raw = _ask(prompt).strip()
     if not raw:
-        return None if default_val is None else str(default_val)
+        return current or None
     if raw.lower() in ("skip", "disable"):
         return raw if raw.lower() == "disable" else None
     return raw
@@ -418,70 +401,30 @@ def prompt_value(metric: str, info: dict[str, object], current: str | None = Non
 def generate_defaults(selected_dbs: list[str]) -> dict:
     """Generate _defaults.yaml content.
 
-    Three sections, and the third one (#1310) is the reason this function is on
-    the tenant-api write path's critical chain:
+    #3924: no threshold key of the registry is written, neither as a value
+    under ``defaults:`` nor as a name under ``optional_overrides:``. Every
+    registry key is in the readers' built-in layer (#3832, #4163): one the
+    platform ships armed is valued with the platform's number, and every other
+    one is valued off, so a tenant, subtree or profile that gives it a value is
+    served without the root declaring it. A copy here would pin the day's
+    number (#3832 decision 7) or arm, for every tenant, a value only the
+    deployment can calibrate. Which keys of the selected packs have no platform
+    value, and how many tenants set them: ``da-tools validate-config``
+    (platform_defaults).
 
-      * ``defaults``       — key → platform value (the platform ASSERTS these).
+    Sections:
+
+      * ``dimensions``     — the labels a dimensional key may carry and still
+        be served (#3475); this file is the only declaration a GitOps
+        deployment has.
       * ``state_filters``  — kubernetes state monitoring.
-      * ``optional_overrides`` — key NAMES only, no values. The platform merely
-        RECOGNISES these; the tenant supplies the number or nothing happens.
-
-    ⛔ Why the third one has to be HERE and not only in the Helm chart: the two
-    surfaces feed two DIFFERENT deployments. threshold-exporter reads the
-    chart-rendered ConfigMap, but tenant-api's ``--config-dir`` is the customer's
-    GitOps repo clone (``helm/tenant-api/templates/deployment.yaml`` init
-    container), and ``config.mergeTenantConfig`` reads
-    ``<config-dir>/_defaults.yaml`` — THIS file — for both ``Defaults`` and
-    ``OptionalOverrides``. Ship the list only in the chart and the only supported
-    writer still answers HTTP 400 for every declared key, which is the exact
-    failure ``merge_tenant.go`` predicted in prose ("unusable through the only
-    supported writer") before it happened.
     """
-    defaults = {}
-    state_filters = {}
-
-    # Always include kubernetes defaults
     k8s = RULE_PACKS["kubernetes"]
-    for key, info in k8s["defaults"].items():
-        defaults[key] = info["value"]
     state_filters = {
         k: {kk: vv for kk, vv in v.items() if kk != "desc"}
         for k, v in k8s["state_filters"].items()
     }
-
-    # Add DB-specific defaults
-    for db in selected_dbs:
-        pack = RULE_PACKS.get(db)
-        if pack and "defaults" in pack:
-            for key, info in pack["defaults"].items():
-                defaults[key] = info["value"]
-
-    # Declared-without-value key names for the selected packs (#1310).
-    #
-    # ⛔ DERIVED, never listed. The nine names are not spelled out anywhere in
-    # this file: `shipped_optional_keys_for_packs` applies the same
-    # `is_shipped_optional_key` predicate that builds the chart list, the pack
-    # headers and the interactive prompt's Enter-default split. A hand-copied
-    # roster here would be a fourth copy of the contract, which is the #1189
-    # disease this whole line of work exists to end.
-    #
-    # `defaults` is untouched by this — `check_threshold_reachability._supply()`
-    # reads `generated["defaults"]` (and the built-in keys) alone.
-    optional_overrides = shipped_optional_keys_for_packs(
-        ["kubernetes", *selected_dbs], RULE_PACKS)
-
-    # #3832 decision 7: no built-in key (`root_written_defaults`), and no
-    # `defaults:` at all when that leaves nothing (absent and empty read the same).
-    defaults = root_written_defaults(defaults)
-    out = {"defaults": defaults} if defaults else {}
-    if optional_overrides:
-        # Omitted entirely when empty: `optional_overrides: []` reads as an
-        # accident, and the Go loader treats absent and empty identically.
-        # Emitted between the two existing sections so the file reads in the
-        # same order as the chart values and the dev conf.d template.
-        out["optional_overrides"] = optional_overrides
-    # #3475: the labels a dimensional key may carry and still be served —
-    # this file is the only declaration a GitOps deployment has.
+    out: dict = {}
     dimensions = shipped_dimensions_for_packs(["kubernetes", *selected_dbs], RULE_PACKS)
     if dimensions:
         out["dimensions"] = dimensions
@@ -494,9 +437,8 @@ def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
 
     逐項詢問並收集：metric 閾值覆寫 → 維護模式 → 靜音模式 → 嚴重度去重 →
     告警路由。prompt 提示字串、預設值與詢問次序與抽出前逐字相同（互動 UX 為契約），
-    **唯一例外**是 optional_overrides 的平鍵：#1310 把那批 key 出貨到宣告清單後，
-    「按 Enter 採用平台建議值」第一次真的會寫成生效的閾值，故該批改為無預設、
-    留空即跳過（見 ``prompt_value`` 的 ``no_platform_default``）。
+    **例外**是閾值：#3924 起按 Enter 不寫任何值——平台給值的鍵沿用平台值，
+    其餘的鍵跳過（見 ``prompt_value``）。
     僅在 ``generate_tenant(interactive=True)`` 路徑被呼叫。
 
     Args:
@@ -514,37 +456,15 @@ def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
         if not pack:
             continue
 
-        # Add default metric overrides
-        for key, info in pack.get("defaults", {}).items():
-            val = prompt_value(key, info)
-            if val and val != "skip":
-                tenant_config[key] = val
-
-        # Add optional overrides
-        #
-        # ⛔ The two halves of this tier get OPPOSITE prompt behaviour (#1310).
-        # A `<base>_critical` resolves through resolveCriticalRows off a base
-        # that IS in `defaults:`, so the registry number is a real platform
-        # position and Enter may adopt it — unchanged. The FLAT keys are the
-        # ones the platform now ships on the `optional_overrides:` list while
-        # asserting no value: Enter must not fill one in (see prompt_value).
-        # The prompt itself stays — it is the only place a tenant is ever told
-        # these keys exist, and dropping it would trade a bad default for zero
-        # discoverability.
-        #
-        # A `<base>_critical` whose base is NOT in `defaults:` (its base is a
-        # declared-only flat key, e.g. mysql_threads_running since #3778) is not
-        # asked: resolveCriticalRows admits on `defaults[<base>]`, which the
-        # `_defaults.yaml` this tool writes does not hold, so the value would be
-        # a dangling `_critical` that ValidateTenantKeys refuses.
-        for key, info in pack.get("optional_overrides", {}).items():
-            if (key.endswith("_critical")
-                    and key[: -len("_critical")] not in pack.get("defaults", {})):
-                continue
-            val = prompt_value(key, info,
-                               no_platform_default=is_shipped_optional_key(key))
-            if val and val != "skip":
-                tenant_config[key] = val
+        # Every threshold key of the pack, each asked once (#3924: no key is
+        # declared in `_defaults.yaml` any more — every one is built in, so a
+        # `<base>_critical` always has its base and is asked too).
+        for tier in ("defaults", "optional_overrides"):
+            for key, info in pack.get(tier, {}).items():
+                val = prompt_value(key, info,
+                                   platform_value=key in _BUILTIN_DEFAULT_KEYS)
+                if val and val != "skip":
+                    tenant_config[key] = val
 
     # Always add maintenance state control (disabled by default)
     # v1.7.0: supports structured format with expires for auto-deactivation
@@ -858,110 +778,61 @@ _DEFAULTS_HEADER = (
     "# _defaults.yaml — Platform-managed global settings\n"
     "# Generated by scaffold_tenant.py\n"
     "#\n"
-    "# 平台出貨即啟用的閾值內建在讀取端（exporter、da-guard、tenant-api），\n"
-    "# 所以 defaults: 不列它們。這些鍵在 defaults: 的寫法：\n"
-    "#   不寫             → 用平台值，跟著平台之後的校準\n"
-    "#   <鍵>: <數字>     → 用自己的數字（釘住）\n"
+    "# 規則包的閾值都內建在讀取端（exporter、da-guard、tenant-api），所以\n"
+    "# defaults: 不列它們：平台出貨即啟用的鍵用平台值，其餘的鍵沒有平台值\n"
+    "# （依部署校準），由租戶、子目錄或 profile 給值才送。在 defaults: 的寫法：\n"
+    "#   不寫             → 平台值（跟著平台之後的校準），或不送\n"
+    "#   <鍵>: <數字>     → 每個租戶都用這個數字（釘住）\n"
     "#   <鍵>: \"disable\"  → 每個租戶都關閉；子目錄、profile 或租戶給了值就開回\n"
-    "# 有哪些鍵、現在的值：da-tools validate-config --config-dir <這個目錄>\n"
-    "# 的 platform_defaults 列。\n"
-    "#\n"
-    "# optional_overrides（若存在）：只有 key 名稱、沒有值。平台「認得」這些 key\n"
-    "# ——租戶可以在自己的檔案裡設定並生效——但平台不主張任何值，所以租戶不設就是\n"
-    "# 靜默。那是刻意的終態，不是漏掉的預設：這些閾值只有租戶自己的 baseline 校\n"
-    "# 準得出來。⛔ 不要為了「讓它不再靜默」把 key 搬進 defaults:——那是對\n"
-    "# 每一個租戶都武裝一個平台選的數字。"
+    "# 有哪些鍵、平台值與設了值的租戶數：da-tools validate-config\n"
+    "# --config-dir <這個目錄> 的 platform_defaults 列。"
 )
 
 
 def defaults_confd_file(defaults_data: dict) -> "_lib_confedit.NewFile":
-    """`_defaults.yaml` of a run: the header, the ⚠ counter-example above each
-    key that has one (`_registry_lib.defaults_counterexample_head`)."""
+    """`_defaults.yaml` of a run, with its header (no threshold key is in
+    it, #3924, so there is no counter-example to annotate)."""
     return _lib_confedit.NewFile("_defaults.yaml", defaults_data,
-                                 _lib_confedit.comment_block(_DEFAULTS_HEADER),
-                                 node_head=defaults_counterexample_head)
+                                 _lib_confedit.comment_block(_DEFAULTS_HEADER))
 
 
-def tenant_confd_file(tenant_name: str, tenant_data: dict, written_defaults: dict,
-                      declared_keys: list) -> "_lib_confedit.NewFile":
-    """`<tenant>.yaml`: the header true for every key population, the
-    saturation note above each saturation `<base>_critical`, the declared-key
-    block after the YAML.
-
-    *written_defaults* is the `_defaults.yaml` data written beside it (the
-    `<base>_critical` paragraph is read off its `defaults:`); *declared_keys*
-    is this tenant's declared list, every one of which that file declares."""
+def tenant_confd_file(tenant_name: str, tenant_data: dict) -> "_lib_confedit.NewFile":
+    """`<tenant>.yaml`: the header, and the saturation note above each
+    saturation `<base>_critical`."""
     try:
         _lib_confedit.comment_field("the tenant id", tenant_name, line=True)
     except ValueError as exc:
         _die(f"{exc} — nothing was written")
-    # ⛔ 標頭的三態句必須對「每一種 key」都為真（#1321）。原句「省略=Default」只對
-    # `_defaults.yaml` 的 `defaults:` 有值的 key 成立；對宣告層
-    # （`optional_overrides:` 只有 key 名、沒有值）它剛好講反：那一格沒有值可繼
-    # 承，省略就是沒有值、就是靜默。這是租戶唯一會打開的檔案，講錯的成本由租戶付。
-    #
-    # ⛔ 而「兩類」也還不是完整分類：`<base>_critical` 兩個區塊都不在，卻只要
-    # `<base>` 在 `defaults:` 有值就會經 `resolveCriticalRows` 產出一條真的
-    # critical row。判準與上一支 PR 把 rule-pack header 一分為三的那條相同——
-    # 「說了買不買得到保護」；租戶唯一會打開的檔不該還停在兩分。
-    #
-    # ⛔ 但「兩個區塊都不在」不能寫死：那是**本生成器**的事實，不是全 repo 的。
-    # `init_project.RULE_PACK_CATALOG` **曾經**把 16 個 `_critical` 直接放進
-    # `defaults:`，同一句話對它的產物是假的。#1218 已把那 16 個搬進 catalog 的
-    # `critical_overrides` 層，並讓 `check_threshold_reachability` 的 defaults-tier
-    # face 對任何 producer 再犯就擋 CI，所以今天兩個生成器同屬同一 regime——但
-    # 推導照舊保留：寫死任一 regime 的句子，會在下一次某個生成器移動時靜默變假，
-    # 那正是這條紀律存在的理由。第三類敘述由**這一次要寫出去的**
-    # `_defaults.yaml` 的 `defaults` 推導（見 `render_tenant_critical_note_lines`）。
-    #
-    # ⛔ 而「清單見檔尾」本身也不能寫死：檔尾那一段只在宣告清單非空時才附上
-    #（`tenant_declared_foot` 對空清單回 None）。實測 postgresql /
-    # mariadb / kafka / rabbitmq / jvm / nginx 的 optional tier 全是 `_critical`，
-    # `shipped_optional_keys_for_packs` 對它們一律回 []——只選這些 pack 的租戶，
-    # 拿到的標頭會指向一個它檔案裡不存在的段落。所以指路句同樣由**這一次要寫出
-    # 去的**清單推導（見 `render_tenant_declared_note_lines`），與檔尾同一份 keys。
+    # #3924: one rule for every threshold key — each is built in (#3832,
+    # #4163), with the platform's number or off — so the header needs no key
+    # list and no per-population sentence (it used to append the declared
+    # keys and a `<base>_critical` paragraph read off `_defaults.yaml`).
     head = _lib_confedit.comment_block("\n".join([
         f"# {tenant_name}.yaml — Tenant-managed thresholds",
         "# Generated by scaffold_tenant.py",
-        "# 三態（限有值的 key：_defaults.yaml 的 defaults: 有值，或平台內建）:"
-        " 數值=Custom, 省略=Default, \"disable\"=停用",
-        *render_tenant_declared_note_lines(declared_keys, lang="zh"),
-        *render_tenant_critical_note_lines(written_defaults.get("defaults") or {},
-                                           lang="zh"),
+        "# 三態: 數值=Custom, 省略=平台值（沒有平台值的鍵省略就是不送）, \"disable\"=停用",
+        "# 沒有平台值的鍵（依部署校準）與 <鍵>_critical 都在這裡給值；有哪些、平台值多少：",
+        "# da-tools validate-config 的 platform_defaults 列。",
     ]))
-    # 檔尾附上「你可以設、但平台不主張值」的宣告 key 區塊（#1321）。
-    #
-    # ⛔ 清單取自 `_defaults.yaml` 的資料——也就是 `generate_defaults` 剛用
-    # `shipped_optional_keys_for_packs` 推導、並且正要寫進同一個目錄的那一份
-    # （`--from-onboard` 時是這個租戶自己選的 pack 那一份，全部都在一起寫出的
-    # `_defaults.yaml` 裡）。刻意不在這裡重算一次：重算需要 pack 選集，而
-    # 「這裡拿到的 pack 選集」與「寫進 _defaults.yaml 的那份清單」可以不一致，
-    # 那個不一致正好會讓租戶對著一個 tenant-api 判 unknown 的 key 填值（400）。
-    #
     # 飽和類 _critical 鍵上方插入教育註解（純顯示；API 全檔重寫不保留）。
     return _lib_confedit.NewFile(f"{tenant_name}.yaml", tenant_data, head,
-                                 tenant_declared_foot(declared_keys, lang="zh"),
                                  node_head=saturation_critical_head)
 
 
 def _plan_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant_data: dict,
                   report: str, relabel_snippet: str | None = None,
                   mapping_hint: dict | None = None, *, with_defaults: bool = True,
-                  declared_keys: list | None = None) -> tuple[list, list]:
+                  ) -> tuple[list, list]:
     """`(conf.d files [_lib_confedit.NewFile], every other write [(path,
     text)])` of one tenant's outputs; nothing is written here (nor the
     output directory created: the conf.d batch does that). *with_defaults* False leaves `_defaults.yaml` to
-    the caller (`--from-onboard` writes one for all its tenants);
-    *declared_keys* is this tenant's declared list (default: the one in
-    *defaults_data*)."""
+    the caller (`--from-onboard` writes one for all its tenants)."""
     out = Path(output_dir)
-    if declared_keys is None:
-        declared_keys = defaults_data.get("optional_overrides") or []
 
     confd = []
     if with_defaults:
         confd.append(defaults_confd_file(defaults_data))
-    confd.append(tenant_confd_file(tenant_name, tenant_data, defaults_data, declared_keys))
+    confd.append(tenant_confd_file(tenant_name, tenant_data))
     # v2.1.0 ADR-006: the _instance_mapping hint (1:N topology)
     if mapping_hint:
         confd.append(_lib_confedit.NewFile("_instance_mapping.yaml", mapping_hint, "\n".join([
@@ -1342,11 +1213,8 @@ def run_from_onboard(args: argparse.Namespace) -> None:
                 tenant_data["tenants"][tenant_name].setdefault("_routing", {}).update(routing)
 
         report = generate_report(tenant_name, selected_dbs, output_dir)
-        # This tenant's declared list: its own packs', all in the file above.
-        own_declared = generate_defaults(selected_dbs).get("optional_overrides") or []
         confd, writes = _plan_outputs(output_dir, tenant_name, defaults_data,
-                                      tenant_data, report, with_defaults=False,
-                                      declared_keys=own_declared)
+                                      tenant_data, report, with_defaults=False)
         all_confd += confd
         all_writes += writes
 

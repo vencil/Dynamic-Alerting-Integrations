@@ -4,88 +4,12 @@
 # Loaded first (underscore prefix sorts before letters).
 # Only this file should contain 'defaults', 'state_filters', and '_routing_defaults'.
 #
-# defaults 不寫平台預設啟用的閾值（threshold-registry 的 arming: default）：
-# 讀取端內建它們，省略就拿平台值、跟著平台日後的校準走（#3832）。整棵樹不要
-# 某個鍵就在這裡寫 `<鍵>: disable`；要改數字就寫那個數字。現在的內建值與摘要
-# 看 `da-tools validate-config` 的 platform_defaults 列。
-# 下方生成段改值走 rule-packs/threshold-registry.yaml ＋ check_threshold_registry.py --regen。
-defaults:
-  # 以下是 examples/ 子目錄租戶所用 pack 的 defaults（#3014）。不放在
-  # examples/ 自己的 _defaults.yaml：只有子樹 carrier 宣告的 key 送不上 /metrics（#1976）。
-  # >>> GENERATED:threshold-registry:dev-example-defaults — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-  # ── redis：Redis (oliver006/redis_exporter) ──
-  # bytes (4GB) — Memory usage warning（critical 加嚴 opt-in：redis_memory_used_bytes_critical，registry
-  # 建議 5368709120）
-  redis_memory_used_bytes: 4294967296
-  # count — Connected clients warning（critical 加嚴 opt-in：redis_connected_clients_critical，registry
-  # 建議 300）
-  redis_connected_clients: 200
-  # keys/s — Key eviction rate; #1196 B identity fix: renamed from redis_evicted_keys_total (alert
-  # demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias
-  redis_evicted_keys_rate: 100
-  # seconds — Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis replication
-  # is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231 owner call);
-  # #1196 C identity fix, no alias（critical 加嚴 opt-in：redis_replication_lag_critical，registry 建議 50）
-  redis_replication_lag: 30
-  # ── mongodb：MongoDB (percona/mongodb_exporter) ──
-  # count — Current connections warning（critical 加嚴
-  # opt-in：mongodb_connections_current_critical，registry 建議 450）
-  mongodb_connections_current: 300
-  # seconds — Replication lag warning; #1196 C identity fix: renamed from mongodb_repl_lag_seconds
-  # (alert demands mongodb_replication_lag) — unwired dead key, no alias（critical 加嚴
-  # opt-in：mongodb_replication_lag_critical，registry 建議 30）
-  mongodb_replication_lag: 10
-  # ops/s — Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total
-  # (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias
-  mongodb_opcounters_rate: 10000
-  # ── elasticsearch：Elasticsearch (elasticsearch_exporter) ──
-  # count — Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py
-  # catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from
-  # scaffold（critical 加嚴 opt-in：es_pending_tasks_critical，registry 建議 150）
-  es_pending_tasks: 50
-  # ms — Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 =
-  # Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning) —
-  # the only community rule semantically identical to ours; full derivation + calibration caveat in
-  # the pack header (#1196 D)（critical 加嚴 opt-in：es_search_latency_ms_critical，registry 建議 2000）
-  es_search_latency_ms: 1000
-  # <<< GENERATED:threshold-registry:dev-example-defaults
-
-# optional_overrides 為生成段（#1310）——「平台認得這個 key，但不主張它的值」。
-# 與 defaults 的差別是整個對比的重點：進 defaults ＝ 對每個租戶都武裝一個平台選的
-# 數字；列在這裡 ＝ 租戶可以在自己的檔案裡設它並生效（resolveDeclaredRows 只在租戶
-# 給了值時發射），平台自己不發射，租戶不設就是靜默。
-# ⛔ 只含 optional_overrides tier 的平鍵，不含 `<base>_critical`——後者走
-# resolveCriticalRows，base 沒進 defaults 就整列丟棄，列進來只是裝飾（#1311）。
-# 改內容走 scaffold_tenant.RULE_PACKS ＋ check_threshold_registry.py --regen。
-optional_overrides:
-  # >>> GENERATED:threshold-registry:dev-optional — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-  # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
-  - mysql_threads_running
-    # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 30 =
-    # PMM/Nichter 'high' tier, a reference start to calibrate per host (a healthy count scales with
-    # CPU cores); renamed from mysql_cpu (2-release alias window, old spelling still resolves)
-  # ── oracle：Oracle Database (query-exporter) ──
-  - oracle_wait_time_rate   # s/s — Wait time rate (5m)
-  - oracle_hard_parse_time_percent
-    # % of DB time — Hard parse time warning: v$sys_time_model "hard parse elapsed time" as a share
-    # of "DB time" over 5m (the AWR Time Model "% of DB Time" row), per exporter, busiest per
-    # tenant; only while the database averages at least one active session (AAS >= 1)
-  - oracle_pga_usage_percent
-    # % of PGA_AGGREGATE_LIMIT — PGA usage warning: v$pgastat total PGA allocated as a share of
-    # PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant; a
-    # database with no limit set (0) has no share. Replaces the absolute-bytes key
-    # oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)
-  # ── db2：IBM DB2 (query-exporter) ──
-  - db2_deadlocks_per_5m
-    # count/5m — Deadlocks in the last 5 minutes, summed over the tenant's exporters; 5 is the
-    # threshold of the grafana ibm-db2 mixin's IBMDB2HighNumberOfDeadlocks (increase over 5m > 5,
-    # per database, for 5m). Replaces the per-second key db2_deadlock_rate (#1320: a unit change is
-    # a removal plus an addition, no alias)
-    # ⚠ 參考庫實測反例（#1176）：其中一個參考庫的正常水位約每 5 分鐘 6 次 deadlock（0.02/s），高於 5 —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-  # ── clickhouse：ClickHouse (built-in /metrics) ──
-  - clickhouse_max_part_count   # count — Max part count per partition
-  - clickhouse_replication_queue   # count — Replication queue size
-  # <<< GENERATED:threshold-registry:dev-optional
+# 規則包的閾值都內建在讀取端（threshold-registry；#3832、#4163），這裡一個都不列：
+# 平台出貨即啟用的鍵省略就拿平台值、跟著平台日後的校準走；其餘的鍵沒有平台值，
+# 由租戶、子目錄或 profile 給值才送（examples/ 的租戶各自在檔裡寫，#3924）。
+# 整棵樹不要某個鍵就在 defaults: 寫 `<鍵>: disable`；要每個租戶都用同一個數字
+# 就寫那個數字。有哪些鍵、平台值、設了值的租戶數看 `da-tools validate-config`
+# 的 platform_defaults 列。
 
 # dimensions 為生成段（#3475，ADR-038 §11）：每個 base 的維度鍵可帶哪些 label 才會送出。
 # 出貨清單 = threshold registry 宣告、且 rule pack 依該 label 聚合的組合；自訂規則若依某個

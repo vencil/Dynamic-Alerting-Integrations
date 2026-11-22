@@ -330,3 +330,135 @@ func TestResultIsTheWholeExpressionsVerdict(t *testing.T) {
 		}
 	}
 }
+
+// scrapeFactSeries: the scrape as label flow is told about it (#4137) — ksm
+// from a job that writes no tenant (kube-state-metrics: namespace only),
+// `up` per target (tenant on the tenant exporters' job "tex" only), m from
+// the tenant exporters.
+const scrapeFactSeries = `
+load 1m
+  ksm{namespace="t1", job="ksm"} 1 1 1 1 1 1 1 1 1 1
+  up{job="tex", tenant="t1", instance="i1"} 0 0 0 0 0 0 0 0 0 0
+  up{job="ksm", instance="i2"} 0 0 0 0 0 0 0 0 0 0
+  m{job="tex", tenant="t1"} 1 1 1 1 1 1 1 1 1 1
+`
+
+// TestScrapeFactsMatchTheEngine: what the request's "metrics" and "jobs" say
+// about the scrape decides a raw metric's selector (#4137: `up{job="x"}` and
+// kube-state-metrics' series were taken to carry tenant), pinned to what
+// Prometheus' engine returns on series built to that scrape.
+func TestScrapeFactsMatchTheEngine(t *testing.T) {
+	t.Parallel()
+	storage := promqltest.LoadedStorage(t, scrapeFactSeries)
+	engine := promqltest.NewTestEngine(t, false, 5*time.Minute, promqltest.DefaultMaxSamplesPerQuery)
+	at := time.Unix(0, 0).Add(9 * time.Minute)
+	for _, c := range []struct {
+		expr string
+		want flow
+		// empty: the engine returns nothing (the matcher selects no
+		// series of this scrape), so only the static answer is pinned.
+		empty bool
+	}{
+		{`ksm > 0`, flowDropped, false},
+		{`label_replace(ksm, "tenant", "$1", "namespace", "(.+)")`, flowKept, false},
+		// a record: no series in the storage, the static answer only
+		{`r:ksm > 0`, flowDropped, true},
+		{`up{job="tex"} == 0`, flowKept, false},
+		{`up{job="ksm"} == 0`, flowDropped, false},
+		{`up == 0`, flowDropped, false},
+		{`up{job=~"tex"} == 0`, flowUnknown, false},
+		{`up{job!="ksm"} == 0`, flowUnknown, false},
+		{`up{job="tex", job="tex"} == 0`, flowUnknown, false},
+		{`huh > 0`, flowUnknown, true},
+		{`m > 0`, flowKept, false},
+		// A matcher on the label that does not match "" selects only
+		// series that carry it, whatever the metric.
+		{`up{tenant=~".+"} == 0`, flowKept, false},
+		{`up{tenant!=""} == 0`, flowKept, false},
+		{`ksm{tenant="t1"}`, flowKept, true},
+		// One that matches "" selects series without it too.
+		{`up{tenant=~".*"} == 0`, flowDropped, false},
+		{`ksm{tenant=""}`, flowDropped, false},
+		// …and selects only series without it, whatever the metric (#4137
+		// review: it read kept).
+		{`m{tenant=""}`, flowDropped, true},
+		{`up{job="tex", tenant=""}`, flowDropped, true},
+		{`up{tenant=""} == 0`, flowDropped, false},
+		// A record's kept is where its value came from: a non-empty matcher
+		// on its reference proves presence, not that (#4137 review).
+		{`r:podcopy{tenant!=""}`, flowUnknown, false},
+		{`r:literal{tenant="db-a"}`, flowUnknown, false},
+	} {
+		f := newFlow(map[string]string{"r:ksm": `ksm`, "r:podcopy": `label_replace(m, "tenant", "$1", "pod", "(.*)")`})
+		f.records["r:literal"] = []recordDef{{expr: mustParse(t, `m`), labels: map[string]string{"tenant": "db-a"}}}
+		f.metrics = map[string]string{"ksm": metricWithout, "up": metricByJob, "huh": metricUnknown}
+		f.jobs = map[string]bool{"tex": true}
+		if got := f.carries(mustParse(t, c.expr)); got != c.want {
+			t.Errorf("%s: got %s, want %s", c.expr, got, c.want)
+			continue
+		}
+		if c.want == flowUnknown {
+			continue
+		}
+		q, err := engine.NewInstantQuery(context.Background(), storage, nil, c.expr, at)
+		if err != nil {
+			t.Fatalf("%s: %v", c.expr, err)
+		}
+		res := q.Exec(context.Background())
+		if res.Err != nil {
+			t.Fatalf("%s: %v", c.expr, res.Err)
+		}
+		vec, err := res.Vector()
+		if err != nil {
+			t.Fatalf("%s: %v", c.expr, err)
+		}
+		if (len(vec) == 0) != c.empty {
+			t.Fatalf("%s: the engine returned %d series, empty=%v", c.expr, len(vec), c.empty)
+		}
+		lacking := 0
+		for _, smp := range vec {
+			if smp.Metric.Get("tenant") == "" {
+				lacking++
+			}
+		}
+		if c.want == flowKept && lacking > 0 {
+			t.Errorf("%s: static kept, but %d series lack tenant: %v", c.expr, lacking, vec)
+		}
+		if c.want == flowDropped && lacking == 0 && !c.empty {
+			t.Errorf("%s: static dropped, but every series has tenant: %v", c.expr, vec)
+		}
+		q.Close()
+	}
+}
+
+// TestScrapeFactsAreTheRequestLabelsOnly: "metrics" speak of the request's
+// label; the reader judging an alias (label_replace from namespace) takes a
+// raw metric to carry the alias, as kube-state-metrics' series carry
+// namespace (#4137).
+func TestScrapeFactsAreTheRequestLabelsOnly(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	in := `{"expressions": ["ksm", "label_replace(ksm, \"tenant\", \"$1\", \"namespace\", \"(.+)\")", "up{job=\"tex\"}"],
+		"aliases": ["namespace"], "metrics": {"ksm": "without", "up": "by-job"}, "jobs": ["tex"]}`
+	if rc := run([]string{"promql-label-flow", "tenant", "-"}, strings.NewReader(in), &stdout, &stderr); rc != exitOK {
+		t.Fatalf("rc %d: %s", rc, stderr.String())
+	}
+	want := `{"documents":[[{"result":"dropped","set_matches":[]},{"result":"kept","set_matches":[]},{"result":"kept","set_matches":[]}]]}` + "\n"
+	if stdout.String() != want {
+		t.Fatalf("got %s want %s", stdout.String(), want)
+	}
+	for _, bad := range []string{
+		`{"expressions": ["up"], "metrics": {"up": "by_job"}}`,
+		`{"expressions": ["up"], "metrics": {"up": null}}`,
+		`{"expressions": ["up"], "metrics": ["up"]}`,
+		`{"expressions": ["up"], "jobs": "tex"}`,
+		`{"expressions": ["up"], "jobs": ["tex", null]}`,
+		`{"expressions": ["up"], "jobs": null}`,
+		`{"expressions": ["up"], "metrics": null}`,
+	} {
+		stdout.Reset()
+		if rc := run([]string{"promql-label-flow", "tenant", "-"}, strings.NewReader(bad), &stdout, &stderr); rc != exitCallerErr || stdout.Len() != 0 {
+			t.Errorf("%s: rc %d stdout %q, want the caller's error", bad, rc, stdout.String())
+		}
+	}
+}

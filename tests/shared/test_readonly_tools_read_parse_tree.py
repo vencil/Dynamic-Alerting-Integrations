@@ -471,10 +471,10 @@ def test_reachability_reads_an_artifact_the_yaml_v3_way():
 
 def test_reachability_reads_the_real_artifacts_with_no_yaml(no_yaml_parse):
     gate = _tool("check_threshold_reachability")
-    paths = gate._defaults_artifacts()
+    paths = gate._tracked_defaults_artifacts()
     assert paths
-    for p in paths:
-        gate._read_artifact_keys(p)
+    # the schema witness reads every tracked artifact through parse-tree
+    assert gate._assert_defaults_artifacts_match_schema(paths)
 
 
 def test_reachability_names_an_unreadable_artifact():

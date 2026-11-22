@@ -231,7 +231,7 @@ lang: zh
 | `check_structure.py` | Project structure enforcement. |
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
 | `check_threshold_observed_map.py` | Drift-guard for the threshold observed-map (#719). |
-| `check_threshold_reachability.py` | Threshold-key reachability gate — every alert-consumed threshold key must be producible by the platform-defaults path (TRK-337 / #1189). |
+| `check_threshold_reachability.py` | Threshold-key reachability, and the producer policy (TRK-337, #3924). |
 | `check_threshold_registry.py` | Threshold-registry gate — schema + self-consistency + generated-surface freshness + header-prose membership (TRK-339 WS1a / #1200). |
 | `check_threshold_unit_sanity.py` | Threshold unit-sanity gate — the value-range validation #992 promised and nobody built. |
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |

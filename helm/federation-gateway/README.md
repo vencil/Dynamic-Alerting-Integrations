@@ -26,7 +26,8 @@ Per request, **cheap checks before expensive ones** (Envoy HTTP filter chain):
 | 5 | `local_ratelimit` (per-tenant) | Sybil ceiling, keyed on `tenant_id` (a tenant round-robining its ≤16 live tokens) |
 | 6 | `buffer` | Buffers the request body (≤ 1 MiB) for the audit Lua. **After** the rate limiters — a rejected request is never buffered into Envoy memory, so the rate limit bounds buffer cost |
 | 7 | `lua` (audit) | Reads the buffered POST body / GET query-string, extracts the PromQL selector into dynamic metadata for the audit log's `query` field |
-| 8 | `router` | Forward to the upstream |
+| 8 | `lua` (in-flight) | Per-token in-flight limit (`inflightLimit`): `429` when the token is at its in-flight cap (per worker; see the section for what that means per instance). Last before the router, so a slot is taken when the request is forwarded (see "Per-token in-flight limit") |
+| 9 | `router` | Forward to the upstream |
 
 A request reaches the upstream only if all checks pass.
 
@@ -176,6 +177,51 @@ blast-radius cap is Layer 1 — the storage backend's `--query.max-samples` /
 `-search.maxUniqueTimeseries` (ADR-020 §三層資源防護). Keep the per-token
 default low (15 r/m; corridor 15–60) for multi-replica headroom.
 
+## Per-token in-flight limit
+
+The rate limits bound how many queries a token *starts* per minute; they do
+not stop a leaked token from keeping several slow queries open at once. The
+`inflightLimit` filter caps that (`maxPerToken`, default `4` per instance —
+see below for what it bounds exactly); a query over the cap gets **429** with the body
+`federation: too many concurrent queries for this token; retry when one
+completes`. It is in the audit log as `status: 429` (with `response_flags: -`,
+where the local rate limiters log `RL`) and counted as
+`tenant_federation_requests_total{status="rate_limited"}`.
+
+What the number actually bounds:
+
+- **Counted per Envoy worker** — Envoy's Lua filter shares no memory between
+  worker threads. Each worker allows
+  `perWorker = max(1, floor(maxPerToken / concurrency))`, so per instance a
+  token can have at most `concurrency × perWorker` in flight, and one
+  connection (HTTP/2, or a single keep-alive connection — one worker) only
+  `perWorker`. The effective per-instance limit therefore lies between
+  `perWorker` and `concurrency × perWorker`, depending on how the token's
+  connections land on workers. With the defaults (`4`, `concurrency: 2`):
+  2 per connection, 4 per instance. When `concurrency` does not divide
+  `maxPerToken` the instance bound differs from it — `concurrency: 3` gives
+  3, `concurrency: 8` gives 8, because a worker cannot get fewer than one
+  slot. The chart does not refuse these (an upgrade must not break for an
+  operator who aligned `concurrency` with the CPU limit); `concurrency: 1`
+  makes the count exact.
+- **Per instance**, like the rate limits. N replicas multiply that bound:
+  8 at the default 2 replicas, 32 at the HPA maximum of 8. A cluster-wide
+  count would need shared state (an external store or service).
+- **Routes the gateway answers itself take no slot** (the emergency 503, the
+  `remote_read` 403, the `victorialogs` default-deny 403): each carries route
+  metadata the filter reads, so a token at its cap still gets the 403/503.
+- **A slot is freed when the response completes** (body included), and on a
+  reply Envoy generates after the filter **before response headers were
+  sent** (route-timeout 504, upstream reset 503). The same failures after the
+  headers are a stream reset, handled like a client disconnect. **A client
+  that disconnects mid-query** (Grafana cancelling a panel) frees its slot
+  only when the slot's lease expires, **35 s** after it was taken (the 30 s
+  route timeout + 5 s): Envoy's Lua filter gets no callback for a reset.
+  That errs towards refusing for up to 35 s, never towards a leaked slot.
+- The lease clock is the wall clock: a forward clock jump larger than 35 s
+  expires every lease at once (a brief over-admission); a backward jump
+  also releases, never pins.
+
 ## Emergency global block
 
 A federation-wide kill switch for an incident — a `prom-label-proxy`
@@ -299,6 +345,9 @@ exposed, 1 = one ingress, …).
 | `revokedSet.tokenIdPattern` | `^ftk_[0-9a-f]+$` | The strict shape a `revoked.txt` line must have, templated into `revoked_check.lua`. A non-conforming line makes the gateway **discard the whole reload and keep its previously loaded set** — widening this widens what the enforcement plane accepts. Must stay equivalent to tenant-api's `tokenIDPattern` and the ADR-028 reconciler's `TOKEN_ID_PATTERN` (#1235). ⛔ **The value must remain expressible as a LUA PATTERN, not a regex**, and three template-time guards abort the render otherwise: **empty** (Lua's match against `""` succeeds for every line), **unanchored** (a pattern without `^…$` matches a substring, so a line could carry arbitrary bytes around a valid id), and **syntax that cannot mean the same thing in all three dialects** — `{`, `}`, `\`, `\|` (regex-only, taken literally by Lua) and `%` (Lua-only, taken literally by Go and Python). The third is the operator foot-gun: pinning the id length with brace quantifiers is valid regex, passes the other two guards, and matches **nothing** under Lua pattern semantics, so the gateway would then refuse every reload and silently stay on the set it already had |
 | `network.xffTrustedHops` | `0` | Trusted L7 proxy hops — see "Client IP behind a load balancer". No safe universal default |
 | `rateLimit.perToken.*` / `perTenant.*` / `perIp.*` | see values.yaml | Token-bucket params; tuning corridors in comments |
+| `inflightLimit.enabled` | `true` | Per-token in-flight limit (see "Per-token in-flight limit"). `false` renders neither the filter nor its script |
+| `inflightLimit.maxPerToken` | `4` | Target for queries one token may have in flight at once **per instance**. Each worker gets `max(1, floor(maxPerToken / concurrency))`; the instance bound is `concurrency` × that (exactly `maxPerToken` only when `concurrency` divides it). Must be a whole number ≥ 1 |
+| `concurrency` | `2` | Envoy worker threads. `inflightLimit.maxPerToken` is divided by it |
 | `networkPolicy.allowedNamespaces` | `[]` | Restrict ingress; empty = cluster-wide on the listen port |
 | `networkPolicy.scrapeNamespaceLabel` | `kubernetes.io/metadata.name: monitoring` | Namespace label selector for the Prometheus that scrapes `auditLog.metrics.port` (where Prometheus runs, not this chart; any pod there, so a kube-prometheus-stack Prometheus in that namespace is admitted). `null` = any namespace (`namespaceSelector: {}`); `{}` does not clear it — Helm merges maps |
 | `networkPolicy.restrictEgress` | `true` | Egress only to DNS and TCP `upstream.port` in the upstream's namespace. Set `false` only to supply your own egress policy (e.g. an upstream outside the cluster) |
@@ -326,6 +375,9 @@ query). `preStop.sleep` requires **Kubernetes ≥ 1.29** (chart `kubeVersion`).
 
 - The rate limit is per-instance, not cluster-global (see "Rate limits are
   soft"). Cluster-consistent limiting would need an external RLS service.
+- The in-flight limit is per-instance too, counted per worker, and holds a
+  slot for up to 35 s after a client disconnects (see "Per-token in-flight
+  limit").
 - `/federate` enforcement is the Layer 3 proxy's / E2E suite's concern
   (#512); this gateway does not special-case it.
 - `prom-label-proxy` mode does not support Prometheus `remote_read`

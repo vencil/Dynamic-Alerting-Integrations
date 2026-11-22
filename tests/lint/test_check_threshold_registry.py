@@ -156,39 +156,39 @@ def test_hand_edit_inside_generated_block_bites(tmp_path):
     stale-surface hard error; re-splice → green again."""
     dst = _helm_values_copy(tmp_path)
     text = dst.read_text(encoding="utf-8")
-    assert "    mysql_replication_lag: 30" in text
+    assert "    container_cpu: [version]" in text
     dst.write_text(
-        text.replace("    mysql_replication_lag: 30",
-                     "    mysql_replication_lag: 80"),
+        text.replace("    container_cpu: [version]",
+                     "    container_cpu: [version, image]"),
         encoding="utf-8")
-    result = gate.run_check(surface_paths={"helm-defaults": str(dst)})
-    assert any("stale-surface" in e and "helm-defaults" in e
+    result = gate.run_check(surface_paths={"helm-dimensions": str(dst)})
+    assert any("stale-surface" in e and "helm-dimensions" in e
                for e in result["errors"]), result
 
     # green again after a fresh splice (what --regen does)
     doc = lib.load_registry()
-    spec = next(s for s in lib.surface_specs(doc) if s["id"] == "helm-defaults")
+    spec = next(s for s in lib.surface_specs(doc) if s["id"] == "helm-dimensions")
     dst.write_text(
         lib.splice_surface(dst.read_text(encoding="utf-8"), spec),
         encoding="utf-8")
-    result = gate.run_check(surface_paths={"helm-defaults": str(dst)})
-    assert not any("helm-defaults" in e for e in result["errors"]), result
+    result = gate.run_check(surface_paths={"helm-dimensions": str(dst)})
+    assert not any("helm-dimensions" in e for e in result["errors"]), result
 
 
 def test_deleted_markers_are_a_hard_error(tmp_path):
     dst = _helm_values_copy(tmp_path)
     lines = [
         ln for ln in dst.read_text(encoding="utf-8").split("\n")
-        if "GENERATED:threshold-registry:helm-defaults" not in ln
+        if "GENERATED:threshold-registry:helm-dimensions" not in ln
     ]
     dst.write_text("\n".join(lines), encoding="utf-8")
-    result = gate.run_check(surface_paths={"helm-defaults": str(dst)})
+    result = gate.run_check(surface_paths={"helm-dimensions": str(dst)})
     assert any("markers" in e for e in result["errors"]), result
 
 
 def test_missing_surface_file_is_a_violation(tmp_path):
     result = gate.run_check(
-        surface_paths={"dev-example-defaults": str(tmp_path / "gone.yaml")})
+        surface_paths={"dev-dimensions": str(tmp_path / "gone.yaml")})
     assert any("stale-surface" in e and "does not exist" in e
                for e in result["errors"]), result
 

@@ -126,15 +126,16 @@ helm install tenant-api ./helm/tenant-api/ -n tenant-api --create-namespace \
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  # ⚠️ 值是數字 —— 讀不成數字的值（例如 disable、abc）不送這個 key 的預設列，
+  # ⚠️ 值是數字（或 "disable"）—— 讀不成數字的值（例如 abc）不送這個 key 的預設列，
   #    da-guard 以 root_default_refused 報錯；寫成對照表或清單則整份檔被丟掉，
   #    該檔的 defaults 全數落空（#3250）。
   mysql_connection_usage_percent: 80
   container_cpu: 70
   container_memory: 80
   # 完整維度 key（metric{label="v"}）也可寫在這裡，label 須在頂層 dimensions: 宣告才送出（見 migration-guide）
-  # 平台不想給某個 key 預設值 → 整條不寫。defaults 沒有 "disable" 這個狀態；
-  # 三態的 "disable" 與 <key>_critical 都只在租戶設定裡有效（見 for-tenants.md）
+  # 規則包的 key 整條不寫 → 用讀取端內建的平台值（沒有平台值的 key 由租戶給值才送；#3924）。
+  # 寫數字＝每個租戶都用這個數字；<key>: "disable"＝整棵樹關掉那一族；
+  # <key>_critical: 95＝每個租戶的 critical 預設值（基底有值才送，租戶可覆寫）
 
 # ↓ 頂層 key，與 defaults: 同級，不是它的子項
 _routing_defaults:

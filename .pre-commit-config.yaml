@@ -1653,10 +1653,7 @@ repos:
         # threshold-registry-check already carries). The gate imports it INSIDE
         # the witness — ⛔ which buys exactly one thing: `--help` still works
         # without jsonschema, but no
-        # CHECK does, because `_defaults_faces()` calls the witness and every
-        # run goes through it (measured: `--help` rc=0, bare `--ci` rc=2 with
-        # jsonschema blocked). ⚠️ Not because `_defaults_faces()` builds every
-        # face — `run_check` also builds the declared and chart faces.
+        # CHECK does, because `main()` calls the witness on every run.
         # The narrow claim is the one that matters: the lazy import is what
         # keeps `--help` working in an environment without jsonschema.
         # ⚠️ NOTHING PINS THIS LIST (repo grep: every mention is prose).
@@ -1701,7 +1698,8 @@ repos:
         # of the others. Kept in step by
         # tests/lint/test_check_threshold_reachability.py::
         # test_precommit_filter_covers_every_input_this_gate_reads, which derives
-        # the list from `_defaults_artifacts()` rather than restating it.
+        # the list from the gate's own readers (`_tracked_defaults_artifacts()`,
+        # the chart and `environments/*` values) rather than restating it.
         # ⚠️ The `_defaults*` alternative carries `(?i:)` because the gate's
         # predicate is case-insensitive (it matches `config_hierarchy.go`, which
         # lowercases before both its suffix and its filename test). A
@@ -1719,7 +1717,7 @@ repos:
         # `migrate_rule` and six more `_lib_*` modules — loaded on every run via
         # onboard_platform / scaffold_tenant / check_confd_schema — joined this
         # list: all seven were read by the gate and none fired it.
-        files: ^(scripts/tools/_lib_(consumer_read|input|tool_fault)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/(rule-pack-.*\.ya?ml|threshold-registry\.yaml)|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_rule_packs_generated|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|parse_cache|parse_tree|paths|prometheus|prompt|python|validation|write_check|yaml_strict)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_(consumer_read|input|tool_fault)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/(rule-pack-.*\.ya?ml|threshold-registry\.yaml)|helm/threshold-exporter/values\.yaml|environments/[^/]+/threshold-exporter\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_rule_packs_generated|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|parse_cache|parse_tree|paths|prometheus|prompt|python|validation|write_check|yaml_strict)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + fixed point + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"
@@ -1735,10 +1733,9 @@ repos:
         # its own extraction (a wrong critical_of, an arming: default on an
         # optional key, a missing portability reason, an alias onto no key → red) +
         # freshness of every GENERATED surface (the RULE_PACKS module / pack
-        # header threshold sections / helm values thresholdConfig.defaults /
-        # dev conf.d _defaults.yaml / the optional_overrides declared-key LIST
-        # on all THREE surfaces that ship it — the two runtime ones (#1310)
-        # plus the try-local seed, #1176 / the Go retired_keys table, #3829 /
+        # header threshold sections / the shipped `dimensions:` blocks, #3475 /
+        # the built-in digest; the chart and sample `defaults` /
+        # `optional_overrides` blocks left in #3924 / the Go retired_keys table, #3829 /
         # the Go built-in defaults table, #3832)
         # + the built-in table's digest named by a `⚠️ breaking` changelog
         # fragment or CHANGELOG.md (#3832: changing it is breaking)
