@@ -67,9 +67,9 @@ Performance benchmarks 與 unit tests 分離記錄。Tier 2 量測 production ho
 | `BenchmarkScanDirTree_Hierarchical_2000_Cold` | 2 | 同上，2000 tenants（scaling characterization） | v2.9.0+ |
 | `BenchmarkScanDirTree_Hierarchical_5000_Cold` | 2 | 同上，5000 tenants（scaling characterization） | v2.9.0+ |
 | `BenchmarkFullDirLoad_Hierarchical_1000` | 2 | `fullDirLoad`：cold-load YAML parse + L0/L1/L2/L3 hierarchical merge (1000 tenants)；健康樹（沒有被拒值，#3467 前誤量被拒值路徑） | v2.8.0 |
-| `BenchmarkFullDirLoad_Hierarchical_1000_RejectedValues` | 2 | 同上，但每個 region 預設檔帶一個非閾值形狀的值：每個租戶都是 value_rejected 候選，載入時逐租戶做一次 effective resolve（#3467） | v2.9.0+ |
 | `BenchmarkFullDirLoad_Hierarchical_2000` | 2 | 同上，2000 tenants | v2.8.0 |
 | `BenchmarkFullDirLoad_Hierarchical_5000` | 2 | 同上，5000 tenants | v2.8.0 |
+| `BenchmarkFullDirLoad_Hierarchical_1000_RejectedValues` | 2 | 同 1000 tenants 那支，但每個 region 預設檔帶一個非閾值形狀的值：每個租戶都是 value_rejected 候選，載入時逐租戶做一次 effective resolve（#3467） | v2.9.0+ |
 | `BenchmarkDiffAndReload_Hierarchical_1000_NoChange` | 2 | `diffAndReload` steady-state WatchLoop tick：hash diff → no-op fast path (1000 tenants) | v2.8.0 |
 | `BenchmarkDiffAndReload_Hierarchical_2000_NoChange` | 2 | 同上，2000 tenants | v2.8.0 |
 | `BenchmarkDiffAndReload_Hierarchical_5000_NoChange` | 2 | 同上，5000 tenants | v2.8.0 |

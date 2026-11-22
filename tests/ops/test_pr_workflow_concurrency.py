@@ -15,7 +15,9 @@ string match) against synthetic contexts:
   * two runs for the same PR share a group and `cancel-in-progress` is true;
   * runs for two different PRs do not share a group;
   * two different workflows never share a group for the same PR — a shared
-    group would let one workflow cancel the other.
+    group would let one workflow cancel the other. Groups are compared
+    case-insensitively, as GitHub compares them (`CI-101` and `ci-101` are
+    one group).
 
 What this deliberately does not decide: how a workflow behaves on push,
 schedule or any other event. Main's CI keeping its runs
@@ -127,21 +129,41 @@ def test_a_pull_request_workflow_cancels_its_superseded_run(path) -> None:
     assert not problems, "\n".join(problems)
 
 
-def test_no_two_workflows_share_a_group_for_one_pr() -> None:
+def shared_groups(workflows: list[tuple[str, dict]]) -> list[str]:
+    """Pairs of workflows whose groups for one PR coincide. PURE.
+
+    GitHub compares concurrency group names case-insensitively, so the
+    comparison here folds case: `CI-101` and `ci-101` are one group."""
     seen: dict[str, str] = {}
     clashes = []
-    for path in _pr_workflows():
-        wf = _load(path)
+    for name, wf in workflows:
         conc = wf.get("concurrency")
         group = conc if isinstance(conc, str) else (conc or {}).get("group")
         if not group:
             continue  # reported by the per-workflow test
-        g = _to_str(render(group, _ctx(wf.get("name", path.name),
-                                         pr=101, run_id=1)))
+        g = _to_str(render(group, _ctx(wf.get("name", name),
+                                         pr=101, run_id=1))).casefold()
         if g in seen:
-            clashes.append(f"{seen[g]} and {path.name} share {g!r}")
-        seen[g] = path.name
+            clashes.append(f"{seen[g]} and {name} share {g!r}")
+        seen[g] = name
+    return clashes
+
+
+def test_no_two_workflows_share_a_group_for_one_pr() -> None:
+    clashes = shared_groups([(p.name, _load(p)) for p in _pr_workflows()])
     assert not clashes, "\n".join(clashes)
+
+
+@pytest.mark.parametrize("a, b, expected", [
+    ("CI-${{ github.event.pull_request.number }}",
+     "ci-${{ github.event.pull_request.number }}", 1),   # case-only clash
+    ("ci-${{ github.event.pull_request.number }}",
+     "docs-${{ github.event.pull_request.number }}", 0),  # distinct
+])
+def test_the_shared_group_finder_folds_case(a, b, expected) -> None:
+    wfs = [("a.yml", {"name": "a", "concurrency": {"group": a}}),
+           ("b.yml", {"name": "b", "concurrency": {"group": b}})]
+    assert len(shared_groups(wfs)) == expected
 
 
 @pytest.mark.parametrize("conc, expected", [
