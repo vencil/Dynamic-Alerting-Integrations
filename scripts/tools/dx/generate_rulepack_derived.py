@@ -86,6 +86,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
+import _lib_metric_sources  # noqa: E402  (#4137: what the scrape says about tenant)
 sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 # The metadata annotation templates have one spelling (#3483).
 from check_leftouterjoin_enrichment import METADATA_ANNOTATIONS  # noqa: E402
@@ -546,7 +547,7 @@ def clause_flow_problems(rules: "list[tuple[str, str, str]]", flow_of=None,
     ``and``/``unless on(tenant)`` matches."""
     if flow_of is None:
         flow_of = lambda exprs: [e["set_matches"] for e in  # noqa: E731
-                                 _lib_consumer_read.promql_label_flow("tenant", exprs, records)]
+                                 _lib_metric_sources.label_flow("tenant", exprs, records)]
     with_clause = [(p, n, e) for p, n, e in rules if _clauses(e)]
     if not with_clause:
         return []
