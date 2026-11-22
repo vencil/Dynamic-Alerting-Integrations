@@ -49,7 +49,7 @@ Dual-Perspective Annotation 把兩種措辭都寫在 Prometheus rule 的 annotat
 
 ### 步驟 1：確認 Rule Pack 已有 platform_summary
 
-Rule Pack 內建的閾值告警都帶 `platform_summary`。⚠️ `rule-pack-custom-alerts.yaml` 裡由 `_custom_alerts` 編譯出的 `Custom_*` 告警不帶（它們也有 runbook_url／owner／tier annotation，不能拿這幾個分辨），所以下面的範例在 `range .Alerts` 裡用 `{{ or .Annotations.platform_summary_zh .Annotations.platform_summary .Annotations.summary_zh .Annotations.summary }}` 補上（依序取第一個有值的），標題也不依賴它。可以用以下命令確認：
+Rule Pack 內建的閾值告警都帶 `platform_summary`。⚠️ `rule-pack-custom-alerts.yaml` 裡由 `_custom_alerts` 編譯出的 `Custom_*` 告警不帶（它們也有 runbook_url／owner／tier annotation，不能拿這幾個分辨），所以下面的範例在 `range .Alerts` 裡用 `{{ or .Annotations.platform_summary_zh .Annotations.platform_summary .Annotations.summary_zh .Annotations.summary }}` 補上（依序取第一個有值的），標題也不依賴它。租戶自助告警（`component="custom"`）本身到不了 NOC 的範例：它們先被另一條路由接走，不會進 `_routing_enforced` 的 route。可以用以下命令確認：
 
 ```bash
 grep -c platform_summary rule-packs/*.yaml
@@ -71,14 +71,14 @@ _routing_enforced:
     title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
     text: |-
       {{ range .Alerts -}}
-      {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Labels.severity | toUpper }}: {{ or .Annotations.platform_summary_zh .Annotations.platform_summary .Annotations.summary_zh .Annotations.summary }}
-      {{ with .Annotations.owner }}Owner: {{ . }}{{ end }}
-      {{ end }}
+      {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }} {{ .Labels.severity }}: {{ or .Annotations.platform_summary_zh .Annotations.platform_summary .Annotations.summary_zh .Annotations.summary }}
+      {{ with .Annotations.owner }}Owner: {{ . }}
+      {{ end }}{{ end }}
   match:
     - 'severity=~"warning|critical"'
 ```
 
-內文逐條列出（`{{ range .Alerts }}`）並讀每一條自己的 `.Annotations`：一則通知可以裝好幾條告警（好幾個 instance，或同一個租戶的好幾個叢集），`.CommonAnnotations` 只有每一條都相同的 annotation，內容不同的那一個會印成空的。`da_cluster` 是告警所在的叢集。
+內文逐條列出（`{{ range .Alerts }}`）並讀每一條自己的 `.Annotations`：一則通知可以裝好幾條告警（好幾個 instance，或同一個租戶的好幾個叢集），`.CommonAnnotations` 只有每一條都相同的 annotation，內容不同的那一個會印成空的。`da_cluster` 是告警所在的叢集。每一行印該條告警自己的 `.Status`：有恢復通知（`send_resolved`）時，同一則裡可以有一條已恢復、另一條還在觸發。
 
 ### 步驟 3：Tenant receiver 繼續使用 summary
 
@@ -96,7 +96,7 @@ tenants:
         title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
         text: |-
           {{ range .Alerts -}}
-          {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ or .Annotations.summary_zh .Annotations.summary }}
+          {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}
           {{ or .Annotations.description_zh .Annotations.description }}
           {{ end }}
 ```

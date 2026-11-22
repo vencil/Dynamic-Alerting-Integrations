@@ -272,14 +272,14 @@ data:
   #
   # Receiver-specific usage:
   #   - Email: use in 'headers' and 'text'/'html' fields
-  #   - Webhook: no template; the payload carries every alert's labels and annotations
+  #   - Webhook: Alertmanager's standard JSON payload; it carries every alert's labels and annotations
   #   - Slack: use in 'title' and 'text' fields
   #   - Teams: use in 'title' and 'text' fields
   #   - PagerDuty: use in 'description' field
   #
   # Example email_template.html:
   #   {{ range .Alerts }}
-  #   <h2>{{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ or .Annotations.summary_zh .Annotations.summary }}</h2>
+  #   <h2>{{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}</h2>
   #   <p>{{ or .Annotations.description_zh .Annotations.description }}</p>
   #   <p><strong>Platform Perspective:</strong> {{ or .Annotations.platform_summary_zh .Annotations.platform_summary }}</p>
   #   {{ end }}
@@ -300,14 +300,16 @@ data:
 
     ```
     {{ range .Alerts -}}
-    {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ or .Annotations.summary_zh .Annotations.summary }}
+    {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}
     {{ or .Annotations.description_zh .Annotations.description }}
     {{ or .Annotations.platform_summary_zh .Annotations.platform_summary }}
     {{ end }}
     ```
 
     One notification can hold several alerts (several instances, or several
-    clusters of one tenant; `da_cluster` is the alert's cluster).
+    clusters of one tenant; `da_cluster` is the alert's cluster). With
+    `send_resolved`, it can hold a resolved alert next to one that still
+    fires, so each line prints the alert's own `.Status`.
     `.CommonAnnotations` and `.CommonLabels` hold only what is identical across
     them, so an annotation that differs between the alerts prints as empty
     there. `.GroupLabels` holds only the labels listed in the route's
@@ -320,7 +322,7 @@ data:
     {{ .Status | toUpper }}: {{ .CommonLabels.alertname }}
     Tenant: {{ .CommonLabels.tenant }}
     {{ range .Alerts -}}
-    {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Labels.severity | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+    {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }} {{ .Labels.severity }}: {{ or .Annotations.summary_zh .Annotations.summary }}
     {{ or .Annotations.description_zh .Annotations.description }}
     {{ end }}
     ```
@@ -330,15 +332,15 @@ data:
     title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.tenant }})'
     text: |-
       {{ range .Alerts -}}
-      {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Labels.severity | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+      {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }} {{ .Labels.severity }}: {{ or .Annotations.summary_zh .Annotations.summary }}
       {{ or .Annotations.description_zh .Annotations.description }}
       {{ end }}
     ```
 
     ### Webhook (JSON)
 
-    A webhook receiver takes no template. Alertmanager posts its own JSON,
-    and each entry of `alerts` carries that alert's labels (including
+    The platform's `webhook` receiver type sends Alertmanager's standard
+    JSON payload, and each entry of `alerts` carries that alert's labels (including
     `da_cluster`) and all its annotations; the receiving end picks
     `summary_zh` or `summary` per alert:
 
@@ -446,7 +448,7 @@ data:
     #         {{ .Status | toUpper }}: {{ .CommonLabels.alertname }}
     #         Tenant: {{ .CommonLabels.tenant }}
     #         {{ range .Alerts -}}
-    #         {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Labels.severity | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+    #         {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }} {{ .Labels.severity }}: {{ or .Annotations.summary_zh .Annotations.summary }}
     #         {{ or .Annotations.description_zh .Annotations.description }}
     #         {{ end }}
     #
@@ -468,18 +470,20 @@ data:
     #       title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.tenant }})'
     #       text: |-
     #         {{ range .Alerts -}}
-    #         {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Labels.severity | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+    #         {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }} {{ .Labels.severity }}: {{ or .Annotations.summary_zh .Annotations.summary }}
     #         {{ or .Annotations.description_zh .Annotations.description }}
     #         {{ end }}
     #
     # Sent for the same alert firing in clusters east and west:
     #   FIRING: MariaDBHighConnections (t1)
-    #   [east] WARNING: MariaDB high connections on t1
+    #   [east] FIRING warning: MariaDB high connections on t1
     #   91% of max_connections
-    #   [west] WARNING: MariaDB high connections on t1
+    #   [west] FIRING warning: MariaDB high connections on t1
     #   82% of max_connections
+    # With send_resolved, once east has resolved and west still fires, the
+    # east line reads `[east] RESOLVED warning: ...`.
     #
-    # Slack renders Markdown. Use ** for bold, _ for italics, ` for monospace.
+    # Slack renders its own mrkdwn. Use * for bold, _ for italics, ` for monospace.
 
     # ========================================================
     # Teams Example
@@ -494,7 +498,7 @@ data:
     #       title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.tenant }})'
     #       text: |-
     #         {{ range .Alerts -}}
-    #         {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}**{{ .Labels.severity | toUpper }}**: {{ or .Annotations.summary_zh .Annotations.summary }}
+    #         {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}**{{ .Status | toUpper }} {{ .Labels.severity }}**: {{ or .Annotations.summary_zh .Annotations.summary }}
     #
     #         {{ or .Annotations.description_zh .Annotations.description }}
     #
@@ -511,7 +515,7 @@ data:
     #   _routing:
     #     receiver:
     #       type: pagerduty
-    #       service_key: <pagerduty_integration_key>
+    #       routing_key: <pagerduty_integration_key>
     #       description: '{{ .CommonLabels.alertname }} ({{ .CommonLabels.tenant }}): {{ range $i, $a := .Alerts.Firing }}{{ if $i }}; {{ end }}{{ with $a.Labels.da_cluster }}[{{ . }}] {{ end }}{{ or $a.Annotations.summary_zh $a.Annotations.summary }}{{ end }}'
     #       severity: '{{ or .CommonLabels.severity "error" }}'
     #       client: "Dynamic Alerting Platform"

@@ -445,7 +445,7 @@ _routing:
     title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.tenant }})'
     text: |-
       {{ range .Alerts -}}
-      {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Labels.severity | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+      {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }} {{ .Labels.severity }}: {{ or .Annotations.summary_zh .Annotations.summary }}
       {{ or .Annotations.description_zh .Annotations.description }}
       {{ end }}
 ```
@@ -454,16 +454,26 @@ _routing:
 
 ```text
 FIRING: MariaDBHighConnections (t1)
-[east] WARNING: MariaDB high connections on t1
+[east] FIRING warning: MariaDB high connections on t1
 91% of max_connections
-[west] WARNING: MariaDB high connections on t1
+[west] FIRING warning: MariaDB high connections on t1
 82% of max_connections
 ```
 
-內文用 `{{ range .Alerts }}` 逐條列出，是因為一則通知可以裝好幾條告警（好幾個 instance，或好幾個叢集），而 `.CommonAnnotations`／`.CommonLabels` 只有每一條都相同的值：各條的 `description` 不同時，`{{ .CommonAnnotations.description }}` 印出來是空的。`{{ with .Labels.da_cluster }}` 讓沒有這個 label 的告警不印出空括號；`or .Annotations.summary_zh .Annotations.summary` 有中文 annotation 時用中文，沒有就用英文。
+receiver 開了 `send_resolved: true` 時，`east` 先恢復、`west` 還在觸發，下一則通知兩條都在，各自標出狀態：
+
+```text
+FIRING: MariaDBHighConnections (t1)
+[east] RESOLVED warning: MariaDB high connections on t1
+91% of max_connections
+[west] FIRING warning: MariaDB high connections on t1
+82% of max_connections
+```
+
+內文用 `{{ range .Alerts }}` 逐條列出，是因為一則通知可以裝好幾條告警（好幾個 instance，或好幾個叢集），而 `.CommonAnnotations`／`.CommonLabels` 只有每一條都相同的值：各條的 `description` 不同時，`{{ .CommonAnnotations.description }}` 印出來是空的。`{{ with .Labels.da_cluster }}` 讓沒有這個 label 的告警不印出空括號；`{{ .Status | toUpper }}` 在迴圈裡是該條告警自己的狀態（標題裡的 `.Status` 是整組的：只要還有一條在觸發就是 `firing`）；`or .Annotations.summary_zh .Annotations.summary` 有中文 annotation 時用中文，沒有就用英文。
 
 Email 和 Teams 使用相同的 Go template 語法，僅欄位名稱不同：
-- Email：`text` 欄位（純文字）或 `html` 欄位（HTML 格式）
+- Email：`text` 欄位（純文字）或 `html` 欄位（HTML 格式）。只寫 `text` 時，Alertmanager 仍會附上內建模板的 HTML 部分，多數郵件軟體顯示的是 HTML 那一份
 - Teams：`text` 欄位（Markdown 格式）
 
 **可用變數：** `.Status`、`.Alerts`（支援 `{{ range }}` 迴圈，每條有 `.Labels`、`.Annotations`）；整組共同的值在 `.CommonLabels`（如 `.CommonLabels.alertname`、`.CommonLabels.tenant`）與 `.CommonAnnotations`；`.GroupLabels` 只有 `group_by` 列出的 label。詳見 [Alertmanager 官方範本](https://prometheus.io/docs/alerting/latest/notifications/)
@@ -479,7 +489,7 @@ Email 和 Teams 使用相同的 Go template 語法，僅欄位名稱不同：
 - 內建的 Slack 模板只有標題、沒有內文，兩個叢集同時觸發時看不出是哪兩個。Slack receiver 請用上一節那種逐條列出告警的模板。
 - PagerDuty 一組是一個 incident，該告警在所有叢集都恢復後才 resolve。
 
-**要每個叢集各收一則。** 把 `da_cluster` 加進 `group_by`。整個部署一起改，寫在 `_defaults.yaml`：
+**要每個叢集各收一則。** 把 `da_cluster` 加進 `group_by`。所有租戶的 route 一起改，寫在 `_defaults.yaml`（`_routing_enforced` 的 NOC route 不讀 `_routing_defaults`，它的 `group_by` 寫在 `_routing_enforced` 自己裡面）：
 
 ```yaml
 _routing_defaults:
@@ -500,7 +510,7 @@ tenants:
 **兩項代價。**
 
 1. 講整個租戶的告警（只從 threshold-exporter 的序列算出來，例如「租戶沒設定閾值」）帶的是評估它的那台 Prometheus 的叢集。幾台 Prometheus 評估同一批規則時，這類告警會變成每台各一則通知。
-2. 在運作中的 Alertmanager 上改一條 route 的 `group_by`，該 route 當下觸發中的每一組都會再通知一次（分組的 key 變了）；以分組為 key 的接收端（PagerDuty）會開新的 incident。
+2. 在運作中的 Alertmanager 上改一條 route 的 `group_by`，該 route 當下觸發中的每一組都會再通知一次（分組的 key 變了）；以分組為 key 的接收端（PagerDuty）會開新的 incident，舊的 incident Alertmanager 不會替它 resolve（恢復通知送到的是新的 key），要手動關閉。
 
 ---
 

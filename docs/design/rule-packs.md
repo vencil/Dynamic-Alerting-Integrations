@@ -131,13 +131,13 @@ Rule Pack 支援 **`*_zh` 後綴 annotation** 實現多語言通知：
 
 ```go
 {{ range .Alerts -}}
-{{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ or .Annotations.summary_zh .Annotations.summary }}
+{{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}
 {{ or .Annotations.description_zh .Annotations.description }}
 {{ or .Annotations.platform_summary_zh .Annotations.platform_summary }}
 {{ end }}
 ```
 
-範例用 `{{ range .Alerts }}` 逐條讀 `.Annotations`，不讀 `.CommonAnnotations`：一則通知可以裝好幾條告警（好幾個 instance，或同一個租戶的好幾個叢集），`.CommonAnnotations` 只有每一條都相同的 annotation，內容不同的那一個會印成空的。`da_cluster` 是告警所在的叢集（見 [ADR-006](../adr/006-tenant-mapping-topologies.md)）。
+範例用 `{{ range .Alerts }}` 逐條讀 `.Annotations`，不讀 `.CommonAnnotations`：一則通知可以裝好幾條告警（好幾個 instance，或同一個租戶的好幾個叢集），`.CommonAnnotations` 只有每一條都相同的 annotation，內容不同的那一個會印成空的。`da_cluster` 是告警所在的叢集（見 [ADR-006](../adr/006-tenant-mapping-topologies.md)）。每一行印該條告警自己的 `.Status`：有恢復通知（`send_resolved`）時，同一則裡可以有一條已恢復、另一條還在觸發。
 
 此模式適用於所有可寫模板的 receiver type（email、Slack、Teams、PagerDuty），寫在 receiver 的 `title`／`text` 等欄位；各型別的範例見 `k8s/03-monitoring/configmap-alertmanager.yaml`。
 

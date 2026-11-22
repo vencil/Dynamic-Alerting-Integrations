@@ -125,13 +125,13 @@ Alertmanager templates use Go's `or` function to prefer Chinese annotations when
 
 ```go
 {{ range .Alerts -}}
-{{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ or .Annotations.summary_zh .Annotations.summary }}
+{{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }}: {{ or .Annotations.summary_zh .Annotations.summary }}
 {{ or .Annotations.description_zh .Annotations.description }}
 {{ or .Annotations.platform_summary_zh .Annotations.platform_summary }}
 {{ end }}
 ```
 
-The example reads `.Annotations` per alert inside `{{ range .Alerts }}`, not `.CommonAnnotations`: one notification can hold several alerts (several instances, or several clusters of one tenant), `.CommonAnnotations` holds only the annotations that are identical in all of them, and one whose content differs prints as empty. `da_cluster` is the cluster the alert is in (see [ADR-006](../adr/006-tenant-mapping-topologies.en.md)).
+The example reads `.Annotations` per alert inside `{{ range .Alerts }}`, not `.CommonAnnotations`: one notification can hold several alerts (several instances, or several clusters of one tenant), `.CommonAnnotations` holds only the annotations that are identical in all of them, and one whose content differs prints as empty. `da_cluster` is the cluster the alert is in (see [ADR-006](../adr/006-tenant-mapping-topologies.en.md)). Each line prints that alert's own `.Status`: with resolve notifications (`send_resolved`), one notification can hold an alert that has resolved next to one that still fires.
 
 This pattern applies to every receiver type that takes a template (email, Slack, Teams, PagerDuty), written in the receiver's `title` / `text` and similar fields; per-type examples are in `k8s/03-monitoring/configmap-alertmanager.yaml`.
 

@@ -223,7 +223,7 @@ func TestGeneratedDedupSemantics(t *testing.T) {
 		{
 			name: "second_enabled_tenant_is_deduped_too",
 			src:  crit("td", g), tgt: warn("td", g), want: true,
-			why: "one rule covers every enabled tenant",
+			why: "the same rules cover every enabled tenant",
 		},
 		{
 			name: "different_metric_group_is_not_suppressed",
