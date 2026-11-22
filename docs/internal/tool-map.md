@@ -174,6 +174,7 @@ lang: zh
 | `check_doc_datools_cmds.py` | documented `da-tools` binary-wrapper subcommands |
 | `check_doc_k8s_refs.py` | docs must reference k8s manifests accurately. |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
+| `check_doc_quotes.py` | a declared quote in docs/ must match its source line for line (#1558). |
 | `check_engagement_disclosure.py` | Engagement-disclosure gate — block "active engagement" assertions in the PUBLIC repo. |
 | `check_env_bool_parsers.py` | ADR-034 mechanical enforcement (narrow). |
 | `check_exporter_queries.py` | check_exporter_queries — a rule pack reads only what its query-exporter config serves. |

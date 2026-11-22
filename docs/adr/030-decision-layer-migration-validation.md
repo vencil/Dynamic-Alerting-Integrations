@@ -168,8 +168,9 @@ updated_at: 2026-11-22
 
 輸入一：波形庫節錄（`tests/dx/fixtures/waveform/selftest_disk_used_percent.yaml`，工具自測用的假指標，所以下面的指令都要帶 `--allow-selftest`）：
 
-```yaml
+```yaml {.quote src="tests/dx/fixtures/waveform/selftest_disk_used_percent.yaml"}
   - description: "自測用：磁碟空間在半小時內從常態爬升到近滿，並持續兩小時"
+    # ...
     normal_level: 42
     fault_level: 96
     onset_duration: 30m
@@ -179,9 +180,12 @@ updated_at: 2026-11-22
     agent_keeps_reporting: true
     must_detect: true
     metric: selftest_disk_used_percent
+    # ...
     time_axis:
-      dropout_pattern: "every:10"   # 每 10 個樣本漏抓一個
+      dropout_pattern: "every:10"
 ```
+
+`dropout_pattern: "every:10"` 表示每 10 個樣本漏抓一個。
 
 輸入二：候選規則（`tests/dx/fixtures/waveform/rules/selftest_disk.rules.yaml`）`selftest_disk_used_percent > 80`，`for: 2m`，`severity: warning`；容差檔（`tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml`）給每個嚴重度一個天花板（工具自測用的示意值，依第 5 節不列在文件裡）。
 

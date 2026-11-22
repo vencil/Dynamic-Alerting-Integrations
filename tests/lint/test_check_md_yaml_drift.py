@@ -313,7 +313,7 @@ def test_illustrative_exempts_and_is_reported(tmp_path: Path) -> None:
             'tenants:\n  example-tenant:\n    bogus_key: "1"\n```\n')
     r = _run(_mkrepo(tmp_path, "ig.md", body))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
-    assert "Units exempted (.illustrative): 1" in r.stdout
+    assert "Units exempted (.illustrative / .quote): 1" in r.stdout
     assert "docs/ig.md:2 — shows a shape on purpose" in r.stdout
 
 

@@ -48,8 +48,9 @@ Tenants should be able to choose which Rule Packs to enable instead of being for
 
 The `rules` volume in `k8s/03-monitoring/deployment-prometheus.yaml` (excerpt):
 
-```yaml
+```yaml {.quote src="k8s/03-monitoring/deployment-prometheus.yaml"}
 volumes:
+  # ...
   - name: rules
     projected:
       sources:
@@ -61,6 +62,7 @@ volumes:
                 path: mariadb-recording.yml
               - key: mariadb-alert.yml
                 path: mariadb-alert.yml
+        # ...
         - configMap:
             name: prometheus-rules-jvm
             optional: true
@@ -69,10 +71,10 @@ volumes:
                 path: jvm-recording.yml
               - key: jvm-alert.yml
                 path: jvm-alert.yml
-        # ... the remaining Rule Packs follow the same pattern
+        # ...
 ```
 
-The volume is mounted at `/etc/prometheus/rules`, and the Prometheus config reads it with `rule_files: ["/etc/prometheus/rules/*.yml"]`.
+The remaining Rule Packs follow the same pattern, one `configMap` source each. The volume is mounted at `/etc/prometheus/rules`, and the Prometheus config reads it with `rule_files: ["/etc/prometheus/rules/*.yml"]`.
 
 Unloading the JVM Rule Pack:
 

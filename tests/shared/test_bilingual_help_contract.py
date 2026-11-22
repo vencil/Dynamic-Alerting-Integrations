@@ -211,6 +211,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_doc_datools_cmds.py": _R_LINT,
     "check_doc_k8s_refs.py": _R_LINT,
     "check_doc_links.py": _R_LINT,
+    "check_doc_quotes.py": _R_LINT,
     "check_env_bool_parsers.py": _R_LINT,
     "check_flaky_registry.py": _R_LINT,
     "check_frontmatter_versions.py": _R_LINT,

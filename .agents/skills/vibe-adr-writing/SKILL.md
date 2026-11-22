@@ -48,6 +48,7 @@ description: ADR 的寫作規範 —— 讀者讀完要知道什麼（決策、�
   - ⚠️ 代號緊貼中文時（例如「見0-B」）`\b` 不成立、grep 會漏，這幾種要人工掃一遍。
 - [ ] 每個專案內縮寫與外部名詞第一次出現時有白話解釋。
 - [ ] 每個描述行為的句子都有這一輪的量測。
+- [ ] 範例是 repo 內檔案的節錄，fence 就宣告 `{.quote src="…"}`（中間省略以整行 `# ...` 標出位置，由 `doc-quote-check` 逐行比對來源）；能整段原樣轉嵌的就用 snippets（`--8<--`），不留副本。
 - [ ] 中英段落對應；狀態與日期一致。
 - [ ] `make lint-docs` 與 `python3 scripts/tools/lint/check_doc_links.py --ci` 通過。
 

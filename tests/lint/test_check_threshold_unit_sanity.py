@@ -683,7 +683,7 @@ def test_main_names_every_illustrative_unit(tmp_path, monkeypatch, capsys, as_js
     monkeypatch.setattr(gate, "PROJECT_ROOT", str(tmp_path))
     assert emit_result(gate.main(["--ci", "--json"] if as_json else ["--ci"])) == gate.EXIT_OK
     out = capsys.readouterr()
-    assert "Units exempted (.illustrative): 1" in out.err
+    assert "Units exempted (.illustrative / .quote): 1" in out.err
     assert "docs/x.md:2 — shown on purpose" in out.err
     if as_json:
         assert json.loads(out.out)["exempted"] == [
