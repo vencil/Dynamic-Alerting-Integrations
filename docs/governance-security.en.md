@@ -147,7 +147,7 @@ da-tools validate-config --config-dir conf.d/ --json
 | 1 | `open()` must include `encoding="utf-8"`; source must not start with a UTF-8 BOM | BOM checked on the leading bytes (this file); `open()` encoding is enforced by the pre-commit `open-encoding-audit` hook (builtin `open()` only), not by this file | High |
 | 2 | `subprocess` forbids `shell=True` | AST scan subprocess.run/call/Popen keywords | Critical |
 | 3 | File write must pair with `os.chmod(0o600)` | Same-function write-open + chmod pair (advisory) | Medium |
-| 4 | Forbid `yaml.load()`, enforce `yaml.safe_load()` | **bandit B506** (`.github/workflows/security-audit.yaml`, hard-fail); the AST implementation in `tests/shared/test_sast.py` was removed in #1643 | Critical |
+| 4 | No unsafe YAML reading; YAML is read only through `_lib_yaml_strict` (built on PyYAML's safe loader, a repeated key refuses the file) | **bandit B506** (`.github/workflows/security-audit.yaml`, hard-fail); `tests/shared/test_yaml_strict_only.py` refuses a PyYAML reading entry outside `_lib_yaml_strict`; the AST implementation in `tests/shared/test_sast.py` was removed in #1643 | Critical |
 | 5 | Forbid hardcoded secrets (password/token/secret/api_key) | Regex scan, exclude env vars and placeholders | High |
 | 6 | Forbid dangerous functions (eval/exec/pickle.load/os.system) | AST scan builtin + module functions | Critical |
 | 7 | Error messages must route to stderr (`print()` starting with `ERROR`/`Error` needs `file=sys.stderr`) | AST scan of print() call args and keywords | Medium |

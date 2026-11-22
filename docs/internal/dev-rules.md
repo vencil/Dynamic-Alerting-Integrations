@@ -70,7 +70,7 @@ lang: zh
 1. encoding 檢查（強制 UTF-8 without BOM）
 2. shell 安全（禁用 `shell=True` + unvalidated input）
 3. chmod 檢查（禁止 0o777）
-4. `yaml.safe_load` 強制（禁用 `yaml.load`）
+4. 讀 YAML 一律經 `_lib_yaml_strict`（safe loader，重複鍵即拒收；禁止直接呼叫 PyYAML 的讀取入口，`tests/shared/test_yaml_strict_only.py` 守）
 5. credentials 掃描（禁止 hardcode token / password）
 6. dangerous functions（禁用 `eval`、`exec`、`pickle.loads` 對外部輸入）
 7. stderr routing（CLI 錯誤訊息必須走 stderr 而非 stdout）
