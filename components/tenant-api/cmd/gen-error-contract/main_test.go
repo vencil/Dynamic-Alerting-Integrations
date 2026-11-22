@@ -243,7 +243,7 @@ func TestScanDirect_ReadsTheDirectAnswers(t *testing.T) {
 		"GROUP_ID_UNAVAILABLE 409 internal/handler/group.go",
 		"TASK_NOT_FOUND 404 internal/handler/task.go",
 		"UPSTREAM_ERROR 502 internal/handler/discovery.go",
-		"PAYLOAD_TOO_LARGE 413 internal/handler/request_body.go",
+		"PAYLOAD_TOO_LARGE 413 internal/handler/read_body_capped.go",
 		"UNAUTHORIZED 401 internal/rbac/middleware.go",
 		"FORBIDDEN 403 internal/rbac/middleware.go",
 		"INVALID_BODY 400 internal/handler/federation/policy.go",
