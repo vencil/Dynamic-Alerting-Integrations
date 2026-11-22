@@ -83,7 +83,7 @@ class TestShippedDeclaredListIsSettable:
 
     #3924 前，讓它們設得進去的是出貨的 `optional_overrides:` 清單；現在它們全在
     讀取端的內建層裡，出貨清單是空的，**不列任何清單**也要放行。所以這裡改讀
-    registry 的成員（`tier: optional_overrides` 的平鍵），並驗兩件事：產物確實
+    registry 的成員（`arming: operator` 的平鍵），並驗兩件事：產物確實
     出貨空清單，以及這批鍵在空清單下仍被放行。
 
     ⭐ 判準來源沿用上面那張判決矩陣的**期望值**，不在本檔另發明一套；下面的
@@ -116,10 +116,11 @@ class TestShippedDeclaredListIsSettable:
 
     @classmethod
     def _shipped(cls) -> list:
-        """The registry keys the platform recognises without a value."""
+        """The flat registry keys the platform recognises without a value
+        (`arming: operator`, built in as off since #4163)."""
         import _registry_lib as rl  # noqa: PLC0415
         return sorted(k for k, e in rl.registry_keys(rl.load_registry()).items()
-                      if e.get("tier") == "optional_overrides"
+                      if e.get("arming") == "operator"
                       and rl.is_flat_key(k))
 
     def test_the_shipped_artifacts_carry_no_declared_list(self):

@@ -104,7 +104,7 @@ def test_value_edit_without_regen_leaves_the_module_stale(tmp_path):
 def test_added_key_without_regen_leaves_the_module_stale(tmp_path):
     def add_key(doc):
         doc["keys"]["ghost_metric"] = {
-            "pack": "mariadb", "tier": "defaults", "value": 1,
+            "pack": "mariadb", "value": 1,
             "unit": "count", "desc": "ghost", "metric_class": "state"}
     path = _write_registry_variant(tmp_path, add_key)
     assert _module_stale(gate.run_check(registry_path=path))

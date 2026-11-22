@@ -723,7 +723,7 @@ def test_registry_metadata_numbers_are_not_read_as_thresholds(monkeypatch):
     # recognises the key (monkeypatch restores it, keeping this hermetic).
     monkeypatch.setattr(gate, "_REGISTRY_KEYS", {"oracle_pga_allocated_bytes"})
     entry = {
-        "pack": "p", "tier": "defaults", "unit": "bytes (4GB)",
+        "pack": "p", "unit": "bytes (4GB)",
         "desc": "d", "metric_class": "capacity",
         "value": 4294967296,
         "value_counterexample": {
