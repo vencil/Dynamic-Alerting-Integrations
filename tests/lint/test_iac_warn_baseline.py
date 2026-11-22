@@ -159,6 +159,29 @@ def test_red_drift(tree, monkeypatch, capsys):
     assert "generated WARN table" in out and "out of date" in out, out
 
 
+def test_drift_while_unregistered_says_register_first(tree, monkeypatch, capsys):
+    """--write-baseline refuses while a WARN is unregistered, so the drift
+    line must not send the reader to it as the fix."""
+    tree.write_text(tree.read_text(encoding="utf-8").replace("| s |", "| hand-edited |"),
+                    encoding="utf-8")
+    monkeypatch.setattr(iac, "collect_findings", _fake_collect([_warn(A), _warn(B)]))
+    rc, out = _main(monkeypatch, capsys, "--ci")
+    drift = [l for l in out.splitlines() if "out of date" in l]
+    assert rc == 1 and drift, out
+    assert "register the WARN(s) above first" in drift[0], out
+    assert "`python3 scripts/tools/lint/check_iac_vibe_rules.py --write-baseline`" \
+        not in drift[0], out
+
+
+def test_drift_alone_asks_to_reread_the_reasons(tree, monkeypatch, capsys):
+    """A count change under one (file, code) key can be a new finding the old
+    summary/rationale does not cover; the key alone cannot tell."""
+    monkeypatch.setattr(iac, "collect_findings",
+                        _fake_collect([_warn(A, line=5), _warn(A, line=9)]))
+    rc, out = _main(monkeypatch, capsys, "--ci")
+    assert rc == 1 and "re-read each changed row's summary and rationale" in out, out
+
+
 def test_red_unregistered(tree, monkeypatch, capsys):
     monkeypatch.setattr(iac, "collect_findings", _fake_collect([_warn(A), _warn(B)]))
     rc, out = _main(monkeypatch, capsys, "--ci")
@@ -183,6 +206,8 @@ def test_without_ci_a_problem_is_printed_but_rc_0(tree, monkeypatch, capsys):
     monkeypatch.setattr(wb, "REGISTER", {})
     rc, out = _main(monkeypatch, capsys)
     assert rc == 0 and "[BASELINE] unregistered" in out, out
+    # The closing line must not also claim every WARN is registered.
+    assert "WARN 皆已登記" not in out and "fail under --ci" in out, out
 
 
 def test_the_pr_body_bypass_does_not_waive_a_register_problem(tree, monkeypatch, capsys):

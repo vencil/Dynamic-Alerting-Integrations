@@ -56,12 +56,12 @@ epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 
 | Layer | 工具 | engine | scope | Critical | baseline-High | INFO |
 |---|---|---|---|---:|---:|---:|
 | L1 Dockerfile（TRK-311）| `check_iac_vibe_rules.py` | hadolint | 全部 Dockerfile（`--list`）| **0** | 見 Layer 1 產生表 | 不列管 |
-| L2 Helm template（TRK-312）| `check_iac_helm.py` | kube-linter | 9 chart | **0** | 5 | 3 |
+| L2 Helm template（TRK-312）| `check_iac_helm.py` | kube-linter | 9 chart | **0** | 4 | 3 |
 | L3 values/manifest secret-shape（TRK-313）| `check_helm_values_secrets.py` | —（純 Vibe，無對應 engine）| 111 檔 | **0** | 0 | 0 |
 | L4 raw k8s manifest（TRK-314）| `check_k8s_manifests.py` | kube-linter | 42 manifest | **0** | 0 | 0 |
-| **總計** | | | | **0** ✅ | L2 5 ＋ L1 產生表 | — |
+| **總計** | | | | **0** ✅ | L2 4（見 Layer 2 分節）＋ L1 產生表 | — |
 
-baseline-High **全數**有 rationale + 退場/修補欄（見各層分節表），其中 L2 `tenant-api` 為架構事實（git workdir 需可寫；原本 L4 也有同一筆，#1594 刪除 raw manifest 後退場）；L2 mariadb×2 + vector×2（root log-collector）為架構必需。L1 的筆數與內容不在這裡手抄：見 Layer 1 的產生表，每筆都必須有登記的 rationale（#3863）。**0 Critical** 由 branch-protection required checks（`Lint` + `Container SAST (Helm L2 + raw k8s L4)`）真擋 merge。
+baseline-High **全數**有 rationale + 退場/修補欄（見各層分節表），其中 L2 `tenant-api` 為架構事實（git workdir 需可寫；原本 L4 也有同一筆，#1594 刪除 raw manifest 後退場）；L2 mariadb×1（`no-read-only-root-fs`；`run-as-non-root` 已於 #1018 解除）+ vector×2（root log-collector）為架構必需。L1 的筆數與內容不在這裡手抄：見 Layer 1 的產生表，每筆都必須有登記的 rationale（#3863）。**0 Critical** 由 branch-protection required checks（`Lint` + `Container SAST (Helm L2 + raw k8s L4)`）真擋 merge。
 
 > **Critical → BLOCK 已真正上鎖**（非裝飾）：`Lint` 與 `Container SAST (Helm L2 + raw k8s L4)` 是必要檢查，以 [`.github/required-checks.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/required-checks.yaml) 為準；與 GitHub 實際設定是否一致由 `required-checks-drift.yml` 每日比對。
 
@@ -85,7 +85,7 @@ hadolint `warning` 不擋 merge，但每一筆都要有登記的 rationale（[#3
 | 2 | `components/tenant-api/Dockerfile` | DL3018 | 1 | `apk add --no-cache git ca-certificates tzdata` 未 pin | apk 不 pin 版本是平台政策（見本節上方「DL3018 政策」）。git：tenant-api 的 gitops writer 要 shell out 到 git（同 Layer 2 `EXEMPTIONS` 的 tenant-api 列）。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
 | 3 | `helm/federation-gateway/audit-sidecar/Dockerfile` | DL3018 | 1 | runtime `apk add --no-cache logrotate` 未 pin | apk 不 pin 版本是平台政策（見本節上方「DL3018 政策」）。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
 | 4 | `helm/vector/projection-gate/Dockerfile` | DL3018 | 1 | #908 tenantProjections gate 的 init-container image `apk add --no-cache python3 py3-yaml` 未 pin | apk 不 pin 版本是平台政策（見本節上方「DL3018 政策」）。py3-yaml 是 distro 套件，映像沒有 pip 與 build toolchain。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
-| 5 | `try-local/generator/Dockerfile` | DL3018 | 1 | runtime `apk add --no-cache git` 未 pin（try-local demo stack 專用映像，#2903） | apk 不 pin 版本是平台政策（見本節上方「DL3018 政策」）。該行上方的註解即援引此政策。generator-service 用 git 讀 `--repo` 與請求的 base commit（`scripts/tools/ops/generator_service.py` 的 `git_read`，#4035）；映像以 nonroot（uid 10001）執行，不能在執行期 `apk add`。nightly image scan 有掃這個映像。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
+| 5 | `try-local/generator/Dockerfile` | DL3018 | 1 | runtime `apk add --no-cache git` 未 pin（try-local demo stack 專用映像，#2903） | apk 不 pin 版本是平台政策（見本節上方「DL3018 政策」）。該行上方的註解即援引此政策。generator-service 用 git 讀 `--repo` 與請求的 base commit（`scripts/tools/ops/generator_service.py` 的 `--git` 旗標，#4035）；映像以 nonroot（uid 10001）執行，不能在執行期 `apk add`。nightly image scan 有掃這個映像。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
 <!-- END GENERATED: iac-l1-warn-baseline -->
 
 **已退場（#1278 D1）**：`audit-sidecar/Dockerfile` build stage 的 **DL3018**（`apk add --no-cache git`，只為 clone mtail 的 pinned commit）——metrics sidecar 改用上游 Vector 後這個映像不再編譯任何東西，build stage 整段拿掉，所以是**消失**而非豁免。

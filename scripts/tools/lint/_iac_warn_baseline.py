@@ -74,7 +74,7 @@ REGISTER: dict[Key, Entry] = {
         summary="runtime `apk add --no-cache git` 未 pin（try-local demo stack 專用映像，#2903）",
         rationale=_APK + "該行上方的註解即援引此政策。generator-service 用 git 讀 `--repo`"
                   " 與請求的 base commit（`scripts/tools/ops/generator_service.py` 的"
-                  " `git_read`，#4035）；映像以 nonroot（uid 10001）執行，不能在執行期"
+                  " `--git` 旗標，#4035）；映像以 nonroot（uid 10001）執行，不能在執行期"
                   " `apk add`。nightly image scan 有掃這個映像。",
         exit=_APK_EXIT),
 }

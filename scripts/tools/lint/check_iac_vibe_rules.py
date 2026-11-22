@@ -649,8 +649,15 @@ def check_warn_baseline(warns: list[dict], write: bool) -> list[str]:
         _lib_io.write_repo_artifact(doc, new)
         print(f"wrote the generated WARN table in {wb.DOC}")
         return out
+    if any(p.startswith("unregistered") for p in out):
+        # --write-baseline refuses while a WARN is unregistered (above), so
+        # pointing at it here would send the reader to a command that fails.
+        return out + [f"the generated WARN table in {wb.DOC} is out of date — "
+                      f"register the WARN(s) above first, then run --write-baseline"]
     return out + [f"the generated WARN table in {wb.DOC} is out of date — run "
-                  f"`python3 scripts/tools/lint/check_iac_vibe_rules.py --write-baseline`"]
+                  f"`python3 scripts/tools/lint/check_iac_vibe_rules.py --write-baseline`, "
+                  f"then re-read each changed row's summary and rationale: a count "
+                  f"change can mean a new finding the old reason does not cover"]
 
 
 def main() -> int:
@@ -715,6 +722,16 @@ def main() -> int:
     if n_block == 0:
         if baseline_fails:
             return EXIT_VIOLATION
+        if baseline:
+            # Without --ci / --write-baseline a register problem does not fail
+            # the run, but the WARNs are then not all registered: say so.
+            print(
+                f"\nOK Container SAST Layer 1 — 0 BLOCK / {n_warn} WARN / {n_info} INFO "
+                f"across {len(dockerfiles)} Dockerfile(s); the WARN register has "
+                f"problems (above) that fail under --ci.\n"
+                f"   容器 SAST 第 1 層：0 個阻擋項；但 WARN 列管有上列問題，--ci 下會擋。"
+            )
+            return EXIT_OK
         print(
             f"\nOK Container SAST Layer 1 — 0 BLOCK / {n_warn} WARN / {n_info} INFO "
             f"across {len(dockerfiles)} Dockerfile(s).\n"
