@@ -189,3 +189,28 @@ func TestPromQLShape_Offsets(t *testing.T) {
 		t.Errorf("rhs spans %q", got)
 	}
 }
+
+// TestAStringIsItsValue: a string literal carries the value the parser reads
+// (escapes resolved), so a check asks which label `label_replace` writes off
+// the parse, not off its spelling (#4136).
+func TestAStringIsItsValue(t *testing.T) {
+	t.Parallel()
+	n := shapeFor(t, `label_replace(x, "ten\x61nt", "$1", "pod", "(.*)")`)
+	args, ok := n["args"].([]any)
+	if !ok || len(args) != 5 {
+		t.Fatalf("args: %v", n["args"])
+	}
+	for i, want := range map[int]string{1: "tenant", 2: "$1", 3: "pod", 4: "(.*)"} {
+		a := args[i].(map[string]any)
+		if a["kind"] != "string" || a["value"] != want {
+			t.Errorf("arg %d: %v, want string %q", i, a, want)
+		}
+	}
+	if _, has := args[0].(map[string]any)["value"]; has {
+		t.Errorf("a selector has no value: %v", args[0])
+	}
+	p := shapeFor(t, `count_values("tenant", x)`)["param"].(map[string]any)
+	if p["kind"] != "string" || p["value"] != "tenant" {
+		t.Errorf("count_values param: %v", p)
+	}
+}

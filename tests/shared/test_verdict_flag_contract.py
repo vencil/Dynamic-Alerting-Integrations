@@ -554,6 +554,16 @@ def _exclude_tree(tmp: Path) -> str:
     return str(d)
 
 
+def _tenant_exclude_tree(tmp: Path) -> str:
+    """``_exclude_tree``'s two files as tenant t's rule files (#4136: the lint
+    reads a scan path's file as the tenant its directory names)."""
+    d = tmp / "tenants"
+    if not (d / "t").is_dir():
+        _exclude_tree(d)
+        (d / "exclude-tree").rename(d / "t")
+    return str(d)
+
+
 def _silence_on(tmp: Path, alertname: str) -> str:
     return _write_str(tmp / "silence-on.json", json.dumps([{
         "id": "on-dropped", "createdBy": "gate", "comment": "exclude probe",
@@ -772,7 +782,7 @@ RECIPES: list[Recipe] = [
     # rule file excluded: what it held is gone from the verdict; a pattern
     # that matches nothing changes nothing.
     R("lint_custom_rules", "--exclude",
-      lambda t, s: [_exclude_tree(t), "--ci"],
+      lambda t, s: [_tenant_exclude_tree(t), "--ci"],
       flip=("--exclude", "drop.yaml"), boundary=("--exclude", "nothing-*.yaml"),
       note="drop.yaml's predict_linear is an ERROR (1); excluding it by name "
            "leaves keep.yaml alone (0); a pattern matching no file keeps the "
