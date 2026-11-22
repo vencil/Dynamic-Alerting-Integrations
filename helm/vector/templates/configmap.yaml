@@ -959,6 +959,11 @@ data:
             # scraper sets honor_timestamps=false, the series stays at its last
             # value until the pod restarts and the alert never clears. Change
             # TenantProjectionStampMissing together with any of those.
+            # ⛔ The other side of the same lifetime: a scrape slower than it
+            # can miss a first miss entirely. templates/servicemonitor.yaml
+            # refuses serviceMonitor.interval above 30s for that reason (two
+            # scrapes inside the shortest 60s lifetime); a raw scrape job has
+            # to keep the same bound (k8s/03-monitoring scrapes at 15s).
             name: tenant_projection_stamp_missed_events_total
             namespace: vector
             tags:

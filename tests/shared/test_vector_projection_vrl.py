@@ -455,6 +455,37 @@ class TestStampMissCounter:
         assert consumers == {"tenant_stamp_missed", "prometheus"}, consumers
 
     @_needs_helm
+    @pytest.mark.parametrize("interval,ok", [
+        (None, True), ("15s", True), ("30s", True), ("500ms", True),
+        ("31s", False), ("60s", False), ("1m", False), ("5m", False),
+        ("1m30s", False), ("fast", False),
+    ])
+    def test_servicemonitor_interval_must_fit_the_counter_lifetime(
+            self, repo_root: Path, interval: str | None, ok: bool) -> None:
+        """The exporter drops the stamp-miss series 60-120s after its last
+        increment; a scrape interval of 60s or more can miss a first miss
+        entirely. The ServiceMonitor refuses anything above 30s (two scrapes
+        inside the shortest lifetime); the chart default 15s must pass."""
+        sets = {"serviceMonitor.enabled": "true"}
+        if interval is not None:
+            sets["serviceMonitor.interval"] = interval
+        r = _render_result(repo_root / "helm/vector", sets=sets)
+        if ok:
+            assert r.returncode == 0, r.stderr
+        else:
+            assert r.returncode != 0, f"{interval} must be refused"
+            assert "serviceMonitor.interval" in r.stderr, r.stderr
+
+    @_needs_helm
+    def test_servicemonitor_interval_is_not_checked_without_the_counter(self, repo_root: Path) -> None:
+        """With metrics off there is no counter (only the gate exposer), so a
+        slow interval is the operator's business."""
+        r = _render_result(repo_root / "helm/vector", sets={
+            **_PROJECTION_SETS, "serviceMonitor.enabled": "true",
+            "metrics.enabled": "false", "serviceMonitor.interval": "5m"})
+        assert r.returncode == 0, r.stderr
+
+    @_needs_helm
     def test_counter_is_absent_when_metrics_are_off(self, repo_root: Path) -> None:
         """metrics.enabled=false renders no exporter; a log_to_metric with no
         consumer would only cost CPU, so the branch goes with it."""
