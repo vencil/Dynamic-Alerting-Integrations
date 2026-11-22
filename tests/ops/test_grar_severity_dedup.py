@@ -104,9 +104,10 @@ def test_a_disabled_tenant_is_excluded_from_the_dedup_rule(tmp_path):
     yml = p.stdout.split("--- DRY RUN: alertmanager.yml ---", 1)[1].rsplit("\n--- ", 1)[0]
     rules = yaml.safe_load(yml)["inhibit_rules"]
     dedup = [r for r in rules if 'severity="critical"' in r.get("source_matchers", [])]
-    assert len(dedup) == 1, rules
-    assert dedup[0]["target_matchers"][-1] == 'tenant!~"t-a"'
-    assert dedup[0]["equal"] == ["tenant", "metric_group"]
+    assert len(dedup) == 2, rules
+    assert [r["target_matchers"][-1] for r in dedup] == ['tenant!~"t-a"'] * 2
+    assert [r["equal"] for r in dedup] == [["tenant", "metric_group", "da_cluster"],
+                                           ["tenant", "metric_group"]]
 
 
 # ── what the exporter does not read refuses the whole tree ──────────────
@@ -270,8 +271,8 @@ def test_an_unknown_mode_is_excluded_from_the_dedup_rule():
     (#3621, #3899), and no INFO line is added for it."""
     from _grar_routes import generate_inhibit_rules
     rules, notes = generate_inhibit_rules({"t-a": None, "t-b": "disable", "t-c": "enable"})
-    assert len(rules) == 1, rules
-    assert rules[0]["target_matchers"][-1] == 'tenant!~"t-a|t-b"', rules
+    assert len(rules) == 2, rules
+    assert [r["target_matchers"][-1] for r in rules] == ['tenant!~"t-a|t-b"'] * 2, rules
     assert [n.tenant for n in notes] == ["t-b"]
 
 

@@ -12,13 +12,16 @@
 #     --set 'tenantProjections[0].accountId=1000' \
 #     --set 'tenantProjections[1].tenantId=tenant-beta' \
 #     --set 'tenantProjections[1].accountId=1001' \
+#     --set 'tenantProjections[1].visibleFields={status,path}' \
 #     | yq '.[] | select(.kind=="ConfigMap" and (.metadata.name|test("vector-config"))) | .data."vector.yaml"' \
 #     > /tmp/rendered-vector.yaml
 #   vector test /tmp/rendered-vector.yaml helm/vector/tests/projection_tests.yaml
 #
 # The fixture render MUST include tenantProjections for tenant-alpha→1000 and
 # tenant-beta→1001, or the tenant_project / tenant_route transforms (and the
-# t_1000 / t_1001 routes these tests reference) are not rendered.
+# t_1000 / t_1001 routes these tests reference) are not rendered. tenant-beta
+# also carries a visibility selection (visibleFields [status, path]) and
+# tenant-alpha none, so both sides of ADR-021's tenant-selected visibility run.
 #
 # The mock events model what Vector's kubernetes_logs source produces: a raw
 # `.message` string (the gateway's audit JSON, or Envoy operational text) plus
@@ -367,6 +370,82 @@ tests:
     # Must NOT leak into tenant-alpha's partition.
     no_outputs_from:
       - tenant_route.t_1000
+
+  # ── ADR-021 tenant-selected visibility: a selection only NARROWS ─────────
+  # tenant-beta selected [status, path]. Its copy keeps those plus the
+  # always-visible fields and drops every other allowlisted field — from the
+  # event AND from the re-serialized message. tenant-alpha (no selection)
+  # keeps the whole allowlist; the 0:0 copy is untouched either way. The
+  # payload's `upstream` stays absent: no selection can add a field.
+  - name: "tenant-beta's visibleFields narrows its copy; 0:0 and tenant-alpha keep everything"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-beta","token_id":"tok-b","method":"GET","path":"/select/logsql/query","query":"_time:5m secret-term","status":200,"duration_ms":7,"upstream":"10.42.7.13:9428","response_flags":"-"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-fghij
+          kubernetes.pod_node_name: node-9
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.query, "_time:5m secret-term", "0:0 keeps every field")
+              assert_eq!(.token_id, "tok-b")
+      - extract_from: tenant_route.t_1001
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.account_id, 1001)
+              # Selected fields kept.
+              assert_eq!(.status, "200")
+              assert_eq!(.path, "/select/logsql/query")
+              # Always-visible fields kept whatever the selection says.
+              assert_eq!(.tenant_id, "tenant-beta")
+              assert_eq!(.log_type, "federation_audit")
+              assert!(is_string(.log_event_id), "join key kept")
+              assert!(exists(.timestamp), "event time kept")
+              # Allowlisted but NOT selected: dropped.
+              assert!(!exists(.query),          "unselected query kept")
+              assert!(!exists(.method),         "unselected method kept")
+              assert!(!exists(.token_id),       "unselected token_id kept")
+              assert!(!exists(.duration_ms),    "unselected duration_ms kept")
+              assert!(!exists(.response_flags), "unselected response_flags kept")
+              msg = to_string(.message) ?? ""
+              assert!(!contains(msg, "secret-term"), "unselected query inside re-serialized message")
+              assert!(!contains(msg, "tok-b"),       "unselected token_id inside re-serialized message")
+              # Outside the allowlist: still absent.
+              assert!(!exists(.upstream), "LEAK: upstream")
+              assert!(!contains(msg, "10.42.7.13"), "LEAK: upstream inside message")
+    no_outputs_from:
+      - tenant_route.t_1000
+
+  - name: "tenant-alpha (no visibility selection) keeps every allowlisted field"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","token_id":"tok-a","method":"GET","path":"/select/logsql/hits","query":"_time:1h","status":200,"duration_ms":9,"response_flags":"-"}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_route.t_1000
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.query, "_time:1h")
+              assert_eq!(.method, "GET")
+              assert_eq!(.token_id, "tok-a")
+              assert_eq!(.response_flags, "-")
+              assert!(exists(.duration_ms))
+    no_outputs_from:
+      - tenant_route.t_1001
 
   # ══ ADR-028 §證據通道 / #1234 — federation revocation EVIDENCE channel ═══════════
   # These insert_at `origin_split` (NOT demux) because the routing decision is

@@ -16,12 +16,13 @@
 //     merges into: Silent Mode / Custom Alert rules, no dedup rule — the merge
 //     refuses a source that holds one, #3899)
 //   - testdata/generated_dedup_inhibit.yaml          (the generator's REAL
-//     severity dedup rule for a fixed dedup_configs, written and drift-checked
+//     severity dedup rules for a fixed dedup_configs, written and drift-checked
 //     by tests/ops/test_generated_dedup_inhibit_fixture.py)
 //
-// The dedup rule is emitted by scripts/tools/ops/_grar_routes.py
-// (build_dedup_inhibit_rule): ONE rule for every tenant, with the tenants set
-// to `_severity_dedup: disable` in its target's tenant!~ list. Reading its
+// The dedup rules are emitted by scripts/tools/ops/_grar_routes.py
+// (build_dedup_inhibit_rules): the same two for every tenant — alerts that
+// carry da_cluster, alerts that do not (#4097) — with the tenants set to
+// `_severity_dedup: disable` in each target's tenant!~ list. Reading their
 // actual output here means Alertmanager's own matcher — not a re-derivation —
 // judges what the generator writes.
 package aminhibit

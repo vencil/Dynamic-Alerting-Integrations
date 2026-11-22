@@ -156,8 +156,8 @@ FINDING_KINDS: dict[str, str] = {
         "tree is refused in every mode.",
     "severity_dedup_excluded":
         "A tenant set _severity_dedup: disable, so it is in the tenant!~ list "
-        "of the one severity dedup inhibit rule (#3899): both its warning and "
-        "critical notifications are sent. A note; never blocks.",
+        "of both severity dedup inhibit rules (#3899, #4097): both its warning "
+        "and critical notifications are sent. A note; never blocks.",
     "unknown_routing_profile":
         "A tenant's _routing_profile names a profile its directory chain "
         "does not define.",

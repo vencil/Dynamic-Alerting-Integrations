@@ -12,18 +12,22 @@ Modes (exactly one; without one the run is a caller error, exit 2):
   --output-alertmanager  the merged config as a plain alertmanager.yml
   --apply                merge into the cluster's ConfigMap and reload
 
-Severity Dedup (#3899: one inhibit rule for every tenant):
-  Default (absent or "enable"): a tenant's critical suppresses its warning of the same metric_group
-  "disable": the tenant is in the rule's tenant!~ list — both warning and critical notifications are sent
-  Mechanism: ONE inhibit_rule, tenant=~".+" + metric_group=~".+" gated on both sides,
-  equal: [tenant, metric_group]; none at all when no tenant is at "enable"
+Severity Dedup (#3899: the same inhibit rules for every tenant; #4097: per cluster):
+  Default (absent or "enable"): a tenant's critical suppresses its warning of the same
+  metric_group in the same cluster
+  "disable": the tenant is in the rules' tenant!~ list — both warning and critical notifications are sent
+  Mechanism: TWO inhibit_rules, tenant=~".+" + metric_group=~".+" gated on both sides —
+  one for alerts that carry da_cluster (equal: [tenant, metric_group, da_cluster]), one for
+  alerts that do not (da_cluster="", equal: [tenant, metric_group]); none at all when no
+  tenant is at "enable"
 
 v2.0.0 Bilingual Templates (i18n):
   Rule Packs can include Chinese annotations: summary_zh, description_zh, platform_summary_zh
-  Alertmanager templates use fallback logic to prefer Chinese if available:
-    Example: {{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary }}
-  Receiver templates (email, webhook, slack, teams, pagerduty) use this pattern automatically.
-  No changes to route generator needed — the fallback pattern is in Alertmanager's global templates.
+  A notification template can prefer the Chinese one where it is set, per alert
+  (a group can hold several alerts — several instances, several clusters):
+    Example: {{ range .Alerts }}{{ or .Annotations.summary_zh .Annotations.summary }}{{ end }}
+  The generator renders no template: receivers use Alertmanager's built-in ones unless
+  the deployment's base config brings its own (docs/integration/byo-alertmanager-integration.md).
 
 Usage:
   python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --output-configmap -o am-configmap.yaml
@@ -128,7 +132,7 @@ from _grar_parse import field_type_findings  # noqa: E402
 from _grar_routes import (  # noqa: E402, F401
     SlotVerdict,
     _build_enforced_routes,
-    build_dedup_inhibit_rule,
+    build_dedup_inhibit_rules,
     _build_override_matchers,
     _build_override_route,
     _build_custom_alert_routes,
@@ -2087,7 +2091,7 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
         enforced_routing=enforced_routing, tenants=dedup_configs,
         secrets=policy.secret_binding(mount_root))
 
-    # Generate the severity dedup inhibit rule (#3899: one, or none)
+    # Generate the severity dedup inhibit rules (#3899, #4097: two, or none)
     inhibit_rules, dedup_warnings = generate_inhibit_rules(dedup_configs)
 
     # Collect all warnings

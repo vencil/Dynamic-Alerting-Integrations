@@ -795,8 +795,9 @@ def assert_base_has_no_dedup_rule(base: object, where: str = "the base config",
     rule the route generator itself writes — raise ValueError (rc 1) naming
     each one.
 
-    The generator renders that rule from conf.d (ONE rule, the ``disable``
-    tenants in its ``tenant!~`` list), and ``merge_generated`` keeps every
+    The generator renders those rules from conf.d (TWO rules, #4097: alerts
+    that carry the cluster label, alerts that do not; the ``disable``
+    tenants in the ``tenant!~`` list of both), and ``merge_generated`` keeps every
     base inhibit rule as written, so a generated rule kept in the base would
     override conf.d: a tenant set to ``disable`` would still be deduped.
     Such a base is almost always an older output fed back as the source —
@@ -805,8 +806,9 @@ def assert_base_has_no_dedup_rule(base: object, where: str = "the base config",
     recognises an output with the marker deleted and no generated receiver.
 
     Only the generator's own shapes count
-    (``_grar_validate.is_generated_dedup_rule``: today's and the per-tenant
-    one before #3899). An inhibit rule the operator wrote is operator policy:
+    (``_grar_validate.is_generated_dedup_rule``: today's two, the single
+    rule before #4097 — ``_grar_routes.pre4097_dedup_inhibit_rule`` — and
+    the per-tenant one before #3899). An inhibit rule the operator wrote is operator policy:
     this guard does not judge it, even where it suppresses what
     ``_severity_dedup`` (``disable`` included) would let through — the other
     invariants (Watchdog, platform-alert silencing, gated ``equal`` labels)

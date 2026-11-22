@@ -1274,7 +1274,8 @@ class TestCustomAlertIsolationInjection:
 
 
 def _build_inhibit_for_test():
-    # the generated severity-dedup inhibit (#3899: one rule for every tenant)
+    # the generated severity-dedup inhibit (#3899: the same rules for every
+    # tenant; #4097: two of them — this is the per-cluster one)
     return generate_inhibit_rules({"db-a": "enable"})[0][0]
 
 

@@ -280,7 +280,7 @@ def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path):
     # routes the nested tenant (before, it was the flat row that WARNed).
     assert routes["status"] == vc.PASS, routes
     assert "skipped_nested_files" not in routes, routes
-    assert "Validation: 1 route(s), 1 receiver(s), 1 inhibit rule(s)" in routes["details"], routes
+    assert "Validation: 1 route(s), 1 receiver(s), 2 inhibit rule(s)" in routes["details"], routes
 
 
 def test_a_nested_tenant_alone_does_not_flag_a_root_carrier_lookup(tmp_path):

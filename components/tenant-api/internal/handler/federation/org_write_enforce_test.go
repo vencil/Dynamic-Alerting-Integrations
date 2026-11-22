@@ -298,6 +298,82 @@ func TestOrgWriteEnforce_PutTenantFederation(t *testing.T) {
 	})
 }
 
+// ── PutTenantLogVisibility (ADR-021 §租戶自選的可見度子集) ─────────────────
+//
+// Same gate as site #9 (PutTenantFederation): PermRead route middleware, then
+// the handler's own OrgAllowed(PermAdmin). The split-rule cases make the
+// handler's gate the only thing that can deny, and the read+write-but-not-admin
+// case pins the permission LEVEL (admin, not write).
+
+func TestOrgWriteEnforce_PutTenantLogVisibility(t *testing.T) {
+	t.Parallel()
+	run := func(t *testing.T, rbacYAML, groups, callerOrg string) (*httptest.ResponseRecorder, *atomic.Int32) {
+		t.Helper()
+		rbacMgr := newFedOrgEnforceRBACFrom(t, rbacYAML)
+		dir := t.TempDir()
+		var writes atomic.Int32
+		st, err := statestore.NewDir(dir, func(string) { writes.Add(1) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		tenantOrg := newFedOrgTenantOrg()
+		rbacMgr.SetOrgResolver(func(tid string) []string { orgs, _ := tenantOrg.OrgsForTenant(tid); return orgs })
+		d := &handler.Deps{RBAC: rbacMgr, TenantOrg: tenantOrg, ConfigDir: dir, State: st}
+		req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+fedOrgTenant+"/federation/log-visibility",
+			"id", fedOrgTenant, bytes.NewBufferString(`{"fields":["status"]}`))
+		req.Header.Set("Content-Type", "application/json")
+		req = fedOrgIdentity(req, callerOrg)
+		req.Header.Set("X-Forwarded-Groups", groups)
+		w := httptest.NewRecorder()
+		wrapWithRBACMiddleware(PutTenantLogVisibility(d), rbacMgr, rbac.PermRead, handler.TenantIDFromPath).ServeHTTP(w, req)
+		return w, &writes
+	}
+	splitYAML := `groups:
+  - name: ` + fedOrgReadAllGroup + `
+    tenants: ["*"]
+    permissions: [read]
+  - name: ` + fedOrgGroup + `
+    tenants: ["*"]
+    permissions: [read, write, admin]
+    org-scope: org
+`
+	splitGroups := fedOrgReadAllGroup + "," + fedOrgGroup
+	// read and write in the caller's own org, but no admin anywhere.
+	readWriteYAML := `groups:
+  - name: ` + fedOrgGroup + `
+    tenants: ["*"]
+    permissions: [read, write]
+    org-scope: org
+`
+
+	for _, tc := range []struct {
+		name, yaml, groups, org string
+		want                    int
+		wantWrites              int32
+	}{
+		{"outsider_denied_403_no_write", fedOrgRBACYAML, fedOrgGroup, fedOrgOutsider, http.StatusForbidden, 0},
+		{"member_allowed_200", fedOrgRBACYAML, fedOrgGroup, fedOrgMember, http.StatusOK, 1},
+		{"read_passes_admin_org_gate_denies_403_no_write", splitYAML, splitGroups, fedOrgOutsider, http.StatusForbidden, 0},
+		{"split_rules_member_allowed_200", splitYAML, splitGroups, fedOrgMember, http.StatusOK, 1},
+		{"member_read_write_not_admin_403_no_write", readWriteYAML, fedOrgGroup, fedOrgMember, http.StatusForbidden, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w, writes := run(t, tc.yaml, tc.groups, tc.org)
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, tc.want, w.Body.String())
+			}
+			if tc.want == http.StatusForbidden && tc.yaml != fedOrgRBACYAML &&
+				!strings.Contains(w.Body.String(), "log visibility") {
+				t.Fatalf("403 did not come from PutTenantLogVisibility's admin gate; body=%s", w.Body.String())
+			}
+			if n := writes.Load(); n != tc.wantWrites {
+				t.Errorf("state writes = %d, want %d", n, tc.wantWrites)
+			}
+		})
+	}
+}
+
 // ── Platform-wide write bar: non-org-scoped "*" admin only (#3160) ────────
 //
 // PutFederationPolicy and BackfillAccounts change platform-wide state (the

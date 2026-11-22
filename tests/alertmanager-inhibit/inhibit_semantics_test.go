@@ -140,10 +140,37 @@ func TestTryLocalInhibitSemantics(t *testing.T) {
 			src:  tlSilentCritSentinel, tgt: tlCriticalConnections, want: true,
 			why: "Silent Mode (critical) must suppress that tenant's criticals",
 		},
+		{
+			// ADR-006: Silent Mode is the tenant's, not a cluster's — the
+			// same property the k8s base pins below (the sentinel's
+			// da_cluster is the evaluating Prometheus', the silenced alert's
+			// is where its series came from). Adding da_cluster to either
+			// Silent rule's equal: turns the matching case red.
+			name: "silent_warning_reaches_the_tenants_alerts_in_another_cluster",
+			src:  withCluster(tlSilentWarnSentinel, "central"),
+			tgt:  withCluster(tlWarningConnections, "east"), want: true,
+			why: "Silent Mode is tenant-wide: equal stays [tenant], whatever da_cluster each side carries",
+		},
+		{
+			name: "silent_critical_reaches_the_tenants_alerts_in_another_cluster",
+			src:  withCluster(tlSilentCritSentinel, "central"),
+			tgt:  withCluster(tlCriticalConnections, "east"), want: true,
+			why: "Silent Mode is tenant-wide: equal stays [tenant], whatever da_cluster each side carries",
+		},
 	})
 }
 
-// ---- the generator's severity dedup rule (#3899) ----
+// withCluster is l plus the da_cluster an alert carries by the time it reaches
+// Alertmanager (ADR-006: every Prometheus sets it under external_labels).
+func withCluster(l lset, cluster string) lset {
+	out := lset{"da_cluster": cluster}
+	for k, v := range l {
+		out[k] = v
+	}
+	return out
+}
+
+// ---- the generator's severity dedup rules (#3899, #4097) ----
 
 // generatedDedupFixture is _grar_routes.generate_inhibit_rules' REAL output
 // for ta=enable tb=disable tc=None td=enable, written and drift-checked by
@@ -152,15 +179,17 @@ func TestTryLocalInhibitSemantics(t *testing.T) {
 // dedup semantics are proven on.
 const generatedDedupFixture = "tests/alertmanager-inhibit/testdata/generated_dedup_inhibit.yaml"
 
-// TestGeneratedDedupSemantics: ONE rule for every tenant. A tenant's critical
-// suppresses its own warning of the same metric_group; the tenants set to
+// TestGeneratedDedupSemantics: the same two rules for every tenant (#4097: one
+// for alerts that carry da_cluster, one for alerts that do not). A tenant's
+// critical suppresses its own warning of the same metric_group in the same
+// cluster; the tenants set to
 // disable (tb) or never judged (tc) are in the target's tenant!~ list; and an
 // alert of a tenant the generator never saw (tz) IS deduped — the rule states
 // who is OUT, not who is in (accepted as breaking in #3899).
 func TestGeneratedDedupSemantics(t *testing.T) {
 	rules := loadPlainAM(t, generatedDedupFixture)
-	if len(rules) != 1 {
-		t.Fatalf("%s: want exactly one dedup rule, got %d", generatedDedupFixture, len(rules))
+	if len(rules) != 2 {
+		t.Fatalf("%s: want the two dedup rules, got %d", generatedDedupFixture, len(rules))
 	}
 
 	crit := func(tenant, group string) lset {
@@ -194,7 +223,7 @@ func TestGeneratedDedupSemantics(t *testing.T) {
 		{
 			name: "second_enabled_tenant_is_deduped_too",
 			src:  crit("td", g), tgt: warn("td", g), want: true,
-			why: "one rule covers every enabled tenant",
+			why: "the same rules cover every enabled tenant",
 		},
 		{
 			name: "different_metric_group_is_not_suppressed",
@@ -252,6 +281,66 @@ func TestGeneratedDedupSemantics(t *testing.T) {
 			why: "tenant!~\"tb|tc\" is ^(?:tb|tc)$, so tbb is not excluded",
 		},
 	})
+
+	// One tenant in several clusters (ADR-006, #4097): every alert reaching
+	// Alertmanager carries the `da_cluster` of the Prometheus it left, and a
+	// critical in one cluster says nothing about the other cluster's warning.
+	in := withCluster
+	const east, west = "east", "west"
+	run(t, rules, []check{
+		{
+			name: "same_cluster_critical_suppresses_its_paired_warning",
+			src:  in(crit("ta", g), east), tgt: in(warn("ta", g), east), want: true,
+			why: "dedup must still work inside one cluster",
+		},
+		{
+			name: "east_critical_does_not_suppress_west_warning",
+			src:  in(crit("ta", g), east), tgt: in(warn("ta", g), west), want: false,
+			why: "west is degraded, not critical: its warning is the only notification west gets",
+		},
+		{
+			name: "west_critical_does_not_suppress_east_warning",
+			src:  in(crit("ta", g), west), tgt: in(warn("ta", g), east), want: false,
+			why: "the mirror direction",
+		},
+		{
+			name: "same_cluster_other_tenant_is_not_suppressed",
+			src:  in(crit("ta", g), east), tgt: in(warn("td", g), east), want: false,
+			why: "sharing a cluster does not make two tenants one",
+		},
+		{
+			name: "same_cluster_other_metric_group_is_not_suppressed",
+			src:  in(crit("ta", g), east), tgt: in(warn("ta", other), east), want: false,
+			why: "sharing a cluster does not pair two metric groups",
+		},
+		{
+			name: "disabled_tenant_is_not_deduped_inside_a_cluster",
+			src:  in(crit("tb", g), east), tgt: in(warn("tb", g), east), want: false,
+			why: "_severity_dedup: disable holds with the cluster label present",
+		},
+		{
+			// A Prometheus that has not set external_labels.da_cluster yet:
+			// neither alert carries the label.
+			name: "pair_without_cluster_label_is_still_deduped",
+			src:  crit("ta", g), tgt: warn("ta", g), want: true,
+			why: "a deployment that has not set the external label keeps its dedup",
+		},
+		{
+			name: "labelled_critical_does_not_suppress_unlabelled_warning",
+			src:  in(crit("ta", g), east), tgt: warn("ta", g), want: false,
+			why: "an alert with no cluster is not known to be in east",
+		},
+		{
+			name: "unlabelled_critical_does_not_suppress_labelled_warning",
+			src:  crit("ta", g), tgt: in(warn("ta", g), east), want: false,
+			why: "the mirror direction",
+		},
+		{
+			name: "disabled_tenant_without_cluster_label_is_not_deduped",
+			src:  crit("tb", g), tgt: warn("tb", g), want: false,
+			why: "the exclusion list holds on the path for alerts without the label too",
+		},
+	})
 }
 
 // ---- k8s (the checked-in ConfigMap Alertmanager actually loads) ----
@@ -292,6 +381,14 @@ func TestK8sTenantAgnosticInhibitSemantics(t *testing.T) {
 		"alertname": "TenantSilentWarning",
 		"severity":  "none", "component": "sentinel", "tenant": tenantX,
 	}
+	platformCriticalX := lset{
+		"alertname": "MariaDBHighConnectionsCritical",
+		"severity":  "critical", "tenant": tenantX, "metric_group": "mysql_connections",
+	}
+	silentCritSentinelX := lset{
+		"alertname": "TenantSilentCritical",
+		"severity":  "none", "component": "sentinel", "tenant": tenantX,
+	}
 
 	run(t, rules, []check{
 		{
@@ -324,6 +421,30 @@ func TestK8sTenantAgnosticInhibitSemantics(t *testing.T) {
 			name: "custom_recipe_silent_does_not_touch_platform_alerts",
 			src:  customSilentSentinelX, tgt: platformWarningX, want: false,
 			why: "platform alerts carry no name, so equal:[tenant,name] excludes them",
+		},
+		{
+			// ADR-006: Silent Mode is the tenant's, not a cluster's. The
+			// sentinel reads threshold-exporter series, so its da_cluster is
+			// only "the Prometheus that evaluated it" — the alert it must
+			// silence carries the cluster its series came from. Adding
+			// da_cluster to this rule's equal: would end the silence for
+			// every cluster but the evaluator's.
+			name: "silent_warning_reaches_the_tenants_alerts_in_another_cluster",
+			src:  withCluster(silentWarnSentinelX, "central"),
+			tgt:  withCluster(platformWarningX, "east"), want: true,
+			why: "Silent Mode is tenant-wide: equal stays [tenant], whatever da_cluster each side carries",
+		},
+		{
+			name: "silent_critical_reaches_the_tenants_alerts_in_another_cluster",
+			src:  withCluster(silentCritSentinelX, "central"),
+			tgt:  withCluster(platformCriticalX, "east"), want: true,
+			why: "Silent Mode is tenant-wide: equal stays [tenant], whatever da_cluster each side carries",
+		},
+		{
+			name: "custom_recipe_silent_reaches_its_recipe_in_another_cluster",
+			src:  withCluster(customSilentSentinelX, "central"),
+			tgt:  withCluster(customAlertSameRecipeX, "east"), want: true,
+			why: "a silent recipe is the tenant's: equal stays [tenant, name]",
 		},
 		{
 			name: "silent_warning_suppresses_tenant_warning",
