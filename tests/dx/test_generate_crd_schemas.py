@@ -168,3 +168,116 @@ def test_importing_the_tool_leaves_the_global_safe_loader_alone() -> None:
     rejected = {name: "ConstructorError" for name in got["before"]}
     assert got["before"] == rejected, got
     assert got["after"] == rejected, got
+
+
+# ── #3981: main end to end, offline — the write through the artifact entry ──
+# `_fetch` (the network) and `_load_crd_docs` (da-crdecode) are replaced; the
+# rest — the lock, the per-source loop, the writes — runs as shipped.
+
+def _crd_doc(group: str, kind: str, version: str = "v1") -> dict:
+    return {"kind": "CustomResourceDefinition",
+            "spec": {"group": group, "names": {"kind": kind},
+                     "versions": [{"name": version, "schema": {"openAPIV3Schema": {
+                         "type": "object", "description": f"{kind} schema"}}}]}}
+
+
+@pytest.fixture
+def offline(tmp_path, monkeypatch):
+    """Two pinned sources under a temp CRD_DIR; ``offline.fail`` names the
+    source ids whose fetch fails."""
+    crd = tmp_path / "crd"
+    crd.mkdir()
+    (crd / "SOURCES.yaml").write_text(
+        "sources:\n"
+        "  - id: one\n    url: https://example.invalid/v1.0.0/one.yaml\n    ref: v1.0.0\n"
+        "    kinds: [{group: a.example, kind: Alpha, version: v1}]\n"
+        "  - id: two\n    url: https://example.invalid/v1.0.0/two.yaml\n    ref: v1.0.0\n"
+        "    kinds: [{group: b.example, kind: Beta, version: v1}]\n", encoding="utf-8")
+    docs = {"one.yaml": _crd_doc("a.example", "Alpha"), "two.yaml": _crd_doc("b.example", "Beta")}
+
+    class State:
+        fail: set = set()
+        root = crd
+    state = State()
+
+    def fetch(url):
+        name = url.rsplit("/", 1)[1]
+        if name.split(".")[0] in state.fail:
+            raise OSError("connection refused (test)")
+        return name.encode()
+
+    monkeypatch.setattr(MODULE, "REPO_ROOT", tmp_path)  # outputs are named relative to it
+    monkeypatch.setattr(MODULE, "CRD_DIR", crd)
+    monkeypatch.setattr(MODULE, "SOURCES", crd / "SOURCES.yaml")
+    monkeypatch.setattr(MODULE, "LOCK", crd / "GENERATED.json")
+    monkeypatch.setattr(MODULE, "_fetch", fetch)
+    monkeypatch.setattr(MODULE, "_load_crd_docs", lambda text: [docs[text]])
+    monkeypatch.setattr(sys, "argv", ["generate_crd_schemas.py"])
+    return state
+
+
+def _run(capsys):
+    try:
+        rc = MODULE.main()
+    except SystemExit as exc:
+        rc = exc.code
+    return rc, capsys.readouterr().err
+
+
+def test_main_vendors_every_source_and_the_lock(offline, capsys):
+    rc, err = _run(capsys)
+    assert rc == 0, err
+    crd = offline.root
+    assert json.loads((crd / "a.example" / "Alpha_v1.json").read_text())["description"] == "Alpha schema"
+    assert (crd / "b.example" / "Beta_v1.json").read_text().endswith("}\n")
+    lock = json.loads((crd / "GENERATED.json").read_text())["sources"]
+    assert sorted(lock) == ["one", "two"]
+
+
+def test_a_later_failing_source_leaves_the_earlier_one_unwritten(offline, capsys):
+    """#3981: the schemas are written only after every source was fetched and
+    read. The second fetch failing (rc 2) used to leave the first source's
+    schema already written and the lock behind it."""
+    offline.fail = {"two"}
+    rc, err = _run(capsys)
+    assert rc == 2 and "two: fetch failed" in err, err
+    assert sorted(p.name for p in offline.root.rglob("*") if p.is_file()) == ["SOURCES.yaml"]
+
+
+@pytest.mark.parametrize("refused", ["fifo", "stdin"])
+def test_a_refused_target_is_rc2_one_line_and_nothing_is_written(refused, offline, capsys):
+    """#3981: a vendored schema that is a FIFO (the old read of it blocked
+    forever) or this process's stdin (refused before it is replaced) stops
+    the run with one line naming it, before the first write."""
+    import os
+    target = offline.root / "b.example" / "Beta_v1.json"
+    target.parent.mkdir()
+    if refused == "fifo":
+        if not hasattr(os, "mkfifo") or not hasattr(__import__("signal"), "SIGALRM"):
+            pytest.skip("no FIFO / SIGALRM on this platform")
+        os.mkfifo(target)
+        import signal
+
+        def hung(signum, frame):
+            raise AssertionError("blocked on the FIFO")
+        prev = signal.signal(signal.SIGALRM, hung)
+        signal.alarm(20)
+        try:
+            rc, err = _run(capsys)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, prev)
+    else:
+        target.write_text("{}\n", encoding="utf-8")
+        saved = os.dup(0)
+        try:
+            with open(target, "rb") as fh:
+                os.dup2(fh.fileno(), 0)
+            rc, err = _run(capsys)
+        finally:
+            os.dup2(saved, 0)
+            os.close(saved)
+    assert rc == 2 and str(target) in err, err
+    assert len(err.strip().splitlines()) == 1, err
+    assert not (offline.root / "a.example").exists()
+    assert not (offline.root / "GENERATED.json").exists()

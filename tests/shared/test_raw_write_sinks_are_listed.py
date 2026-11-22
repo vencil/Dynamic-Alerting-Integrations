@@ -266,10 +266,6 @@ DEBT: dict[str, dict[str, int]] = {
         "write_outputs os.chmod [artifact]": 1,
         "write_outputs os.makedirs [artifact]": 1,
     },
-    "scripts/tools/dx/generate_crd_schemas.py": {
-        "run .mkdir [artifact]": 1,
-        "run .write_text [artifact]": 2,
-    },
     "scripts/tools/dx/generate_platform_data.py": {
         "main .mkdir [artifact]": 2,
         "main .write_text [artifact]": 2,
@@ -354,7 +350,7 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 93
+_DEBT_CEILING = 90
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
