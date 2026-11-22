@@ -3218,7 +3218,7 @@ da-tools guard effective --config-dir conf.d/
 
 Migration Batch PR Pipeline (v2.8.0). Python wrapper that shells out to the `da-batchpr` Go binary; designed to take a customer's PromRule corpus through the full "emit → open PRs → review → Base merge → tenant rebase → optional data-layer hot-fix" loop.
 
-> ⚠️ **Experimental: no shipped tool produces either of `apply`'s two required inputs.** The Plan JSON (`--plan`) and the emit output (`--emit-dir`) were meant to come from the Profile Builder (`BuildProposals` / `EmitProposals`) and `BuildPlan`, but neither is wired to any CLI. The Profile Builder's output is also one directory per rule cluster, so a tenant present in two clusters makes da-guard refuse the tree as a duplicate tenant. To import customer rules, use the per-tenant [`migrate`](#migrate). The technology choice for bulk import is being redone in [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211); the whole group may be retired (breaking).
+> ⚠️ **Experimental: no shipped tool produces either of `apply`'s two required inputs.** The Plan JSON (`--plan`) and the emit output (`--emit-dir`) were meant to come from the Profile Builder (`BuildProposals` / `EmitProposals`) and `BuildPlan`, but neither is wired to any CLI. The Profile Builder's output is also one directory per rule cluster, so a tenant that deviates from the median in two clusters gets a file in each of the two directories and da-guard refuses the tree as a duplicate tenant, while a tenant at the median in every cluster gets no file at all and drops out of the tree. To import customer rules, use the per-tenant [`migrate`](#migrate). The technology choice for bulk import is being redone in [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211); the whole group may be retired (breaking).
 
 **Usage**
 
@@ -3230,7 +3230,7 @@ da-tools batch-pr <subcommand> [flags]
 
 | Subcommand | Purpose |
 |---|---|
-| `apply` | Open (or update) tenant chunk PRs from a Plan + an emit directory. Uses Hierarchy-Aware chunking (Base Infrastructure PR + per-domain tenant chunks). Both inputs must currently be prepared by hand; see the experimental note above. |
+| `apply` | Open (or update) tenant chunk PRs from a Plan + an emit directory. Walks the Plan's items in order (Base Infrastructure PR first, then tenant chunks); the grouping is the Plan's, `apply` does none itself. Both inputs must currently be prepared by hand; see the experimental note above. |
 | `refresh` | After the Base PR merges, run `git rebase --onto <merged-sha>` against every `Blocked by` tenant branch; conflicts surface in `refresh-report.md`. |
 | `refresh-source` | When a parser bug fix changes the emission for a known set of source rules, rewrite the affected files in the corresponding tenant PRs and push the patch (data-layer hot-fix). |
 

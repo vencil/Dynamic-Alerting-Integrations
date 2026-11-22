@@ -18,7 +18,7 @@ DX tooling improvements are tracked in [dx-tooling-backlog.md](../internal/dx-to
 
 ## v2.8.0 Delivered (release wrap-up in progress)
 
-The Scale Foundation I laid in v2.7.0 (`conf.d/` hierarchy + `_defaults.yaml` inheritance + dual-hash + `/effective`) + component robustness (Design Token migration across 9 JSX tools + Component Health + dark mode ADR-015) + test infrastructure (1000-tenant fixture + Blast Radius CI bot) evolved in v2.8.0 into a **complete customer-deployable pipeline + Scale production validation + automation consolidation**.
+The Scale Foundation I laid in v2.7.0 (`conf.d/` hierarchy + `_defaults.yaml` inheritance + dual-hash + `/effective`) + component robustness (Design Token migration across 9 JSX tools + Component Health + dark mode ADR-015) + test infrastructure (1000-tenant fixture + Blast Radius CI bot) evolved in v2.8.0 into a **customer import pipeline (partially shipped, see below) + Scale production validation + automation consolidation**.
 
 ### Customer Migration Pipeline — 5-step chain ⚠️ partially shipped
 

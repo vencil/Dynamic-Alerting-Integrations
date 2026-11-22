@@ -20,7 +20,7 @@ DX 工具改善追蹤見 [dx-tooling-backlog.md](../internal/dx-tooling-backlog.
 
 ## v2.8.0 已交付（release 收尾中）
 
-v2.7.0 奠定的 Scale Foundation I（`conf.d/` 階層 + `_defaults.yaml` 繼承 + dual-hash + `/effective`）+ 元件健壯化（Design Token 9 支 JSX + Component Health + dark mode ADR-015）+ 測試基礎設施（1000-tenant fixture + Blast Radius CI bot），在 v2.8.0 進化為**客戶可導入的完整 pipeline + Scale 生產驗證 + 自動化收斂**。
+v2.7.0 奠定的 Scale Foundation I（`conf.d/` 階層 + `_defaults.yaml` 繼承 + dual-hash + `/effective`）+ 元件健壯化（Design Token 9 支 JSX + Component Health + dark mode ADR-015）+ 測試基礎設施（1000-tenant fixture + Blast Radius CI bot），在 v2.8.0 進化為**客戶導入 pipeline（部分出貨，見下）+ Scale 生產驗證 + 自動化收斂**。
 
 ### 客戶導入管線 — 5-step chain ⚠️ 部分出貨
 

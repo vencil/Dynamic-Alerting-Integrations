@@ -3201,7 +3201,7 @@ da-tools guard effective --config-dir conf.d/
 
 Migration Batch PR Pipeline（v2.8.0）。Python 包裝 shell-out 到 `da-batchpr` Go binary，設計目標是把 customer 的 PromRule corpus 走完「emit → 開 PR → review → Base merge → tenant rebase → 必要時 data-layer hot-fix」整套流程。
 
-> ⚠️ **experimental：目前沒有任何出貨的工具產生 `apply` 的兩個必填輸入。** `--plan` 的 Plan JSON 與 `--emit-dir` 的 emit 輸出原本應由 Profile Builder（`BuildProposals`／`EmitProposals`）與 `BuildPlan` 產生，但這兩者都沒有接到任何 CLI；而且 Profile Builder 輸出的目錄是「一個規則群組（cluster）一個目錄」，同一個租戶出現在兩個群組時，那棵樹會被 da-guard 以重複租戶拒收。要導入客戶規則，請用逐租戶的 [`migrate`](#migrate)。大量導入的技術選型在 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211) 重做，可能整組退役（breaking）。
+> ⚠️ **experimental：目前沒有任何出貨的工具產生 `apply` 的兩個必填輸入。** `--plan` 的 Plan JSON 與 `--emit-dir` 的 emit 輸出原本應由 Profile Builder（`BuildProposals`／`EmitProposals`）與 `BuildPlan` 產生，但這兩者都沒有接到任何 CLI；而且 Profile Builder 輸出的目錄是「一個規則群組（cluster）一個目錄」，同一個租戶在兩個群組都偏離中位數時，兩個目錄會各有一份該租戶的檔，那棵樹會被 da-guard 以重複租戶拒收；在每個群組都等於中位數的租戶則一份檔都沒有，從樹上消失。要導入客戶規則，請用逐租戶的 [`migrate`](#migrate)。大量導入的技術選型在 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211) 重做，可能整組退役（breaking）。
 
 **用法**
 
@@ -3213,7 +3213,7 @@ da-tools batch-pr <subcommand> [flags]
 
 | 子命令 | 說明 |
 |---|---|
-| `apply` | 從 Plan + emit 目錄開出（或更新）tenant chunk PR；走 Hierarchy-Aware chunking（Base Infrastructure PR + per-domain tenant chunks）。兩個輸入目前都要自備，見上方 experimental 說明 |
+| `apply` | 從 Plan + emit 目錄開出（或更新）tenant chunk PR，照 Plan 的 items 依序處理（Base Infrastructure PR 先、tenant chunk 後）；怎麼分組由 Plan 決定，`apply` 自己不分。兩個輸入目前都要自備，見上方 experimental 說明 |
 | `refresh` | Base PR merge 後對 `Blocked by` tenant branches 跑 `git rebase --onto <merged-sha>`，conflict 落地到 `refresh-report.md` |
 | `refresh-source` | 已知一組 source rule 因 parser 修 bug 導致 emission 變化時，把對應 tenant PR 的受影響檔案重寫 + 推上去（data-layer hot-fix）|
 

@@ -17,7 +17,7 @@ lang: en
 
 🟢 **Accepted** (v2.8.0, 2026-04-27) — The Profile Builder's PromRule→threshold translator and emission ship with v2.8.0.
 
-2026-11-22: the Profile Builder is wired to no CLI and the batch PR pipeline does not call it; and when a tenant appears in two clusters, the emission writes a file for that tenant in each of the two directories, so da-guard refuses the whole tree as a duplicate tenant. The bulk-import approach is being re-selected; for the current state see [`batch-pr`](../cli-reference.en.md#batch-pr). This ADR's default-vs-override boundary is unaffected.
+2026-11-22: the Profile Builder is wired to no CLI and the batch PR pipeline does not call it; and when a tenant deviates from the median in two clusters, the emission writes a file for that tenant in each of the two directories, so da-guard refuses the whole tree as a duplicate tenant. The bulk-import approach is being re-selected; for the current state see [`batch-pr`](../cli-reference.en.md#batch-pr). This ADR's default-vs-override boundary is unaffected.
 
 ## Context
 

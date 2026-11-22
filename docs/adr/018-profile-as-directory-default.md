@@ -22,7 +22,7 @@ updated_at: 2026-11-22
 
 🟢 **Accepted**（v2.8.0, 2026-04-27）— Profile Builder 的 PromRule→threshold translator 與 emission 隨 v2.8.0 出貨。
 
-2026-11-22：Profile Builder 沒有接到任何 CLI，batch PR pipeline 也沒有呼叫它；而一個租戶出現在兩個 cluster 時，emission 會在兩個目錄各寫一份該租戶的檔，da-guard 以重複租戶拒收整棵樹。大量導入的做法重新選型中，現況見 [`batch-pr`](../cli-reference.md#batch-pr)。本 ADR 的 default-vs-override 邊界不受影響。
+2026-11-22：Profile Builder 沒有接到任何 CLI，batch PR pipeline 也沒有呼叫它；而一個租戶在兩個 cluster 都偏離中位數時，emission 會在兩個目錄各寫一份該租戶的檔，da-guard 以重複租戶拒收整棵樹。大量導入的做法重新選型中，現況見 [`batch-pr`](../cli-reference.md#batch-pr)。本 ADR 的 default-vs-override 邊界不受影響。
 
 ## 背景
 

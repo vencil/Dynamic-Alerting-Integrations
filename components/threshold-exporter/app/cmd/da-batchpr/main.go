@@ -111,7 +111,7 @@ func run(args []string, stdout, errOut io.Writer) int {
 func printUsage(w io.Writer) {
 	fmt.Fprintf(w, "Usage: %s <subcommand> [flags]\n\n", programName)
 	fmt.Fprintf(w, "Subcommands:\n")
-	fmt.Fprintf(w, "  apply           Open or update tenant chunk PRs from a Plan.\n")
+	fmt.Fprintf(w, "  apply           Open or update tenant chunk PRs from a Plan (experimental).\n")
 	fmt.Fprintf(w, "  refresh         Rebase tenant branches after Base PR merges.\n")
 	fmt.Fprintf(w, "  refresh-source  Re-apply data-layer hot-fix into tenant branches.\n")
 	fmt.Fprintf(w, "  --version       Print version and exit.\n")
