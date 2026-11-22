@@ -230,10 +230,10 @@ def _setup_recipe_contract(mod, mp, root, target):
 
 CALLERS: dict[str, Caller] = {
     "tenant_id_json": Caller(
-        "gen_tenant_id_json", "scripts/tools/dx/gen_tenant_id_json.py:121",
+        "gen_tenant_id_json", "scripts/tools/dx/gen_tenant_id_json.py:135",
         None, _setup_schema_json),
     "am_duration_json": Caller(
-        "gen_am_duration_json", "scripts/tools/dx/gen_am_duration_json.py:120",
+        "gen_am_duration_json", "scripts/tools/dx/gen_am_duration_json.py:138",
         None, _setup_schema_json),
     "rule_pack_readme": Caller(
         "generate_rule_pack_readme", "scripts/tools/dx/generate_rule_pack_readme.py:361",
@@ -273,10 +273,10 @@ CALLERS: dict[str, Caller] = {
         _setup_planning_index),
     # #3981, fourth batch: both write through sync_schema.write_targets.
     "reserved_key_lists": Caller(
-        "sync_schema", "scripts/tools/dx/sync_schema.py:662", None,
+        "sync_schema", "scripts/tools/dx/sync_schema.py:667", None,
         _setup_reserved_key_lists),
     "recipe_contract": Caller(
-        "gen_recipe_contract", "scripts/tools/dx/sync_schema.py:662", None,
+        "gen_recipe_contract", "scripts/tools/dx/sync_schema.py:667", None,
         _setup_recipe_contract),
 }
 
@@ -588,6 +588,48 @@ def test_a_refused_english_reference_leaves_the_chinese_one_alone(root, monkeypa
     assert (root / "aux" / "other.md").read_text(encoding="utf-8") == "UNCHANGED\n"
 
 
+@pytest.mark.parametrize("name", ["reserved_key_lists", "recipe_contract"])
+def test_a_refused_target_leaves_the_stale_one_before_it_alone(name, root, monkeypatch):
+    """#3981, fourth batch (independent review): `--update` judges every
+    target before the first write. A stale target first and a FIFO second:
+    the run is refused, and the stale one keeps its bytes — with the write
+    inside the read loop it was already rewritten."""
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFO on this platform")
+    stale = _target(root)
+    fifo = root / "out" / "second.md"
+    os.mkfifo(fifo)
+    caller = CALLERS[name]
+    mod = importlib.import_module(caller.module)
+    run = caller.setup(mod, monkeypatch, root, stale)
+    pair = [(str(stale), lambda text: NEW), (str(fifo), lambda text: NEW)]
+    if name == "reserved_key_lists":
+        monkeypatch.setattr(mod, "targets", lambda root_, d: pair)
+    else:
+        monkeypatch.setattr(mod, "targets", lambda root_, c, grammar: pair)
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        rc = run()
+    assert rc == 2 and str(fifo) in err.getvalue(), err.getvalue()
+    assert stale.read_text(encoding="utf-8") == OLD
+
+
+@pytest.mark.parametrize("script", ["sync_schema.py", "gen_recipe_contract.py",
+                                    "gen_tenant_id_json.py", "gen_am_duration_json.py"])
+def test_check_with_a_target_as_stdin_keeps_its_answer(script):
+    """#3981, fourth batch (independent review): `--check` only reads its
+    targets, so one that is also this process's stdin is still compared —
+    rc 0 on the in-sync repository, as before. Only a target `--update`
+    replaces must not be a standard stream."""
+    mod = importlib.import_module(script[:-3])
+    rel = next(iter(getattr(mod, "OUT_RELS", None) or sorted(mod.WHOLE_FILE_TARGETS)))
+    with open(REPO_ROOT / rel, "rb") as stdin:
+        done = subprocess.run([sys.executable, str(TOOLS / "dx" / script), "--check"],
+                              cwd=REPO_ROOT, stdin=stdin, capture_output=True, text=True,
+                              encoding="utf-8", timeout=120)
+    assert done.returncode == 0, (rel, done.stdout, done.stderr)
+
+
 @pytest.mark.parametrize("name", ["rule_pack_stats_fragment", "tenant_id_json",
                                   "am_duration_json", "recipe_contract"])
 def test_the_target_directory_is_created_when_absent(name, root, monkeypatch):
@@ -663,17 +705,17 @@ def test_a_generator_never_loads_what_loads_the_file_it_repairs(module, constant
     mod = importlib.import_module(module)
     target = getattr(mod, constant)
     assert target == "scripts/tools/_lib_constants.py", target
+    # Anti-vacuity: the measurement sees a module that does load it.
     assert "_lib_constants" in _modules_loaded_with("_lib_io"), (
-        "_lib_io no longer loads _lib_constants: this rule has no ground left")
-    source = ast.parse((TOOLS / "dx" / f"{module}.py").read_text(encoding="utf-8"))
-    imported = {a.name for n in ast.walk(source) if isinstance(n, ast.Import) for a in n.names}
-    imported |= {n.module for n in ast.walk(source) if isinstance(n, ast.ImportFrom)}
-    loaders = {name for name in imported
-               if name and name.startswith("_lib_") and name != "_lib_constants"
-               and "_lib_constants" in _modules_loaded_with(name)}
-    assert not loaders, (
-        f"{module} imports {sorted(loaders)}, which load(s) _lib_constants.py — "
-        f"the file its --update repairs")
+        "_lib_io no longer loads _lib_constants: the measurement is unproven")
+    # Measured, not read off the imports (independent review): a direct
+    # `import _lib_constants`, or one through a sibling tool such as
+    # sync_schema, is caught as well as one through a `_lib_*` module.
+    loaded = sorted(m for m in _modules_loaded_with(module)
+                    if m == "_lib_constants" or m.startswith("_lib_io"))
+    assert not loaded, (
+        f"importing {module} loads {loaded}: _lib_constants.py is the file its "
+        "--update repairs")
 
 
 def test_the_caller_table_is_the_surveyed_population():

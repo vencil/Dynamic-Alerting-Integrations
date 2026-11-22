@@ -60,7 +60,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 # PyYAML (`--check` is an isolated pre-commit hook) nor `_lib_constants` (a
 # target this tool repairs: a broken generated block must not stop --update).
 from _lib_output import (  # noqa: E402
-    OutputWriteError, check_repo_artifact, ensure_dir, write_repo_artifact)
+    OutputWriteError, check_repo_artifact, ensure_dir, is_special_file, write_repo_artifact)
 
 REGISTRY_REL = "components/threshold-exporter/app/pkg/config/reserved_keys.json"
 PY_REL = "scripts/tools/_lib_constants.py"
@@ -630,17 +630,22 @@ def targets(root, d):
     ]
 
 
-def read_target(path, rel, whole_file, error=None):
+def read_target(path, rel, whole_file, error=None, *, will_write=False):
     """The current text of generated target *path* ("" for a whole-file
-    target that is absent). Judged by `check_repo_artifact` BEFORE it is
-    read (#3981): a FIFO or `/dev/stdout` there would block the read, in
-    `--check` as in `--update`. *error* is the exception class raised (the
-    caller's own; `RegistryError` by default)."""
+    target that is absent), judged BEFORE it is read (#3981): a FIFO there
+    would block the read, in `--check` as in `--update`. Only a target
+    *will_write* replaces must also pass `check_repo_artifact` (not this
+    process's stdin / stdout / stderr): reading one is harmless, so a
+    `--check < target` keeps its answer. *error* is the exception class
+    raised (the caller's own; `RegistryError` by default)."""
     error = error or RegistryError
-    try:
-        check_repo_artifact(path)
-    except OutputWriteError as e:
-        raise error(f"{rel}: cannot read: {e.strerror or e.cause}") from e
+    if is_special_file(path):
+        raise error(f"{rel}: cannot read: not a regular file")
+    if will_write:
+        try:
+            check_repo_artifact(path)
+        except OutputWriteError as e:
+            raise error(f"{rel}: cannot read: {e.strerror or e.cause}") from e
     try:
         return path.read_text(encoding="utf-8") if path.exists() or not whole_file else ""
     except (OSError, UnicodeDecodeError) as e:
@@ -671,7 +676,7 @@ def run(root, registry, update):
     stale, changed = [], []
     for rel, render in targets(root, d):
         path = Path(root) / rel
-        current = read_target(path, rel, rel in WHOLE_FILE_TARGETS)
+        current = read_target(path, rel, rel in WHOLE_FILE_TARGETS, will_write=update)
         wanted = render(current)
         if wanted != current:
             stale.append(rel)

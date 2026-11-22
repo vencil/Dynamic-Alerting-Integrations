@@ -32,7 +32,7 @@ from _lib_compat import require_project_root  # noqa: E402  (#2852)
 # #3981 / #4223: the output entries without PyYAML — `--check` runs as a
 # pre-commit hook in an environment that has none.
 from _lib_output import (  # noqa: E402
-    OutputWriteError, check_repo_artifact, ensure_dir, write_repo_artifact)
+    OutputWriteError, check_repo_artifact, ensure_dir, is_special_file, write_repo_artifact)
 
 SCHEMA_REL = "docs/schemas/tenant-config.schema.json"
 
@@ -90,12 +90,18 @@ def main() -> int:
         return 2
     targets = [(rel, repo / rel) for rel in OUT_RELS]
 
-    # Every copy is judged before it is read or the first is written: a
-    # FIFO there would block the read (`--check` too), a directory or
-    # `/dev/stdout` is no file to compare or replace (#3981).
+    # Every copy is judged before it is read or the first is written
+    # (#3981): a FIFO there would block the read (`--check` too), a
+    # directory is no file to compare or replace. Only a copy that will be
+    # replaced must also not be this process's stdin / stdout / stderr:
+    # comparing one is harmless (`--check < copy`).
     try:
         for _rel, path in targets:
-            check_repo_artifact(path)
+            if args.check:
+                if is_special_file(path):
+                    raise OutputWriteError(path, OSError(None, "not a regular file"))
+            else:
+                check_repo_artifact(path)
     except OutputWriteError as exc:
         print(f"ERROR: {exc.path}: not usable as a generated copy: "
               f"{exc.strerror or exc.cause}", file=sys.stderr)
