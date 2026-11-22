@@ -77,7 +77,7 @@ RULE_PACK_CATALOGUE = [
      ["rabbitmq_queue_messages", "rabbitmq_node_mem_percent"], "queue"),
 ]
 
-REQUIRED_KEYS = {"display", "exporter", "default_on", "rule_pack_file", "defaults"}
+REQUIRED_KEYS = {"display", "exporter", "default_on", "rule_pack_file", "thresholds"}
 
 
 # ── RULE_PACKS Catalogue ────────────────────────────────────────────
@@ -109,10 +109,10 @@ class TestRulePacksCatalogue:
     @pytest.mark.parametrize("db_key,default_on,metrics,dim_kw", RULE_PACK_CATALOGUE,
                              ids=[r[0] for r in RULE_PACK_CATALOGUE])
     def test_has_expected_defaults(self, db_key, default_on, metrics, dim_kw):
-        """DB type defaults 包含預期 metric key。"""
-        defaults = scaffold_tenant.RULE_PACKS[db_key]["defaults"]
+        """DB type thresholds 包含預期 metric key。"""
+        thresholds = scaffold_tenant.RULE_PACKS[db_key]["thresholds"]
         for m in metrics:
-            assert m in defaults, f"{db_key} defaults missing: {m}"
+            assert m in thresholds, f"{db_key} thresholds missing: {m}"
 
     @pytest.mark.parametrize("db_key,default_on,metrics,dim_kw", RULE_PACK_CATALOGUE,
                              ids=[r[0] for r in RULE_PACK_CATALOGUE])

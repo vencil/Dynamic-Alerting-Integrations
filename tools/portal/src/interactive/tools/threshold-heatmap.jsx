@@ -21,7 +21,7 @@ dependencies: [
 
 import React, { useState, useMemo, useCallback } from 'react';
 import { useModalFocusTrap } from './_common/hooks/useModalFocusTrap.js';
-import { RULE_PACK_DATA as RULE_PACKS, PACK_ORDER } from './_common/data/rule-packs.js';
+import { RULE_PACK_DATA as RULE_PACKS, PACK_ORDER, getPackThresholds } from './_common/data/rule-packs.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -99,9 +99,10 @@ function extractMetricsFromPacks(selectedPacks) {
   const packIds = selectedPacks.length > 0 ? selectedPacks : PACK_ORDER;
 
   for (const packId of packIds) {
-    const pack = RULE_PACKS[packId];
-    if (pack && pack.defaults) {
-      Object.keys(pack.defaults).forEach(key => {
+    // Platform values and declared keys alike (#4195): sample data needs a
+    // number per key, and a declared key's reference value is one.
+    if (RULE_PACKS[packId]) {
+      Object.keys(getPackThresholds(packId)).forEach(key => {
         if (!key.endsWith('_critical')) {
           metrics.add(key);
         }
@@ -121,12 +122,12 @@ function generateSampleTenantData() {
   for (const tenant of tenants) {
     data[tenant] = {};
     for (const metric of metrics) {
-      const packId = Object.entries(RULE_PACKS).find(([_, pack]) =>
-        pack.defaults && pack.defaults[metric]
-      )?.[0];
+      const packId = Object.keys(RULE_PACKS).find(id =>
+        getPackThresholds(id)[metric]
+      );
 
       if (packId) {
-        const defaultVal = RULE_PACKS[packId].defaults[metric]?.value;
+        const defaultVal = getPackThresholds(packId)[metric]?.value;
         // Add some variance per tenant
         const variance = (Math.random() - 0.5) * 0.3;
         data[tenant][metric] = Math.max(

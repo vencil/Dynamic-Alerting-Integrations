@@ -85,7 +85,7 @@ describe('rule-packs accessor — platform-data resolution', () => {
 // ---------------------------------------------------------------------------
 
 // Expected saturation keys present in the INLINE FALLBACK catalog — the full
-// authoritative 21-key set (see tests/ops/test_scaffold_tenant.py
+// authoritative 22-key set (see tests/ops/test_scaffold_tenant.py
 // EXPECTED_SATURATION_KEYS). The fallback caught up with the source set when
 // #1099 backfilled kubernetes container_cpu_throttle into the offline catalog.
 const EXPECTED_FALLBACK_SATURATION_KEYS = [
@@ -100,7 +100,7 @@ const EXPECTED_FALLBACK_SATURATION_KEYS = [
   'kafka_consumer_lag',
   'mongodb_connections_current',
   'mysql_connection_usage_percent',
-  // mysql_threads_running left the defaults tier (#3778): declared, no value.
+  'mysql_threads_running',
   'nginx_connections',
   'nginx_waiting',
   'oracle_sessions_active',
@@ -124,12 +124,18 @@ describe('rule-packs fallback — saturation metricClass tagging', () => {
   });
 
   it('fallback metricClass === saturation key set matches the expected set', async () => {
-    const { RULE_PACK_DATA } = await import('../src/interactive/tools/_common/data/rule-packs.js');
-    const tagged = Object.values(RULE_PACK_DATA)
-      .flatMap((pack: any) => Object.entries(pack.defaults ?? {})
-        .filter(([, meta]: [string, any]) => meta.metricClass === 'saturation')
-        .map(([key]) => key))
-      .sort();
+    // Both sets: keys with a platform value (`defaults`) and declared ones —
+    // since #4195 most saturation keys have no platform value.
+    const { RULE_PACK_DATA, DECLARED_KEYS } = await import('../src/interactive/tools/_common/data/rule-packs.js');
+    const tagged = [
+      ...Object.values(RULE_PACK_DATA)
+        .flatMap((pack: any) => Object.entries(pack.defaults ?? {})
+          .filter(([, meta]: [string, any]) => meta.metricClass === 'saturation')
+          .map(([key]) => key)),
+      ...Object.values(DECLARED_KEYS).flat()
+        .filter((row: any) => row.metricClass === 'saturation')
+        .map((row: any) => row.key),
+    ].sort();
     expect(tagged).toEqual(EXPECTED_FALLBACK_SATURATION_KEYS);
   });
 

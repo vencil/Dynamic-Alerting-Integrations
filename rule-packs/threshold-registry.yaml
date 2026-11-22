@@ -39,13 +39,13 @@
 # critical_of 是推導欄位：key 以 _critical 結尾且同 pack 有 base key 時才寫，
 # 寫錯或漏寫會被 --ci 的自身一致性檢查擋下。
 #
-# 範圍：threshold 身分（defaults / optional_overrides 兩層＋arming）。
+# 範圍：threshold 身分（每個鍵的值、單位、說明、metric_class 與 arming；#4195 起不分層）。
 # state_filters 與 dimensional_example 仍歸 scaffold（非閾值身分）。
 # 本 registry 首要服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。
 #
 # arming／portability／blocker（D-A A1，#3773 拆成正交欄位）：每個非 _critical 的
 # key 都要寫前兩個，_critical 都不寫（跟隨 base）。
-#   arming       default（chart 出貨即啟用，限 defaults 層）| operator（要部署方自己給值）
+#   arming       default（讀取端內建平台值）| operator（內建為 off，要部署方或租戶給值）
 #   portability  portable（一個值可跨部署沿用）| ratio_pending（絕對值，正解是改比值，
 #                #1320）| site_specific（沒有普世的值）。非 portable 必附
 #                portability_reason 與 portability_reason_zh，各一行。
@@ -53,8 +53,7 @@
 #                aggregation_bug、unmeasured、value_disputed；tracking 是追蹤的 issue 號。
 # 閘門：arming: default 必須 portable 且沒有 blocker；要出貨一個不可攜的值，得寫
 # default_exception: {tracking: <issue>}。
-# 推導、不手寫：「規則包會讀、chart 不出貨」（原 NOT_CHART_ARMED）與「可攜、未出貨、
-# 無阻塞、在 defaults 層」的 A2 驗證候選集合。
+# 推導、不手寫：「可攜、未出貨、無阻塞」的 A2 驗證候選集合。
 #
 # validation（D-A A2a，#1200 裁決 B）：出貨的值憑什麼。arming: default 必填；operator 的
 # key 可以在升級前先登記，登記了就照同一套規則檢查。
@@ -183,7 +182,6 @@ packs:
 keys:
   container_cpu:
     pack: kubernetes
-    tier: defaults
     value: 80
     unit: '%'
     desc: Container CPU % of limit (weakest link)
@@ -202,12 +200,10 @@ keys:
     - version
   container_cpu_throttle:
     pack: kubernetes
-    tier: defaults
     value: 25
     unit: '%'
     desc: 'Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost
-      (critical tier opt-in via container_cpu_throttle_critical, declared in optional_overrides;
-      #944)'
+      (critical tier opt-in via container_cpu_throttle_critical; #944)'
     metric_class: saturation
     arming: default
     portability: portable
@@ -230,7 +226,6 @@ keys:
         value: 25
   container_memory:
     pack: kubernetes
-    tier: defaults
     value: 85
     unit: '%'
     desc: Container memory % of limit (weakest link)
@@ -254,7 +249,6 @@ keys:
     - version
   container_cpu_critical:
     pack: kubernetes
-    tier: optional_overrides
     value: 95
     unit: '%'
     desc: Container CPU critical
@@ -262,7 +256,6 @@ keys:
     critical_of: container_cpu
   container_cpu_throttle_critical:
     pack: kubernetes
-    tier: optional_overrides
     value: 50
     unit: '%'
     desc: CFS throttle critical
@@ -270,7 +263,6 @@ keys:
     critical_of: container_cpu_throttle
   container_memory_critical:
     pack: kubernetes
-    tier: optional_overrides
     value: 95
     unit: '%'
     desc: Container memory critical
@@ -278,7 +270,6 @@ keys:
     critical_of: container_memory
   pg_connections:
     pack: postgresql
-    tier: defaults
     value: 80
     unit: '% of max_connections'
     desc: Connection usage % warning
@@ -305,7 +296,6 @@ keys:
         tier: warning
   pg_replication_lag:
     pack: postgresql
-    tier: defaults
     value: 30
     unit: seconds
     desc: Replication lag warning
@@ -322,7 +312,6 @@ keys:
         tier: warning
   pg_connections_critical:
     pack: postgresql
-    tier: optional_overrides
     value: 90
     unit: '% of max_connections'
     desc: Critical tier connections
@@ -330,7 +319,6 @@ keys:
     critical_of: pg_connections
   pg_replication_lag_critical:
     pack: postgresql
-    tier: optional_overrides
     value: 60
     unit: seconds
     desc: Critical tier replication lag
@@ -338,7 +326,6 @@ keys:
     critical_of: pg_replication_lag
   mysql_connection_usage_percent:
     pack: mariadb
-    tier: defaults
     value: 80
     unit: '% of max_connections'
     desc: 'Connection usage warning: threads_connected as a share of max_connections,
@@ -363,7 +350,6 @@ keys:
         tier: warning
   mysql_threads_running:
     pack: mariadb
-    tier: optional_overrides
     value: 30
     unit: threads
     desc: 'threads_running saturation, NOT host CPU% — running-threads 1m-avg warning;
@@ -377,7 +363,6 @@ keys:
     portability_reason_zh: "健康的 running threads 數隨主機的 CPU 核數而定"
   mysql_replication_lag:
     pack: mariadb
-    tier: defaults
     value: 30
     unit: seconds
     desc: Async replication lag warning (seconds behind primary, sql_delay-adjusted);
@@ -402,7 +387,6 @@ keys:
         tier: critical
   mysql_connection_usage_percent_critical:
     pack: mariadb
-    tier: optional_overrides
     value: 90
     unit: '% of max_connections'
     desc: Critical tier connection usage (same tier pair as pg_connections_critical)
@@ -410,7 +394,6 @@ keys:
     critical_of: mysql_connection_usage_percent
   mysql_threads_running_critical:
     pack: mariadb
-    tier: optional_overrides
     value: 50
     unit: threads
     desc: Critical tier (running-threads saturation); 120→50 = PMM critical-load /
@@ -420,7 +403,6 @@ keys:
     critical_of: mysql_threads_running
   mysql_replication_lag_critical:
     pack: mariadb
-    tier: optional_overrides
     value: 120
     unit: seconds
     desc: Critical tier replication lag; 120 = 4x the APA/mixin 30s trigger, 5x below
@@ -430,7 +412,6 @@ keys:
     critical_of: mysql_replication_lag
   redis_memory_used_bytes:
     pack: redis
-    tier: defaults
     value: 4294967296
     unit: bytes (4GB)
     desc: Memory usage warning
@@ -441,7 +422,6 @@ keys:
     portability_reason_zh: "絕對位元組跨部署沒有意義；可攜的形式是佔 maxmemory 的比例（redis_memory_max_bytes），待 #1320"
   redis_connected_clients:
     pack: redis
-    tier: defaults
     value: 200
     unit: count
     desc: Connected clients warning
@@ -452,7 +432,6 @@ keys:
     portability_reason_zh: "絕對連線數跨部署沒有意義；可攜的形式是佔 maxclients 的比例（redis_config_maxclients），待 #1320"
   redis_evicted_keys_rate:
     pack: redis
-    tier: defaults
     value: 100
     unit: keys/s
     desc: 'Key eviction rate; #1196 B identity fix: renamed from redis_evicted_keys_total
@@ -465,7 +444,6 @@ keys:
     portability_reason_zh: "LRU 快取淘汰是常態，可容忍的速率取決於工作負載"
   redis_replication_lag:
     pack: redis
-    tier: defaults
     value: 30
     unit: seconds
     desc: 'Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis
@@ -481,7 +459,6 @@ keys:
       reason_zh: "尚未找到給出 replica lag 門檻的來源（只查了 awesome-prometheus-alerts）；30 秒是比照 MySQL／PostgreSQL 訂的"
   redis_connected_clients_critical:
     pack: redis
-    tier: optional_overrides
     value: 300
     unit: count
     desc: Connected clients critical
@@ -489,7 +466,6 @@ keys:
     critical_of: redis_connected_clients
   redis_memory_used_bytes_critical:
     pack: redis
-    tier: optional_overrides
     value: 5368709120
     unit: bytes
     desc: Memory usage critical
@@ -497,7 +473,6 @@ keys:
     critical_of: redis_memory_used_bytes
   redis_replication_lag_critical:
     pack: redis
-    tier: optional_overrides
     value: 50
     unit: seconds
     desc: Replica lag critical
@@ -505,7 +480,6 @@ keys:
     critical_of: redis_replication_lag
   mongodb_connections_current:
     pack: mongodb
-    tier: defaults
     value: 300
     unit: count
     desc: Current connections warning
@@ -516,7 +490,6 @@ keys:
     portability_reason_zh: "正常的連線數取決於工作負載與資料庫前面的連線池大小。佔「已用＋可用」連線的比例另有一條不必填值的告警 MongoDBConnectionSaturation（80%）"
   mongodb_replication_lag:
     pack: mongodb
-    tier: defaults
     value: 10
     unit: seconds
     desc: 'Replication lag warning; #1196 C identity fix: renamed from mongodb_repl_lag_seconds
@@ -531,7 +504,6 @@ keys:
       reason_zh: "來源的值不一致（10 秒與 30 秒），現行 exporter 是否還輸出規則讀的指標也沒確認（#3833）"
   mongodb_opcounters_rate:
     pack: mongodb
-    tier: defaults
     value: 10000
     unit: ops/s
     desc: 'Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total
@@ -544,7 +516,6 @@ keys:
     portability_reason_zh: "操作量是工作負載而非故障，任何數字都只適用於特定部署"
   mongodb_connections_current_critical:
     pack: mongodb
-    tier: optional_overrides
     value: 450
     unit: count
     desc: Current connections critical
@@ -552,7 +523,6 @@ keys:
     critical_of: mongodb_connections_current
   mongodb_replication_lag_critical:
     pack: mongodb
-    tier: optional_overrides
     value: 30
     unit: seconds
     desc: Replication lag critical
@@ -560,7 +530,6 @@ keys:
     critical_of: mongodb_replication_lag
   es_heap_usage_percent:
     pack: elasticsearch
-    tier: defaults
     value: 85
     unit: '%'
     desc: 'JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent
@@ -587,7 +556,6 @@ keys:
         tier: warning
   es_disk_usage_percent:
     pack: elasticsearch
-    tier: defaults
     value: 85
     unit: '%'
     desc: 'Disk USAGE % warning (used = 1 - available/size, recording rule tenant:es_disk_usage_percent:max,
@@ -611,7 +579,6 @@ keys:
         tier: warning
   es_pending_tasks:
     pack: elasticsearch
-    tier: defaults
     value: 50
     unit: count
     desc: 'Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py
@@ -624,7 +591,6 @@ keys:
     portability_reason_zh: "正常的 pending task 量隨叢集規模與變更頻率而定"
   es_search_latency_ms:
     pack: elasticsearch
-    tier: defaults
     value: 1000
     unit: ms
     desc: Avg search latency warning (rate(query_time)/rate(query_total), per-query
@@ -638,7 +604,6 @@ keys:
     portability_reason_zh: "可接受的搜尋延遲是各部署的服務等級選擇"
   es_disk_usage_percent_critical:
     pack: elasticsearch
-    tier: optional_overrides
     value: 90
     unit: '%'
     desc: Disk usage critical
@@ -646,7 +611,6 @@ keys:
     critical_of: es_disk_usage_percent
   es_heap_usage_percent_critical:
     pack: elasticsearch
-    tier: optional_overrides
     value: 90
     unit: '%'
     desc: JVM heap usage critical
@@ -654,7 +618,6 @@ keys:
     critical_of: es_heap_usage_percent
   es_pending_tasks_critical:
     pack: elasticsearch
-    tier: optional_overrides
     value: 150
     unit: count
     desc: Pending cluster tasks critical
@@ -662,7 +625,6 @@ keys:
     critical_of: es_pending_tasks
   es_search_latency_ms_critical:
     pack: elasticsearch
-    tier: optional_overrides
     value: 2000
     unit: ms
     desc: Avg search latency critical
@@ -670,7 +632,6 @@ keys:
     critical_of: es_search_latency_ms
   oracle_sessions_active:
     pack: oracle
-    tier: defaults
     value: 200
     unit: count
     desc: Active sessions warning
@@ -686,7 +647,6 @@ keys:
       observed_zh: 健康的日夜週期尖峰會到 240 個 active session
   oracle_tablespace_used_percent:
     pack: oracle
-    tier: defaults
     value: 85
     unit: '%'
     desc: Tablespace usage warning
@@ -708,7 +668,6 @@ keys:
         tier: warning
   oracle_wait_time_rate:
     pack: oracle
-    tier: optional_overrides
     value: 50
     unit: s/s
     desc: Wait time rate (5m)
@@ -724,7 +683,6 @@ keys:
       reason_zh: "尚無實測；#1320 在有訊號前維持宣告"
   oracle_hard_parse_time_percent:
     pack: oracle
-    tier: optional_overrides
     value: 20
     unit: '% of DB time'
     desc: 'Hard parse time warning: v$sys_time_model "hard parse elapsed time" as a share
@@ -740,7 +698,6 @@ keys:
       reason_zh: "沒有 vendor 預設值（Oracle EM 的 parse 指標閾值為 Not Defined）。20 落在 #1174 於 Oracle Free 23 實測的區間：健康負載 0.2–1.5%、字典統計收集 12%、被遞迴批次稀釋的 hard parse 風暴 38%、未稀釋 73%"
   oracle_process_usage_percent:
     pack: oracle
-    tier: defaults
     value: 85
     unit: '% of PROCESSES'
     desc: 'Process usage warning: v$process rows as a share of the PROCESSES parameter,
@@ -760,7 +717,6 @@ keys:
         tier: warning
   oracle_pga_usage_percent:
     pack: oracle
-    tier: optional_overrides
     value: 85
     unit: '% of PGA_AGGREGATE_LIMIT'
     desc: 'PGA usage warning: v$pgastat total PGA allocated as a share of PGA_AGGREGATE_LIMIT
@@ -777,7 +733,6 @@ keys:
       reason_zh: "沒有公開的告警規則或 vendor 預設值給出佔 PGA_AGGREGATE_LIMIT 多少比例該警告；85 與 process、session 比例一致，只是起點"
   oracle_sessions_active_critical:
     pack: oracle
-    tier: optional_overrides
     value: 280
     unit: count
     desc: Active sessions critical
@@ -785,7 +740,6 @@ keys:
     critical_of: oracle_sessions_active
   oracle_tablespace_used_percent_critical:
     pack: oracle
-    tier: optional_overrides
     value: 95
     unit: '%'
     desc: Tablespace usage critical
@@ -793,7 +747,6 @@ keys:
     critical_of: oracle_tablespace_used_percent
   db2_connections_active:
     pack: db2
-    tier: defaults
     value: 200
     unit: count
     desc: Active connections warning
@@ -809,7 +762,6 @@ keys:
       observed_zh: 尖峰時段的工作負載會到 360 個連線
   db2_bufferpool_hit_ratio:
     pack: db2
-    tier: defaults
     value: 0.95
     unit: ratio
     desc: Bufferpool hit ratio warning
@@ -820,7 +772,6 @@ keys:
     portability_reason_zh: "交易型與分析型工作負載的合理命中率不同"
   db2_lock_wait_time:
     pack: db2
-    tier: defaults
     value: 10
     unit: s/s
     desc: Lock wait accumulation rate warning (rate over 5m, summed across the tenant's
@@ -839,7 +790,6 @@ keys:
       observed_zh: 良性批次的 lock-wait 短暫維持 18 s/s 達 7 分鐘（negative-db2.yaml）
   db2_log_usage_percent:
     pack: db2
-    tier: defaults
     value: 75
     unit: '%'
     desc: 'Transaction log usage warning: used over used plus available active log space,
@@ -859,7 +809,6 @@ keys:
         tier: warning
   db2_deadlocks_per_5m:
     pack: db2
-    tier: optional_overrides
     value: 5
     unit: count/5m
     desc: 'Deadlocks in the last 5 minutes, summed over the tenant''s exporters; 5 is the
@@ -878,7 +827,6 @@ keys:
       observed_zh: 其中一個參考庫的正常水位約每 5 分鐘 6 次 deadlock（0.02/s），高於 5
   db2_tablespace_used_percent:
     pack: db2
-    tier: defaults
     value: 80
     unit: '%'
     desc: 'Tablespace usage warning: share of the space a tablespace can grow to, fullest
@@ -901,7 +849,6 @@ keys:
         tier: warning
   db2_storage_path_used_percent:
     pack: db2
-    tier: defaults
     value: 80
     unit: '%'
     desc: 'Storage path file system usage warning: bytes used over the size of the file
@@ -930,7 +877,6 @@ keys:
         tier: warning
   db2_connections_active_critical:
     pack: db2
-    tier: optional_overrides
     value: 400
     unit: count
     desc: Active connections critical
@@ -938,7 +884,6 @@ keys:
     critical_of: db2_connections_active
   db2_lock_wait_time_critical:
     pack: db2
-    tier: optional_overrides
     value: 20
     unit: s/s
     desc: Lock wait accumulation rate critical
@@ -946,7 +891,6 @@ keys:
     critical_of: db2_lock_wait_time
   clickhouse_queries_rate:
     pack: clickhouse
-    tier: defaults
     value: 500
     unit: qps
     desc: Query rate warning (5m)
@@ -957,7 +901,6 @@ keys:
     portability_reason_zh: "查詢量是工作負載而非故障，任何數字都只適用於特定部署"
   clickhouse_active_connections:
     pack: clickhouse
-    tier: defaults
     value: 200
     unit: count
     desc: Active TCP connections warning
@@ -968,7 +911,6 @@ keys:
     portability_reason_zh: "正常的連線數取決於工作負載與 server 前面的連線池大小，而且沒有可以拿來算比例的上限：ClickHouse 的 /metrics 不匯出 max_connections（讀 v25.8.1.5101-lts 原始碼：只寫出 system.metrics、events、asynchronous metrics 與 errors）"
   clickhouse_max_part_count:
     pack: clickhouse
-    tier: optional_overrides
     value: 300
     unit: count
     desc: Max part count per partition
@@ -979,7 +921,6 @@ keys:
     portability_reason_zh: "安全的 part 數依 ClickHouse 版本而定：舊版在 300 個 part 就拒絕寫入，現行版本要到 3000（parts_to_throw_insert）"
   clickhouse_replication_queue:
     pack: clickhouse
-    tier: optional_overrides
     value: 50
     unit: count
     desc: Replication queue size
@@ -995,7 +936,6 @@ keys:
       reason_zh: "尚無實測；#1320 在有訊號前維持宣告"
   clickhouse_active_connections_critical:
     pack: clickhouse
-    tier: optional_overrides
     value: 300
     unit: count
     desc: Active TCP connections critical
@@ -1003,7 +943,6 @@ keys:
     critical_of: clickhouse_active_connections
   kafka_consumer_lag:
     pack: kafka
-    tier: defaults
     value: 1000
     unit: messages
     desc: Consumer lag warning
@@ -1014,7 +953,6 @@ keys:
     portability_reason_zh: "可容忍的訊息延遲隨各 topic 的吞吐量而定"
   kafka_under_replicated_partitions:
     pack: kafka
-    tier: defaults
     value: 0
     unit: count
     desc: Under-replicated partitions (should be 0)
@@ -1028,7 +966,6 @@ keys:
       reason_zh: "讀這個 exporter 指標的來源只有 Strimzi 一個（自稱是要自行調整的範例）；也沒有來源給出滾動重啟不會誤觸的 for: 長度"
   kafka_broker_count:
     pack: kafka
-    tier: defaults
     value: 3
     unit: count
     desc: Minimum broker count warning
@@ -1039,7 +976,6 @@ keys:
     portability_reason_zh: "預期的 broker 數是各部署的拓撲"
   kafka_consumer_lag_critical:
     pack: kafka
-    tier: optional_overrides
     value: 10000
     unit: messages
     desc: Consumer lag critical
@@ -1047,7 +983,6 @@ keys:
     critical_of: kafka_consumer_lag
   kafka_under_replicated_partitions_critical:
     pack: kafka
-    tier: optional_overrides
     value: 1
     unit: count
     desc: Under-replicated critical
@@ -1055,7 +990,6 @@ keys:
     critical_of: kafka_under_replicated_partitions
   rabbitmq_queue_messages:
     pack: rabbitmq
-    tier: defaults
     value: 100000
     unit: messages
     desc: Queue depth warning
@@ -1066,7 +1000,6 @@ keys:
     portability_reason_zh: "正常的佇列深度取決於各部署的生產者與消費者"
   rabbitmq_node_mem_percent:
     pack: rabbitmq
-    tier: defaults
     value: 90
     unit: '%'
     desc: 'Node memory warning: resident memory as % of the memory high watermark, fullest node (#3929: 80 → 90, measured per node)'
@@ -1087,7 +1020,6 @@ keys:
         value: 90
   rabbitmq_connections:
     pack: rabbitmq
-    tier: defaults
     value: 1000
     unit: count
     desc: Connection count warning
@@ -1098,7 +1030,6 @@ keys:
     portability_reason_zh: "絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available 是候選分母，但它由檔案描述符推得，由 #1320 決定"
   rabbitmq_consumers:
     pack: rabbitmq
-    tier: defaults
     value: 5
     unit: count
     desc: Minimum consumer count warning
@@ -1109,7 +1040,6 @@ keys:
     portability_reason_zh: "預期的 consumer 數是各部署的拓撲"
   rabbitmq_unacked_messages:
     pack: rabbitmq
-    tier: defaults
     value: 10000
     unit: messages
     desc: Unacknowledged messages warning
@@ -1120,7 +1050,6 @@ keys:
     portability_reason_zh: "正常的未 ack 量取決於 consumer 的 prefetch 與處理時間"
   rabbitmq_queue_messages_critical:
     pack: rabbitmq
-    tier: optional_overrides
     value: 500000
     unit: messages
     desc: Queue depth critical
@@ -1128,7 +1057,6 @@ keys:
     critical_of: rabbitmq_queue_messages
   rabbitmq_node_mem_percent_critical:
     pack: rabbitmq
-    tier: optional_overrides
     value: 95
     unit: '%'
     desc: Node memory critical
@@ -1136,7 +1064,6 @@ keys:
     critical_of: rabbitmq_node_mem_percent
   rabbitmq_connections_critical:
     pack: rabbitmq
-    tier: optional_overrides
     value: 1500
     unit: count
     desc: Connection count critical
@@ -1144,7 +1071,6 @@ keys:
     critical_of: rabbitmq_connections
   rabbitmq_unacked_messages_critical:
     pack: rabbitmq
-    tier: optional_overrides
     value: 50000
     unit: messages
     desc: Unacknowledged messages critical
@@ -1152,7 +1078,6 @@ keys:
     critical_of: rabbitmq_unacked_messages
   jvm_gc_pause:
     pack: jvm
-    tier: defaults
     value: 0.5
     unit: s/s
     desc: 'GC pause warning: seconds of GC pause accrued per second (rate over 5m of
@@ -1166,7 +1091,6 @@ keys:
     portability_reason_zh: "可容忍的 GC 暫停時間是應用程式的延遲預算"
   jvm_memory:
     pack: jvm
-    tier: defaults
     value: 80
     unit: '%'
     desc: 'Heap memory warning: the whole heap as % of its max, fullest JVM (#3928: pools summed before dividing)'
@@ -1180,7 +1104,6 @@ keys:
       reason_zh: "Micrometer 的逐 pool 上限加總不等於 heap 上限：Parallel GC 預設旗標下到 OutOfMemoryError 都讀不到 95，OpenJ9 balanced 讀成約四分之一"
   jvm_threads:
     pack: jvm
-    tier: defaults
     value: 500
     unit: count
     desc: Active thread count warning
@@ -1191,7 +1114,6 @@ keys:
     portability_reason_zh: "正常的執行緒數取決於應用程式與其執行緒池"
   jvm_gc_pause_critical:
     pack: jvm
-    tier: optional_overrides
     value: 1.0
     unit: s/s
     desc: 'GC pause critical: seconds of GC pause accrued per second (see jvm_gc_pause)'
@@ -1199,7 +1121,6 @@ keys:
     critical_of: jvm_gc_pause
   jvm_memory_critical:
     pack: jvm
-    tier: optional_overrides
     value: 95
     unit: '%'
     desc: Heap memory critical
@@ -1207,7 +1128,6 @@ keys:
     critical_of: jvm_memory
   jvm_threads_critical:
     pack: jvm
-    tier: optional_overrides
     value: 800
     unit: count
     desc: Thread count critical
@@ -1215,7 +1135,6 @@ keys:
     critical_of: jvm_threads
   nginx_connections:
     pack: nginx
-    tier: defaults
     value: 1000
     unit: count
     desc: Active connections warning
@@ -1226,7 +1145,6 @@ keys:
     portability_reason_zh: "絕對連線數取決於流量，worker_connections 沒有匯出可當分母"
   nginx_request_rate:
     pack: nginx
-    tier: defaults
     value: 5000
     unit: req/s
     desc: Request rate warning
@@ -1237,7 +1155,6 @@ keys:
     portability_reason_zh: "請求量是工作負載而非故障，任何數字都只適用於特定部署"
   nginx_waiting:
     pack: nginx
-    tier: defaults
     value: 200
     unit: count
     desc: Waiting connections (backlog) warning
@@ -1248,7 +1165,6 @@ keys:
     portability_reason_zh: "閒置的 keep-alive 連線也算 waiting，正常數量取決於流量與 keepalive 設定"
   nginx_connections_critical:
     pack: nginx
-    tier: optional_overrides
     value: 2000
     unit: count
     desc: Active connections critical
@@ -1256,7 +1172,6 @@ keys:
     critical_of: nginx_connections
   nginx_request_rate_critical:
     pack: nginx
-    tier: optional_overrides
     value: 10000
     unit: req/s
     desc: Request rate critical
@@ -1264,7 +1179,6 @@ keys:
     critical_of: nginx_request_rate
   nginx_waiting_critical:
     pack: nginx
-    tier: optional_overrides
     value: 500
     unit: count
     desc: Waiting connections critical

@@ -631,20 +631,18 @@ def _not_read(raw):
 
 
 @functools.lru_cache(maxsize=1)
-def _registry_tiers():
-    """`{key: tier}` of the threshold registry, read from the generated
-    RULE_PACKS module (no repo file needed, so the da-tools image has it
-    too), with each `defaults`-tier key's shipped platform default:
-    `({key: tier}, {key: default})`."""
-    keys = registry_lib.registry_keys(registry_lib.packaged_registry_doc())
-    return ({k: e.get("tier") for k, e in keys.items()},
-            {k: e.get("value") for k, e in keys.items() if e.get("tier") == "defaults"})
+def _registry_key_names():
+    """Every threshold registry key, read from the generated RULE_PACKS
+    module (no repo file needed, so the da-tools image has it too). Each is
+    built into the readers — the platform's value or off (#3832, #4163) — so
+    the written root names none of them."""
+    return frozenset(registry_lib.registry_keys(registry_lib.packaged_registry_doc()))
 
 
 @functools.lru_cache(maxsize=1)
 def _registry_dimensions():
     """The shipped `dimensions:` (#3475): `{base: [labels]}` from the
-    threshold registry, as `_registry_tiers` reads it."""
+    threshold registry, as `_registry_key_names` reads it."""
     return dict(registry_lib.dimension_entries(registry_lib.packaged_registry_doc()))
 
 
@@ -656,21 +654,19 @@ _SELECTOR_LABEL = re.compile(r"""([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!=|!~|=)\s*(?:"(
 
 def _written_tree(conf_d, key, raws):
     """Write the conf.d `_served_written` hands to da-guard: a root
-    `_defaults.yaml` with the shipped platform defaults (`_registry_tiers`:
-    the `defaults:` tier with its values, the `optional_overrides:` tier
-    declared without one, the shipped `dimensions:`) and one tenant per side
-    writing `key` as given. A key the registry does not know is declared
-    without a default (and, for `<base>_critical`, its base too), and the
-    labels of a dimensional key are declared for its base (#3475), so the
-    exporter reads the value rather than dropping an undeclared key."""
+    `_defaults.yaml` and one tenant per side writing `key` as given. The
+    root names no registry key — the readers build every one in, the
+    platform's value or off (#3832, #4163) — so it carries only the shipped
+    `dimensions:` and, for a key the registry does not know, that key
+    declared without a default (and, for `<base>_critical`, its base too);
+    the labels of a dimensional key are declared for its base (#3475), so
+    the exporter reads the value rather than dropping an undeclared key."""
     import yaml  # lazy: only `--tenant` writes a tree
-    tiers, defaults = _registry_tiers()
-    optional = [k for k, t in tiers.items() if t == "optional_overrides"]
+    known = _registry_key_names()
     bare = key.partition("{")[0]
-    for k in ([bare[:-len("_critical")]] if bare.endswith("_critical") else []) + [bare]:
-        if k not in tiers and k not in optional:
-            optional.append(k)
-    root = {"defaults": dict(defaults), "optional_overrides": optional}
+    optional = [k for k in ([bare[:-len("_critical")]] if bare.endswith("_critical") else []) + [bare]
+                if k not in known]
+    root = {"optional_overrides": optional} if optional else {}
     dims = {b: list(ls) for b, ls in _registry_dimensions().items()}
     if "{" in key:
         # the name the row serves: a regex matcher's is `<label>_re` (#3475)
@@ -701,7 +697,7 @@ def _served_side(tenant_values, key, raw):
         raise _not_read(raw)
     if entry.reason == "disabled":
         return None
-    known = key.partition("{")[0] in _registry_tiers()[0]
+    known = key.partition("{")[0] in _registry_key_names()
     if entry.refused is not None and (entry.refused != "non_finite" or not known):
         raise _not_read(raw)
     if not entry.exporter:

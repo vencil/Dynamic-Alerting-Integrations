@@ -429,7 +429,7 @@ def _walk_literals(node, key_of_interest: str | None = None, _path: tuple = (),
             yield key_of_interest, node, at_value
 
 
-#: Where the registry writes a key's threshold: `<key>: {value: …, tier: …}`.
+#: Where the registry writes a key's threshold: `<key>: {value: …, unit: …}`.
 _REGISTRY_VALUE_PATHS = (("value",),)
 
 
@@ -602,14 +602,13 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
     # (percentiles + recommended + unit), template-data (embedded tenant YAML).
     pd = os.path.join(root, "docs/assets/platform-data.json")
     if os.path.isfile(pd):
-        for pack in (json.loads(_read(pd)).get("rulePacks") or {}).values():
-            for key, meta in (pack.get("defaults") or {}).items():
-                # A field that is there must hold a number: a JSON null, true,
-                # list or object is not one (`_AT_VALUE_STRICT`). A field that
-                # is absent writes nothing.
-                if key in _REGISTRY_KEYS and isinstance(meta, dict) and "value" in meta:
-                    pending.append(("docs/assets/platform-data.json", key, meta["value"], True,
-                                    _AT_VALUE_STRICT))
+        for key, meta in _platform_data_rows(json.loads(_read(pd))):
+            # A field that is there must hold a number: a JSON null, true,
+            # list or object is not one (`_AT_VALUE_STRICT`). A field that
+            # is absent writes nothing.
+            if key in _REGISTRY_KEYS and isinstance(meta, dict) and "value" in meta:
+                pending.append(("docs/assets/platform-data.json", key, meta["value"], True,
+                                _AT_VALUE_STRICT))
 
     rd = os.path.join(root, "docs/assets/recommendation-data.json")
     if os.path.isfile(rd):
@@ -650,15 +649,30 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
     return _judged(pending, not_numbers)
 
 
+def _platform_data_rows(pd: dict) -> list[tuple[str, object]]:
+    """(key, meta) of every threshold row platform-data.json carries: the
+    platform values (`rulePacks[*].defaults`) and the keys without one
+    (`declaredKeys`, rows of `{key, value, unit, …}`). Since #4195 the
+    operator keys sit only in the second, so reading the first alone would
+    drop them from this gate."""
+    rows: list[tuple[str, object]] = []
+    for pack in (pd.get("rulePacks") or {}).values():
+        rows.extend(((pack or {}).get("defaults") or {}).items())
+    for pack_rows in (pd.get("declaredKeys") or {}).values():
+        for row in pack_rows or []:
+            if isinstance(row, dict) and isinstance(row.get("key"), str):
+                rows.append((row["key"], row))
+    return rows
+
+
 def _declared_units(root: str) -> list[tuple[str, str, str]]:
     """Return [(surface, key, declared_unit)] for assets that carry a unit field."""
     out: list[tuple[str, str, str]] = []
     pd = os.path.join(root, "docs/assets/platform-data.json")
     if os.path.isfile(pd):
-        for pack in (json.loads(_read(pd)).get("rulePacks") or {}).values():
-            for key, meta in (pack.get("defaults") or {}).items():
-                if key in _REGISTRY_KEYS and isinstance(meta, dict) and meta.get("unit"):
-                    out.append(("docs/assets/platform-data.json", key, meta["unit"]))
+        for key, meta in _platform_data_rows(json.loads(_read(pd))):
+            if key in _REGISTRY_KEYS and isinstance(meta, dict) and meta.get("unit"):
+                out.append(("docs/assets/platform-data.json", key, meta["unit"]))
     rd = os.path.join(root, "docs/assets/recommendation-data.json")
     if os.path.isfile(rd):
         for key, meta in (json.loads(_read(rd)).get("recommendations") or {}).items():
@@ -680,17 +694,11 @@ def run_check(
     root = root or PROJECT_ROOT
     doc = registry if registry is not None else registry_lib.load_registry()
 
-    spec: dict[str, dict] = {}
-
-    def _walk_registry(node):
-        if isinstance(node, dict):
-            for k, v in node.items():
-                if isinstance(v, dict) and "value" in v and "tier" in v:
-                    spec[k] = v
-                else:
-                    _walk_registry(v)
-
-    _walk_registry(doc)
+    # The registry's flat `keys:` mapping (#4195: an entry is found by where
+    # it sits, not by carrying a `tier`).
+    spec: dict[str, dict] = {
+        k: v for k, v in registry_lib.registry_keys(doc).items()
+        if isinstance(v, dict) and "value" in v}
     _REGISTRY_KEYS = set(spec)
 
     errors: list[str] = []

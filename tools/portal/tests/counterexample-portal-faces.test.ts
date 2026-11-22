@@ -68,7 +68,7 @@ function counterexampleKeysIn(yamlText: string): string[] {
 }
 
 describe('counter-example data is actually present', () => {
-  it('platform-data carries counter-examples on BOTH tiers', () => {
+  it('platform-data carries counter-examples, all on declared keys', () => {
     // Guard the guard: with an empty CE map every assertion below is vacuous
     // and would read as "all portal faces covered".
     expect(Object.keys(CE).length).toBeGreaterThan(0);
@@ -77,7 +77,9 @@ describe('counter-example data is actually present', () => {
       .filter((m: any) => m?.valueCounterexample).length;
     const fromDeclared = Object.values(platformData.declaredKeys ?? {} as any)
       .flat().filter((r: any) => r?.valueCounterexample).length;
-    expect(fromDefaults).toBeGreaterThan(0);
+    // The shipping gate refuses a measured value as a platform value
+    // (arming_problems), and since #4195 `defaults` is exactly those.
+    expect(fromDefaults).toBe(0);
     expect(fromDeclared).toBeGreaterThan(0);
   });
 });

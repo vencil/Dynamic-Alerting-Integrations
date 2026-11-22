@@ -378,12 +378,12 @@ def test_the_refusal_uses_the_registry_predicate_not_its_own_copy(fixture_module
     """⛔ Imported, not respelled.
 
     `not key.endswith("_critical") and "{" not in key` already exists in
-    `_registry_lib.is_shipped_optional_key`, and the exporter's `resolve.go` is
+    `_registry_lib.is_flat_key`, and the exporter's `resolve.go` is
     what both describe. A fourth hand-copy is how the contract drifts: this
     asserts the module actually binds that function, so a future edit that
     inlines the predicate here fails instead of silently forking it.
     """
-    assert fixture_module.is_shipped_optional_key.__module__ == "_registry_lib"
+    assert fixture_module.is_flat_key.__module__ == "_registry_lib"
 
 
 def test_generated_silent_mode_values_are_schema_words(fixture_module):

@@ -420,8 +420,8 @@ def test_path_metadata_without_da_guard_is_exit_2(tmp_path, monkeypatch, no_pars
 
 # ── check_threshold_unit_sanity (its fixed conf.d dirs) ─────────────────
 
-_US_REGISTRY = {"version": 1, "packs": {"t": {"k": {"value": 50, "unit": "%",
-                                                     "tier": "defaults"}}}}
+_US_REGISTRY = {"version": 1, "packs": {"t": {}},
+                "keys": {"k": {"pack": "t", "value": 50, "unit": "%"}}}
 _US_CONFD = "components/threshold-exporter/config/conf.d"
 
 

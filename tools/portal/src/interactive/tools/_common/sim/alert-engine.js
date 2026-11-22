@@ -100,11 +100,10 @@ function generateSampleYaml(selectedPacks, withProfile) {
     const pack = RULE_PACK_DATA[packId];
     if (!pack) continue;
     const packDefaults = pack.defaults || {};
-    // Declared keys are a SECOND reason to emit a pack section. The old guard
-    // skipped on empty `defaults` alone, which predates this tier — a pack with
-    // a declared tier and no platform defaults would have been dropped whole,
-    // silently losing exactly the thing this change exists to surface. No
-    // shipped pack is in that state today; the guard was stale, not broken.
+    // Declared keys are a SECOND reason to emit a pack section: since #4195 a
+    // pack whose keys all lack a platform value (redis, mongodb, kafka, …) has
+    // no `defaults` at all, and skipping on empty `defaults` alone would drop
+    // it whole, losing exactly the keys a tenant has to fill in.
     const declared = getDeclaredKeys([packId]);
     if (Object.keys(packDefaults).length === 0 && declared.length === 0) continue;
     lines.push(`\n# --- ${pack.label} ---`);
@@ -114,8 +113,8 @@ function generateSampleYaml(selectedPacks, withProfile) {
       // `YamlValidatorTab`'s insert-metric button are the others; a blind
       // review found both, #1344). The declared block below is emitted
       // commented precisely because the platform asserts no number for those —
-      // but these defaults-tier keys ARE asserted, and #1176 measured
-      // counter-examples for two of them. A
+      // but these platform values ARE asserted (#1176 measured counter-examples
+      // for some reference numbers; the shipping gate keeps those out). A
       // template that stays silent about that teaches the reader the number is
       // endorsed. Rendered from the registry field, so a pack with nothing
       // measured emits nothing (absence ≠ "validated").

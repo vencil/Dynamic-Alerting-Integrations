@@ -55,7 +55,7 @@ from scaffold_tenant import (
     SATURATION_CRITICAL_COMMENT,
 )
 from _registry_lib import (  # noqa: E402
-    is_shipped_optional_key,
+    is_flat_key,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
@@ -297,17 +297,17 @@ class TestRulePacksIntegrity:
 
     def test_all_packs_have_required_keys(self):
         """每個 pack 包含必要欄位。"""
-        required = {"display", "exporter", "defaults", "rule_pack_file"}
+        required = {"display", "exporter", "thresholds", "rule_pack_file"}
         for name, pack in RULE_PACKS.items():
             missing = required - set(pack.keys())
             assert not missing, f"RULE_PACKS['{name}'] 缺少: {missing}"
 
     def test_defaults_have_value_and_unit(self):
-        """每個 defaults entry 包含 value 和 unit。"""
+        """每個 thresholds entry 包含 value 和 unit。"""
         for name, pack in RULE_PACKS.items():
-            for key, info in pack.get("defaults", {}).items():
-                assert "value" in info, f"{name}.defaults.{key} 缺少 value"
-                assert "unit" in info, f"{name}.defaults.{key} 缺少 unit"
+            for key, info in pack.get("thresholds", {}).items():
+                assert "value" in info, f"{name}.thresholds.{key} 缺少 value"
+                assert "unit" in info, f"{name}.thresholds.{key} 缺少 unit"
 
     @pytest.mark.parametrize("db", [
         k for k in RULE_PACKS
@@ -952,8 +952,8 @@ class TestRunFromOnboard:
 EXPECTED_SATURATION_KEYS = {
     # kubernetes
     "container_cpu", "container_cpu_throttle", "container_memory",
-    # mariadb（mysql_threads_running 自 #3778 在 optional_overrides 層，不在 defaults）
-    "mysql_connection_usage_percent",
+    # mariadb
+    "mysql_connection_usage_percent", "mysql_threads_running",
     # postgresql
     "pg_connections",
     # redis
@@ -1049,9 +1049,10 @@ class TestSaturationGenerateReport:
     def test_mariadb_report_includes_education_section(self):
         report = generate_report("db-x", ["kubernetes", "mariadb"], "/tmp/out")
         assert "飽和類指標的 critical 層" in report
-        # #3778: mysql_threads_running_critical is not offered — its base has
-        # no defaults value, so the critical row cannot be served.
-        assert "mysql_threads_running_critical" not in report
+        # #4195: mysql_threads_running has no platform value but is
+        # saturation-classed, and since #4163 its critical row is served once a
+        # tenant writes it — so it is offered like the others.
+        assert "mysql_threads_running_critical" in report
         assert "mysql_connection_usage_percent_critical" in report
         assert "container_cpu_critical" in report
         # #1447: this asserted the repo-relative `docs/…md` path. The report
@@ -1087,30 +1088,22 @@ class TestSaturationRulePacksIntegrity:
         (key_schema,) = schema["properties"]["keys"]["patternProperties"].values()
         enum = set(key_schema["properties"]["metric_class"]["enum"])
         for name, pack in RULE_PACKS.items():
-            for section in ("defaults", "optional_overrides"):
-                for key, info in pack.get(section, {}).items():
-                    assert info.get("metric_class") in enum, f"{name}.{section}.{key}"
+            for key, info in pack.get("thresholds", {}).items():
+                assert info.get("metric_class") in enum, f"{name}.thresholds.{key}"
 
-    def test_saturation_outside_defaults_is_only_a_critical_variant(self):
-        """optional_overrides 裡的 saturation 只能是 saturation base 的
-        `_critical`（繼承而來），或平台宣告、不給值的平鍵（#3778 的
-        mysql_threads_running）與它的 `_critical`——不會長出別的 defaults 外飽和鍵。"""
+    def test_a_saturation_critical_key_has_a_saturation_base(self):
+        """`<base>_critical` 的 saturation 一定跟著 base（繼承而來）：saturation
+        的 `_critical` 鍵，其 base 必在 saturation base 集合裡（#4195 起不分層）。"""
         bases = saturation_default_keys()
-        declared = {k for pack in RULE_PACKS.values()
-                    for k, info in pack.get("optional_overrides", {}).items()
-                    if is_shipped_optional_key(k) and info.get("metric_class") == "saturation"}
-        assert declared == {"mysql_threads_running"}, declared
         for name, pack in RULE_PACKS.items():
-            for key, info in pack.get("optional_overrides", {}).items():
-                if info.get("metric_class") == "saturation" and key not in declared:
-                    assert key.endswith("_critical") and \
-                        key[:-len("_critical")] in bases | declared, \
-                        f"{name}.optional_overrides.{key}"
+            for key, info in pack.get("thresholds", {}).items():
+                if info.get("metric_class") == "saturation" and not is_flat_key(key):
+                    assert key[:-len("_critical")] in bases, f"{name}.thresholds.{key}"
 
     def test_saturation_set_matches_expected(self):
-        """被標 set == 預期常數（真 N=21）。"""
+        """被標 set == 預期常數（真 N=22）。"""
         assert saturation_default_keys() == EXPECTED_SATURATION_KEYS
-        assert len(EXPECTED_SATURATION_KEYS) == 21
+        assert len(EXPECTED_SATURATION_KEYS) == 22
 
 
 # ---------------------------------------------------------------------------
@@ -1597,8 +1590,7 @@ class TestPromptEnterWritesNothing:
         """平台給值的鍵：寫出平台值、留空沿用；沒有平台值的鍵：數字標成參考值、留空跳過。"""
         from _rule_packs_generated import BUILTIN_DEFAULT_KEYS
         prompts, _ = self._prompts_for(["oracle"])
-        oracle = {k for tier in ("defaults", "optional_overrides")
-                  for k in RULE_PACKS["oracle"].get(tier, {})}
+        oracle = set(RULE_PACKS["oracle"].get("thresholds", {}))
         armed = sorted(oracle & set(BUILTIN_DEFAULT_KEYS))
         unarmed = sorted(oracle - set(BUILTIN_DEFAULT_KEYS))
         assert armed and unarmed
@@ -1643,15 +1635,15 @@ class TestCounterexamplePrompt:
 
 
     def test_every_registry_counterexample_is_reachable_from_a_prompt(self):
-        """Non-vacuity: each key carrying the field must live in a tier the
-        interactive flow actually prompts for, or the line renders for nobody."""
+        """Non-vacuity: each key carrying the field is one the interactive
+        flow prompts for (every key of the pack since #3924), or the line
+        renders for nobody."""
         found = 0
         for pack in RULE_PACKS.values():
-            for tier in ("defaults", "optional_overrides"):
-                for key, info in (pack.get(tier) or {}).items():
-                    if "value_counterexample" in info:
-                        assert counterexample_prompt_lines(info), key
-                        found += 1
+            for key, info in (pack.get("thresholds") or {}).items():
+                if "value_counterexample" in info:
+                    assert counterexample_prompt_lines(info), key
+                    found += 1
         assert found >= 2, "fewer than two keys carry the field"
 
 
