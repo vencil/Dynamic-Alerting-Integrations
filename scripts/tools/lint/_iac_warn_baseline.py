@@ -113,8 +113,8 @@ def problems(warns: Iterable[Mapping], register: Mapping[Key, Entry]) -> list[st
         if (path, code) not in register:
             where = ", ".join(f"{path}:{n}" for n in lines)
             out.append(f"unregistered WARN {code} in {path} ({where}): add a "
-                       f"REGISTER entry with its rationale in scripts/tools/lint/"
-                       f"_iac_warn_baseline.py, or fix the finding")
+                       f"REGISTER entry with its rationale in "
+                       f"scripts/tools/lint/_iac_warn_baseline.py, or fix the finding")
     for path, code in sorted(register):
         if (path, code) not in seen:
             out.append(f"stale register entry ({path}, {code}): hadolint no longer "
