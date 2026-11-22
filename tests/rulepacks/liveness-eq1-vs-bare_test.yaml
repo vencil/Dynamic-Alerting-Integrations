@@ -14,7 +14,7 @@ tests:
   - interval: 30s
     name: static-sd-up-zero-eq1-fires-bare-misses
     input_series:
-      - series: 'tenant_expected_exporter{tenant="db-a", db_type="mariadb"}'
+      - series: 'tenant_expected_exporter{tenant="db-a", pack="mariadb"}'
         values: '1x10'
       # target present the whole time, but reporting up=0 (pod down, Service alive).
       - series: 'up{job="tenant-exporters", tenant="db-a", instance="db-a:9104"}'
@@ -27,7 +27,7 @@ tests:
           - exp_labels:
               severity: critical
               tenant: db-a
-              db_type: mariadb
+              pack: mariadb
       # bare: the present up=0 series suppresses the anti-join → MISSES (no alert).
       - eval_time: 3m
         alertname: AbsentBareUnless

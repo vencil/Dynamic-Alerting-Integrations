@@ -247,11 +247,11 @@ func hasRow(tv servedTenantValues, k string) bool {
 }
 
 // reservedValueKeys is the reserved keys servedValuesFilled's Values holds
-// for every tenant of cfg, whatever their reading: `_metadata`,
-// `_severity_dedup`, `_silent_mode`, and `_state_<filter>` for every filter
+// for every tenant of cfg, whatever their reading: `_expected_exporters`,
+// `_metadata`, `_severity_dedup`, `_silent_mode`, and `_state_<filter>` for every filter
 // the root declares (key_verdict_day_test.go holds the two equal).
 func reservedValueKeys(cfg *config.ThresholdConfig) []string {
-	out := []string{"_metadata", "_severity_dedup", "_silent_mode"}
+	out := []string{"_expected_exporters", "_metadata", "_severity_dedup", "_silent_mode"}
 	for name := range cfg.StateFilters {
 		out = append(out, "_state_"+name)
 	}

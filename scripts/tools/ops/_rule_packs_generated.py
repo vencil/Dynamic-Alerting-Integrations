@@ -1,10 +1,12 @@
 """GENERATED from rule-packs/threshold-registry.yaml — DO NOT EDIT.
 
 The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its
-display/exporter/default_on/rule_pack_file(/queries) and its `thresholds`
-(registry key order), and BUILTIN_DEFAULT_KEYS: the keys the readers build
-in with a platform value (`arming: default`, the same derivation as
-builtin_defaults_gen.go, #3832). Edit the registry, then run
+display/exporter/default_on/rule_pack_file(/queries/presence/undeclared_notice)
+and its `thresholds` (registry key order), BUILTIN_DEFAULT_KEYS: the keys the
+readers build in with a platform value (`arming: default`, the same derivation
+as builtin_defaults_gen.go, #3832), and EXPECTED_EXPORTER_KINDS: the packs with
+`presence:`, the kinds a tenant may name in `_expected_exporters` (#4097).
+Edit the registry, then run
   python3 scripts/tools/lint/check_threshold_registry.py --regen
 `--ci` (pre-commit, CI) fails while this file is stale.
 """
@@ -49,6 +51,7 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                 'exporter': 'prometheus-community/postgres_exporter',
                 'default_on': False,
                 'rule_pack_file': 'rule-packs/rule-pack-postgresql.yaml',
+                'presence': ['pg_up'],
                 'thresholds': {'pg_connections': {'value': 80,
                                                   'unit': '% of max_connections',
                                                   'desc': 'Connection usage % warning',
@@ -70,6 +73,7 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
              'exporter': 'prom/mysqld-exporter or Percona',
              'default_on': True,
              'rule_pack_file': 'rule-packs/rule-pack-mariadb.yaml',
+             'presence': ['mysql_up'],
              'thresholds': {'mysql_connection_usage_percent': {'value': 80,
                                                                'unit': '% of max_connections',
                                                                'desc': 'Connection usage warning: '
@@ -146,6 +150,7 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
            'exporter': 'oliver006/redis_exporter',
            'default_on': False,
            'rule_pack_file': 'rule-packs/rule-pack-redis.yaml',
+           'presence': ['redis_up'],
            'thresholds': {'redis_memory_used_bytes': {'value': 4294967296,
                                                       'unit': 'bytes (4GB)',
                                                       'desc': 'Memory usage warning',
@@ -188,6 +193,7 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
              'exporter': 'percona/mongodb_exporter',
              'default_on': False,
              'rule_pack_file': 'rule-packs/rule-pack-mongodb.yaml',
+             'presence': ['mongodb_up'],
              'thresholds': {'mongodb_connections_current': {'value': 300,
                                                             'unit': 'count',
                                                             'desc': 'Current connections warning',
@@ -222,6 +228,7 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                    'exporter': 'justwatchcom/elasticsearch_exporter',
                    'default_on': False,
                    'rule_pack_file': 'rule-packs/rule-pack-elasticsearch.yaml',
+                   'presence': ['elasticsearch_exporter_build_info'],
                    'thresholds': {'es_heap_usage_percent': {'value': 85,
                                                             'unit': '%',
                                                             'desc': 'JVM heap usage warning; #1196 '
@@ -294,6 +301,7 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
             'default_on': False,
             'rule_pack_file': 'rule-packs/rule-pack-oracle.yaml',
             'queries': 'rule-packs/exporters/oracle.yaml',
+            'presence': ['query_interval{query="oracle_liveness"}'],
             'thresholds': {'oracle_sessions_active': {'value': 200,
                                                       'unit': 'count',
                                                       'desc': 'Active sessions warning',
@@ -379,6 +387,7 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
          'default_on': False,
          'rule_pack_file': 'rule-packs/rule-pack-db2.yaml',
          'queries': 'rule-packs/exporters/db2.yaml',
+         'presence': ['query_interval{query="db2_liveness"}'],
          'thresholds': {'db2_connections_active': {'value': 200,
                                                    'unit': 'count',
                                                    'desc': 'Active connections warning',
@@ -517,6 +526,7 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                 'exporter': 'ClickHouse built-in Prometheus endpoint',
                 'default_on': False,
                 'rule_pack_file': 'rule-packs/rule-pack-clickhouse.yaml',
+                'presence': ['ClickHouseMetrics_TCPConnection'],
                 'thresholds': {'clickhouse_queries_rate': {'value': 500,
                                                            'unit': 'qps',
                                                            'desc': 'Query rate warning (5m)',
@@ -544,6 +554,7 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
            'exporter': 'danielqsj/kafka-exporter',
            'default_on': False,
            'rule_pack_file': 'rule-packs/rule-pack-kafka.yaml',
+           'presence': ['kafka_brokers'],
            'thresholds': {'kafka_consumer_lag': {'value': 1000,
                                                  'unit': 'messages',
                                                  'desc': 'Consumer lag warning',
@@ -570,6 +581,7 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
               'exporter': 'kbudde/rabbitmq_exporter or built-in Prometheus plugin',
               'default_on': False,
               'rule_pack_file': 'rule-packs/rule-pack-rabbitmq.yaml',
+              'presence': ['rabbitmq_up', 'rabbitmq_identity_info'],
               'thresholds': {'rabbitmq_queue_messages': {'value': 100000,
                                                          'unit': 'messages',
                                                          'desc': 'Queue depth warning',
@@ -616,6 +628,8 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
          'exporter': 'prometheus/jmx_exporter or Spring Boot Actuator',
          'default_on': False,
          'rule_pack_file': 'rule-packs/rule-pack-jvm.yaml',
+         'presence': ['jvm_memory_used_bytes', 'jvm_memory_bytes_used'],
+         'undeclared_notice': False,
          'thresholds': {'jvm_gc_pause': {'value': 0.5,
                                          'unit': 's/s',
                                          'desc': 'GC pause warning: seconds of GC pause accrued '
@@ -652,6 +666,7 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
            'exporter': 'nginxinc/nginx-prometheus-exporter',
            'default_on': False,
            'rule_pack_file': 'rule-packs/rule-pack-nginx.yaml',
+           'presence': ['nginx_up'],
            'thresholds': {'nginx_connections': {'value': 1000,
                                                 'unit': 'count',
                                                 'desc': 'Active connections warning',
@@ -678,3 +693,5 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                      'metric_class': 'saturation'}}}}
 
 BUILTIN_DEFAULT_KEYS = frozenset({'container_cpu', 'container_cpu_throttle', 'container_memory', 'db2_log_usage_percent', 'db2_storage_path_used_percent', 'db2_tablespace_used_percent', 'es_disk_usage_percent', 'es_heap_usage_percent', 'mysql_connection_usage_percent', 'mysql_replication_lag', 'oracle_process_usage_percent', 'oracle_tablespace_used_percent', 'pg_connections', 'pg_replication_lag', 'rabbitmq_node_mem_percent'})
+
+EXPECTED_EXPORTER_KINDS = ('clickhouse', 'db2', 'elasticsearch', 'jvm', 'kafka', 'mariadb', 'mongodb', 'nginx', 'oracle', 'postgresql', 'rabbitmq', 'redis',)

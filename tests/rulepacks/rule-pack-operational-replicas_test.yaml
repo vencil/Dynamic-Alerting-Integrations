@@ -32,9 +32,9 @@ tests:
       - series: 'da_config_event{tenant="t1", event="silence_expired", reason="end_time_passed", job="threshold-exporter", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
         values: '1x40'
       # t1 宣告了 mariadb exporter，但 tenant-exporters 沒有健康 target。
-      - series: 'tenant_expected_exporter{tenant="t1", db_type="mariadb", job="threshold-exporter", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
+      - series: 'tenant_expected_exporter{tenant="t1", pack="mariadb", job="threshold-exporter", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
         values: '1x40'
-      - series: 'tenant_expected_exporter{tenant="t1", db_type="mariadb", job="threshold-exporter", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'tenant_expected_exporter{tenant="t1", pack="mariadb", job="threshold-exporter", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
         values: '1x40'
     promql_expr_test:
       - eval_time: 5m

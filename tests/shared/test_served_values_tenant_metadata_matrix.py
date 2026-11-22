@@ -1,7 +1,7 @@
 """租戶元資料語意矩陣：值寫在哪裡，generate_tenant_metadata 的答案都要與 Go 的 served-values 一致（#2115 0-B／B4）。
 
 讀取端：`generate_tenant_metadata.build_tenant_metadata`（platform-data.json 內嵌的
-租戶清單與 `_metadata`、db_type）與其 CLI。
+租戶清單與 `_metadata`、expected_exporters）與其 CLI。
 
 同一組值（`_metadata.owner` 與 `redis_connected_clients: 5`）寫在四個位置之一：根
 `defaults:`、平台檔 `tenants:`、租戶檔、子目錄（子樹 `_defaults.yaml` 的
@@ -12,7 +12,7 @@ tenant-b 是對照組，值永遠寫在自己的租戶檔，四個位置下答�
 fail-closed 的測試），所以「defaults」那格只放閾值鍵，owner 依 Go 為空。
 
 根 `defaults:` 宣告的鍵（`mysql_connections`、`redis_connected_clients`）每個租戶都會
-收到：列數（`metric_count`）看 Go 實際發出的鍵（含繼承），不看租戶檔自己寫了什麼。db_type 不推斷，只取 Go 的 `_metadata.db_type`：
+收到：列數（`metric_count`）看 Go 實際發出的鍵（含繼承），不看租戶檔自己寫了什麼。expected_exporters 不推斷，只取 Go 讀到的 `_expected_exporters`：
 tenant-a 沒宣告，鍵再像 mysql 也是空字串；tenant-b 宣告 redis，就是 redis。
 
 舊讀取端（ee778a42 以前）只平鋪讀根目錄租戶檔本身：平台 `tenants:` 的 owner 讀成空字串、
@@ -50,7 +50,7 @@ pytestmark = pytest.mark.usefixtures("da_guard_env")
 _BASE = "defaults:\n  mysql_connections: 80\n  redis_connected_clients: 100\n"
 _A_PLAIN = "tenants:\n  tenant-a:\n    _silent_mode: disable\n"
 _B = ("tenants:\n  tenant-b:\n    redis_connected_clients: 7\n"
-      "    _metadata:\n      owner: team-b\n      db_type: redis\n")
+      "    _metadata:\n      owner: team-b\n    _expected_exporters: [redis]\n")
 #: `redis_connected_clients` 關到 {expires} 為止，之後回落成根的 100（送出）。
 _EXPIRING_DISABLE = ("tenants:\n  tenant-a:\n    redis_connected_clients:\n      default: disable\n"
                      "      expires: \"{expires}\"\n")
@@ -126,22 +126,24 @@ def test_matches_served_values(where, tmp_path):
     assert sorted(meta) == sorted(served) == ["tenant-a", "tenant-b"], (where, sorted(meta))
     for tenant, t in served.items():
         got, md = meta[tenant], t.values["_metadata"]
-        for field in ("owner", "tier", "region", "domain", "db_type"):
+        for field in ("owner", "tier", "region", "domain"):
             assert got[field] == md[field], (where, tenant, field)
+        assert got["expected_exporters"] == t.values["_expected_exporters"], (where, tenant)
+        assert "db_type" not in got and "db_type" not in md, (where, tenant)
         assert got["metric_count"] == len(t.severities), (where, tenant)
 
     assert meta["tenant-a"]["owner"] == _OWNER_A[where], where
     assert meta["tenant-b"]["owner"] == "team-b", where              # 對照組不變
-    # db_type 只認宣告值：tenant-a 繼承了 mysql_connections 也不推成 mariadb。
-    # #3771：db_type 是列表（字串宣告＝一元素），沒宣告是 []。
-    assert meta["tenant-a"]["db_type"] == [], where
-    assert meta["tenant-b"]["db_type"] == ["redis"], where
+    # expected_exporters 只認宣告值（`_expected_exporters`，#4097）：tenant-a 繼承了
+    # mysql_connections 也不推成 mariadb。沒宣告是 []。
+    assert meta["tenant-a"]["expected_exporters"] == [], where
+    assert meta["tenant-b"]["expected_exporters"] == ["redis"], where
     # #3832：內建層的鍵每個租戶都有列，列數一併算進來。
     for tenant in ("tenant-a", "tenant-b"):
         # 繼承的 mysql_connections 與 redis_connected_clients 都算數。
         assert meta[tenant]["metric_count"] == 2 + len(BUILTIN_DEFAULTS), (where, tenant)
         # #4141：不輸出 rule_packs——由發出的鍵推得的包每個租戶都一樣（內建層），
-        # 租戶宣告的是 db_type。
+        # 租戶宣告的是 `_expected_exporters`。
         assert "rule_packs" not in meta[tenant], (where, tenant, meta[tenant])
 
 

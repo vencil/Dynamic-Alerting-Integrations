@@ -170,7 +170,7 @@ class Tool:
 
 
 def _helm_values(cell: pathlib.Path) -> None:
-    """A K8s target for every tenant the catalogue's files declare a db_type
+    """A K8s target for every tenant the catalogue's files declare an exporter kind
     for, so a tree with nothing flagged is no retire-ordering violation."""
     (cell / "helm").mkdir()
     for t in ("a", "b", "eye"):

@@ -230,7 +230,7 @@ def _write_tree(root: pathlib.Path, *, upper: bool, tenants: bool) -> None:
             "tenants:\n  alpha:\n    pg_connections: 90\n"
             "    _routing_profile: standard\n"
             # blind-spot counts a DB type a tenant declares (#4026).
-            "    _metadata: {db_type: postgresql}\n", encoding="utf-8")
+            "    _expected_exporters: [postgresql]\n", encoding="utf-8")
         (root / names["beta"]).write_text(
             "tenants:\n  beta:\n    pg_connections: 91\n", encoding="utf-8")
 
@@ -727,7 +727,7 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
 # thresholds, so removing the tenant files changes what it governs.
 #
 # ⛔ `check_retire_drift.py` LEFT this set in #4026. It reads only the
-# tenants that declare `_metadata.db_type`, and the fixture declared none;
+# tenants that declare `_expected_exporters`, and the fixture declared none;
 # `alpha` now declares postgresql (what blind-spot counts), so removing the
 # tenant files changes its report.
 #

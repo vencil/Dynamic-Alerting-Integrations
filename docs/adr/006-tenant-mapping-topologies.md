@@ -183,7 +183,7 @@ groups:
 3. **閾值仍是租戶一份。** 閾值、維護狀態、租戶 metadata 由 threshold-exporter 送出，一個租戶一組，不分叢集。這些序列若是從別的叢集 federate 上來，身上也會帶 `da_cluster`；規則一律先以 `by(tenant)` 收成一份，再用 `on(tenant) group_left` 套到該租戶的每個叢集（`group_left` 表示右邊一條序列可以配左邊多條），所以帶不帶結果相同。前提是各叢集送上來的閾值內容一致。
 4. **規則的寫法。** 輸入是租戶 exporter 序列的聚合，`by(...)` 只要含 `tenant`、`instance`、`pod`、`namespace`、`node` 任一個，就必須同時含 `da_cluster`。兩邊都是這類序列的配對（`on(...)`）也一樣。
 5. **告警帶 `da_cluster`。** 送到 Alertmanager 的告警都有這個 label：規則算出來的告警若已經帶著（它讀的序列來自哪個叢集），就是那個值；沒有的，Prometheus 送出時補上自己的 external label，也就是「評估這條規則的那台 Prometheus 所在的叢集」。Alertmanager 的 warning／critical 去重（[ADR-001](./001-severity-dedup-via-inhibit.md)）把它納入，兩個叢集的同名告警互不壓制。通知的分組（`group_by`，決定哪些告警合成同一則通知）預設不變：同一條告警在幾個叢集同時觸發時是一則通知，裡面裝著各叢集的告警；會不會逐條列出告警與它的 `da_cluster`，取決於接收端用的模板（Alertmanager 內建的 email、PagerDuty、webhook 會，內建的 Slack 不會，見下面的已知限制）。要每個叢集各收一則的部署或租戶，把 `da_cluster` 加進自己的 `group_by`。租戶自助告警（`Custom_*`）例外：它們走另一條分組固定的路由，租戶的 `group_by` 對它們不適用。只讀 threshold-exporter 序列的告警（例如「租戶沒設定閾值」）屬於後一種：它講的是整個租戶，label 上的叢集只代表是哪一台算出來的。
-6. **「該有卻沒有」逐叢集判定。** 租戶可以在設定裡宣告自己預期出現在哪些叢集；有宣告時，任一個宣告的叢集沒有回報就告警。沒宣告時，只要在至少一個叢集出現就算存在。
+6. **「該有卻沒有」逐叢集判定。** 租戶可以在設定裡宣告自己預期出現在哪些叢集；有宣告時，任一個宣告的叢集沒有回報就告警。沒宣告時，只要在至少一個叢集出現就算存在。宣告的位置是租戶頂層的 `_expected_exporters`（見 [ADR-010](./010-multi-tenant-grouping.md)）：目前它只宣告租戶跑哪些種類的 exporter，逐叢集的寫法（`種類@叢集`）還沒有讀取端，寫了會被拒收，所以現在一律是「沒宣告叢集」的行為。
 7. **沒設 `da_cluster` 的 Prometheus 在上線時被指出來。** `da-tools federation-check edge` 讀實際那台 Prometheus 的設定，`external_labels.da_cluster` 沒有值就失敗；本 repo 自己的設定由抓取設定的 lint 檢查同一件事。兩者都只看一個地方，不需要推算 relabel 的結果。
 
 ### 範例
