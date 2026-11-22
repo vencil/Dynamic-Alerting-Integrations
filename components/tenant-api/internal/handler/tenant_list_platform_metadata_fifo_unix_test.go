@@ -43,7 +43,7 @@ func listedRowsByID(t *testing.T, dir string) map[string]TenantSummary {
 func TestListTenants_PlatformFIFOFallsBackThenRecovers(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
-		"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
+		"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      region: r-1\n",
 	})
 	fifo := filepath.Join(dir, "_x.yaml")
 	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
@@ -58,7 +58,7 @@ func TestListTenants_PlatformFIFOFallsBackThenRecovers(t *testing.T) {
 	metadataRootReadGuards.Store(dir, guard)
 	t.Cleanup(func() { metadataRootReadGuards.Delete(dir) })
 
-	tenantOnly := listedMetadata{DBType: "mariadb"}
+	tenantOnly := listedMetadata{Region: "r-1"}
 	for i := 0; i < 2; i++ {
 		done := make(chan map[string]TenantSummary, 1)
 		go func() { done <- listedRowsByID(t, dir) }()
@@ -84,7 +84,7 @@ func TestListTenants_PlatformFIFOFallsBackThenRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := listedRowsByID(t, dir)
-	if got, want := metadataOf(rows["tx"]), (listedMetadata{DBType: "mariadb", Owner: "plat-team"}); !reflect.DeepEqual(got, want) {
+	if got, want := metadataOf(rows["tx"]), (listedMetadata{Region: "r-1", Owner: "plat-team"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("tx metadata after recovery = %+v, want %+v", got, want)
 	}
 }

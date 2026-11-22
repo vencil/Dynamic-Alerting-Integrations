@@ -12,10 +12,23 @@
 #   3. rule-pack-platform.yaml 的內建層摘要
 #   4. components/threshold-exporter/app/pkg/config/builtin_defaults_gen.go
 #      （每個鍵都內建在讀取端：arming: default 帶平台值、其餘為 off；#3832）
+#   5. components/threshold-exporter/app/pkg/config/expected_exporter_kinds_gen.go
+#      （帶 presence: 的 pack 名稱，即 `_expected_exporters` 可以寫的 kind；#4097）
 # #3924 起出貨的 chart values、範例根 _defaults.yaml 與產生器都**不寫**本檔的
 # 鍵（不放 defaults:、不列 optional_overrides:），由
 # check_threshold_reachability.py 的 producer policy 擋。
 # 新鮮度由 check_threshold_registry.py --ci 面強制（stale＝硬錯）。
+#
+# packs.<pack>.presence（#4097）：該 pack 的 exporter 只要有回應就一定會吐的 selector
+# 清單（任一個出現就算在；被監控的對象連不上時也照吐）。不寫 job matcher——規則自己加
+# job="tenant-exporters"。帶 presence 的 pack 就是一個 exporter kind：租戶在
+# `_expected_exporters` 能宣告的值、exporter 的允許清單（上面第 5 項）、
+# tenant-config schema 的 enum、liveness 規則的 presence 運算式
+# （scripts/tools/_lib_exporter_presence.py --write）都由這裡生成或被雙向測試釘住。
+# kubernetes 沒有（不是租戶自己跑的 exporter）。
+# packs.<pack>.undeclared_notice: false：TenantExporterUndeclared 不點名這個 kind
+# （jvm：很多應用順帶吐 jvm_*，不代表租戶打算跑一支 JVM exporter）；仍然可以宣告，
+# 宣告了 TenantExporterAbsent 就照管。只能寫 false，只能寫在帶 presence 的 pack 上。
 #
 # ✅ D-A PR-3 起本檔是手寫的唯一來源：閾值、arming、metric_class 與
 # deprecated_aliases 都直接寫在這裡。scaffold_tenant.RULE_PACKS 的閾值部分改由
@@ -83,63 +96,90 @@ packs:
     exporter: prometheus-community/postgres_exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-postgresql.yaml
+    presence:
+      - pg_up
   mariadb:
     display: MariaDB / MySQL (mysqld_exporter)
     exporter: prom/mysqld-exporter or Percona
     default_on: true
     rule_pack_file: rule-packs/rule-pack-mariadb.yaml
+    presence:
+      - mysql_up
   redis:
     display: Redis (oliver006/redis_exporter)
     exporter: oliver006/redis_exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-redis.yaml
+    presence:
+      - redis_up
   mongodb:
     display: MongoDB (percona/mongodb_exporter)
     exporter: percona/mongodb_exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-mongodb.yaml
+    presence:
+      - mongodb_up
   elasticsearch:
     display: Elasticsearch (elasticsearch_exporter)
     exporter: justwatchcom/elasticsearch_exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-elasticsearch.yaml
+    presence:
+      - elasticsearch_exporter_build_info
   oracle:
     display: Oracle Database (query-exporter)
     exporter: albertodonato/query-exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-oracle.yaml
     queries: rule-packs/exporters/oracle.yaml
+    presence:
+      - 'query_interval{query="oracle_liveness"}'
   db2:
     display: IBM DB2 (query-exporter)
     exporter: albertodonato/query-exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-db2.yaml
     queries: rule-packs/exporters/db2.yaml
+    presence:
+      - 'query_interval{query="db2_liveness"}'
   clickhouse:
     display: ClickHouse (built-in /metrics)
     exporter: ClickHouse built-in Prometheus endpoint
     default_on: false
     rule_pack_file: rule-packs/rule-pack-clickhouse.yaml
+    presence:
+      - ClickHouseMetrics_TCPConnection
   kafka:
     display: Apache Kafka (danielqsj/kafka-exporter)
     exporter: danielqsj/kafka-exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-kafka.yaml
+    presence:
+      - kafka_brokers
   rabbitmq:
     display: RabbitMQ (kbudde/rabbitmq_exporter)
     exporter: kbudde/rabbitmq_exporter or built-in Prometheus plugin
     default_on: false
     rule_pack_file: rule-packs/rule-pack-rabbitmq.yaml
+    presence:
+      - rabbitmq_up
+      - rabbitmq_identity_info
   jvm:
     display: JVM (jmx_exporter / Micrometer)
     exporter: prometheus/jmx_exporter or Spring Boot Actuator
     default_on: false
     rule_pack_file: rule-packs/rule-pack-jvm.yaml
+    presence:
+      - jvm_memory_used_bytes
+      - jvm_memory_bytes_used
+    undeclared_notice: false
   nginx:
     display: Nginx (nginx-prometheus-exporter)
     exporter: nginxinc/nginx-prometheus-exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-nginx.yaml
+    presence:
+      - nginx_up
 keys:
   container_cpu:
     pack: kubernetes

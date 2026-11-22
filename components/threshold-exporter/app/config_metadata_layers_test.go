@@ -4,10 +4,11 @@ package main
 // root platform files' `tenants.<id>._metadata` (merge order) and the tenant
 // file's own, the tenant file winning a key both write.
 //
-// Read off a real scrape (tenant_metadata_info's owner / tier labels,
-// tenant_expected_exporter's db_type) plus ResolveMetadata for the fields
-// that are not labels (environment, domain), which da-guard's served values
-// report from the same resolve.
+// Read off a real scrape (tenant_metadata_info's owner / tier labels) plus
+// ResolveMetadata for the fields that are not labels (environment, domain,
+// region), which da-guard's served values report from the same resolve.
+// (`_expected_exporters`, which took over the removed `db_type`'s job, is a
+// key of its own with its own layering: config_expected_exporters_test.go.)
 
 import (
 	"path/filepath"
@@ -20,8 +21,8 @@ import (
 
 // metadataReading is one tenant's metadata as the exporter serves it.
 type metadataReading struct {
-	Owner, Tier, DBType string // scraped labels
-	Environment, Domain string // ResolveMetadata
+	Owner, Tier                 string // scraped labels
+	Environment, Domain, Region string // ResolveMetadata
 }
 
 // scrapeMetadata gathers the collector of m in a pedantic registry and
@@ -39,7 +40,7 @@ func scrapeMetadata(t *testing.T, m *ConfigManager) map[string]metadataReading {
 	out := map[string]metadataReading{}
 	for _, mf := range mfs {
 		name := mf.GetName()
-		if name != "tenant_metadata_info" && name != "tenant_expected_exporter" {
+		if name != "tenant_metadata_info" {
 			continue
 		}
 		for _, metric := range mf.GetMetric() {
@@ -48,17 +49,13 @@ func scrapeMetadata(t *testing.T, m *ConfigManager) map[string]metadataReading {
 				labels[l.GetName()] = l.GetValue()
 			}
 			r := out[labels["tenant"]]
-			if name == "tenant_metadata_info" {
-				r.Owner, r.Tier = labels["owner"], labels["tier"]
-			} else {
-				r.DBType = labels["db_type"]
-			}
+			r.Owner, r.Tier = labels["owner"], labels["tier"]
 			out[labels["tenant"]] = r
 		}
 	}
 	for _, md := range m.GetConfig().ResolveMetadata() {
 		r := out[md.Tenant]
-		r.Environment, r.Domain = md.Environment, md.Domain
+		r.Environment, r.Domain, r.Region = md.Environment, md.Domain, md.Region
 		out[md.Tenant] = r
 	}
 	return out
@@ -67,9 +64,9 @@ func scrapeMetadata(t *testing.T, m *ConfigManager) map[string]metadataReading {
 // controlTenantFile is a second tenant whose metadata is written only in its
 // own file; no tree below gives it a platform entry, so its reading must
 // stay exactly this whatever the tree does to tx.
-const controlTenantFile = "tenants:\n  ty:\n    _metadata:\n      owner: ty-team\n      db_type: postgresql\n"
+const controlTenantFile = "tenants:\n  ty:\n    _metadata:\n      owner: ty-team\n      region: r-control\n"
 
-var controlTenantReading = metadataReading{Owner: "ty-team", DBType: "postgresql"}
+var controlTenantReading = metadataReading{Owner: "ty-team", Region: "r-control"}
 
 func metadataLayerTrees() []struct {
 	name  string
@@ -113,21 +110,21 @@ func metadataLayerTrees() []struct {
 			want: metadataReading{Owner: "tx-team", Tier: "silver"},
 		},
 		{
-			name: "tenant file writes only db_type, platform writes environment domain owner",
+			name: "tenant file writes only region, platform writes environment domain owner",
 			files: map[string]string{
 				"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      environment: production\n      domain: finance\n      owner: plat-team\n",
-				"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
+				"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      region: r-1\n",
 			},
-			want: metadataReading{Owner: "plat-team", DBType: "mariadb", Environment: "production", Domain: "finance"},
+			want: metadataReading{Owner: "plat-team", Region: "r-1", Environment: "production", Domain: "finance"},
 		},
 		{
 			name: "two platform files: the later file wins a key both write",
 			files: map[string]string{
 				"_a.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: a-team\n      tier: silver\n",
 				"_b.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: b-team\n      domain: finance\n",
-				"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
+				"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      region: r-1\n",
 			},
-			want: metadataReading{Owner: "b-team", Tier: "silver", Domain: "finance", DBType: "mariadb"},
+			want: metadataReading{Owner: "b-team", Tier: "silver", Domain: "finance", Region: "r-1"},
 		},
 		{
 			name: "tenant file writes a null _metadata: nothing below survives",
@@ -174,12 +171,12 @@ func TestMetadataLayersSurviveATenantOnlyReload(t *testing.T) {
 		"ty.yaml":        controlTenantFile,
 	})
 	tenantFile := filepath.Join(dir, "tx.yaml")
-	writeTestYAML(t, tenantFile, "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n    redis_x: \"1\"\n")
+	writeTestYAML(t, tenantFile, "tenants:\n  tx:\n    _metadata:\n      region: r-1\n    redis_x: \"1\"\n")
 
 	m, _ := newOverlayManager(t, dir)
 	requireFlatWatchPath(t, m)
 
-	writeTestYAML(t, tenantFile, "tenants:\n  tx:\n    _metadata:\n      db_type: postgresql\n    redis_x: \"2\"\n")
+	writeTestYAML(t, tenantFile, "tenants:\n  tx:\n    _metadata:\n      region: r-2\n    redis_x: \"2\"\n")
 	if err := watchReload(m); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -187,7 +184,7 @@ func TestMetadataLayersSurviveATenantOnlyReload(t *testing.T) {
 	if !strings.Contains(m.GetConfig().Tenants["tx"]["redis_x"].Default, "2") {
 		t.Fatalf("premise: the tenant edit did not land, so this run proves nothing")
 	}
-	want := metadataReading{Owner: "plat-team", DBType: "postgresql", Environment: "production"}
+	want := metadataReading{Owner: "plat-team", Region: "r-2", Environment: "production"}
 	if reloaded["tx"] != want {
 		t.Errorf("tx metadata after a tenant-only reload = %+v, want %+v", reloaded["tx"], want)
 	}

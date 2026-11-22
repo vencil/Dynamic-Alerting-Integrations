@@ -111,6 +111,7 @@ OPERATOR_ROUTING_REMEDY_ZH: Final[str] = (
 # block from components/threshold-exporter/app/pkg/config/reserved_keys.json. DO NOT EDIT.
 VALID_RESERVED_KEYS: Final[set[str]] = {
     "_custom_alerts",
+    "_expected_exporters",
     "_metadata",
     "_namespaces",
     "_profile",
@@ -142,6 +143,9 @@ RESERVED_KEY_READERS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
     "_custom_alerts": {
         "exporter": ("tenant", "platform_tenants", "profile"),
         "custom_alert_compiler": ("tenant", "platform_tenants", "profile"),
+    },
+    "_expected_exporters": {
+        "exporter": ("tenant", "platform_tenants", "profile"),
     },
     "_metadata": {
         "exporter": ("tenant", "platform_tenants", "profile"),
@@ -309,13 +313,16 @@ RECEIVER_URL_FIELDS: Final[dict[str, list[str]]] = {
 }
 
 # ============================================================
-# DB Type Inference Maps (Job name + Metric prefix → DB type)
+# Exporter-kind Inference Maps (Job name + Metric prefix → kind)
 # ============================================================
-# JOB_DB_MAP: Prometheus job name → DB type（完整比對 + 關鍵字比對）；
-#   blind_spot_discovery 用它判 live target 的 DB 類型。值集合必須等於
-#   tenant-config schema 的 dbTypeValue enum（租戶 `_metadata.db_type` 能宣告的值，
-#   #4026；tests/ops/test_blind_spot_discovery.py 守著）。
-# METRIC_PREFIX_DB_MAP: Metric 名稱前綴 → DB type；onboard_platform 用。
+# JOB_DB_MAP: Prometheus job name → exporter kind（完整比對 + 關鍵字比對）；
+#   blind_spot_discovery 用它判 live target 是哪一種 exporter。值必須是租戶
+#   `_expected_exporters` 能宣告的 kind（registry 帶 presence 的 pack，#4026、#4097）
+#   的子集——只涵蓋資料庫類的 kind。⛔ 刻意不收 nginx、jvm：`nginx` 這個關鍵字會
+#   命中平台的 ingress-nginx job，jvm 則從 job 名稱看不出來；所以 live 的 nginx／jvm
+#   exporter 在 blind-spot 是 `unrecognized`、不會是 blind spot（宣告了仍算 covered）；
+#   tests/rulepacks/test_exporter_presence.py 與 tests/ops/test_blind_spot_discovery.py 守著。
+# METRIC_PREFIX_DB_MAP: Metric 名稱前綴 → kind；onboard_platform 用。
 JOB_DB_MAP: Final[dict[str, str]] = {
     # MariaDB / MySQL
     "mysql": "mariadb", "mariadb": "mariadb", "mysqld": "mariadb",

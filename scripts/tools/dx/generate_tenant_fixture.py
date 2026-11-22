@@ -217,7 +217,7 @@ def _gen_routing(rng: random.Random, tenant_id: str) -> dict:
     """Generate routing configuration for a tenant."""
     routing: dict[str, Any] = {
         "receiver": _gen_receiver(rng, tenant_id),
-        "group_by": rng.sample(["alertname", "severity", "db_type", "namespace"], k=rng.randint(1, 3)),
+        "group_by": rng.sample(["alertname", "severity", "pack", "namespace"], k=rng.randint(1, 3)),
         "group_wait": f"{rng.choice([30, 60, 120])}s",
         "group_interval": f"{rng.choice([1, 3, 5])}m",
         "repeat_interval": f"{rng.choice([1, 4, 12, 24])}h",
@@ -233,7 +233,7 @@ def _gen_routing(rng: random.Random, tenant_id: str) -> dict:
     return routing
 
 
-def _gen_tenant_config(rng: random.Random, tenant_id: str, db_type: str) -> dict:
+def _gen_tenant_config(rng: random.Random, tenant_id: str, kind: str) -> dict:
     """Generate a single tenant's configuration."""
     config: dict[str, Any] = {}
 
@@ -244,9 +244,10 @@ def _gen_tenant_config(rng: random.Random, tenant_id: str, db_type: str) -> dict
         "environment": rng.choice(ENVIRONMENTS),
         "region": rng.choice(REGIONS),
         "domain": rng.choice(DOMAINS),
-        "db_type": db_type,
         "tags": rng.sample(["critical-path", "batch-job", "real-time", "legacy", "migration"], k=rng.randint(1, 3)),
     }
+    # _expected_exporters (#4097): the exporter kind this tenant runs.
+    config["_expected_exporters"] = [kind]
 
     # _namespaces
     config["_namespaces"] = [f"ns-{tenant_id}"]
@@ -261,8 +262,8 @@ def _gen_tenant_config(rng: random.Random, tenant_id: str, db_type: str) -> dict
     if rng.random() < 0.7:
         config["_routing"] = _gen_routing(rng, tenant_id)
 
-    # Thresholds — pick 2-5 metrics from the db_type's pool
-    metrics = METRIC_TEMPLATES.get(db_type, METRIC_TEMPLATES["postgresql"])
+    # Thresholds — pick 2-5 metrics from the kind's pool
+    metrics = METRIC_TEMPLATES.get(kind, METRIC_TEMPLATES["postgresql"])
     chosen_metrics = rng.sample(metrics, k=min(rng.randint(2, 5), len(metrics)))
     for m in chosen_metrics:
         # 80% scalar, 15% scheduled, 5% dimensional
@@ -324,7 +325,7 @@ def _root_defaults_file(rng: random.Random, with_defaults: bool,
 
 def _gen_defaults_yaml(
     rng: random.Random,
-    db_types: list[str] | None = None,
+    kinds: list[str] | None = None,
     extra_defaults: dict[str, int | float] | None = None,
     *,
     thresholds: bool = True,
@@ -353,8 +354,8 @@ def _gen_defaults_yaml(
     drawn from rng (the root file without --with-defaults).
     """
     defaults: dict[str, Any] = {"defaults": {}}
-    all_db_types = (db_types or DB_TYPES) if thresholds else []
-    for dbt in all_db_types:
+    all_kinds = (kinds or DB_TYPES) if thresholds else []
+    for dbt in all_kinds:
         metrics = METRIC_TEMPLATES.get(dbt, [])
         for m in metrics[:3]:  # top 3 metrics per db type as defaults
             # Numeric-only — see docstring above for rationale.
@@ -420,10 +421,10 @@ def generate_flat(
         ("_defaults.yaml", _root_defaults_file(rng, with_defaults, extra_defaults))]
 
     for i in range(count):
-        db_type = DB_TYPES[i % len(DB_TYPES)]
+        kind = DB_TYPES[i % len(DB_TYPES)]
         domain = DOMAINS[i % len(DOMAINS)]
-        tid = f"{domain}-{db_type}-{i:04d}"
-        tenant_config = {"tenants": {tid: _gen_tenant_config(rng, tid, db_type)}}
+        tid = f"{domain}-{kind}-{i:04d}"
+        tenant_config = {"tenants": {tid: _gen_tenant_config(rng, tid, kind)}}
         files.append((f"{tid}.yaml", tenant_config))
 
     _confirm_and_write(output_dir, files)
@@ -459,7 +460,7 @@ def generate_hierarchical(
 
     idx = 0
     files: list[tuple[str, dict]] = []
-    domain_db_types: dict[str, list[str]] = {}
+    domain_kinds: dict[str, list[str]] = {}
     for slot_i, (domain, region, env) in enumerate(slots):
         if idx >= count:
             break
@@ -468,22 +469,22 @@ def generate_hierarchical(
         for j in range(n):
             if idx >= count:
                 break
-            db_type = DB_TYPES[idx % len(DB_TYPES)]
-            tid = f"{domain}-{db_type}-{idx:04d}"
-            tenant_config = {"tenants": {tid: _gen_tenant_config(rng, tid, db_type)}}
+            kind = DB_TYPES[idx % len(DB_TYPES)]
+            tid = f"{domain}-{kind}-{idx:04d}"
+            tenant_config = {"tenants": {tid: _gen_tenant_config(rng, tid, kind)}}
             # Override metadata to match directory
             tenant_config["tenants"][tid]["_metadata"]["domain"] = domain
             tenant_config["tenants"][tid]["_metadata"]["region"] = region
             tenant_config["tenants"][tid]["_metadata"]["environment"] = env
             files.append((f"{domain}/{region}/{env}/{tid}.yaml", tenant_config))
-            domain_db_types.setdefault(domain, []).append(db_type)
+            domain_kinds.setdefault(domain, []).append(kind)
             idx += 1
 
     # The root declarations always; the platform values (root and domain
     # levels) with --with-defaults.
     files.append(("_defaults.yaml", _root_defaults_file(rng, with_defaults, extra_defaults)))
     if with_defaults:
-        files.extend(_domain_defaults(rng, domain_db_types))
+        files.extend(_domain_defaults(rng, domain_kinds))
 
     _confirm_and_write(output_dir, files)
     print(f"✅ Generated {idx} tenant files (hierarchical) in {output_dir}")
@@ -603,7 +604,7 @@ def generate_synthetic_v2(
 
     idx = 0
     files: list[tuple[str, dict]] = []
-    domain_db_types: dict[str, list[str]] = {}
+    domain_kinds: dict[str, list[str]] = {}
     for slot_i, (domain, region, env) in enumerate(slots):
         if idx >= count:
             break
@@ -612,9 +613,9 @@ def generate_synthetic_v2(
         for j in range(n):
             if idx >= count:
                 break
-            db_type = DB_TYPES[idx % len(DB_TYPES)]
-            tid = f"{domain}-{db_type}-{idx:04d}"
-            tenant_config = {"tenants": {tid: _gen_tenant_config(rng, tid, db_type)}}
+            kind = DB_TYPES[idx % len(DB_TYPES)]
+            tid = f"{domain}-{kind}-{idx:04d}"
+            tenant_config = {"tenants": {tid: _gen_tenant_config(rng, tid, kind)}}
             tenant_config["tenants"][tid]["_metadata"]["domain"] = domain
             tenant_config["tenants"][tid]["_metadata"]["region"] = region
             tenant_config["tenants"][tid]["_metadata"]["environment"] = env
@@ -636,12 +637,12 @@ def generate_synthetic_v2(
                 rng.choice(TIERS)
 
             files.append((f"{domain}/{region}/{env}/{tid}.yaml", tenant_config))
-            domain_db_types.setdefault(domain, []).append(db_type)
+            domain_kinds.setdefault(domain, []).append(kind)
             idx += 1
 
     files.append(("_defaults.yaml", _root_defaults_file(rng, with_defaults, extra_defaults)))
     if with_defaults:
-        files.extend(_domain_defaults(rng, domain_db_types))
+        files.extend(_domain_defaults(rng, domain_kinds))
 
     _confirm_and_write(output_dir, files)
     print(f"✅ Generated {idx} tenant files (synthetic-v2) in {output_dir}")
@@ -650,7 +651,7 @@ def generate_synthetic_v2(
 
 
 def _domain_defaults(rng: random.Random,
-                     domain_db_types: dict[str, list[str]]) -> list[tuple[str, dict]]:
+                     domain_kinds: dict[str, list[str]]) -> list[tuple[str, dict]]:
     """The `<domain>/_defaults.yaml` of every domain that holds a tenant, in
     `DOMAINS` order (the order the RNG is drawn in).
 
@@ -660,11 +661,11 @@ def _domain_defaults(rng: random.Random,
     from one run to the next."""
     out = []
     for domain in DOMAINS:
-        if domain in domain_db_types:
-            present = set(domain_db_types[domain])
-            db_types_in_domain = [d for d in DB_TYPES if d in present]
+        if domain in domain_kinds:
+            present = set(domain_kinds[domain])
+            kinds_in_domain = [d for d in DB_TYPES if d in present]
             out.append((f"{domain}/_defaults.yaml",
-                        _gen_defaults_yaml(rng, db_types_in_domain)))
+                        _gen_defaults_yaml(rng, kinds_in_domain)))
     return out
 
 

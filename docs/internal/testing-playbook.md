@@ -308,9 +308,9 @@ Job name 到 DB type 的推斷不能用 substring matching：
 
 # ✅ Segment matching — 以 -_./空格 切割後做完整匹配
 segments = set(re.split(r'[-_.\s/]+', job_lower))
-for keyword, db_type in JOB_DB_MAP.items():
+for keyword, kind in JOB_DB_MAP.items():
     if keyword in segments:
-        return db_type
+        return kind
 ```
 
 **回歸測試必備：** 加一個 false-positive case（如 `"prometheus"` → `"unknown"`）防止未來改動退化。

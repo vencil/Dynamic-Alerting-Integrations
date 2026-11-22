@@ -53,6 +53,9 @@
     "max_metrics_per_tenant": {
       "title": "ThresholdConfig.max_metrics_per_tenant — platform-wide cardinality cap; in directory mode the exporter honours it ONLY in the conf.d ROOT _defaults.yaml (#2028) and ignores it with a WARN anywhere else"
     },
+    "_expected_exporters": {
+      "description": "The exporter kinds the tenant runs (a list of rule packs that have a presence metric), served as tenant_expected_exporter{tenant, pack}; declaring a kind turns TenantExporterAbsent on for it."
+    },
     "_routing_defaults": {
       "$ref": "tenant-config.schema.json#/definitions/routingDefaults",
       "title": "Default routing inherited by all tenants under this directory",

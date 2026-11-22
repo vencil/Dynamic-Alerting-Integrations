@@ -40,7 +40,7 @@ import { DEMO_TENANTS, DEMO_GROUPS } from './tenant-manager/fixtures/demo-tenant
 import { styles } from './tenant-manager/styles.js';
 import { generateMaintenanceYaml, generateSilentModeYaml } from './tenant-manager/utils/yaml-generators.js';
 import { useTenantData } from './tenant-manager/hooks/useTenantData.js';
-import { dbTypesOf } from './tenant-manager/utils/db-types.js';
+import { expectedExportersOf } from './tenant-manager/utils/expected-exporters.js';
 import { apiFetch, ApiPathError } from './_common/api/api-fetch.js';
 import { useSavedViews } from './tenant-manager/hooks/useSavedViews.js';
 import { GroupSidebar } from './tenant-manager/components/GroupSidebar.jsx';
@@ -156,7 +156,7 @@ export default function TenantManager() {
   const [filterTier, setFilterTier] = useState('');
   const [filterMode, setFilterMode] = useState('');
   const [filterDomain, setFilterDomain] = useState('');
-  const [filterDBType, setFilterDBType] = useState('');
+  const [filterExporter, setFilterExporter] = useState('');
 
   // C-6 Smart Views (S#100) — pass `setApiNotification` so CRUD errors
   // surface as toasts. Hook is a no-op in demo mode (`reachable: false`)
@@ -175,7 +175,7 @@ export default function TenantManager() {
     setFilterTier(f.tier || '');
     setFilterMode(f.operational_mode || '');
     setFilterDomain(f.domain || '');
-    setFilterDBType(f.db_type || '');
+    setFilterExporter(f.expected_exporters || '');
   }, []);
   const [selected, setSelected] = useState(new Set());
   const [modalType, setModalType] = useState(null);
@@ -332,10 +332,10 @@ export default function TenantManager() {
       const matchTier = !filterTier || data.tier === filterTier;
       const matchMode = !filterMode || (!data.config_error && data.operational_mode === filterMode);
       const matchDomain = !filterDomain || data.domain === filterDomain;
-      const matchDBType = !filterDBType || dbTypesOf(data.db_type).includes(filterDBType);
-      return matchSearch && matchEnv && matchTier && matchMode && matchDomain && matchDBType;
+      const matchExporter = !filterExporter || expectedExportersOf(data.expected_exporters).includes(filterExporter);
+      return matchSearch && matchEnv && matchTier && matchMode && matchDomain && matchExporter;
     });
-  }, [tenants, groups, activeGroupId, dataSource, searchText, filterEnv, filterTier, filterMode, filterDomain, filterDBType]);
+  }, [tenants, groups, activeGroupId, dataSource, searchText, filterEnv, filterTier, filterMode, filterDomain, filterExporter]);
 
   const stats = useMemo(() => {
     const envCounts = {};
@@ -357,14 +357,14 @@ export default function TenantManager() {
   // Collect unique filter values
   const filterOptions = useMemo(() => {
     const domains = new Set();
-    const dbTypes = new Set();
+    const exporterKinds = new Set();
     Object.values(tenants).forEach(t => {
       if (t.domain) domains.add(t.domain);
-      dbTypesOf(t.db_type).forEach(d => dbTypes.add(d));
+      expectedExportersOf(t.expected_exporters).forEach(d => exporterKinds.add(d));
     });
     return {
       domains: [...domains].sort(),
-      dbTypes: [...dbTypes].sort(),
+      exporterKinds: [...exporterKinds].sort(),
     };
   }, [tenants]);
 
@@ -560,7 +560,7 @@ export default function TenantManager() {
     filterTier && { label: `Tier: ${filterTier}`, key: 'tier' },
     filterMode && { label: `Mode: ${filterMode}`, key: 'mode' },
     filterDomain && { label: `Domain: ${filterDomain}`, key: 'domain' },
-    filterDBType && { label: `DB Type: ${filterDBType}`, key: 'dbType' },
+    filterExporter && { label: `Expected exporter: ${filterExporter}`, key: 'exporter' },
   ].filter(Boolean);
 
   const modeColors = {
@@ -821,7 +821,7 @@ export default function TenantManager() {
               tier: filterTier,
               operational_mode: filterMode,
               domain: filterDomain,
-              db_type: filterDBType,
+              expected_exporters: filterExporter,
             }}
             onApplyView={applySavedView}
             canWrite={writable}
@@ -918,18 +918,18 @@ export default function TenantManager() {
               ))}
             </select>
 
-            <label style={styles.formLabel} htmlFor="filter-dbtype">
-              {t('數據庫類型', 'DB Type')}
+            <label style={styles.formLabel} htmlFor="filter-expected-exporter">
+              {t('預期的 exporter', 'Expected exporters')}
             </label>
             <select
-              id="filter-dbtype"
-              value={filterDBType}
-              onChange={(e) => setFilterDBType(e.target.value)}
+              id="filter-expected-exporter"
+              value={filterExporter}
+              onChange={(e) => setFilterExporter(e.target.value)}
               style={styles.filterSelect}
             >
-              <option value="">{t('所有類型', 'All DB Types')}</option>
-              {filterOptions.dbTypes.map(dbType => (
-                <option key={dbType} value={dbType}>{dbType}</option>
+              <option value="">{t('所有種類', 'All kinds')}</option>
+              {filterOptions.exporterKinds.map(kind => (
+                <option key={kind} value={kind}>{kind}</option>
               ))}
             </select>
           </div>
@@ -948,7 +948,7 @@ export default function TenantManager() {
                         if (filter.key === 'tier') setFilterTier('');
                         if (filter.key === 'mode') setFilterMode('');
                         if (filter.key === 'domain') setFilterDomain('');
-                        if (filter.key === 'dbType') setFilterDBType('');
+                        if (filter.key === 'exporter') setFilterExporter('');
                       }}
                     >
                       ✕
@@ -962,7 +962,7 @@ export default function TenantManager() {
                   setFilterTier('');
                   setFilterMode('');
                   setFilterDomain('');
-                  setFilterDBType('');
+                  setFilterExporter('');
                   setSearchText('');
                 }}
                 style={{ ...styles.button, ...styles.buttonSecondary }}

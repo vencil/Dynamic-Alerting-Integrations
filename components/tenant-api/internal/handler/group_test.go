@@ -597,12 +597,12 @@ func TestListTenants_WithMetadata(t *testing.T) {
       region: ap-northeast-1
       tier: tier-1
       domain: finance
-      db_type: mariadb
       owner: team-dba
       tags:
         - critical-path
       groups:
         - production-dba
+    _expected_exporters: [mariadb]
 `,
 	})
 
@@ -637,8 +637,8 @@ func TestListTenants_WithMetadata(t *testing.T) {
 	if ts.Domain != "finance" {
 		t.Errorf("Domain = %q, want %q", ts.Domain, "finance")
 	}
-	if !reflect.DeepEqual(ts.DBType, []string{"mariadb"}) {
-		t.Errorf("DBType = %q, want %q", ts.DBType, []string{"mariadb"})
+	if !reflect.DeepEqual(ts.ExpectedExporters, []string{"mariadb"}) {
+		t.Errorf("ExpectedExporters = %q, want %q", ts.ExpectedExporters, []string{"mariadb"})
 	}
 	if ts.Owner != "team-dba" {
 		t.Errorf("Owner = %q, want %q", ts.Owner, "team-dba")

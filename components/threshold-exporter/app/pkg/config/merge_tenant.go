@@ -550,7 +550,7 @@ func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConf
 //     either. It is NOT a different answer from /metrics'. The platform
 //     layer's `_metadata` does reach every reader of tenant metadata — the
 //     tenant-api list and search (TenantSummary's environment / domain /
-//     db_type / owner …) and its other metadata readers through
+//     owner …) and its other metadata readers through
 //     MetadataResolver, /metrics through the flat merge
 //     — with ONE rule: per key, the tenant file over the platform files, a
 //     later platform file over an earlier one, the elected profile's only
