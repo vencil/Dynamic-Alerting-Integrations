@@ -27,7 +27,7 @@ tenants:
       runbook_url: "https://runbooks.demo.local/mysql-high-connections"
       environment: "production"
       domain: "ecommerce"
-      db_type: "mariadb"
+    _expected_exporters: [mariadb]
     # Minimal tenant routing (#2315), so this seed is also a routing fixture:
     # validate.yaml runs `generate_alertmanager_routes.py --validate --strict
     # --policy .github/deployment-policy.yaml` over this tree, and without a

@@ -1,13 +1,13 @@
-"""diagnose：依 db_type 決定 Pod／exporter 檢查，以及結束碼（issue 1513）。
+"""diagnose：依租戶宣告的 exporter kind 決定 Pod／exporter 檢查，以及結束碼（issue 1513）。
 
 本輪決策 N（owner 裁決 N2 原案）：Pod 檢查固定查 `app=mariadb`、exporter 檢查
 固定查 `mysql_up`，所以非 MariaDB 租戶一律得到 `Pod not found`，batch-diagnose
-對它們全報 error。改成：租戶的 db_type 是 mariadb 才跑這兩項；不是 mariadb 或
+對它們全報 error。改成：租戶宣告了 mariadb 才跑這兩項；不是 mariadb 或
 沒宣告時，兩項標 skipped 並附原因，不算 error。
 
-db_type 從 Prometheus 的 `tenant_expected_exporter{tenant, db_type}` 讀：
+kind 從 Prometheus 的 `tenant_expected_exporter{tenant, pack}` 讀（label `pack`，#4097）：
 batch-diagnose 呼叫 check() 時不帶 config_dir，讀 conf.d 在那條路徑上拿不到；
-exporter 對宣告了 `_metadata.db_type` 的租戶發這條 series（#869）。
+exporter 對宣告了 `_expected_exporters` 的租戶發這條 series（#869）。
 
 結束碼先前一律 0（`status: error` 也是），沒有 kubectl 時是 traceback。
 """
@@ -27,16 +27,16 @@ sys.path.insert(0, str(_OPS))
 import diagnose  # noqa: E402
 
 
-def _router(db_type="mariadb", up="1", fail=()):
+def _router(kind="mariadb", up="1", fail=()):
     """依查詢的指標名回應；fail 內的指標名回 transport 錯誤。"""
     def fake(_url, query):
         name = query.split("{", 1)[0]
         if name in fail:
             return None, "connection refused"
         if name == "tenant_expected_exporter":
-            if db_type is None:
+            if kind is None:
                 return [], None
-            return [{"metric": {"tenant": "t1", "db_type": db_type},
+            return [{"metric": {"tenant": "t1", "pack": kind},
                      "value": [0, "1"]}], None
         if name == "mysql_up":
             return [{"value": [0, up]}], None
@@ -49,12 +49,12 @@ def _check(**kw):
     return diagnose.check("t1", "http://prom:9090")
 
 
-@pytest.mark.parametrize("db_type,reason_word", [
+@pytest.mark.parametrize("kind,reason_word", [
     ("postgresql", "postgresql"),
-    (None, "not declared"),
+    (None, "no exporter declared"),
 ])
-def test_non_mariadb_tenant_skips_pod_and_exporter(db_type, reason_word):
-    with mock.patch.object(diagnose, "query_prometheus", side_effect=_router(db_type)), \
+def test_non_mariadb_tenant_skips_pod_and_exporter(kind, reason_word):
+    with mock.patch.object(diagnose, "query_prometheus", side_effect=_router(kind)), \
             mock.patch.object(diagnose, "pod_phase") as pod_phase, \
             mock.patch.object(diagnose, "mariadb_logs") as mariadb_logs:
         result = _check()
@@ -78,7 +78,7 @@ def test_mariadb_tenant_still_runs_both_checks():
     mariadb_logs.assert_called_once_with("t1")
 
 
-def test_db_type_query_failure_is_reported_not_skipped_silently():
+def test_expected_exporter_query_failure_is_reported_not_skipped_silently():
     with mock.patch.object(diagnose, "query_prometheus",
                            side_effect=_router(fail=("tenant_expected_exporter",))), \
             mock.patch.object(diagnose, "pod_phase"), \
@@ -103,7 +103,7 @@ def test_exit_code_follows_the_result(result, rc):
 
 @pytest.fixture
 def mariadb_prom(tmp_path):
-    """真的起一個 Prometheus 替身（HTTP），對每個查詢都回 db_type=mariadb；
+    """真的起一個 Prometheus 替身（HTTP），對每個查詢都回 pack=mariadb；
     yield 它的 URL。CLI 子行程裡打不了 monkeypatch，只能這樣讓 Pod 檢查跑到。"""
     fake_prom = tmp_path / "prom.py"
     fake_prom.write_text(
@@ -111,7 +111,7 @@ def mariadb_prom(tmp_path):
         "class H(http.server.BaseHTTPRequestHandler):\n"
         "    def do_GET(self):\n"
         "        body = json.dumps({'status': 'success', 'data': {'resultType': 'vector',"
-        " 'result': [{'metric': {'db_type': 'mariadb'}, 'value': [0, '1']}]}}).encode()\n"
+        " 'result': [{'metric': {'pack': 'mariadb'}, 'value': [0, '1']}]}}).encode()\n"
         "        self.send_response(200); self.send_header('Content-Type', 'application/json')\n"
         "        self.end_headers(); self.wfile.write(body)\n"
         "    def log_message(self, *a): pass\n"
@@ -137,7 +137,7 @@ def _diagnose_cli(prom_url, path, *extra):
 
 
 def test_missing_kubectl_is_a_caller_error_not_a_traceback(tmp_path, mariadb_prom):
-    """真的跑一次：PATH 上沒有 kubectl，Prometheus 回 db_type=mariadb。"""
+    """真的跑一次：PATH 上沒有 kubectl，Prometheus 回 pack=mariadb。"""
     empty = tmp_path / "no-kubectl"
     empty.mkdir()
     proc = _diagnose_cli(mariadb_prom, str(empty))  # 沒有 kubectl
@@ -168,3 +168,19 @@ def test_a_forbidden_pod_read_is_kubectl_error_not_pod_not_found(tmp_path, maria
     assert proc.stdout == "", proc.stdout
     assert "Forbidden" in proc.stderr
     assert "needs kubectl and a cluster that answers" in proc.stderr, proc.stderr
+
+
+def test_the_kind_is_read_from_the_pack_label_not_the_removed_db_type():
+    """#4097：tenant_expected_exporter 的 label 從 `db_type` 改名為 `pack`。只帶舊 label 的
+    回應（升級前的 exporter）讀不出 kind——當成沒宣告，不會被誤判成 mariadb。"""
+    def old_label(_url, query):
+        if query.startswith("tenant_expected_exporter"):
+            return [{"metric": {"tenant": "t1", "db_type": "mariadb"}, "value": [0, "1"]}], None
+        return [], None
+    with mock.patch.object(diagnose, "query_prometheus", side_effect=old_label):
+        assert diagnose.tenant_expected_kind("t1", "http://prom:9090") == (None, None)
+    with mock.patch.object(diagnose, "query_prometheus", side_effect=_router("mariadb")):
+        assert diagnose.tenant_expected_kind("t1", "http://prom:9090") == ("mariadb", None)
+    multi = lambda _u, _q: ([{"metric": {"pack": "redis"}}, {"metric": {"pack": "nginx"}}], None)  # noqa: E731
+    with mock.patch.object(diagnose, "query_prometheus", side_effect=multi):
+        assert diagnose.tenant_expected_kind("t1", "http://prom:9090") == ("nginx,redis", None)

@@ -264,7 +264,7 @@ class TestEvaluateOperator:
         ("contains", "red", False, False),
     ])
     def test_list_value_is_read_element_by_element(self, op, expected_val, want_one, want_two):
-        """#3771：db_type 以 list 送出；一元素 list 等同原本的純量。主規則的約束要每個
+        """#3771、#4097：`_expected_exporters` 是 list；一元素 list 等同它代表的純量。主規則的約束要每個
         元素都成立（五個值運算子都是）。"""
         assert pe._evaluate_operator(op, ["mariadb"], expected_val) is want_one
         assert pe._evaluate_operator(op, ["mariadb", "redis"], expected_val) is want_two
@@ -295,17 +295,17 @@ class TestEvaluateWhen:
     """when 條件子句測試。"""
 
     @pytest.mark.parametrize("when,want", [
-        ({"target": "_metadata.db_type", "operator": "one_of", "value": ["mariadb", "postgresql"]}, True),
-        ({"target": "_metadata.db_type", "operator": "one_of", "value": ["kafka"]}, False),
-        ({"target": "_metadata.db_type", "operator": "matches", "value": "^red"}, True),
-        ({"target": "_metadata.db_type", "operator": "not_equals", "value": "mariadb"}, False),
-        ({"target": "_metadata.db_type", "operator": "equals", "value": "redis"}, True),
-        ({"target": "_metadata.db_type", "operator": "contains", "value": "red"}, True),
+        ({"target": "_expected_exporters", "operator": "one_of", "value": ["mariadb", "postgresql"]}, True),
+        ({"target": "_expected_exporters", "operator": "one_of", "value": ["kafka"]}, False),
+        ({"target": "_expected_exporters", "operator": "matches", "value": "^red"}, True),
+        ({"target": "_expected_exporters", "operator": "not_equals", "value": "mariadb"}, False),
+        ({"target": "_expected_exporters", "operator": "equals", "value": "redis"}, True),
+        ({"target": "_expected_exporters", "operator": "contains", "value": "red"}, True),
     ])
     def test_when_on_a_list_holds_for_some_element(self, when, want):
         """#3771 審查：when 問的是「規則適不適用」，多 DB 租戶不能因全稱語意逃過約束；
         主規則的 one_of／matches 仍要每個元素都成立。"""
-        config = {"_metadata": {"db_type": ["mariadb", "redis"]}}
+        config = {"_expected_exporters": ["mariadb", "redis"]}
         assert pe._evaluate_when(config, when) is want
         if when["operator"] in ("one_of", "matches", "equals", "contains") and want:
             assert pe._evaluate_operator(when["operator"], ["mariadb", "redis"], when["value"]) is False
@@ -313,9 +313,9 @@ class TestEvaluateWhen:
     def test_rule_guarded_by_when_one_of_still_applies_to_a_multi_db_tenant(self):
         rule = pe.PolicyRule(name="r", description="", target="_metadata.owner",
                              operator="required",
-                             when={"target": "_metadata.db_type", "operator": "one_of",
+                             when={"target": "_expected_exporters", "operator": "one_of",
                                    "value": ["mariadb", "postgresql"]})
-        config = {"_metadata": {"db_type": ["mariadb", "redis"]}}
+        config = {"_expected_exporters": ["mariadb", "redis"]}
         assert len(pe.evaluate_rule(rule, "t-a", config)) == 1
 
     @pytest.mark.parametrize("tags,violations", [

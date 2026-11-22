@@ -7,7 +7,7 @@ Pinned contracts
    matching it is clean.
 2. `by (tenant…)` over exporter series is `by-drops-cluster`; with
    `da_cluster` it is clean; a grouping that names no identity label
-   (`count(x)`, `sum by (db_type)`) is a fleet-wide figure and is clean.
+   (`count(x)`, `sum by (pack)`) is a fleet-wide figure and is clean.
 3. `without (da_cluster)` and `ignoring (da_cluster)` are findings.
 4. threshold-exporter's series are one per tenant: joining exporter series
    to them with `on(tenant) group_left` is clean, and aggregating them by
@@ -72,7 +72,7 @@ def test_masking_join_is_the_headline_finding():
     ("max by (namespace, pod) (kube_pod_status_ready)", [(cid.BY_DROPS, "namespace,pod")]),
     ("sum by (tenant, da_cluster) (rate(db_deadlocks_total[5m]))", []),
     ("count(db_up)", []),
-    ("sum by (db_type) (db_up)", []),
+    ("sum by (pack) (db_up)", []),
     ("topk by (tenant) (3, db_up)", [(cid.BY_DROPS, "tenant")]),
     # a selecting aggregation returns its input's series, labels and all: the
     # aggregation around it is where the label goes

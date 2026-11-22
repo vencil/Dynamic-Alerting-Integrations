@@ -35,7 +35,7 @@ purpose: |
 
   Props:
     - currentFilters:  { q, environment, tier, operational_mode,
-                         domain, db_type } — orchestrator's live
+                         domain, expected_exporters } — orchestrator's live
                          filter state, for the "Save current..." path
     - onApplyView(filters):  callback to push view filters into
                              orchestrator setters when user picks one
@@ -67,8 +67,22 @@ function filtersToViewMap(state) {
   if (state.tier) out.tier = state.tier;
   if (state.operational_mode) out.operational_mode = state.operational_mode;
   if (state.domain) out.domain = state.domain;
-  if (state.db_type) out.db_type = state.db_type;
+  if (state.expected_exporters) out.expected_exporters = state.expected_exporters;
   return out;
+}
+
+/**
+ * The filters to apply for a stored view. A view saved by v2.9 carries
+ * `db_type`, which no filter reads any more (#4097): applied as stored, that
+ * filter was dropped and the view listed every tenant. Its value is one
+ * exporter kind — the same strings `expected_exporters` filters on — so it
+ * is applied as that filter unless the view already has one. Read side
+ * only: `db_type` is never passed on, and `filtersToViewMap` never writes it.
+ */
+function viewFiltersToApply(filters) {
+  const { db_type: legacyKind, ...rest } = filters || {};
+  if (legacyKind && !rest.expected_exporters) rest.expected_exporters = legacyKind;
+  return rest;
 }
 
 function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) {
@@ -147,7 +161,7 @@ function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) 
             const id = e.target.value;
             if (!id) return;
             const view = sortedViews.find((v) => v.id === id);
-            if (view) onApplyView(view.filters || {});
+            if (view) onApplyView(viewFiltersToApply(view.filters));
             // Reset to placeholder so the same view can be re-applied.
             e.target.value = '';
           }}
@@ -398,4 +412,4 @@ function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) 
   );
 }
 
-export { SavedViewsPanel, filtersToViewMap };
+export { SavedViewsPanel, filtersToViewMap, viewFiltersToApply };

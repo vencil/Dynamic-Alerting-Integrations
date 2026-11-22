@@ -234,3 +234,27 @@ func TestWriteMerged_NoOpUnaffected(t *testing.T) {
 		t.Fatalf("notices=%q err=%v", notices, err)
 	}
 }
+
+// #4097: `_metadata.db_type` was removed. A write that adds it is refused
+// with the line to write instead; a file that already holds it can still
+// change another key, and is told (the ratchet, as for any unread value).
+func TestWrite_RemovedDBType_RefusedWhenWrittenRatchetedWhenHeld(t *testing.T) {
+	const migrate = "`_metadata.db_type` is removed (#4097)"
+	ctx := context.Background()
+
+	dir := seedTreeRepo(t, map[string]string{"vw-n.yaml": "tenants:\n  vw-n:\n    _severity_dedup: enable\n"})
+	w := newTestWriter(dir, dir)
+	added := "tenants:\n  vw-n:\n    _severity_dedup: enable\n    _metadata:\n      db_type: redis\n"
+	if _, err := w.Write(ctx, "vw-n", "a@example.com", added); !errors.Is(err, ErrValidation) ||
+		!strings.Contains(err.Error(), migrate) || !strings.Contains(err.Error(), "_expected_exporters: [redis]") {
+		t.Fatalf("Write adding db_type: err = %v, want ErrValidation naming the line to write", err)
+	}
+
+	held := seedTreeRepo(t, map[string]string{"vw-h.yaml": "tenants:\n  vw-h:\n    _metadata:\n      db_type: redis\n"})
+	wh := newTestWriter(held, held)
+	other := "tenants:\n  vw-h:\n    _metadata:\n      db_type: redis\n    _severity_dedup: disable\n"
+	notices, err := wh.Write(ctx, "vw-h", "a@example.com", other)
+	if err != nil || countSub(notices, migrate) != 1 {
+		t.Fatalf("Write beside a held db_type: notices=%q err=%v", notices, err)
+	}
+}

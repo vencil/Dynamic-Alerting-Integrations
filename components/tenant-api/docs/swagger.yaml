@@ -1584,18 +1584,20 @@ definitions:
         - malformed_yaml
         - invalid_config
         type: string
-      db_type:
-        description: |-
-          Every database kind the tenant declares in `_metadata.db_type`, in the
-          order written (#3771: the config takes a string or a list; a string is
-          one kind). Omitted when none is declared.
-        items:
-          type: string
-        type: array
       domain:
         type: string
       environment:
         type: string
+      expected_exporters:
+        description: The exporter kinds the tenant declares in `_expected_exporters`,
+          in the order written, as threshold-exporter reads them through the tenant's
+          layers (root platform files' entry, the tenant file over it, else its profile's)
+          — the kinds tenant_expected_exporter is served for, so the ones TenantExporterAbsent
+          watches. Omitted when none is declared, or when the value is one the exporter
+          does not read (an unknown kind, a repeat, not a list).
+        items:
+          type: string
+        type: array
       git_managed_reason:
         description: |-
           GitManagedReason is why the tenant is git-managed (managed_by: git), the code GET /api/v1/tenants/{id} gives:
@@ -3664,10 +3666,10 @@ paths:
     get:
       description: |-
         Server-side filter / sort / pagination over the tenants visible to the caller (RBAC-filtered). Each item's config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager; the response's config_derivation names the conf.d files skipped as unparseable.
-        When the conf.d root platform files cannot be read, an item's metadata carries only the tenant file's own `_metadata` values and the item is marked `metadata_incomplete`: like a degraded item (config_error) it is visible only to callers whose matching RBAC rule does not restrict environments or domains, no metadata filter (environment / tier / domain / db_type / tag) matches it, and q matches its id only.
+        When the conf.d root platform files cannot be read, an item's metadata carries only the tenant file's own `_metadata` values and the item is marked `metadata_incomplete`: like a degraded item (config_error) it is visible only to callers whose matching RBAC rule does not restrict environments or domains, no metadata filter (environment / tier / domain / expected_exporters / tag) matches it, and q matches its id only.
         An item whose `_metadata` does not decode is marked `metadata_incomplete` the same way, with empty metadata fields.
       parameters:
-      - description: Case-insensitive substring over id / owner / domain / db_type
+      - description: Case-insensitive substring over id / owner / domain / expected_exporters
           / tags
         in: query
         name: q
@@ -3684,10 +3686,11 @@ paths:
         in: query
         name: domain
         type: string
-      - description: A db_type the tenant declares (exact match against any one of
-          its kinds)
+      - description: An exporter kind the tenant declares in _expected_exporters (exact
+          match against any one of its kinds). Replaces db_type, which is refused
+          with 400.
         in: query
-        name: db_type
+        name: expected_exporters
         type: string
       - description: A tag the tenant must carry (case-sensitive)
         in: query

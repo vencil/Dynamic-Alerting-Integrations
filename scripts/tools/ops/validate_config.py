@@ -60,12 +60,11 @@ Checks:
                     (#3042): a rule that never fires, a served threshold no
                     rule reads. Report only; run only where the compiler is
                     installed (the repo — the da-tools image ships none)
-  16. Unsupplied defaults — a threshold the registry ships armed
-                    (`arming: default`), of a pack this tree deploys (the
-                    root platform file sets one of its keys under `defaults:`,
-                    or a tenant declares it in `_metadata.db_type`), that the root
-                    platform file neither sets under `defaults:` nor lists
-                    under `optional_overrides:`. Advisory: WARN at most (#3830)
+  16. Platform defaults — what the tree does with each threshold the
+                    platform ships armed (`arming: default`): served from the
+                    built-in layer, overridden at the root, or opted out
+                    there. An explanation: PASS, WARN only when it cannot
+                    say (#3832)
 
 Hierarchical trees: a row may get its input from a reader that is FLAT — it
 reads only the top level of --config-dir — while threshold-exporter reads the

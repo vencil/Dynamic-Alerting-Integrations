@@ -866,7 +866,7 @@ def test_migrate_conf_d_refuses_an_unlistable_directory_as_nobody(name) -> None:
 def _hidden_tenant_tree(tmp: pathlib.Path) -> pathlib.Path:
     """`a.yaml` declares a; `team` is a link to a directory the walk does not
     follow, holding a tenant file — so the tree's tenant set is unknown."""
-    root = _write(tmp / "conf.d", {"a.yaml": "tenants:\n  a:\n    _metadata: {db_type: mysql}\n"})
+    root = _write(tmp / "conf.d", {"a.yaml": "tenants:\n  a:\n    _expected_exporters: [mariadb]\n"})
     _write(tmp / "outside", {"o.yaml": "tenants:\n  o: {}\n"})
     symlink_or_skip("../outside", root / "team", target_is_directory=True)
     return root
@@ -915,7 +915,7 @@ def test_every_tenant_set_reader_names_what_hides_a_tenant(reader_name, tmp_path
     elif reader_name == "check_retire_drift":
         import check_retire_drift as c
         with pytest.raises(YamlFileError, match="team"):
-            c.conf_d_declared_db_type_tenants(root)
+            c.conf_d_declared_exporter_tenants(root)
     else:
         import validate_config as v
         row = getattr(v, reader_name.split(".")[1])(str(root))
@@ -925,7 +925,7 @@ def test_every_tenant_set_reader_names_what_hides_a_tenant(reader_name, tmp_path
 
 def test_check_retire_drift_refuses_a_hidden_tenant_as_nobody() -> None:
     """M-A end to end: `team -> ../outside` beside a tenant declaring a
-    db_type — rc 2 naming `team` (it was rc 0, reading the tenant files
+    declaration — rc 2 naming `team` (it was rc 0, reading the tenant files
     alone, after round 2)."""
     with unprivileged_sandbox(str(REPO)) as (box, run):
         box = pathlib.Path(box)

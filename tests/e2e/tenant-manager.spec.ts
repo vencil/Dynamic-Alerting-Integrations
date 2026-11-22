@@ -207,8 +207,8 @@ test.describe('Tenant Manager @critical', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           items: [
-            { id: 'api-tenant-alpha', environment: 'production', tier: 'tier-1', domain: 'finance', db_type: 'mariadb', owner: 'alice', tags: ['stub'], groups: [] },
-            { id: 'api-tenant-beta', environment: 'staging', tier: 'tier-2', domain: 'ops', db_type: 'redis', owner: 'bob', tags: [], groups: [] },
+            { id: 'api-tenant-alpha', environment: 'production', tier: 'tier-1', domain: 'finance', expected_exporters: ['mariadb'], owner: 'alice', tags: ['stub'], groups: [] },
+            { id: 'api-tenant-beta', environment: 'staging', tier: 'tier-2', domain: 'ops', expected_exporters: ['redis'], owner: 'bob', tags: [], groups: [] },
           ],
           total_matched: 2,
           page_size: 500,
@@ -252,7 +252,7 @@ test.describe('Tenant Manager @critical', () => {
         environment: 'production',
         tier: 'tier-2',
         domain: 'ops',
-        db_type: 'mariadb',
+        expected_exporters: ['mariadb'],
         owner: 'team',
         tags: [],
         groups: [],
@@ -302,7 +302,7 @@ test.describe('Tenant Manager @critical', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           items: [
-            { id: 'after-retry-tenant', environment: 'production', tier: 'tier-1', domain: 'ops', db_type: 'mariadb', owner: 'alice', tags: [], groups: [] },
+            { id: 'after-retry-tenant', environment: 'production', tier: 'tier-1', domain: 'ops', expected_exporters: ['mariadb'], owner: 'alice', tags: [], groups: [] },
           ],
           total_matched: 1,
           page_size: 500,
@@ -338,7 +338,7 @@ test.describe('Tenant Manager @critical', () => {
         body: JSON.stringify({
           items: [{
             id: 'q-test-tenant', environment: 'production', tier: 'tier-1',
-            domain: 'finance', db_type: 'mariadb', owner: 'alice', tags: [], groups: [],
+            domain: 'finance', expected_exporters: ['mariadb'], owner: 'alice', tags: [], groups: [],
           }],
           total_matched: 1, page_size: 500, next_offset: null,
         }),
@@ -377,7 +377,7 @@ test.describe('Tenant Manager @critical', () => {
         body: JSON.stringify({
           items: [{
             id: 'url-state-tenant', environment: 'production', tier: 'tier-1',
-            domain: 'finance', db_type: 'mariadb', owner: 'alice', tags: [], groups: [],
+            domain: 'finance', expected_exporters: ['mariadb'], owner: 'alice', tags: [], groups: [],
           }],
           total_matched: 1, page_size: 500, next_offset: null,
         }),
@@ -404,7 +404,7 @@ test.describe('Tenant Manager @critical', () => {
       environment: i % 2 === 0 ? 'production' : 'staging',
       tier: 'tier-1',
       domain: 'analytics',
-      db_type: 'mariadb',
+      expected_exporters: ['mariadb'],
       owner: 'pr2c',
       tags: [],
       groups: [],
@@ -448,7 +448,7 @@ test.describe('Tenant Manager @critical', () => {
     const items = Array.from({ length: 10 }, (_, i) => ({
       id: `small-${i}`,
       environment: 'production', tier: 'tier-1',
-      domain: 'analytics', db_type: 'mariadb', owner: 'pr2c',
+      domain: 'analytics', expected_exporters: ['mariadb'], owner: 'pr2c',
       tags: [], groups: [],
     }));
     await page.route('**/api/v1/tenants/search**', async (route) => {

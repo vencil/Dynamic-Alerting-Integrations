@@ -67,6 +67,9 @@ _SENTINELS = {
     "_severity_dedup": ("_severity_dedup", "disable"),
     "_namespaces": ("_namespaces", "[probe-ns]"),
     "_metadata": ("_metadata", "{owner: probe}"),
+    # #4097: served as tenant_expected_exporter{tenant, pack} and as
+    # served-values' `_expected_exporters`.
+    "_expected_exporters": ("_expected_exporters", "[redis]"),
     "_profile": ("_profile", "p9"),
     "_routing": ("_routing", "{receiver: {type: webhook, url: 'https://w.example/probe'}}"),
     "_routing_profile": ("_routing_profile", "rp1"),

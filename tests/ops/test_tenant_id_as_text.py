@@ -912,7 +912,7 @@ def test_patch_config_apply_sends_one_patch_for_the_colliding_pair(capsys):
 _ID_SPELLINGS = {"UNQ": "010", "QUOTED": "'010'"}
 _T2216 = "tenants:\n  {id}:\n    mysql_connection_usage_percent: '70'\n"
 _META2216 = ("tenants:\n  {id}:\n    _metadata:\n      domain: db\n"
-             "      environment: prod\n      db_type: postgres\n")
+             "      environment: prod\n    _expected_exporters: [postgresql]\n")
 
 
 def _ids_mapping_rules(d, spell):
@@ -953,7 +953,7 @@ def _ids_path_metadata(d, spell):
 def _ids_retire_drift(d, spell):
     import check_retire_drift as m
     _tree(d, {"t.yaml": _META2216.format(id=spell)})
-    return set(m.conf_d_declared_db_type_tenants(d))
+    return set(m.conf_d_declared_exporter_tenants(d))
 
 
 def _ids_onboard_platform(d, spell):
@@ -980,7 +980,7 @@ _READERS_2216 = {
 
 
 # #2115 0-B/B4: these take the tenants from da-guard served-values (Go's id).
-# check_retire_drift (#2858) takes the db_type from it, looked up by the id
+# check_retire_drift (#2858) takes the declared kinds from it, looked up by the id
 # its own walk read.
 _READERS_VIA_DA_GUARD = frozenset({"generate_tenant_metadata", "check_retire_drift",
                                    "backtest_threshold"})

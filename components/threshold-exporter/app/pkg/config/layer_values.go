@@ -68,6 +68,11 @@ type LayerValueProblem struct {
 	// Reading is then the schedule as written (ScheduleReading), not a
 	// reader's reading of the `default`.
 	Schedule bool
+	// EveryLayer (#4097): the problem is an error in whichever layer writes
+	// it, not only in a tenant file (valueCheck.everyLayer): an
+	// `_expected_exporters` the exporter does not read, a `_metadata` that
+	// still writes the removed `db_type`.
+	EveryLayer bool
 }
 
 // LayerValueProblems is every reserved value of built's files the exporter
@@ -92,8 +97,9 @@ func LayerValueProblems(scan *TreeScan, built *FlatBuild) []LayerValueProblem {
 			if p := layerValueProblem(layer, key, sv, values, profiles); p != "" {
 				canon, _ := canonicalKeyFor(key)
 				out = append(out, LayerValueProblem{File: file, Layer: layer, Owner: owner, Key: key, Problem: p,
-					Value:   sv.Default,
-					Reading: ValueReading(canon, sv)})
+					Value:      sv.Default,
+					Reading:    ValueReading(canon, sv),
+					EveryLayer: valueErrorInEveryLayer(canon, sv)})
 			}
 		}
 	})

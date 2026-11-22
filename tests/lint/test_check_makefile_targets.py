@@ -222,8 +222,9 @@ class TestTenantMetadataExemptionRationale:
         assert "tenant_groups" in data
 
         sample = next(iter(data["tenant_metadata"].values()))
-        # #4141: no `rule_packs` any more; db_type is what a tenant declares.
-        assert "db_type" in sample and "metric_count" in sample
+        # #4141: no `rule_packs` any more; `_expected_exporters` is what a
+        # tenant declares (#4097).
+        assert "expected_exporters" in sample and "metric_count" in sample
 
     def test_build_tenant_metadata_is_still_defined(self):
         """被匯入的那個函式必須真的存在（import 字串對得上實體）。"""
