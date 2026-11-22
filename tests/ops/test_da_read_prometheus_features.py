@@ -70,7 +70,8 @@ def _prometheus_servers(node):
     """The --enable-feature values of each Prometheus under node, one list
     per server."""
     if isinstance(node, dict):
-        if node.get("kind") == "Prometheus" and str(node.get("apiVersion", "")).startswith("monitoring.coreos.com/"):
+        group = str(node.get("apiVersion", "")).partition("/")[0]   # the API group
+        if node.get("kind") == "Prometheus" and group == "monitoring.coreos.com":
             spec = node.get("spec") or {}
             yield [str(f) for f in spec.get("enableFeatures") or []]
         if _is_prometheus_image(node.get("image")):
