@@ -273,13 +273,15 @@ def interval_seconds(value: object) -> float:
     refuses the file by location in served_names, and the run is "cannot run"
     whatever this said. Pinned by test_interval_and_timeout_parse_as_query_exporter_does
     (#4119)."""
+    # The same steps as query-exporter's _validate_interval: `$` there also
+    # takes a trailing newline (`interval: |` then `15` is "15\n", 15 s).
     multiplier = 1
     if isinstance(value, str):
-        m = re.fullmatch(r"([0-9]+)([smhd]?)", value)
-        if not m:
+        if not re.match(r"^[0-9]+[smhd]?$", value):
             return float("nan")
-        value = m.group(1)
-        multiplier = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+        multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+        if value[-1] in multipliers:
+            value, multiplier = value[:-1], multipliers[value[-1]]
     try:
         return float(int(value) * multiplier)  # type: ignore[call-overload]
     except (TypeError, ValueError, OverflowError):

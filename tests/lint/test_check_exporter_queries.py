@@ -520,7 +520,7 @@ def test_a_timeout_query_exporter_reads_as_a_float_is_compared():
 
 
 _PARSE_VALUES = [15, 15.0, 1.5, "15", "2m", "1h", "1d", "15s", "1e1", "1.5", ".", "1.2.3",
-                 " 15", "15 ", "m", "", "-5", "0", 0.3, 0.15, True, None, [1], {"a": 1}]
+                 " 15", "15 ", "15\n", "15s\n", "m", "", "-5", "0", 0.3, 0.15, True, None, [1], {"a": 1}]
 
 
 @pytest.mark.parametrize("value", _PARSE_VALUES, ids=[repr(v) for v in _PARSE_VALUES])
