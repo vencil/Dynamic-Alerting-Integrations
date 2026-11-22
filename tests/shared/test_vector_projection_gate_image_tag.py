@@ -134,5 +134,8 @@ def test_the_registry_reader_is_tenant_apis_release() -> None:
     api = strict_safe_load((REPO_ROOT / "helm/tenant-api/values.yaml").read_text(encoding="utf-8"))
     assert reader["repository"] == api["image"]["repository"], reader
     assert reader["tag"] == f"v{chart['appVersion']}", (
-        f"{_VALUES} projectionGate.registryReader.image.tag is {reader['tag']!r}; tenant-api's "
-        f"release is v{chart['appVersion']} — bump it with tenant-api")
+        f"{_VALUES} projectionGate.registryReader.image.tag is {reader['tag']!r}, but "
+        f"tenant-api's release is v{chart['appVersion']}. Set it to \"v{chart['appVersion']}\" and "
+        "bump helm/vector/Chart.yaml's version (a line in its history) in the same change: "
+        "bump_docs does not move it, because no release line moves the vector chart (#4212 "
+        "retires the pin by having tenant-api write the projections).")

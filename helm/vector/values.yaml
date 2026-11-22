@@ -456,8 +456,10 @@ projectionGate:
   # registry is judged by its one reader (schema, next_account_id, the id range,
   # two tenants on one id) and the gate only compares projections against it.
   # ⛔ The tag is tenant-api's release: `v<helm/tenant-api Chart appVersion>`,
-  # pinned equal by tests/shared/test_vector_projection_gate_image_tag.py. The
-  # registry key is mounted alone, by subPath, as a regular file.
+  # pinned equal by tests/shared/test_vector_projection_gate_image_tag.py —
+  # bump it (and the chart version) by hand with each tenant-api release
+  # (#4212 retires the pin). The registry key is mounted alone, by subPath,
+  # as a regular file.
   registryReader:
     image:
       repository: ghcr.io/vencil/tenant-api
