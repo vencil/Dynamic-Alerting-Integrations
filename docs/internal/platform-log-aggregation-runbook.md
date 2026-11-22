@@ -829,7 +829,7 @@ kubectl rollout restart ds/<vector> -n <ns>
 
 #### 8.9.2 `VectorRegistryUnreadableAtBoot`（critical，ghost race / registry 讀不到）
 
-gate boot 時無法**信任** registry（degrade 到 0:0，`category="registry_unreadable"`）。最陰險的觸發＝**fresh-deploy 順序競態**：Vector 早於 registry ConfigMap 同步就啟動（`optional:true` 讓 pod 起得來）→ gate 讀到缺檔→降級，而 **one-shot-at-boot** 使它在 registry 之後到達仍**維持降級**（症狀：全綠、但租戶路由永久靜默關）。也可能是 tenant-api 拒收這份 registry：registry 由 gate 之前的 init-container `projection-gate-registry` 以 tenant-api 自己的讀法（`tenant-api state show`）判定（[#4164](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4164)），schema 較新、兩個租戶共用同一個 id、id 不小於 `next_account_id` 都是拒收；`projectionGate.registryReader.image` 是早於 #4164 的 tenant-api 版本時，讀不到 ConfigMap 掛載（key 是 symlink），一律降級。復原：
+gate boot 時無法**信任** registry（degrade 到 0:0，`category="registry_unreadable"`）。最陰險的觸發＝**fresh-deploy 順序競態**：Vector 早於 registry ConfigMap 同步就啟動（`optional:true` 讓 pod 起得來）→ gate 讀到缺檔→降級，而 **one-shot-at-boot** 使它在 registry 之後到達仍**維持降級**（症狀：全綠、但租戶路由永久靜默關）。也可能是 tenant-api 拒收這份 registry：registry 由 gate 之前的 init-container `projection-gate-registry` 以 tenant-api 自己的讀法（`tenant-api state show`）判定（[#4164](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4164)），schema 較新、兩個租戶共用同一個 id、id 不小於 `next_account_id` 都是拒收。復原：
 
 ```bash
 # 1) 看 tenant-api 怎麼判（拒收原因在 gate 的 log 裡，原文照錄）

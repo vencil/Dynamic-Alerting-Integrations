@@ -229,6 +229,17 @@ def test_what_tenant_api_will_not_vouch_for_degrades(tmp_path, state):
     assert 'category="registry_unreadable"' in _unreadable(f)
 
 
+def test_a_problem_beside_a_record_still_degrades(tmp_path):
+    """tenant-api's problem is the verdict even when a record is printed too
+    (#4164 review: the problem branch was unguarded — the cases above had no
+    record, so `record is not a mapping` caught them instead)."""
+    f = _setup(tmp_path, _ALPHA_OK)
+    doc = json.loads((f["state"] / gate.STATE_JSON).read_text(encoding="utf-8"))
+    doc["records"][0]["problem"] = {"kind": "rejected", "message": "two tenants hold id 1000"}
+    (f["state"] / gate.STATE_JSON).write_text(json.dumps(doc), encoding="utf-8")
+    assert 'category="registry_unreadable"' in _unreadable(f)
+
+
 def test_the_registry_record_is_read_as_tenant_api_decoded_it(tmp_path):
     f = _setup(tmp_path, _ALPHA_OK)
     _state(f["state"], record={"schema_version": "v1", "next_account_id": 1001,

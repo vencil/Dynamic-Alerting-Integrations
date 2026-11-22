@@ -74,8 +74,14 @@ spec:
           resources:
             {{- toYaml .Values.projectionGate.resources | nindent 12 }}
           volumeMounts:
+            # subPath: the registry key as a regular file. A ConfigMap volume
+            # holds each key as a symlink into ..data, which tenant-api before
+            # #4164 skips (a directory of no records); the directory holds
+            # nothing else, which `state show` would refuse. An absent key
+            # mounts as an empty directory: no records, rc 1, degrade.
             - name: registry
-              mountPath: /conf.d
+              mountPath: /conf.d/_account_registry.yaml
+              subPath: _account_registry.yaml
               readOnly: true
             - name: registry-state
               mountPath: /registry-state
@@ -292,11 +298,6 @@ spec:
           configMap:
             name: {{ required "projectionGate.registry.configMapName is required when tenantProjections is set (the conf.d _account_registry.yaml ConfigMap)" .Values.projectionGate.registry.configMapName }}
             optional: true
-            # Only the registry: `tenant-api state show` refuses a directory
-            # holding any key that is no tenant-api state record (#4164).
-            items:
-              - key: _account_registry.yaml
-                path: _account_registry.yaml
         # tenant-api's reading of the registry, for the gate (#4164).
         - name: registry-state
           emptyDir: {}
