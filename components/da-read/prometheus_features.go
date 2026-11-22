@@ -18,9 +18,9 @@ import (
 // be built from the same ones — and it cannot read them at run time: it is
 // handed a customer's rule file, not the manifest that runs the Prometheus.
 // So the options are written here once (deployedFeatures), and a test that
-// reads every Prometheus the repo runs (tests/ops/
-// test_da_read_prometheus_features.py) holds them to what those pass, asking
-// this subcommand how each one it finds bears on da-read.
+// reads every Prometheus the repo runs holds them to what those pass,
+// asking this subcommand how each one it finds bears on da-read:
+// tests/ops/test_da_read_prometheus_features.py.
 //
 // Standard input is a JSON array of --enable-feature values, each split on
 // commas the way Prometheus splits them; stdout is
