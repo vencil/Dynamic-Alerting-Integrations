@@ -1050,9 +1050,11 @@ def plan_stdout(
 ) -> List[str]:
     """Pure decision table for the (checklist_only × dry_run × json) matrix.
 
-    Returns the exact sequence of text chunks main() must emit to stdout, in
-    order; each chunk carries its own newlines, so the caller's only job is
-    ``print(chunk, end="")``.  Zero I/O happens here — the whole 8-combo
+    Returns the exact sequence of text chunks that make up stdout, in order;
+    each chunk carries its own newlines. In text mode main() prints them
+    (``print(chunk, end="")``); in JSON mode (#3216) main() hands the one
+    document — `stdout_json_document`, which this function encodes — back to
+    `run` as a Report instead.  Zero I/O happens here — the whole 8-combo
     output matrix is decided in this one function, so any future regression
     in mode precedence shows up at the unit level instead of only in
     subprocess gates.
@@ -1072,7 +1074,8 @@ def plan_stdout(
       to be suppressed by the "dry-run + json already printed its one
       document" rule, leaving stdout EMPTY while ``--json`` was asked for.
       The checklist envelope IS that run's one document, so the suppression
-      only applies to the pure dry-run preview (see the summary condition).
+      only applies to the pure dry-run preview (`stdout_json_document`'s
+      first branch).
 
     Args:
         checklist_only: ``--checklist-only`` flag
@@ -1326,10 +1329,12 @@ def main():
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
-    # stdout: the whole 8-combo (checklist_only × dry_run × json) matrix is
-    # decided in plan_stdout() — main() only prints. See plan_stdout() for the
-    # two historical matrix bugs (#1112) whose fixes live there as explicit
-    # branches.
+    # stdout: the (checklist_only × dry_run × json) matrix is decided in
+    # `stdout_json_document` (JSON: one document, handed back) and
+    # `plan_stdout` (text: chunks, printed here). See plan_stdout() for the
+    # two historical matrix bugs (#1112) whose fixes live there.
+    # ⛔ `dry_run=no_write` in BOTH calls: no --output-dir is a dry run for
+    # what stdout carries (#1582), in JSON as in text.
     if args.json:
         # #3216: the document goes back to `run`, which encodes and writes
         # it. Everything this run writes to disk is written by now.

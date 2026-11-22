@@ -843,6 +843,24 @@ class TestWritingIsOptIn:
             )
         capsys.readouterr()
 
+    def test_no_output_dir_with_json_is_the_preview_too(
+        self, temp_configmap_dir, tmp_path, monkeypatch, capsys,
+    ):
+        """#3216 review: `--json` has its own call now (the document goes
+        back as a Report), and every other --json test of main() gives
+        --output-dir. With none, the document is the PREVIEW — the same
+        "no write target is a dry run" the text test below pins — not the
+        report of a write that did not happen."""
+        monkeypatch.chdir(tmp_path)
+        with patch("sys.argv", ["migrate_to_operator.py",
+                                "--source-dir", str(temp_configmap_dir), "--json"]):
+            emit_result(mto.main())
+        doc = json.loads(capsys.readouterr().out)
+        assert set(doc) == {"metadata", "prometheus_rules", "already_crd", "errors"}, doc.keys()
+        assert doc["prometheus_rules"] and all(
+            crd["kind"] == "PrometheusRule" for crd in doc["prometheus_rules"])
+        assert list(tmp_path.iterdir()) == []
+
     def test_no_output_dir_still_produces_output_on_stdout(
         self, temp_configmap_dir, tmp_path, monkeypatch, capsys,
     ):
