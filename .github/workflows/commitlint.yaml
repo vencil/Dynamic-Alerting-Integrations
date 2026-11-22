@@ -6,6 +6,13 @@ on:
     # See dev-rules.md §S6 / v2.8.0-planning.md Trap #12.
     types: [opened, synchronize, reopened, edited]
 
+# A newer push to the same PR cancels this run (runner slots are this repo's
+# CI bottleneck; tests/ops/test_pr_workflow_concurrency.py holds the rule).
+# Any other event groups by run id: it neither cancels nor is replaced.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   commitlint:
     runs-on: ubuntu-24.04
