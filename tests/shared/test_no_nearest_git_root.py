@@ -11,7 +11,8 @@ The two shapes, found by AST in every Python file of the tree
 (`tests/_tree.repo_files`):
 
   * WALK — an existence probe of ``<x> / ".git"`` (or ``os.path.join(<x>,
-    ".git")``) — ``.exists()`` / ``.is_dir()`` / ``.is_file()`` /
+    ".git")``, ``<p>.joinpath(".git")``, ``Path(<x>, ".git")``) —
+    ``.exists()`` / ``.is_dir()`` / ``.is_file()`` /
     ``os.path.exists|isdir|isfile|lexists`` — inside a loop or comprehension:
     the walk up the parents. A probe of ``root / ".git" / "hooks"`` is not
     one (the ``.git`` is not the probed path), nor is a single probe outside
@@ -24,6 +25,11 @@ in (the cwd), or the repository a CUSTOMER's output directory sits in. Those
 are listed in `ALLOWED`, one reason per file and shape. The list is checked
 both ways: an entry whose file is gone or no longer shows that shape is red
 too, so the list cannot outlive what it excuses.
+
+Known blind spots (the detector reads constants, not values): a ``.git``
+spelled by string concatenation (``d + "/.git"``), an f-string, a ``.git``
+held in a variable or constant, a probe through a helper function, or a
+``--show-toplevel`` assembled from pieces are not seen.
 
 ⛔ Shell scripts are out of scope: this ratchet reads Python's AST only, and a
 `git rev-parse --show-toplevel` in a `.sh` / `.bat` / workflow is not seen.
@@ -62,7 +68,11 @@ ALLOWED: dict[tuple[str, str], str] = {
         "maps paths in the session's project (CLAUDE_PROJECT_DIR / cwd), "
         "which is what a hook is asked about",
     ("scripts/session-guards/session-init.py", WALK):
-        "initialises the project the session opened, located from the cwd",
+        "walks up from its own file (cwd only as a fallback) to the checkout "
+        "it is installed in, whose .git/hooks it heals. It cannot use the "
+        "helper: it runs under the hook protocol, where exit 2 BLOCKS the "
+        "tool call, and the helper refuses with SystemExit(2). It runs no "
+        "git ls-files / git log over the tree",
     ("scripts/session-guards/vscode_git_toggle.py", WALK):
         "toggles VS Code's git integration for the opened workspace",
     # ── a customer's repository ──
@@ -90,13 +100,25 @@ def _is_dot_git(node: ast.AST) -> bool:
     return isinstance(node, ast.Constant) and node.value == ".git"
 
 
+_PATH_CTORS = {"Path", "PurePath", "PosixPath", "PurePosixPath",
+               "WindowsPath", "PureWindowsPath"}
+
+
 def _is_git_path(node: ast.AST) -> bool:
-    """`<x> / ".git"` or `os.path.join(..., ".git")` — `.git` LAST."""
+    """A path whose LAST component is the constant `.git`:
+    `<x> / ".git"`, `os.path.join(..., ".git")`, `<p>.joinpath(..., ".git")`,
+    `Path(<x>, ".git")` (and the other pathlib constructors)."""
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
         return _is_dot_git(node.right)
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "join" and node.args):
+    if not (isinstance(node, ast.Call) and node.args):
+        return False
+    func = node.func
+    name = func.attr if isinstance(func, ast.Attribute) else (
+        func.id if isinstance(func, ast.Name) else None)
+    if name in ("join", "joinpath"):
         return _is_dot_git(node.args[-1])
+    if name in _PATH_CTORS:
+        return len(node.args) >= 2 and _is_dot_git(node.args[-1])
     return False
 
 
@@ -178,6 +200,9 @@ def test_every_allowed_entry_gives_a_reason():
     "for c in here.parents:\n    if (c / '.git').is_dir():\n        pass\n",
     "while True:\n    if os.path.lexists(os.path.join(d, '.git')):\n        break\n",
     "r = next(p for p in here.parents if (p / '.git').exists())\n",
+    "for c in here.parents:\n    if Path(c, '.git').exists():\n        pass\n",
+    "for c in here.parents:\n    if c.joinpath('.git').is_dir():\n        pass\n",
+    "for c in here.parents:\n    if pathlib.PurePath(c, '.git').exists():\n        pass\n",
     "subprocess.run(['git', 'rev-parse', '--show-toplevel'])\n",
     "cmd = ['git', '-C', d, 'rev-parse', '--show-toplevel']\n",
 ])
@@ -188,6 +213,8 @@ def test_detector_sees_the_shapes(src):
 @pytest.mark.parametrize("src", [
     # a path under .git is not a root probe (session-init / pr_preflight)
     "for h in names:\n    if (repo_root / '.git' / 'hooks' / h).exists():\n        pass\n",
+    "for h in names:\n    if root.joinpath('.git', 'hooks', h).exists():\n        pass\n",
+    "for h in names:\n    if Path('.git').exists():\n        pass\n",
     # one probe outside any loop is not a walk
     "if (root / '.git').exists():\n    pass\n",
     # prose about the flag is not a call

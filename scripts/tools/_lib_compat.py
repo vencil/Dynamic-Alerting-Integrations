@@ -287,25 +287,40 @@ def require_git_project_root(start) -> "Path":
 
     The structural root (``require_project_root``) says which tree the tool
     sits in; it says nothing about which repository a ``git ls-files`` /
-    ``git log`` run there reads. A copy vendored into another repository has
-    no ``.git`` of its own, so git walks up and answers for the ENCLOSING
-    repository — every tracked path, every commit date is then someone
-    else's (#2852). So this asks git where the work tree containing the root
-    begins, and accepts the root only when that IS the root.
+    ``git log`` run there reads. Two things can make git answer for another
+    repository, and both are refused here (#2852):
 
-    ⛔ git's repo-local environment variables are dropped for that one call
-    (the names come from ``git rev-parse --local-env-vars``, as in
-    ``scripts/ops/win_git_escape.bat``). A git hook exports ``GIT_DIR`` /
-    ``GIT_INDEX_FILE``, and with ``GIT_DIR`` set ``--show-toplevel`` reports
-    the ``-C`` directory itself, whatever it is — the check would pass for
-    any directory.
+    1. The tree is not the root of a work tree of its own — a copy vendored
+       into another repository has no ``.git``, so git walks up and answers
+       for the ENCLOSING one. So git is asked where the work tree containing
+       the root begins (``rev-parse --show-toplevel``), and that must BE the
+       root. git's repo-local environment variables (the names come from
+       ``git rev-parse --local-env-vars``, as in ``ops/_gsvc_child.py``) are
+       dropped for that question: with ``GIT_DIR`` set, ``--show-toplevel``
+       reports the ``-C`` directory itself, whatever it is.
+    2. The caller's environment points git elsewhere. The tool's own git
+       runs inherit that environment — deliberately: inside this repo's own
+       ``git commit -a`` hook, ``GIT_INDEX_FILE`` names ``index.lock``, and
+       only it holds what is being committed. So an inherited ``GIT_DIR``
+       must be this tree's git dir (``rev-parse --absolute-git-dir``), an
+       inherited ``GIT_INDEX_FILE`` must sit in that git dir, and an
+       inherited ``GIT_WORK_TREE`` must be the root. A hook of an OUTER
+       repository exports its own, and would have every later git read it.
 
-    The two paths are compared with ``os.path.samefile`` (the same file on
-    disk), not as realpath strings, which differ on case-folding filesystems
-    and 8.3 names while naming one directory.
+    Kept from the dropped list: the ``GIT_CONFIG*`` carriers (``GIT_CONFIG``,
+    ``GIT_CONFIG_PARAMETERS``, ``GIT_CONFIG_COUNT`` / ``_KEY_n`` /
+    ``_VALUE_n``). They carry configuration, not where the repository is, and
+    they are how ``safe.directory`` reaches git for a clone owned by another
+    user; without them that clone is "dubious ownership".
 
-    Not the root, git missing or failing, no work tree at all: print one
-    line naming the structural root and what git said, and exit 2
+    Paths are compared with ``os.path.samefile`` (the same file on disk), not
+    as realpath strings, which differ on case-folding filesystems and 8.3
+    names while naming one directory. A relative inherited path is read
+    against the cwd, as git reads it.
+
+    Any refusal — another root, a foreign inherited variable, git missing or
+    failing or not listing its variables — prints one line naming the
+    structural root and what git or the variable said, and exits 2
     (``_lib_exitcodes``' EXIT_CALLER_ERROR, a literal for the same reason as
     above).
     """
@@ -315,36 +330,60 @@ def require_git_project_root(start) -> "Path":
     root = require_project_root(start)
 
     def _refuse(why: str):  # never returns: SystemExit(2)
-        print(f"ERROR: {root} is not the root of a git work tree of its own "
+        print(f"ERROR: {root} cannot be read as a git work tree of its own "
               f"({why}); this tool reads git ls-files / git log and would "
               f"otherwise read another repository (#2852)", file=sys.stderr)
         raise SystemExit(2)
 
-    try:
-        names = subprocess.run(
-            ["git", "rev-parse", "--local-env-vars"], cwd=str(root),
-            capture_output=True, timeout=30, check=True).stdout
-        env = dict(os.environ)
-        for name in os.fsdecode(names).split():
-            env.pop(name, None)
-        top = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-            capture_output=True, timeout=30, env=env)
-    except FileNotFoundError:
-        _refuse("git is not installed")
-    except subprocess.TimeoutExpired as exc:
-        _refuse(f"`{' '.join(exc.cmd)}` timed out")
-    except subprocess.CalledProcessError as exc:
-        _refuse(f"`git rev-parse --local-env-vars` exited {exc.returncode}")
-    if top.returncode != 0:
-        detail = os.fsdecode(top.stderr).strip().splitlines()
-        _refuse(f"git: {detail[0] if detail else f'exit {top.returncode}'}")
-    reported = os.fsdecode(top.stdout).rstrip("\n")
-    try:
-        same = os.path.samefile(reported, root)
-    except OSError as exc:
-        _refuse(f"git reports the work tree root {reported!r}, which cannot "
-                f"be compared: {exc}")
-    if not same:
-        _refuse(f"git reports the work tree root {reported}")
+    def _git(*args: str, env=None):
+        try:
+            return subprocess.run(["git", *args], cwd=str(root), env=env,
+                                  capture_output=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            _refuse(f"`git {' '.join(args)}` timed out")
+        except OSError as exc:  # FileNotFoundError: no git; and the rest
+            _refuse(f"cannot run git: {exc}")
+
+    def _answer(proc, what: str) -> str:
+        if proc.returncode != 0:
+            detail = os.fsdecode(proc.stderr).strip().splitlines()
+            _refuse(f"`git {what}`: "
+                    f"{detail[0] if detail else f'exit {proc.returncode}'}")
+        return os.fsdecode(proc.stdout).rstrip("\n")
+
+    def _same(a: str, b, what: str) -> bool:
+        try:
+            return os.path.samefile(a, b)
+        except OSError as exc:
+            _refuse(f"{what} {a!r} cannot be compared: {exc}")
+
+    names = _answer(_git("rev-parse", "--local-env-vars"),
+                    "rev-parse --local-env-vars").split()
+    if "GIT_DIR" not in names:
+        # An empty or garbled list would keep every variable it failed to
+        # name; fail closed rather than check with GIT_DIR still set.
+        _refuse("`git rev-parse --local-env-vars` did not list GIT_DIR")
+    env = {k: v for k, v in os.environ.items()
+           if k not in names or k.startswith("GIT_CONFIG")}
+
+    top = _answer(_git("-C", str(root), "rev-parse", "--show-toplevel", env=env),
+                  "rev-parse --show-toplevel")
+    if not _same(top, root, "git's work tree root"):
+        _refuse(f"git reports the work tree root {top}")
+
+    git_dir = _answer(_git("-C", str(root), "rev-parse", "--absolute-git-dir",
+                           env=env), "rev-parse --absolute-git-dir")
+    inherited = (
+        ("GIT_DIR", lambda p: p, git_dir, "is not this tree's git dir"),
+        ("GIT_INDEX_FILE", os.path.dirname, git_dir,
+         "is not inside this tree's git dir"),
+        ("GIT_WORK_TREE", lambda p: p, str(root), "is not this tree's root"),
+    )
+    for var, where, expected, label in inherited:
+        value = os.environ.get(var)
+        if not value:
+            continue
+        path = os.path.abspath(value)  # relative: against the cwd, as git does
+        if not _same(where(path) or ".", expected, f"inherited {var}"):
+            _refuse(f"inherited {var}={value} {label} {expected}")
     return root
