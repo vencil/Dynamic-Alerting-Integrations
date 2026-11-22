@@ -1,4 +1,4 @@
-# Envoy bootstrap for the federation API gateway (ADR-020 Layer 2).
+# Envoy bootstrap for the federation API gateway (ADR-020 §Gateway).
 # Rendered from the Helm chart (helm/federation-gateway) — see chart README.
 # Static bootstrap, no xDS control plane.
 #
@@ -44,7 +44,7 @@ static_resources:
                 # non-canonical path slips past the /api/v1/read reject route
                 # below into the catch-all and is forwarded to a Layer 3 proxy
                 # that cannot tenant-scope remote_read — a cross-tenant leak
-                # (ADR-020 §Blast radius Layer 3).
+                # (ADR-020 §Gateway).
                 merge_slashes: true
                 normalize_path: true
                 {{- if or (eq .Values.mode "prom-label-proxy") (eq .Values.mode "victorialogs") }}
@@ -60,14 +60,14 @@ static_resources:
                 # path-segment route guards cannot be bypassed. Both
                 # prom-label-proxy (the /api/v1/read 403 guard) and
                 # victorialogs (the default-deny endpoint allowlist; ADR-021
-                # §Blast radius Layer 3 — `/select/logsql%2Fquery` must not
+                # §查詢端點白名單 — `/select/logsql%2Fquery` must not
                 # slip past the allowlist into the catch-all) carry route-layer
                 # guards and need a fully canonical path. vm-cluster does its
                 # own Lua path rewrite and is left untouched (hardens #542;
-                # ADR-020 §Blast radius Layer 3).
+                # ADR-020 §Gateway).
                 path_with_escaped_slashes_action: UNESCAPE_AND_FORWARD
                 {{- end }}
-                # ── Audit log (ADR-020 §Audit log; IV-2f) ──────────────
+                # ── Audit log (ADR-020 §稽核日誌與指標) ──────────────────────
                 # One JSON line per request, with the cryptographically
                 # verified claims pulled from jwt_authn dynamic metadata.
                 # Two sinks, identical shape (YAML anchor):
@@ -173,7 +173,7 @@ static_resources:
                         {{- end }}
                         {{- if eq .Values.mode "victorialogs" }}
                         # ── VictoriaLogs LogsQL read surface — DEFAULT-DENY ──
-                        # ADR-021 §Blast radius Layer 3: this is an explicit
+                        # ADR-021 §查詢端點白名單: this is an explicit
                         # ALLOWLIST, not a denylist. Each VictoriaLogs LogsQL
                         # query / metadata endpoint is named below and routed
                         # to the upstream; the catch-all 403 immediately after

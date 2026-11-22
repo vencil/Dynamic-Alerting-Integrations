@@ -8,7 +8,7 @@ lang: zh
 
 # Federation 簽章金鑰輪替 Runbook
 
-ADR-020 IV-2l。federation token 是 tenant-api 用 RS256 私鑰簽的 JWT;
+ADR-020 §Token。federation token 是 tenant-api 用 RS256 私鑰簽的 JWT;
 API gateway（IV-2b）用對應公鑰的 JWKS 驗章。本 runbook 是這把金鑰的
 **生成、輪替、緊急汰換**標準流程。
 

@@ -27,7 +27,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `shadow-verify` | Shadow Monitoring 就緒度與收斂性三階段驗證 | --mapping <FILE>, --report-csv <FILE>, --readiness-json <FILE> | `da-tools shadow-verify --help` |
 | `byo-check` | 自動化 BYO Prometheus & Alertmanager 整合驗證（取代手動 curl +... | --prometheus <URL>, --alertmanager <URL>, --json | `da-tools byo-check --help` |
 | `federation-check` | 多叢集 Federation 整合驗證（自動化 federation-integration | --prometheus <URL>, --edge-urls <URLS>, --json | `da-tools federation-check --help` |
-| `fed-key` | 產生 / 輪替 federation JWT 簽章金鑰（ADR-020 IV-2l）：私鑰 Secret manifest + 公鑰 JWKS | --rotate, --existing-jwks <FILE>, --jwks-out <FILE>, --namespace <NS> | `da-tools fed-key --help` |
+| `fed-key` | 產生 / 輪替 federation JWT 簽章金鑰（ADR-020 §Token）：私鑰 Secret manifest + 公鑰 JWKS | --rotate, --existing-jwks <FILE>, --jwks-out <FILE>, --namespace <NS> | `da-tools fed-key --help` |
 | `grafana-import` | Grafana Dashboard 匯入工具（透過 ConfigMap sidecar 自動掛載） | --dashboard <FILE>, --dashboard-dir <DIR>, --name <NAME> | `da-tools grafana-import --help` |
 | `generate-routes` | 從 tenant YAML 產出 Alertmanager route + receiver + i... | --config-dir <PATH>, --output <FILE>, --output-configmap | `da-tools generate-routes --help` |
 | `patch-config` | ConfigMap 局部更新工具，支援 preview（--diff）和直接應用 | --diff, --json, --exporter-namespace <NS> | `da-tools patch-config --help` |

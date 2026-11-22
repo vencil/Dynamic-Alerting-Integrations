@@ -70,7 +70,7 @@ So **narrowing this selector so tenant-api is no longer tailed pages within ~15m
 
 ⚠️ Note on today's state: the two alerts above are currently **firing-by-default**, not quietly green — the reconciler's pinned `da-tools:v2.9.0` image does not yet contain `_federation_revocation_reconciler.py` (registered in the #1240 image-pin EXEMPTIONS; the fix is the next `tools/v*` release), so `ReconcileStale` fires. The silent false-green is what appears **after** that is fixed, which is exactly what the canary is here to prevent.
 
-## Tenant-sanitized projection (ADR-021 Phase 1 (b) — [#609](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/609))
+## Tenant-sanitized projection (ADR-021 §平台副本與租戶副本 — [#609](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/609))
 
 Off by default. When `tenantProjections` is set, the chart fans out a **second, sanitized** copy of each tenant's `federation_audit` rows into that tenant's native VictoriaLogs `(AccountID, ProjectID=0)` partition — so a tenant can query the platform's operational logs *about itself* without seeing infra topology or another tenant's rows. The platform full copy keeps flowing to the primary `victorialogs` sink (`0:0`) **unchanged**.
 

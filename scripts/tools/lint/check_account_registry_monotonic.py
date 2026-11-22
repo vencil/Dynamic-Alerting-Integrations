@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """check_account_registry_monotonic.py — guard _account_registry.yaml's
-next_account_id against a cross-commit DECREASE (#609 / ADR-021, Gemini #1+#3).
+next_account_id against a cross-commit DECREASE (#609 / ADR-021).
 
 Why this exists
 ---------------

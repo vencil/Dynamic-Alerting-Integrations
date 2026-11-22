@@ -25,7 +25,7 @@ spec:
       # prom-label-proxy never calls the Kubernetes API — drop the token.
       automountServiceAccountToken: false
       # Must exceed preStopSleepSeconds + the 30s max federation query so an
-      # in-flight query can finish before SIGKILL (ADR-020 Layer 1 cap).
+      # in-flight query can finish before SIGKILL (ADR-020 §儲存後端的查詢上限).
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
@@ -54,7 +54,7 @@ spec:
           args:
             - -label={{ .Values.tenant.label }}
             # Per-tenant value comes from a gateway-set header, never the
-            # client — the gateway verifies the JWT first (ADR-020 Layer 3).
+            # client — the gateway verifies the JWT first (ADR-020 §代理注入租戶標籤).
             - -header-name={{ .Values.tenant.headerName }}
             - -upstream={{ .Values.upstream.url }}
             - -insecure-listen-address=0.0.0.0:{{ .Values.listenPort }}

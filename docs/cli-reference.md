@@ -172,7 +172,7 @@ da-tools <command> --help
 | `operator-check` | Operator CRD 部署狀態驗證（檢查項目 + 診斷報告） | `[--namespace <ns>]` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（#747；MISSING / UNHEALTHY / ORPHAN） | `--prometheus <url>` 或 `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3），Federation Scenario B | `--rule-packs-dir <dir>` |
-| `fed-key` | 產生 / 輪替 federation JWT 簽章金鑰（ADR-020 IV-2l）：私鑰 Secret manifest → stdout、公鑰 JWKS → 檔案 | （無，bootstrap 預設）/ `--rotate --existing-jwks <file>` |
+| `fed-key` | 產生 / 輪替 federation JWT 簽章金鑰（ADR-020 §Token）：私鑰 Secret manifest → stdout、公鑰 JWKS → 檔案 | （無，bootstrap 預設）/ `--rotate --existing-jwks <file>` |
 
 ### 配置生成工具
 
@@ -934,7 +934,7 @@ da-tools federation-check central --prometheus http://central:9090 --json
 
 #### fed-key
 
-產生 / 輪替 federation JWT 簽章金鑰（ADR-020 IV-2l）。
+產生 / 輪替 federation JWT 簽章金鑰（ADR-020 §Token）。
 
 **用途**：tenant-api 用 RS256 私鑰簽 federation token，federation-gateway 用對應公鑰的 JWKS 驗章。本工具產 RSA keypair，並輸出兩個下游 artifact：私鑰 → Kubernetes Secret manifest（stdout，不落地）；公鑰 → JWKS 檔。每把公鑰的 `kid` 是它的 RFC 7638 JWK thumbprint，與 tenant-api 端算出的 `kid` header 天然一致。
 

@@ -435,7 +435,7 @@ data:
           # Drop the .kubernetes blob now that the keys we need are
           # promoted — keeps the per-line payload small.
           del(.kubernetes)
-          # ── Cross-partition correlation id (ADR-021 §Fork B / #609) ──────
+          # ── Cross-partition correlation id (ADR-021 §平台副本與租戶副本 / #609) ──────
           # Stamp a globally-unique id into EVERY line in the shared demux
           # stage so it lands in BOTH the platform full copy (0:0) AND the
           # tenant-sanitized projection (AccountID:X). The projection's
@@ -640,7 +640,7 @@ data:
       {{-   $_ := set $seenAcct $acct true }}
       {{-   $_ := set $seenTid $tid true }}
       {{- end }}
-      # ── (b) Tenant-sanitized projection — ADR-021 Phase 1 / #609 ────────
+      # ── (b) Tenant-sanitized projection — ADR-021 §平台副本與租戶副本 / #609 ────────
       # FAN-OUT, not a move: the platform full copy keeps flowing to the
       # `victorialogs` sink (0:0) below, UNCHANGED. This adds a SECOND,
       # net-new write of a *sanitized* subset into each tenant's native
@@ -693,7 +693,7 @@ data:
           # NOT demux: the projection must only ever see rows tenant_eligible
           # passed. test_vector_projection_vrl.py pins this input list.
           - tenant_eligible
-        # Fail-closed error handling (§Fork B / Gemini 1c): a row that aborts
+        # Fail-closed error handling (ADR-021 §寫入時只留白名單欄位): a row that aborts
         # (eligibility/enrichment miss) OR hits a runtime VRL error is DROPPED
         # from this branch — NOT sent onward, NOT rerouted to a tenant sink.
         # Both knobs are load-bearing and set EXPLICITLY:
@@ -713,7 +713,7 @@ data:
         drop_on_error: true
         reroute_dropped: false
         source: |
-          # Eligibility gate (ADR-021 §Fork B): tenant projection is the
+          # Eligibility gate (ADR-021 §寫入時只留白名單欄位): tenant projection is the
           # SUBSET `log_type == "federation_audit"` AND a non-empty tenant_id.
           # gateway_operational / suspicious_audit / prometheus_query_log /
           # JWT-fail rows are platform-only — abort so drop_on_abort removes
@@ -741,7 +741,7 @@ data:
           # rows are projected into Helm `tenantProjections` (a reviewed,
           # GitOps-versioned derivation of the registry) and templated into
           # this static map; Phase 2 (a) generates it from the registry at
-          # render time (config-from-SSOT) — see ADR-021 §Ingestion.
+          # render time (config-from-SSOT) — see ADR-021 §平台副本與租戶副本.
           # We DELIBERATELY do not coerce the string tenant_id into a number
           # (ADR forbids hash/derived ids — collision = cross-tenant leak);
           # an unknown tenant simply isn't in the map → account_id stays
@@ -975,7 +975,7 @@ data:
           headers:
             # Verified, server-side-derived tenant partition. NEVER trust a
             # tenant_id carried in the payload (zero-trust ingestion, ADR-021
-            # §contract) — this AccountID comes from the Git-registry-derived
+            # §日誌進入端的契約) — this AccountID comes from the Git-registry-derived
             # tenantProjections map, not the log line.
             AccountID: {{ $p.accountId | quote }}
             ProjectID: {{ $.Values.tenantProjectionProjectId | quote }}

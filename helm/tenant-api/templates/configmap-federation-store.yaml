@@ -40,7 +40,7 @@ exactly where the data is at risk.
   .Release.Name .Release.Namespace .Release.Namespace) }}
 {{- end }}
 {{- end }}
-# Federation token record store (ADR-020 Posture B, issue #519).
+# Federation token record store (ADR-020 §Token, issue #519).
 #
 # tenant-api owns store.json (its source of truth) and revoked.txt (the
 # gateway-facing projection) at RUNTIME. This chart only pre-creates the

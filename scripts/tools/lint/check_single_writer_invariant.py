@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Single-writer invariant lint for the tenant-api write plane (ADR-023).
 
-Codifies ADR-023's "機制強制（三層）" as a commit/CI-time STATIC guard
-(layer 2). Layer 1 is the Helm `fail` guard inside the chart template, which
+Codifies the first of ADR-023's three defences as a commit/CI-time STATIC
+guard (ADR-023 §設定守衛). The other half is the Helm `fail` guard inside the chart template, which
 only fires when helm actually renders; this lint catches the same breach
 earlier, at commit time, so a drift is a red CI rather than a latent production
 foot-gun. The Helm chart (`helm/tenant-api`) is tenant-api's only deployment
@@ -23,8 +23,8 @@ WHAT THIS CHECKS (the two halves of the runtime invariant):
   2. `strategy.type: Recreate` is present — replicaCount=1 ALONE is not enough:
      the default RollingUpdate surges a second Ready pod during a rollout, a
      phantom-writer window where two pods each hold their own write lock
-     (ADR-023 §1). The Helm template must pin it.
-  3. The Helm template still carries the layer-1 `fail` guard (so removing the
+     (ADR-023 §滾動更新期間的交疊). The Helm template must pin it.
+  3. The Helm template still carries the config-guard `fail` check (so removing the
      guard, not just bumping the value, is also caught).
   4. No autoscaler manifest (native HPA or KEDA ScaledObject/ScaledJob) is
      shipped under the chart's templates — it would drive replicas>1 and
@@ -35,19 +35,19 @@ WHAT THIS DOES **NOT** CHECK (deliberately):
     Deployment, an HPA that a KEDA controller generates at runtime from a
     ScaledObject, a GitOps controller reconciling such a patch, or a Kustomize
     overlay applied by Argo/Flux — all mutate replicas at RUNTIME, outside any
-    static/render-time guard. Their only defense is the deferred A3 K8s Lease
-    (ADR-023 layer-3). This lint + the Helm `fail` guard close the
+    static/render-time guard. Their only defense is the deferred K8s Lease
+    (ADR-023 §Lease). This lint + the Helm `fail` guard close the
     *config-authoring* vector, not the runtime one.
   - Generic Deployments. This is a NAMED invariant about ONE component
     (tenant-api, the sole stateful write plane). Other services scale freely;
     flagging their replica counts would be noise. The target set is an explicit
     allow-list (`_TARGETS`), not a glob.
-  - `writeMode`. ADR-023's original layer-1 spec gated the guard on
+  - `writeMode`. ADR-023's original config-guard spec gated the guard on
     `writeMode != read-only`, but the binary has NO read-only mode
     (`--write-mode` ∈ {direct, pr-github, pr-gitlab}) and values.yaml has no
     such field — writes are ALWAYS on, so the guard is unconditional on
-    replicaCount. (This lint codifies the corrected invariant; the ADR §A
-    校正 records the same.)
+    replicaCount. (This lint codifies the corrected invariant; ADR-023
+    §設定守衛 records the same.)
 
 Exit codes:
     0  The tenant-api chart honors the single-writer invariant
@@ -126,7 +126,7 @@ def check_helm_values(values: dict) -> List[str]:
     if rc != 1:
         return [
             f"replicaCount={rc!r} (MUST be 1 — single-writer; horizontal write "
-            f"scaling needs a K8s Lease, ADR-023 Deferred A3, not a bump)"
+            f"scaling needs a K8s Lease, ADR-023 §Lease, not a bump)"
         ]
     return []
 
@@ -233,7 +233,7 @@ def main() -> int:
               "coordination. Keep replicaCount=1 in values.yaml and strategy: "
               "Recreate in the Deployment template. To scale writes, implement "
               "a K8s Lease "
-              "(ADR-023 Deferred option A3).", file=sys.stderr)
+              "(ADR-023 §Lease).", file=sys.stderr)
         return EXIT_VIOLATION if args.ci else EXIT_OK
     print(f"✅ tenant-api single-writer invariant holds across {len(_TARGETS)} "
           f"chart file(s) (replicaCount=1 + strategy: Recreate + guard).")

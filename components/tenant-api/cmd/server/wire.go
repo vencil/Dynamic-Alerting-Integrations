@@ -190,7 +190,7 @@ type federationFlags struct {
 }
 
 // wireFederation builds the federation-token Manager backed by the
-// ConfigMap RecordStore (ADR-020 Posture B). It also returns the
+// ConfigMap RecordStore (ADR-020 §Token). It also returns the
 // resolved store namespace so the caller can log where the store
 // actually lives (it may have been derived, not passed explicitly).
 //

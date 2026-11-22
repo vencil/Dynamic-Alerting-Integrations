@@ -16,7 +16,7 @@ metadata:
   {{- if .Values.auditLog.enabled }}
   annotations:
     # Scrape the audit-metrics sidecar's federation-audit metrics (ADR-020
-    # IV-2f): tenant_federation_requests_total and
+    # §稽核日誌與指標): tenant_federation_requests_total and
     # tenant_log_query_requests_total. The port is the sidecar's container
     # port — the raw `platform-components` job (role: endpointslice) keeps the
     # endpoint whose pod port equals it (#3483).

@@ -1,6 +1,6 @@
 package federation
 
-// Federation policy handlers (ADR-020 IV-2e) — the 2-tier metric
+// Federation policy handlers (ADR-020 §隔離與治理的分界) — the 2-tier metric
 // allowlist:
 //
 //   - GET/PUT /api/v1/federation/policy        — platform whitelist
@@ -77,7 +77,7 @@ type PutFederationPolicyRequest struct {
 // tenants, and a fleet-wide write is not bounded to any org.
 //
 // Metrics newly added to the whitelist run through the admission
-// validator (ADR-020 IV-2e): a hard block (series lacking the tenant
+// validator (ADR-020 §白名單收錄檢查): a hard block (series lacking the tenant
 // label) is rejected outright; a soft warning (no recent samples, or a
 // PII-looking label name) is rejected unless force=true is set with a
 // reason — which is recorded in the git commit message, the durable
@@ -351,7 +351,7 @@ func admissionMetrics(results []fedpolicy.AdmissionResult) []string {
 // live platform whitelist. The stored file can go stale when the
 // whitelist shrinks; intersecting on read returns a subset that is
 // always consistent with the current policy without rewriting the file
-// (ADR-020 IV-2e).
+// (ADR-020 §白名單收錄檢查).
 //
 // @Summary     Get a tenant's effective federation metric subset
 // @Tags        federation

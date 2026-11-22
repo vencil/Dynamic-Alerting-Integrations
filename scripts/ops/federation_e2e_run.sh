@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runner for the federation E2E harness — ADR-020 IV-2j (#516).
+# Runner for the federation E2E harness — ADR-020 (#516).
 #
 # Renders the REAL federation-gateway Helm chart into tests/federation-e2e/
 # rendered/ (so the E2E exercises shipped config, no drift), generates a

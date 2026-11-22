@@ -1,5 +1,5 @@
 # promtool behavioural test for the projection-gate observability alerts
-# (ADR-021 Phase 2(a) / #908 PR-3a). Validates the codified contract for all three:
+# (ADR-021 §平台副本與租戶副本 / #908 PR-3a). Validates the codified contract for all three:
 #
 #   VectorProjectionGateMismatch / VectorRegistryUnreadableAtBoot (verdict metric):
 #     1) FIRE on their OWN category only — modelled with the scrape topology labels

@@ -50,10 +50,10 @@ lang: zh
 | `ADR-017` | adr | ADR-017: _defaults.yaml 多層繼承與雙雜湊熱重載 | exporter | — | [docs/adr/017-defaults-yaml-inheritance-dual-hash.md](../adr/017-defaults-yaml-inheritance-dual-hash.md) |
 | `ADR-018` | adr | ADR-018: Profile-as-Directory-Default | tools | — | [docs/adr/018-profile-as-directory-default.md](../adr/018-profile-as-directory-default.md) |
 | `ADR-019` | adr | ADR-019: 計畫追蹤的單一來源 — 各條目自帶 frontmatter，索引自動產生 | docs | — | [docs/adr/019-planning-ssot.md](../adr/019-planning-ssot.md) |
-| `ADR-020` | adr | ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | tenant-api | — | [docs/adr/020-tenant-federation.md](../adr/020-tenant-federation.md) |
-| `ADR-021` | adr | ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled | tenant-api | — | [docs/adr/021-tenant-log-query-federation.md](../adr/021-tenant-log-query-federation.md) |
+| `ADR-020` | adr | ADR-020: 租戶把自己的指標拉回自家系統 — 用現成的標籤注入代理，不自寫端點 | tenant-api | — | [docs/adr/020-tenant-federation.md](../adr/020-tenant-federation.md) |
+| `ADR-021` | adr | ADR-021: 租戶在平台上查自己的日誌 — 平台只管查詢授權，日誌進入端另以契約約束 | tenant-api | — | [docs/adr/021-tenant-log-query-federation.md](../adr/021-tenant-log-query-federation.md) |
 | `ADR-022` | adr | ADR-022: tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment | tenant-api | — | [docs/adr/022-dev-auth-bypass-four-layer-containment.md](../adr/022-dev-auth-bypass-four-layer-containment.md) |
-| `ADR-023` | adr | ADR-023: tenant-api 寫入平面 — 單一寫者不變式 | tenant-api | — | [docs/adr/023-write-plane-single-writer-invariant.md](../adr/023-write-plane-single-writer-invariant.md) |
+| `ADR-023` | adr | ADR-023: tenant-api 的寫入只能有一個寫者，讀取可以水平擴展 | tenant-api | — | [docs/adr/023-write-plane-single-writer-invariant.md](../adr/023-write-plane-single-writer-invariant.md) |
 | `ADR-024` | adr | ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts | threshold-exporter | — | [docs/adr/024-version-aware-threshold-via-dimensional-label.md](../adr/024-version-aware-threshold-via-dimensional-label.md) |
 | `ADR-025` | adr | ADR-025: 告警平面自我存活性 — 讓告警系統能偵測自己的死亡 | observability | — | [docs/adr/025-alerting-plane-self-liveness.md](../adr/025-alerting-plane-self-liveness.md) |
 | `ADR-027` | adr | ADR-027: tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分 | tenant-api | — | [docs/adr/027-tenant-api-caller-identity.md](../adr/027-tenant-api-caller-identity.md) |

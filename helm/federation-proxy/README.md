@@ -1,13 +1,13 @@
 # federation-proxy Helm chart
 
-Layer 3 of the ADR-020 tenant-federation defence: the read-path proxy that
+The proxy layer of the ADR-020 tenant-federation defence (ADR-020 §代理注入租戶標籤): the read-path proxy that
 enforces per-tenant isolation. It deploys [prom-label-proxy](https://github.com/prometheus-community/prom-label-proxy)
 between the federation API gateway (IV-2b / #507) and the metrics storage
 backend, and force-injects `{tenant="<X>"}` into every PromQL selector —
 query API **and** metadata APIs — so tenant A can never read tenant B's data.
 
 Source issue: [#506](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/506) (IV-2a) ·
-Design: [ADR-020](../../docs/adr/020-tenant-federation.md) §Blast radius Layer 3.
+Design: [ADR-020](../../docs/adr/020-tenant-federation.md) §代理注入租戶標籤.
 
 Tenant-side usage — how a tenant gets a token and points its Prometheus /
 Grafana at the federation gateway — is [`docs/integration/tenant-federation.md`](../../docs/integration/tenant-federation.md).
@@ -40,7 +40,7 @@ the gateway (#507) doing a direct URL rewrite to the tenant's cluster path
 rewrite ^/api/v1/(.*)$ /select/$jwt_claim_tenant_id/prometheus/api/v1/$1 break;
 ```
 
-ADR-020 §主決策 is annotated with this correction.
+ADR-020 §代理選型 records this.
 
 ## Security model
 

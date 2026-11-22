@@ -1,5 +1,5 @@
 # ValidatingAdmissionPolicy — anti-silent-disarm for the tenant-projection gate
-# (ADR-021 Phase 2(a) / #908 PR-3). The K8s-native generalisation of the #945
+# (ADR-021 §平台副本與租戶副本 / #908 PR-3). The K8s-native generalisation of the #945
 # mtail-compile lesson: a security control that can be SILENTLY removed is fragile.
 #
 # ⚠️ REQUIRES KUBERNETES >= 1.30 (admissionregistration.k8s.io/v1 GA). On older

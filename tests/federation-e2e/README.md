@@ -1,4 +1,4 @@
-# Federation E2E harness (ADR-020 IV-2j, #516)
+# Federation E2E harness (ADR-020, #516)
 
 End-to-end integration test for the tenant-federation request path:
 **gateway → proxy → storage backend**. A federation JWT is minted and
@@ -42,7 +42,7 @@ divergence itself is therefore not covered here** — it is the same
 orchestration-layer boundary as the projected-volume swap above.
 
 `tenant-api` is **not** in the stack. Its federation token store is
-K8s-ConfigMap-coupled (ADR-020 Posture B), so running it here would
+K8s-ConfigMap-coupled (ADR-020 §Token), so running it here would
 re-introduce the K8s coupling this harness avoids. The driver instead
 RS256-signs tokens with the federation key and tenant-api's exact claim
 shape (`iss=tenant-api`, `aud=tenant-federation`, `tenant_id`,

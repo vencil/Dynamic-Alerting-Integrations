@@ -439,7 +439,7 @@ const docTemplate = `{
         },
         "/api/v1/federation/tokens/{id}": {
             "delete": {
-                "description": "Revokes a federation token — removes its record and adds it to the gateway revoked set. NOTE: revocation is eventually consistent and propagates to the gateway within ~1-2 minutes (ADR-020 Posture B). Requires admin permission on the token's tenant.\nA caller without that permission gets the same 404 as for a token that does not exist, so a token id reveals nothing about its tenant.",
+                "description": "Revokes a federation token — removes its record and adds it to the gateway revoked set. NOTE: revocation is eventually consistent and propagates to the gateway within ~1-2 minutes (ADR-020 §Token). Requires admin permission on the token's tenant.\nA caller without that permission gets the same 404 as for a token that does not exist, so a token id reveals nothing about its tenant.",
                 "produces": [
                     "application/json"
                 ],

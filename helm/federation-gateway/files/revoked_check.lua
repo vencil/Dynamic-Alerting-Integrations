@@ -1,4 +1,4 @@
--- federation-gateway Lua filter (ADR-020 Layer 2).
+-- federation-gateway Lua filter (ADR-020 §Gateway).
 -- Rendered from the Helm chart (helm/federation-gateway). Runs AFTER
 -- envoy.filters.http.jwt_authn, so by the time envoy_on_request fires the
 -- JWT signature / exp / aud / iss are already cryptographically verified.
@@ -289,7 +289,7 @@ function envoy_on_request(handle)
     -- request_headers_to_remove for these two: that removal runs in the
     -- router AFTER this Lua and would delete the value we just set).
     --   AccountID — the verified numeric tenant partition (stringified).
-    --   ProjectID — pinned 0: ADR-021 capability (b), the platform's
+    --   ProjectID — pinned 0: ADR-021 §租戶分區隔離, the platform's
     --               operational log about this tenant. Phase 2 capability
     --               (a) (the tenant's own application logs) will use 1;
     --               this PR is (b)-only and hard-codes 0 by design.

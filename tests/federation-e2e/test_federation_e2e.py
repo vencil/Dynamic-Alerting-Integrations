@@ -1,4 +1,4 @@
-"""Federation E2E scenarios — ADR-020 IV-2j (#516).
+"""Federation E2E scenarios — ADR-020 (#516).
 
 Each test walks a real request through the gateway -> proxy -> storage
 chain. See README for the design and the fidelity boundary.

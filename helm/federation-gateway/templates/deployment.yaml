@@ -158,7 +158,7 @@ spec:
               mountPath: /etc/jwks
               readOnly: true
             # Whole-ConfigMap mount (NOT subPath) so kubelet keeps the
-            # projected revoked.txt updated — Posture B revocation depends
+            # projected revoked.txt updated — token revocation depends
             # on it (subPath mounts do not receive updates).
             - name: revoked
               mountPath: /etc/revoked
@@ -174,7 +174,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- if .Values.auditLog.enabled }}
-            # Audit-log emptyDir (ADR-020 IV-2f) — Envoy writes sink 2,
+            # Audit-log emptyDir (ADR-020 §稽核日誌與指標) — Envoy writes sink 2,
             # the audit-metrics / logrotate sidecars share the same volume.
             - name: audit-log
               mountPath: /var/log/federation
@@ -200,7 +200,7 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
         {{- if .Values.auditLog.enabled }}
-        # ── audit-metrics sidecar (ADR-020 IV-2f) ────────────────────
+        # ── audit-metrics sidecar (ADR-020 §稽核日誌與指標) ────────────────────
         # Tails the Envoy audit access log (sink 2) and turns it into
         # tenant_federation_requests_total{tenant,status} plus the ADR-021
         # log-query metrics. Upstream Vector (same image as helm/vector)
@@ -246,7 +246,7 @@ spec:
               mountPath: /var/lib/audit-metrics
           resources:
             {{- toYaml .Values.auditLog.metrics.resources | nindent 12 }}
-        # ── logrotate sidecar (ADR-020 IV-2f) ────────────────────────
+        # ── logrotate sidecar (ADR-020 §稽核日誌與指標) ────────────────────────
         # Caps the audit-log emptyDir so a high-pull tenant can never
         # grow it large enough to evict the pod. Rotation is rename +
         # Envoy admin /reopen_logs (lossless — no copytruncate gap).
@@ -320,7 +320,7 @@ spec:
             medium: Memory
             sizeLimit: 16Mi
         {{- if .Values.auditLog.enabled }}
-        # Audit-log mirror (ADR-020 IV-2f). Disk-backed (NOT medium:
+        # Audit-log mirror (ADR-020 §稽核日誌與指標). Disk-backed (NOT medium:
         # Memory) — a ~150 MiB rotated log mirror should not cost RAM.
         # Ephemeral on purpose: the durable trail is Envoy's stdout sink.
         - name: audit-log

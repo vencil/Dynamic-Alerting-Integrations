@@ -1,6 +1,6 @@
 package fedpolicy
 
-// Admission validator (ADR-020 IV-2e) — the data-layer label-enrichment
+// Admission validator (ADR-020 §白名單收錄檢查) — the data-layer label-enrichment
 // gate for the federation whitelist.
 //
 // When a metric is added to the platform whitelist, the validator
@@ -22,7 +22,7 @@ package fedpolicy
 //                  metrics are legitimate, so this is a soft gate: an
 //                  admin may proceed with an explicit --force.
 //
-// Query design (ADR-020 §前提約束; Gemini metadata-API review):
+// Query design (ADR-020 §資料層的租戶標籤; Gemini metadata-API review):
 //
 //   - The check uses ONLY the Series metadata API (`/api/v1/series`).
 //     A range query like `count_over_time(metric[24h])` would force
@@ -59,7 +59,7 @@ const tenantLabel = "tenant"
 
 const (
 	// admissionWindow is the lookback for the existence / enrichment
-	// check. 24h matches ADR-020 §前提約束.
+	// check. 24h matches ADR-020 §資料層的租戶標籤.
 	admissionWindow = 24 * time.Hour
 	// defaultQueryTimeout bounds a single Series-API call. The check
 	// runs on an interactive admin operation (a whitelist edit); a slow
@@ -249,7 +249,7 @@ func (v *AdmissionValidator) Check(ctx context.Context, metric string) (Admissio
 // piiLabelPatterns are case-insensitive substrings that, found in a
 // metric's label NAMES, hint the metric may carry end-user PII.
 // Federation moves data past the platform boundary, so a hit is
-// surfaced for reviewer judgement (ADR-020 round-6 review). The list is
+// surfaced for reviewer judgement (ADR-020 §白名單收錄檢查). The list is
 // deliberately conservative — bare `ip` / `user` match too many benign
 // labels, so only qualified forms are listed.
 var piiLabelPatterns = []string{

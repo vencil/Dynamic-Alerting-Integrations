@@ -1,6 +1,6 @@
 {{- if .Values.federation.enabled }}
 # tenant-api's only Kubernetes API access: get + update on the single
-# federation token-store ConfigMap (ADR-020 Posture B, issue #519).
+# federation token-store ConfigMap (ADR-020 §Token, issue #519).
 # resourceNames pins the grant to that one object — a compromised pod
 # cannot enumerate or rewrite any other ConfigMap in the namespace.
 apiVersion: rbac.authorization.k8s.io/v1
