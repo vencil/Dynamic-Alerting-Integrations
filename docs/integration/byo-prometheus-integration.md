@@ -451,7 +451,7 @@ tenants:
         group_by: [persistentvolumeclaim]  # 逐 PVC 評估（小卷快滿不被大空卷掩蓋）
 ```
 
-完整範例（threshold / rate / ratio / p99 / absence / `==` 等所有 recipe）見 [`recipes/examples/conf.d/shop-a.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/examples/conf.d/shop-a.yaml)；recipe 語法、各模式語義與安全採用指引（含 dead-exporter 盲點）見 [Custom Rule Governance](../custom-rule-governance.md)。改完跑 `make custom-alerts-compile` 重編規則包。
+完整範例（threshold / rate / ratio / p99 / absence / `==` 等所有 recipe）見 [`recipes/examples/conf.d/shop-a.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/examples/conf.d/shop-a.yaml)；recipe 語法、各模式語義與安全採用指引（含 dead-exporter 盲點）見 [Custom Rule Governance](../custom-rule-governance.md)。改完用 [`da-tools compile-custom-alerts --config-dir <你的 conf.d> --out <規則包>`](../cli-reference.md#compile-custom-alerts) 重編規則包，再交給 Prometheus 載入（`make custom-alerts-compile` 只編本 repo 自己的 conf.d）。
 
 ### 步驟 C：驗證
 

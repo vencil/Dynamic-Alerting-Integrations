@@ -197,6 +197,12 @@ TOOL_FILES=(
     # PR; until then it's a transitive lib for tenant-verify only.
     dx/describe_tenant.py
     dx/tenant_verify.py
+    # #4225 — compile a customer's conf.d `_custom_alerts` into a rule pack
+    # (ADR-024 Capability B), through `da-guard compile-custom-alerts`.
+    # Imports _lib_tenant_values (below) and check_rulepack_sync, a library
+    # here (_lint_helpers.BUILD_EXEMPT) for --check's semantic compare.
+    dx/compile_custom_alerts.py
+    lint/check_rulepack_sync.py
     # Shared library sub-modules
     _lib_constants.py
     # #452 Track A — canonical 0/1/2 exit-code contract (EXIT_OK /

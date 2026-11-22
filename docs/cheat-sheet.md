@@ -70,6 +70,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `batch-pr` | Migration Batch PR Pipeline（v2.8.0；experimental，見 [batch-pr](cli-reference.md#batch-pr)），shell-out 至 `da-batchpr` Go binary 跑 apply / refresh / refresh-source orchestration | apply\|refresh\|refresh-source 子命令 + --plan, --emit-dir, --input, --patches-dir, --workdir, --repo, --dry-run | `da-tools batch-pr --help` |
 | `parser` | PromRule parser（v2.8.0），shell-out 至 `da-parser` Go binary 解析 PrometheusRule YAML + dialect / VM-only / strict-PromQL 相容性分類 | import\|allowlist 子命令 + --input, --output, --validate-strict-prom, --fail-on-non-portable, --fail-on-ambiguous | `da-tools parser --help` |
 | `tenant-verify` | 印 tenant effective config + merged_hash（v2.8.0；incremental migration playbook rollback checklist item 6） | <tenant-id>, --conf-d <PATH>, --expect-merged-hash <H>, --all, --json | `da-tools tenant-verify --help` |
+| `compile-custom-alerts` | 把 conf.d 的 `_custom_alerts` 編譯成規則包（ADR-024 能力 B；見 [compile-custom-alerts](cli-reference.md#compile-custom-alerts)） | --config-dir <DIR>, --out <FILE>, --check, --allow-empty | `da-tools compile-custom-alerts --help` |
 
 ## 快速提示
 

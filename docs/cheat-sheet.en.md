@@ -70,6 +70,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `batch-pr` | Migration Batch PR Pipeline (v2.8.0; experimental, see [batch-pr](cli-reference.en.md#batch-pr)); shells out to the `da-batchpr` Go binary for apply / refresh / refresh-source orchestration | apply\|refresh\|refresh-source subcommands + --plan, --emit-dir, --input, --patches-dir, --workdir, --repo, --dry-run | `da-tools batch-pr --help` |
 | `parser` | PromRule parser (v2.8.0); shells out to the `da-parser` Go binary for PrometheusRule YAML parsing + dialect / VM-only / strict-PromQL portability classification | import\|allowlist subcommands + --input, --output, --validate-strict-prom, --fail-on-non-portable, --fail-on-ambiguous | `da-tools parser --help` |
 | `tenant-verify` | Print tenant effective config + merged_hash (v2.8.0; incremental migration playbook rollback checklist item 6) | <tenant-id>, --conf-d <PATH>, --expect-merged-hash <H>, --all, --json | `da-tools tenant-verify --help` |
+| `compile-custom-alerts` | Compile a conf.d's `_custom_alerts` into a rule pack (ADR-024 Capability B; see [compile-custom-alerts](cli-reference.en.md#compile-custom-alerts)) | --config-dir <DIR>, --out <FILE>, --check, --allow-empty | `da-tools compile-custom-alerts --help` |
 
 ## Quick Tips
 

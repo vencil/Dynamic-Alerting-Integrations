@@ -64,6 +64,9 @@ BUILD_EXEMPT = frozenset({
     # #2744 — validate-config's json_schema row imports its verdict. Shipped
     # as a library; `check_confd_schema` is not a da-tools command.
     "check_confd_schema.py",
+    # #4225 — compile-custom-alerts' --check compares through its semantic
+    # diff. Shipped as a library; `check_rulepack_sync` is not a da-tools command.
+    "check_rulepack_sync.py",
     # #3862 — the record of a reader binary that did not run. Library, not CLI.
     "_lib_tool_fault.py",
     # v2.8.0 PR #432 — cross-platform compat helpers (try_utf8_stdout
