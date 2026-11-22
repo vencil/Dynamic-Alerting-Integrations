@@ -2602,7 +2602,7 @@ groups:
       # on. STRUCTURAL, not a baseline: every counted row is wrong on its own.
       #
       # Input: vector_tenant_projection_stamp_missed_events_total{reason}, a
-      # log_to_metric counter helm/vector (0.12.6+) exports beside its
+      # log_to_metric counter helm/vector (0.13.1+) exports beside its
       # internal_metrics. Without that chart version the series never exists
       # and this alert can never fire. Vector increments it for an audit row
       # that (1) carries a VALID gateway-logged `account_id` — Envoy writes

@@ -279,8 +279,9 @@ tenants:
 For tenant-specific monitoring needs not covered by default Rule Packs, deploy custom rules.
 
 ```bash
-# 1. Write custom rules (Prometheus PromQL)
-cat > custom-rules.yaml <<'EOF'
+# 1. Write custom rules (Prometheus PromQL), in the tenant's directory: its name is the tenant (#4136)
+mkdir -p rule-packs/custom/db-product-01
+cat > rule-packs/custom/db-product-01/custom-rules.yaml <<'EOF'
 groups:
   - name: custom-db-product-01
     rules:
@@ -295,10 +296,10 @@ groups:
 EOF
 
 # 2. Validate custom rules
-da-tools lint custom-rules.yaml
+da-tools lint rule-packs/custom/ --ci
 
 # 3. Deploy
-kubectl apply -f custom-rules.yaml
+kubectl apply -f rule-packs/custom/db-product-01/custom-rules.yaml
 
 # 4. Verify loaded
 curl -s http://prometheus:9090/api/v1/rules | \
@@ -422,7 +423,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 | **baseline_discovery.py** | Threshold suggestions | `--tenant <name> --duration 604800` |
 | **backtest_threshold.py** | Test threshold changes | `--tenant <name> --metric <key> --old-value 80 --new-value 75` |
 | **batch_diagnose.py** | Multi-tenant report | `--output report.json` |
-| **lint_custom_rules.py** | Custom rule validation | `custom-rules.yaml` |
+| **lint_custom_rules.py** | Custom rule validation | `rule-packs/custom/` |
 | **offboard_tenant.py** | Tenant offboarding | `<name> --config-dir conf.d/ --state <tenant-api state show JSON>` (pre-check only by default, `--execute` deletes; without `--state`, or when a record it uses carries a `problem`, `--execute` also needs `--skip-state-check`; no archiving — `cp` first, see 4.1) |
 | **deprecate_rule.py** | Rule offboarding | `rule-name-1 rule-name-2 --config-dir conf.d/ --execute` (without `--config-dir` it points at a path inside the repo) |
 | **onboard_platform.py** | Pre-migration scan | `--alertmanager-config <am.yml> --rule-files <rules-dir> --output-dir migration_input/`(on the v2.9.0 image a directory selects no file: give a quoted glob) <!-- image-caveat: v2.9.0 --> |

@@ -245,6 +245,14 @@ func buildRouter(rd routerDeps) *chi.Mux {
 				Get("/federation", federation.GetTenantFederation(deps))
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Put("/federation", federation.PutTenantFederation(deps))
+
+			// Tenant log visibility selection (ADR-021 §租戶自選的可見度子集).
+			// Same split as the metric subset: PUT's tenant-admin check is
+			// inside the handler.
+			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
+				Get("/federation/log-visibility", federation.GetTenantLogVisibility(deps))
+			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
+				Put("/federation/log-visibility", federation.PutTenantLogVisibility(deps))
 		})
 
 		// Batch operations — route-level middleware checks read on some tenant;

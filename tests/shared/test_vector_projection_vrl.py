@@ -96,6 +96,9 @@ _PROJECTION_SETS = {
     "tenantProjections[0].accountId": "1000",
     "tenantProjections[1].tenantId": "tenant-beta",
     "tenantProjections[1].accountId": "1001",
+    # ADR-021 tenant-selected visibility: tenant-beta narrows its copy,
+    # tenant-alpha keeps the default — projection_tests.yaml runs both.
+    "tenantProjections[1].visibleFields": "{status,path}",
     # #908 PR-2: the projection gate's init-container needs the conf.d registry
     # ConfigMap; the chart `required`s it whenever tenantProjections is set, so
     # every projection-enabled render must provide it.
@@ -365,6 +368,75 @@ class TestProjectionEnabledShape:
         })
         assert r.returncode != 0, "duplicate tenantId must fail render"
         assert "duplicate tenantId" in r.stderr
+
+    @_needs_helm
+    def test_visible_fields_outside_allowlist_fails_render(self, repo_root: Path) -> None:
+        """ADR-021 tenant-selected visibility can only NARROW the allowlist: a
+        visibleFields entry outside tenantProjectionKeepFields (here the backend
+        IP field the allowlist exists to drop) must fail the render, not be
+        silently accepted."""
+        r = _render_result(repo_root / "helm/vector", sets={
+            **_PROJECTION_SETS,
+            "tenantProjections[1].visibleFields": "{status,upstream}",
+        })
+        assert r.returncode != 0, "a visibleFields entry outside the allowlist must not render"
+        assert "not in tenantProjectionKeepFields" in r.stderr, r.stderr
+
+    @_needs_helm
+    def test_always_visible_set_is_not_configurable(self, repo_root: Path) -> None:
+        """tenant-api offers tenants exactly keepFields − tenantProjectionAlwaysVisibleFields
+        as selectable, so changing the always-visible set would silently override
+        their selections: adding `query` keeps a field a tenant dropped, removing
+        `log_event_id` drops the 0:0 join key. Either must fail the render; the
+        same set in another order renders."""
+        for override in ("{tenant_id,log_type,log_event_id,timestamp,query}",
+                         "{tenant_id,log_type,timestamp}",
+                         "{}"):
+            r = _render_result(repo_root / "helm/vector", sets={
+                **_PROJECTION_SETS, "tenantProjectionAlwaysVisibleFields": override})
+            assert r.returncode != 0, f"override {override} must not render"
+            assert "tenantProjectionAlwaysVisibleFields must be exactly" in r.stderr, r.stderr
+        r = _render_result(repo_root / "helm/vector", sets={
+            **_PROJECTION_SETS,
+            "tenantProjectionAlwaysVisibleFields": "{timestamp,log_event_id,log_type,tenant_id}"})
+        assert r.returncode == 0, r.stderr
+
+    @_needs_helm
+    def test_missing_always_visible_key_renders_like_default(self, repo_root: Path) -> None:
+        """`helm upgrade --reuse-values` from a chart before
+        tenantProjectionAlwaysVisibleFields existed carries no such key. That
+        must mean the fixed set — the render (narrowing VRL included, the
+        fixture has a visibleFields tenant) is identical to the default one —
+        not "nothing is always visible" and not a render failure. `--set
+        key=null` deletes the key, which is the state reuse-values leaves."""
+        default = _render_result(repo_root / "helm/vector", sets=_PROJECTION_SETS)
+        missing = _render_result(repo_root / "helm/vector", sets={
+            **_PROJECTION_SETS, "tenantProjectionAlwaysVisibleFields": "null"})
+        assert default.returncode == 0, default.stderr
+        assert missing.returncode == 0, missing.stderr
+        assert missing.stdout == default.stdout
+        # ...and with no visibleFields anywhere it also renders (no guard trip).
+        plain = {k: v for k, v in _PROJECTION_SETS.items() if "visibleFields" not in k}
+        r = _render_result(repo_root / "helm/vector", sets={
+            **plain, "tenantProjectionAlwaysVisibleFields": "null"})
+        assert r.returncode == 0, r.stderr
+
+    @_needs_helm
+    def test_visible_fields_narrowing_only_iterates_the_allowlist(self, repo_root: Path) -> None:
+        """The narrowing condition is attached to allowlist copies only: every
+        `kept.<f> = .<f>` line still comes from tenantProjectionKeepFields, and
+        always-visible fields carry no narrowing condition."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
+        vrl = cfg["transforms"]["tenant_project"]["source"]
+        values = yaml.safe_load((repo_root / "helm/vector/values.yaml").read_text(encoding="utf-8"))
+        keep = values["tenantProjectionKeepFields"]
+        always = values["tenantProjectionAlwaysVisibleFields"]
+        copied = re.findall(r"^\s*kept\.(\w+) = \.\1$", vrl, flags=re.M)
+        assert sorted(copied) == sorted(keep), "only allowlisted fields may be copied"
+        assert '"tenant-beta": ["status","path"]' in vrl, "selection rendered into the map"
+        for f in keep:
+            narrowed = f'if exists(.{f}) && (!narrow || includes(visible, "{f}")) {{' in vrl
+            assert narrowed == (f not in always), f"{f}: narrowing condition {'missing' if not narrowed else 'on an always-visible field'}"
 
     @_needs_helm
     def test_noninteger_accountid_fails_schema(self, repo_root: Path) -> None:

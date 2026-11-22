@@ -22,6 +22,7 @@ updated_at: 2026-11-22
 - 2026-10-13 修訂：AccountID 的高水位另記在 federation token store ConfigMap，運行中被蓋回的舊帳本會被擋下；`state restore` 的計數器加上安全邊際。見「單調性靠什麼守」。
 - 2026-11-07 修訂：日誌庫前方加上依消費端授權的 vmauth，gateway 以自己的帳密連線；它不做租戶路由，與「不用 vmauth 做租戶路由」的決定不衝突，見替代方案。
 - 2026-11-22 修訂：實作「該蓋章卻落進 `0:0`」的偵測：Vector 計數帶已驗證 AccountID 卻沒進租戶分區的 audit 列，rule pack 以 `TenantProjectionStampMissing` 告警。見「日誌進入端的契約」。
+- 2026-11-22 修訂：租戶自選的可見度子集已實作。租戶經 tenant-api 選擇自己的日誌副本保留哪些欄位，選擇存在 state store；平台把它抄進 Vector 的租戶投影設定，在寫入時套用，只能縮小平台策展的欄位。見「租戶自選的可見度子集」。
 - 2026-11-22 修訂：gateway 新增的每 token 並發上限（ADR-020）在日誌查詢模式同樣生效，「Gateway 限流」與「已知限制」改寫為限流加並發上限。
 
 **範圍**：租戶查「平台**關於它**的營運日誌」（目前是它自己的 federation 查詢稽核紀錄）已實作。租戶查**自己工作負載的應用日誌**延後，要等日誌進入端的另一份設計（見「已知限制」）。
@@ -85,7 +86,7 @@ gateway 本來就有多種模式：`prom-label-proxy`（注入指標標籤）、
 
 1. **gateway 的 `victorialogs` 模式**：驗章 → 覆寫租戶 header → 只轉送列名的查詢端點。
 2. **tenant-api**：為租戶配發穩定的 uint32 AccountID；簽日誌 token 時把它放進數值 claim；列舉與撤銷沿用 ADR-020 的 token 機制。
-3. **可見度**：只有特定類別的日誌、特定欄位會進租戶分區（見下）。
+3. **可見度**：只有特定類別的日誌、特定欄位會進租戶分區；租戶可再從這些欄位中選自己要保留的子集（見下）。
 4. **稽核與指標**：誰查了哪些日誌、有沒有異常。
 
 ### 注入前驗證 AccountID
@@ -204,6 +205,37 @@ ok  	github.com/vencil/tenant-api/internal/federation/account	0.019s
 
 這份白名單與目錄是**治理**，不是安全邊界：跨租戶隔離完全來自 VictoriaLogs 的 `(AccountID, ProjectID)` 分區，租戶查得到的恆等於自己分區裡的列。
 
+### 租戶自選的可見度子集
+
+可見度分兩層：平台策展哪些日誌類別、哪些欄位可以進租戶分區（上一節），租戶再從這些欄位中選自己的副本要保留哪些。例如租戶不想讓自己的查詢文字（`query`）留在分區裡、被它所有的 token 持有者讀到，就可以不選它。
+
+- **選擇存在哪裡**：tenant-api 的 state store，每個租戶一筆 `_log_visibility.<tenant>.yaml`，與 ADR-020 的指標子集同一個 store、同樣以 compare-and-swap 寫入並記 `state_write` 稽核日誌。經 `GET`／`PUT /api/v1/tenants/{id}/federation/log-visibility` 讀寫；`PUT` 要該租戶的 admin，門檻與指標子集、簽發 token 相同。
+- **可選的欄位**：`tenantProjectionKeepFields` 扣掉四個永遠保留的欄位：`tenant_id`、`log_type`（分區的身分，也是 stream field）、`timestamp`（事件時間），以及 `log_event_id`（值班回 `0:0` 找完整那一列的關聯鍵）。四個欄位列在 `helm/vector` 的 `tenantProjectionAlwaysVisibleFields`，這組值不能改，覆寫會讓 chart 渲染失敗：tenant-api 把其餘欄位全部開放給租戶選，改了這組就會在 tenant-api 不知情下蓋掉租戶的選擇。`status` 雖是租戶分區的 stream field 仍可拿掉，拿掉後新寫入的列沒有這個 stream 標籤，以 `status` 過濾查不到它們。
+- **任何讀不懂的輸入都不會變成「全部欄位」**：最寬的選擇是「回到預設」，所以 tenant-api 拒絕不在可選清單上的欄位、重複的欄位與永遠保留的欄位，也拒絕任何會被寬鬆解析讀成 `fields: null` 的請求：沒有 `fields` 鍵、鍵名拼錯或大小寫不同、多出其他鍵、物件後面還有資料。回到預設必須明寫 `{"fields": null}`。讀取已存的紀錄同樣嚴格：缺 `fields` 鍵、有未知的鍵或空白的紀錄視為損壞，`GET` 回 500，不當成預設。
+- **沒選就是平台預設**：沒有紀錄、或 `fields: null`，保留平台策展的全部欄位，包括平台日後新增的欄位，與加入這一層之前的行為相同。`fields: []` 只留四個永遠保留的欄位。
+- **在哪裡強制：寫入時，Vector 的租戶投影。** 平台把租戶的選擇抄進該租戶的 `tenantProjections` 項目（`visibleFields`），流程與從帳本抄 AccountID 相同。投影重建每一列時，迴圈仍只走 `tenantProjectionKeepFields`，不在選擇裡的可選欄位不複製；重新序列化的 `message` 只由留下的欄位組成，所以被拿掉的欄位也不會藏在字串裡。白名單外的欄位沒有任何路徑能經選擇加進來；chart 另在渲染時拒絕 `visibleFields` 中不在白名單上的欄位，抄錯會在部署時失敗，不會悄悄生效。沒有任何租戶帶 `visibleFields` 時，渲染出的設定與加入這一層之前逐字相同。
+- **為什麼不在查詢端套用**：gateway 只注入 header。要在查詢端只回某些欄位，得改寫租戶的 LogsQL（例如補一段欄位篩選），也就是本 ADR 拒絕的自寫 LogsQL 過濾：漏掉一種語法，選擇就失效，而且失效的方向是多回欄位。寫入端從白名單重建，出錯的方向是少一個欄位，維持 fail-closed。代價與上一節相同：改選擇只影響之後寫入的列，已經寫進分區的列保持原樣。
+
+**範例**：租戶 `tenant-beta`（AccountID 1001）只保留 `status` 與 `path`。
+
+```text
+# 1. 租戶的選擇（tenant-api）
+PUT /api/v1/tenants/tenant-beta/federation/log-visibility
+{"fields": ["status", "path"]}
+
+# 2. 平台抄進 helm/vector 的 values
+tenantProjections:
+  - tenantId: "tenant-beta"
+    accountId: 1001
+    visibleFields: [status, path]
+
+# 3. gateway 寫出的一筆稽核列
+{"tenant_id":"tenant-beta","token_id":"tok-b","method":"GET","path":"/select/logsql/query",
+ "query":"_time:5m secret-term","status":200,"duration_ms":7,"upstream":"10.42.7.13:9428","response_flags":"-"}
+```
+
+寫進 tenant-beta 分區的那一列只有 `tenant_id`、`log_type`、`log_event_id`、`timestamp`、`status`、`path`，加上投影注入的 `account_id` 與由這些欄位重組的 `message`；`query`、`method`、`token_id`、`duration_ms`、`response_flags` 都不在，`message` 裡也找不到 `secret-term` 或 `tok-b`。`upstream` 不在白名單上，本來就不會出現。`0:0` 的平台副本保留全部欄位；沒有選擇的租戶保留整份白名單。這組輸入與斷言是 `helm/vector/tests/projection_tests.yaml` 中 `tenant-beta's visibleFields narrows its copy` 這個測試，CI 以 `vector test` 執行。
+
 ### 平台副本與租戶副本
 
 租戶分區不是把 `0:0` 的資料搬過去，而是**同時寫兩份**：平台仍需要跨租戶的完整稽核視角。
@@ -280,7 +312,11 @@ VictoriaLogs 的查詢端點逐一列名放行，不用前綴比對。`helm/fede
 **已知限制**
 
 - **蓋章失效的偵測只看得到帶已驗證 AccountID 的列。** `TenantProjectionStampMissing`（見「日誌進入端的契約」）的判準是 logs token 寫進稽核列的 `account_id`，所以：從不查日誌的租戶沒有列可數；同一租戶用指標 token 產生的列不計；列被投影到**錯的**分區（`tenantProjections` 的號碼與 claim 不符時，Vector 照對映表蓋章）不算「落進 `0:0`」，那是啟動時投影閘門比對帳本的範圍。投影 VRL 執行錯誤、閘門把租戶 sink 拿掉、租戶 sink 丟棄 batch 也不在它的範圍，各有自己的告警。目前會進租戶分區的只有 `federation_audit`，所以它涵蓋的也只有這個類別；將來開放其他類別時，判準要跟著那個類別的可信身分來源一起設計。`account_id` 本身不影響蓋章（蓋章只看 `tenant_id` 與 `tenantProjections`），所以偽造它最多造成誤報。但能在 gateway 的命名空間起 pod、帶 gateway 標籤的人，能做的不只誤報：pod 的 owner 名稱不符 gateway 的 workload 前綴時，列被改判 `suspicious_audit`，計為 `origin_rejected`；owner 名稱符合（例如一個叫 `federation-gateway-x` 的 Deployment）時，列就是 `federation_audit`，`tenant_id` 對映不到時計為 `not_projected`，對映得到時會照常蓋進那個租戶的分區。最後這種是既有的風險，不是這個偵測造成的，也不是它能擋的（見「日誌進入端的契約」對節點與命名空間隔離的前提）。沒有已驗證身分、卻對映不到 AccountID 的列（指標 token 的流量、偽造或畸形 payload）仍只由 `TenantProjectionFanoutDiscardSpike` 以「高於自己一天平均三倍」偵測，量小或長期存在的落差會被併入基準而不觸發。
-- **已決定、尚未實作：租戶自選的可見度子集。** 本 ADR 決定可見度分兩層：平台策展哪些日誌類別與欄位可以給租戶看，租戶再從中選自己要看的子集。目前只有平台那一層（`tenantProjectionKeepFields` 與只投影 `federation_audit`），沒有租戶自選子集的機制。
+- **租戶的可見度選擇要平台抄進 Vector 才生效。** tenant-api 存的是租戶要的；Vector 讀的是 `tenantProjections[].visibleFields` 這份副本，抄寫與 AccountID 一樣靠 PR review，沒有機制比對兩者。沒抄或抄到舊的，租戶的副本保留的是平台預設或舊的選擇：仍在平台策展的範圍內，只是沒有縮小，不會多出白名單外的欄位。`GET` 回的是租戶的選擇（`selected_visible_fields` 是套用後會保留的欄位），不是 Vector 實際套用的設定。改由機制同步的觸發條件：投影改由帳本自動產生時（見下「租戶應用日誌延後」）一併從 state store 產生；或有租戶把某個欄位不保留列為合規要求。
+- **只能選欄位，不能選日誌類別。** 平台目前只策展 `federation_audit` 一個類別，選類別等於「全部或不投影」。平台策展第二個類別時再擴充成類別加欄位。
+- **tenant-api 的可選清單是 chart 預設白名單的鏡像。** 兩者由 `components/tenant-api/internal/federation/logvis/logvis_test.go` 比對 `helm/vector/values.yaml`。部署端若覆寫了 `tenantProjectionKeepFields`：新增的欄位租戶選不到（沒選擇時仍看得到）；被移除的欄位若出現在某租戶抄過來的選擇裡，chart 渲染失敗，要把那一項從 `visibleFields` 拿掉。
+- **租戶目前只能直接呼叫 API 設定。** portal 沒有對應的畫面，與指標子集相同。
+- **退回前一版 tenant-api 後，備份還原會拒絕含可見度紀錄的備份。** 前一版的 `state restore` 不認得 `_log_visibility.*` 鍵，會把整份備份判為「不是 tenant-api state 備份」。要退版又要還原，先從備份移除這些鍵。孤兒偵測也不涵蓋這些紀錄，退租時要手動刪（見 offboarding runbook）。
 - **已決定、尚未實作：在 gateway 強制 `/query` 帶 `limit`。** 本 ADR 決定 `/query` 除了時間範圍上限，還要強制帶 `limit` 收斂串流回傳量；gateway 目前不檢查也不補上 `limit`，只靠時間範圍上限與租戶指南。
 - **VictoriaLogs 本身的分區沒有被平台測試驗證。** 選原生分區的理由之一是它同樣套在 metadata 類端點（`field_values`、`stream_field_values` 等）上，不像 ADR-020 要顯式開 `-enable-label-apis`。但 gateway 的 E2E（`tests/federation-e2e/test_victorialogs_e2e.py`）用的是模擬日誌庫，驗證的是 gateway 送出的 header，不是 VictoriaLogs 對每個端點的隔離。
 - **租戶應用日誌延後。** 要先有另一份日誌進入端的設計，依 namespace 蓋章並滿足上面的契約與節點隔離硬化；屆時沿用同一個 gateway 模式，`ProjectID=1`，Vector 的對映改由帳本產生，解決固定 sink 在大量租戶下無法擴展的問題。觸發條件：合約把「應用日誌代管與合規稽核」列為必選；或客戶願意付加值授權費，足以支撐儲存擴容與節點採集架構的常態維運成本。
@@ -319,6 +355,14 @@ ProjectID: 0
 
 vmauth 只看第一個 header；後兩個原封轉給 VictoriaLogs。設定方式見 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §1.2。
 
+### 在查詢端套用租戶的可見度選擇
+
+讓 gateway 依租戶的選擇只回某些欄位，選擇改了立刻生效，也不必抄進 Vector。但 gateway 只會注入 header，要做到得改寫或包裝租戶的 LogsQL，與「自寫 LogsQL 過濾注入」是同一個地雷；而且漏濾時多回的是租戶已選擇不保留的欄位。不採用，選擇在寫入端套用（見「租戶自選的可見度子集」）。
+
+### 讓投影閘門直接讀租戶的選擇
+
+投影閘門（Vector 啟動前比對 `tenantProjections` 與帳本的 init container）已經掛載帳本所在的 ConfigMap（與 tenant-api 同 namespace 時就是 `tenant-api-state`），可以直接讀 `_log_visibility.<tenant>.yaml`，省掉抄寫。但閘門只會在「放行整份租戶設定」與「不放行」之間二選一：選擇與副本不一致就整個停掉租戶投影，偏好沒同步會變成所有租戶查不到新日誌；改成由閘門產生設定，則要改它的映像檔與 Vector 設定的產生方式。目前延後，觸發條件見已知限制。
+
 ## 相關
 
 - [ADR-020](./020-tenant-federation.md)：租戶把指標拉回自家系統；本 ADR 沿用它的 gateway、token 與三層防護。
@@ -326,4 +370,4 @@ vmauth 只看第一個 header；後兩個原封轉給 VictoriaLogs。設定方�
 - [ADR-009](./009-tenant-manager-crud-api.md)：tenant-api 的端點慣例，AccountID 配發沿用。
 - [ADR-028](028-federation-revocation-tamper-evidence.md)：撤銷紀錄被竄改的偵測，同樣用 Vector 與 VictoriaLogs。
 - [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md)：Vector／VictoriaLogs 維運；[`log-visibility-2tier-catalogue.md`](../internal/log-visibility-2tier-catalogue.md)：租戶可見的類別與欄位；[`tenant-log-query.md`](../integration/tenant-log-query.md)：租戶上手指南。
-- 實作位置：`helm/federation-gateway/`（`files/revoked_check.lua`、`files/envoy.yaml`）、`helm/vector/`（`templates/configmap.yaml` 的租戶投影與 `tenant_stamp_check` 計數、`tests/projection_tests.yaml`）、`rule-packs/rule-pack-platform.yaml`（`TenantProjectionStampMissing`）、`helm/victorialogs/`、`components/tenant-api/internal/federation/account/`、`components/tenant-api/cmd/server/state_cmd.go`。
+- 實作位置：`helm/federation-gateway/`（`files/revoked_check.lua`、`files/envoy.yaml`）、`helm/vector/`（`templates/configmap.yaml` 的租戶投影、可見度選擇與 `tenant_stamp_check` 計數、`tests/projection_tests.yaml`）、`rule-packs/rule-pack-platform.yaml`（`TenantProjectionStampMissing`）、`helm/victorialogs/`、`components/tenant-api/internal/federation/account/`、`components/tenant-api/internal/federation/logvis/`（可見度選擇的驗證）、`components/tenant-api/internal/handler/federation/log_visibility.go`、`components/tenant-api/cmd/server/state_cmd.go`。

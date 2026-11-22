@@ -215,3 +215,36 @@ func TestLoad_RefusesNonStateBackups(t *testing.T) {
 		}
 	}
 }
+
+// A log visibility selection (ADR-021 §租戶自選的可見度子集) is a state record:
+// a backup holding one loads, --keys may name it, it is restored whole, and
+// its change notification goes to that tenant's entity. Without ValidKey
+// knowing the key, a DR restore of any backup holding one is refused outright.
+func TestLogVisibilityRecordRestores(t *testing.T) {
+	t.Parallel()
+	key := statestore.LogVisibilityKey("t-a")
+	cm := "kind: ConfigMap\nmetadata: {name: tenant-api-state}\ndata:\n  _groups.yaml: |\n    groups: {}\n  " +
+		key + ": |\n    fields: [status]\n"
+	p := filepath.Join(t.TempDir(), "backup.yaml")
+	if err := os.WriteFile(p, []byte(cm), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bak, err := Load(p, nil)
+	if err != nil {
+		t.Fatalf("Load refused a backup holding %s: %v", key, err)
+	}
+	if got, err := checkKeys(bak, []string{key}); err != nil || len(got) != 1 || got[0] != key {
+		t.Fatalf("checkKeys(%s) = %v, %v", key, got, err)
+	}
+	if got := entityOf(key); got != statestore.LogVisibilityEntity("t-a") {
+		t.Errorf("entityOf(%s) = %q, want %q", key, got, statestore.LogVisibilityEntity("t-a"))
+	}
+	s := newStore(t)
+	put(t, s, key, "fields: null\n")
+	if err := Run(context.Background(), s, bak, Options{Keys: []string{key}}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(get(t, s, key)); got != "fields: [status]\n" {
+		t.Errorf("%s not restored: %q", key, got)
+	}
+}

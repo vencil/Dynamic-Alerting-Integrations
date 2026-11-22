@@ -83,6 +83,8 @@ var writeRouteManifest = map[string]string{
 		" — site #11: authz before the PR-mode 501 so write-mode is not probeable",
 	"PUT /api/v1/tenants/{id}/federation": gateInHandler +
 		" — site #9: PermAdmin on path {id}, same bar as token issuance",
+	"PUT /api/v1/tenants/{id}/federation/log-visibility": gateInHandler +
+		" — PermAdmin on path {id} (OrgAllowed), the metric subset's bar",
 	"POST /api/v1/tenants/batch": gateHelperFunnel +
 		" — sites #3/#4: PR-mode pre-validation inline OrgAllowed + executeBatchOps (sync/async, orgs resolved at execution time)",
 	"POST /api/v1/tenants/simulate": gateReadOp +
@@ -159,10 +161,11 @@ const (
 // the read-by-id IDOR surface P4c closed.
 var readRouteManifest = map[string]string{
 	// per-tenant reads — org-gated by the middleware (P4c)
-	"GET /api/v1/tenants/{id}/":           gateReadByIDOrg + " — primary IDOR: full tenant config incl. thresholds",
-	"GET /api/v1/tenants/{id}/effective":  gateReadByIDOrg + " — merged effective config + hashes",
-	"GET /api/v1/tenants/{id}/metrics":    gateReadByIDOrg + " — metric discovery catalog (Prometheus proxy)",
-	"GET /api/v1/tenants/{id}/federation": gateReadByIDOrg + " — per-tenant federation metric subset",
+	"GET /api/v1/tenants/{id}/":                          gateReadByIDOrg + " — primary IDOR: full tenant config incl. thresholds",
+	"GET /api/v1/tenants/{id}/effective":                 gateReadByIDOrg + " — merged effective config + hashes",
+	"GET /api/v1/tenants/{id}/metrics":                   gateReadByIDOrg + " — metric discovery catalog (Prometheus proxy)",
+	"GET /api/v1/tenants/{id}/federation":                gateReadByIDOrg + " — per-tenant federation metric subset",
+	"GET /api/v1/tenants/{id}/federation/log-visibility": gateReadByIDOrg + " — per-tenant log visibility selection",
 	// list / wildcard reads — middleware org-blind by design
 	"GET /api/v1/me":                 gateReadAuthenticated + " — caller's own identity and rule patterns (RulesMatching); names no tenant beyond the caller's own grants; zero grants → 200 with empty grants",
 	"GET /api/v1/tenants":            gateReadAnyTenant + " — filterTenantsByRBAC: ScopeAllowed / ScopeAllowedUnknownMetadata per row (list plane, P4a)",
