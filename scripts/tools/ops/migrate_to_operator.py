@@ -692,18 +692,23 @@ def build_migration_checklist(
         zh_renamed = (
             "- [ ] 若曾套用過本工具舊版的輸出：下列物件舊版用的是另一個名稱，"
             "新舊並存時同一批規則會載入兩次。逐一找出舊名物件"
-            f"（`{find}<舊名>`），先備份"
-            "（`kubectl get prometheusrule -n <namespace> <舊名> -o yaml > <舊名>.backup.yaml`；"
-            "回滾時 `kubectl apply -f` 它），確認新名物件已載入（Phase 3）後再刪除："
+            f"（`{find}<舊名>`）。同一個舊名可能在不同 namespace 各有一個："
+            "只處理當初套用本工具舊版輸出的那個 namespace 裡的，其餘屬於別次遷移。先備份"
+            "（`kubectl get prometheusrule -n <namespace> <舊名> -o yaml > "
+            "<namespace>.<舊名>.backup.yaml`；回滾時 `kubectl apply -f` 它），"
+            "確認新名物件已載入（Phase 3）後再刪除："
             "`kubectl delete prometheusrule -n <namespace> <舊名>`。"
             "帶同一個標籤的其他物件屬於別次遷移，不要動。\n" + rows)
         en_renamed = (
             "- [ ] If output of an earlier version of this tool was applied: it gave the "
             "objects below another name, and with both in the cluster the same rules load "
-            f"twice. Find each old one (`{find}<old-name>`), back it up (`kubectl get "
-            "prometheusrule -n <namespace> <old-name> -o yaml > <old-name>.backup.yaml`; to "
-            "roll back, `kubectl apply -f` it) and, once the new one is loaded (Phase 3), "
-            "delete it: `kubectl delete prometheusrule -n <namespace> <old-name>`. "
+            f"twice. Find each old one (`{find}<old-name>`). One old name may be in more "
+            "than one namespace: act only on the one in the namespace the earlier output "
+            "was applied to — the others belong to other migrations. Back it up (`kubectl "
+            "get prometheusrule -n <namespace> <old-name> -o yaml > "
+            "<namespace>.<old-name>.backup.yaml`; to roll back, `kubectl apply -f` it) and, "
+            "once the new one is loaded (Phase 3), delete it: "
+            "`kubectl delete prometheusrule -n <namespace> <old-name>`. "
             "Other objects carrying that label belong to other migrations: leave them.\n" + rows)
     # #3426: PrometheusRules found in --source-dir are named here — they are
     # already the CRD, so nothing was converted from them.

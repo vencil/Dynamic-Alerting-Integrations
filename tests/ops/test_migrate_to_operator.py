@@ -1441,8 +1441,12 @@ def test_cli_two_keys_end_as_one_file_and_the_summary_says_one(tmp_path):
         assert text.count("kubectl get prometheusrule -A -l migrated-from=configmap "
                           f"--field-selector metadata.name={old}`") == 1, text
         assert text.count(f"kubectl delete prometheusrule -n <namespace> {old}`") == 1
+        # the backup is named for its namespace too: one old name may be in
+        # two namespaces, and the second backup would replace the first
         assert text.count(f"kubectl get prometheusrule -n <namespace> {old} -o yaml > "
-                          f"{old}.backup.yaml`") == 1, text
+                          f"<namespace>.{old}.backup.yaml`") == 1, text
+    assert "act only on the one in the namespace the earlier output was applied to" in checklist
+    assert "只處理當初套用本工具舊版輸出的那個 namespace 裡的" in zh
     assert "belong to other migrations: leave them" in checklist
     assert "屬於別次遷移，不要動" in zh
 

@@ -1643,7 +1643,7 @@ da-tools migrate-to-operator [options]
 - 物件名稱：`prometheus-rules-<pack>` 這種名稱的 ConfigMap（本平台規則包的 ConfigMap）與 `rule-pack-<pack>.yaml` 產出 `da-rule-pack-<pack>`，與 `operator-generate` 對同一個規則包的物件同名；其他來源是 `da-rule-pack-<來源名稱小寫>`（名稱開頭的 `rule-pack-` 不重複）。
 - 以下情形結束碼 `2`，不寫任何檔、也不印預覽（`--dry-run`、`--json`、`--checklist-only` 相同），每一筆都點名：兩個來源會產出同名的物件；產出的名稱不是合法的 Kubernetes 物件名稱，或長到輸出檔名寫不出來；產出的名稱與來源目錄裡已有的 PrometheusRule 同名；同一個 ConfigMap 的兩個 key 有同名的 group（Prometheus 允許，因為是不同的 rule 檔；一個 PrometheusRule 裝不下）。
 - `--output-dir` 裡已有本工具命名的 PrometheusRule 檔（`da-rule-pack-*.yaml`）而這次不會寫它時，結束碼 `2`、不寫任何檔（`--dry-run` 相同；`--checklist-only` 不寫 CRD，不看這個目錄）：checklist 以整個目錄為對象的步驟（dry-run 驗證、回滾）會連它一起算進去。這次會寫的檔照舊覆寫。
-- ⚠️ 舊版把規則包的物件命名為 `da-rule-pack-prometheus-rules-<pack>`，也會把名稱中間的 `rule-pack-` 切掉（`my-rule-pack-foo` 舊名 `da-rule-pack-my-foo`，現在是 `da-rule-pack-my-rule-pack-foo`）。套用過舊版輸出的叢集，套用新輸出後新舊物件並存、同一批規則載入兩次；checklist 的 Phase 5 逐一列出這次計畫裡被改名的物件（舊名 → 新名）與找出舊名物件的指令；確認新名物件已載入後再刪除舊名的。帶同一個標籤的其他物件屬於別次遷移，不要動。
+- ⚠️ 舊版把規則包的物件命名為 `da-rule-pack-prometheus-rules-<pack>`，也會把名稱中間的 `rule-pack-` 切掉（`my-rule-pack-foo` 舊名 `da-rule-pack-my-foo`，現在是 `da-rule-pack-my-rule-pack-foo`）。套用過舊版輸出的叢集，套用新輸出後新舊物件並存、同一批規則載入兩次；checklist 的 Phase 5 逐一列出這次計畫裡被改名的物件（舊名 → 新名）與找出舊名物件的指令；同一個舊名可能在不同 namespace 各有一個，只處理當初套用舊版輸出的那個 namespace 裡的；先備份，確認新名物件已載入後再刪除。帶同一個標籤的其他物件屬於別次遷移，不要動。
 
 **範例**
 
