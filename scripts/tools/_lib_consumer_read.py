@@ -1042,9 +1042,10 @@ def promql_metric_names(exprs: "list[str]", binary: str | None = None) -> "list[
     each once — or the ``InputRefused`` of an expression the parser refuses.
     A batch with one refused expression is re-read one expression at a time,
     so a refusal names its expression and no other is lost (the batch
-    refusal does not say which). No tool reads metric names off the text of
-    an expression: a list of the function and keyword names to skip goes
-    stale with every Prometheus release (``holt_winters``)."""
+    refusal does not say which). ⛔ Read metric names here, never off the
+    text of an expression: a list of the function and keyword names to skip
+    goes stale with every Prometheus release (``holt_winters``). Text
+    scanners still left are tracked in #4219."""
     exprs = list(exprs)
     if not exprs:
         return []

@@ -121,7 +121,7 @@ def test_the_names_an_expression_reads_are_its_parse_trees(expr, want):
     ("x / $__interval_ms", "x / 300"),
     ("rate(x[${__interval}])", "rate(x[5m])"),
     ('sum(rate(x{tenant=~"$tenant"}[$window])) offset $off', 'sum(rate(x{tenant=~"x"}[5m])) offset 5m'),
-    ("max_over_time(x[$range:$step])", "max_over_time(x[5m:1m])"),
+    ("max_over_time(x[$range:$step])", "max_over_time(x[5m:5m])"),
     ("$metric{a=\"1\"}", "x{a=\"1\"}"),
     ("[[metric]] > 0", "x > 0"),
     ("label_values(user_threshold{metric=\"$metric\"}, severity)", "user_threshold{metric=\"x\"}"),
@@ -129,6 +129,13 @@ def test_the_names_an_expression_reads_are_its_parse_trees(expr, want):
     ("label_values(tenant)", None),
     ("label_names()", None),
     ("metrics(tenant_.*)", None),
+    # #4150 review: a subquery step, a literal range with a variable step, the
+    # deprecated [[var]] in a range, a variable label, a negative offset
+    ("max_over_time(x[$__range:$step])", "max_over_time(x[5m:5m])"),
+    ("max_over_time(x[1h:$step])", "max_over_time(x[1h:5m])"),
+    ("rate(foo[[[iv]]])", "rate(foo[5m])"),
+    ("label_values(foo, $lbl)", "foo"),
+    ("foo offset -$off", "foo offset -5m"),
 ])
 def test_grafana_queries_are_interpolated_as_grafana_does(query, want):
     assert gate.grafana_promql(query) == want
@@ -154,6 +161,45 @@ def test_a_dashboard_of_another_datasource_is_skipped(tmp_path, monkeypatch):
         {"targets": [{"datasource": "${DS}", "expr": "tenant:b:max > 0"}]},
     ])
     assert gate.collect_consumed_tokens(root) == {"tenant:a:sum", "tenant:b:max"}
+
+
+def _queries(doc) -> list:
+    return list(gate._walk_json_strings(doc))
+
+
+def test_only_query_variables_are_read():
+    """A custom / interval / datasource variable's `query` is a value list or
+    a datasource type, never PromQL (#4150 review: `prometheus` read as a
+    metric, `1m,5m` refused)."""
+    doc = {"templating": {"list": [
+        {"type": "custom", "query": "warning,critical"},
+        {"type": "interval", "query": "1m,5m,10m"},
+        {"type": "datasource", "query": "prometheus"},
+        {"type": "query", "query": "label_values(tenant:a:sum, tenant)"},
+        {"type": "query", "query": {"query": "label_values(tenant:b:max, x)", "refId": "A"}},
+    ]}}
+    assert [q for q, _ in _queries(doc)] == ["label_values(tenant:a:sum, tenant)",
+                                             "label_values(tenant:b:max, x)"]
+
+
+def test_datasources_as_grafana_resolves_them():
+    """A Mixed panel's target without its own datasource reads the default;
+    a row's datasource does not reach the panels it holds (#4150 review)."""
+    doc = {"panels": [
+        {"datasource": {"type": "datasource", "uid": "-- Mixed --"},
+         "targets": [{"expr": "a"}, {"datasource": {"type": "loki"}, "expr": "{x=\"1\"}"}]},
+        {"type": "row", "datasource": {"type": "loki"}, "panels": [{"targets": [{"expr": "b"}]}]},
+    ]}
+    assert _queries(doc) == [("a", None), ('{x="1"}', "loki"), ("b", None)]
+
+
+def test_main_names_a_refused_dashboard_query_rc2(monkeypatch, capsys):
+    def boom():
+        raise gate.DashboardQueryRefused("d.json: Prometheus' parser refuses the query 'sum('")
+    monkeypatch.setattr(gate, "run_check", boom)
+    assert gate.main(["--ci"]) == gate.EXIT_CALLER_ERROR
+    err = capsys.readouterr().err
+    assert "d.json" in err and "crashed" not in err
 
 
 def test_a_dashboard_query_the_parser_refuses_is_a_caller_error(tmp_path, monkeypatch):

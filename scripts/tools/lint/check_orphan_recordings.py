@@ -109,13 +109,14 @@ OBSERVED_MAP = "scripts/tools/ops/metric_observed_map.yaml"
 _GRAFANA_NUMBER = re.compile(r"\$\{?__(?:interval|range|rate_interval)_(?:ms|s)\}?(?![\w])")
 _GRAFANA_DURATION = re.compile(r"\$\{?__(?:rate_interval|interval|range|auto)\}?(?![\w])")
 _GRAFANA_VAR = r"\$(?:\{[^}]*\}|[A-Za-z_]\w*)"
-_GRAFANA_RANGE = re.compile(r"\[\s*" + _GRAFANA_VAR + r"\s*(?::\s*(?:" + _GRAFANA_VAR + r"|\w+)\s*)?\]")
-_GRAFANA_OFFSET = re.compile(r"\boffset\s+" + _GRAFANA_VAR)
-_GRAFANA_ANY = re.compile(_GRAFANA_VAR + r"|\[\[\w+(?::\w+)?\]\]")
+_GRAFANA_OLD = re.compile(r"\[\[(\w+)(?::\w+)?\]\]")  # [[var]], the deprecated spelling of $var
+_GRAFANA_BRACKET = re.compile(r"\[[^\[\]]*\]")       # a range or subquery: [5m], [$a:$b]
+_GRAFANA_OFFSET = re.compile(r"\boffset(\s+-?)" + _GRAFANA_VAR)
+_GRAFANA_ANY = re.compile(_GRAFANA_VAR)
 #: Grafana's query-variable functions: label_values(<query>, <label>) and
 #: query_result(<query>) wrap PromQL; label_values(<label>), label_names()
 #: and metrics() read no series.
-_GRAFANA_WRAPS = (re.compile(r"\s*label_values\((.*),\s*[A-Za-z_]\w*\s*\)\s*", re.S),
+_GRAFANA_WRAPS = (re.compile(r"\s*label_values\((.*),\s*(?:[A-Za-z_]\w*|" + _GRAFANA_VAR + r")\s*\)\s*", re.S),
                   re.compile(r"\s*query_result\((.*)\)\s*", re.S))
 _GRAFANA_NONE = re.compile(r"\s*(?:label_values\(\s*[A-Za-z_]\w*\s*\)|label_names\(.*\)|metrics\(.*\))\s*", re.S)
 
@@ -131,10 +132,11 @@ def grafana_promql(query: str) -> "str | None":
         if m:
             query = m.group(1)
             break
+    query = _GRAFANA_OLD.sub(r"$\1", query)
     query = _GRAFANA_NUMBER.sub("300", query)
     query = _GRAFANA_DURATION.sub("5m", query)
-    query = _GRAFANA_RANGE.sub(lambda m: "[5m:1m]" if ":" in m.group(0) else "[5m]", query)
-    query = _GRAFANA_OFFSET.sub("offset 5m", query)
+    query = _GRAFANA_BRACKET.sub(lambda m: _GRAFANA_ANY.sub("5m", m.group(0)), query)
+    query = _GRAFANA_OFFSET.sub(r"offset\g<1>5m", query)
     return _GRAFANA_ANY.sub("x", query)
 
 
@@ -191,22 +193,42 @@ def iter_rules(root: Path = PROJECT_ROOT):
 def _datasource_type(ds, inherited):
     """A panel's / target's `datasource`: its `type` when Grafana wrote one
     (an object), else the enclosing one's (a uid, a name or `${DS}` names
-    no type)."""
-    if isinstance(ds, dict) and isinstance(ds.get("type"), str):
+    no type). Grafana's own pseudo-datasources (type `datasource`: `--
+    Mixed --`, `-- Dashboard --`) name none either: a Mixed panel's target
+    without its own reads the default datasource."""
+    if isinstance(ds, dict) and isinstance(ds.get("type"), str) and ds["type"] != "datasource":
         return ds["type"]
     return inherited
 
 
+#: Grafana template variable types whose `query` is a datasource query; the
+#: others (custom, interval, constant, textbox, datasource, adhoc) hold a
+#: list of values, a datasource type or nothing to run.
+_QUERY_VARIABLE = "query"
+
+
 def _walk_json_strings(obj, keys=("expr", "query"), ds_type=None):
-    """(query, datasource type or None) of every query string, the type the
-    nearest enclosing `datasource` names."""
+    """(query, datasource type or None) of every query Grafana runs: a
+    panel's targets under the datasource that panel or target names (a row's
+    does not reach the panels it holds), and a template variable's when it
+    is a query variable."""
     if isinstance(obj, dict):
+        inherited = ds_type
         ds_type = _datasource_type(obj.get("datasource"), ds_type)
         for k, v in obj.items():
-            if k in keys and isinstance(v, str):
+            if k == "templating" and isinstance(v, dict):
+                for var in v.get("list") or []:
+                    if not isinstance(var, dict) or var.get("type") != _QUERY_VARIABLE:
+                        continue
+                    q = var.get("query")
+                    q = q.get("query") if isinstance(q, dict) else q
+                    if isinstance(q, str):
+                        yield q, _datasource_type(var.get("datasource"), inherited)
+            elif k in keys and isinstance(v, str):
                 yield v, ds_type
             else:
-                yield from _walk_json_strings(v, keys, ds_type)
+                child_ds = inherited if obj.get("type") == "row" else ds_type
+                yield from _walk_json_strings(v, keys, child_ds)
     elif isinstance(obj, list):
         for item in obj:
             yield from _walk_json_strings(item, keys, ds_type)
@@ -254,7 +276,7 @@ def collect_record_names(root: Path = PROJECT_ROOT) -> set[str]:
     return {name for _s, kind, name, _e in iter_rules(root) if kind == "record"}
 
 
-def collect_consumed_tokens(root: Path = PROJECT_ROOT) -> set[str]:
+def collect_consumed_tokens(root: Path = PROJECT_ROOT, skipped: "list[str] | None" = None) -> set[str]:
     """Union of consumer-side tokens over all four surfaces.
 
     A recording rule's own expr does not consume its own name
@@ -266,8 +288,12 @@ def collect_consumed_tokens(root: Path = PROJECT_ROOT) -> set[str]:
         if isinstance(names, _lib_consumer_read.InputRefused):
             raise names  # a rule file Prometheus loaded parses; never reached
         consumed |= set(names) - ({name} if kind == "record" else set())
-    queries = [(src, q) for src, q, ds in iter_dashboard_exprs(root)
-               if ds in (None, "prometheus")]
+    queries = []
+    for src, q, ds in iter_dashboard_exprs(root):
+        if ds in (None, "prometheus"):
+            queries.append((src, q))
+        elif skipped is not None:
+            skipped.append(f"{src}: a {ds} query, not Prometheus': {q!r}")
     promql = [(src, q, grafana_promql(q)) for src, q in queries]
     promql = [x for x in promql if x[2] is not None]
     for (src, query, _), names in zip(promql, _lib_consumer_read.promql_metric_names(
@@ -297,8 +323,9 @@ def run_check(
     """
     if record_names is None:
         record_names = collect_record_names()
+    skipped: list[str] = []
     if consumed is None:
-        consumed = collect_consumed_tokens()
+        consumed = collect_consumed_tokens(skipped=skipped)
     if known_orphans is None:
         known_orphans = KNOWN_ORPHANS
     if exempt is None:
@@ -307,7 +334,7 @@ def run_check(
     orphans = record_names - consumed
 
     errors: list[str] = []
-    infos: list[str] = []
+    infos: list[str] = [f"not read (another datasource) — {s}" for s in skipped]
 
     # NEW orphans (not grandfathered, not exempt) — fresh dead weight.
     for name in sorted(orphans - set(known_orphans) - set(exempt)):
@@ -367,6 +394,11 @@ def main(argv: list[str] | None = None) -> int:
         # #3206: a rule file Prometheus would not load (each named, with the
         # loader's reason), or no da-read — malformed input, not a violation.
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    except DashboardQueryRefused as exc:
+        # #4150: a dashboard query that does not parse reads unknown
+        # consumers — the input's problem, named, not a crash.
+        print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
         print(f"ERROR: orphan-recording check crashed: {exc}", file=sys.stderr)
