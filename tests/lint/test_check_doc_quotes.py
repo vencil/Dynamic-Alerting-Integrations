@@ -38,6 +38,7 @@ for p in (REPO / "scripts" / "tools", REPO / "scripts" / "tools" / "lint", REPO 
         sys.path.insert(0, str(p))
 import _lib_doc_yaml_inventory as inv  # noqa: E402
 import check_doc_quotes as guard  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 SRC = """\
 pack:
@@ -315,8 +316,8 @@ def test_src_must_be_a_regular_non_markdown_file_in_the_repository(tmp_path, src
 @pytest.mark.parametrize("link", ["l.yaml", "d/x.yaml"])
 def test_no_symlink_on_the_path(tmp_path, link):
     root = _root(tmp_path, {".build/gen.yaml": "a: 1\n", ".build/x.yaml": "a: 1\n"})
-    (root / "l.yaml").symlink_to(root / ".build" / "gen.yaml")
-    (root / "d").symlink_to(root / ".build")
+    symlink_or_skip(root / ".build" / "gen.yaml", root / "l.yaml")
+    symlink_or_skip(root / ".build", root / "d")
     assert any("is a symlink" in e for e in _quote(root, "a: 1", src=link).errors)
 
 
