@@ -72,7 +72,7 @@ tenants:
     mysql_connection_usage_percent: "75"
 ```
 
-`python3 scripts/tools/dx/migrate_conf_d.py --conf-d conf.d --dry-run` 的輸出（結束碼 0，不搬任何檔；第一行的路徑省略）：
+`python3 scripts/tools/dx/migrate_conf_d.py --conf-d conf.d --dry-run` 的輸出（需要 da-guard：`$DA_GUARD_BINARY` 或 `$PATH` 上的 `da-guard`，沒有就結束碼 2；結束碼 0，不搬任何檔；第一行的路徑省略）：
 
 ```text
    Migratable:        1
@@ -91,7 +91,7 @@ Run with --apply to move them. (1 files will be moved)
     legacy-db.yaml
 ```
 
-`--apply` 把整份計畫當成一批交給 da-guard 判定：任何一筆搬不成（目的地沒有讀者會讀、已存在、搬完會讓整棵樹變差），一個檔都不搬、結束碼 2。樹在 git 工作目錄裡時，每個來源都要是 git 追蹤的檔案，搬完後 index 的效果與 `git mv` 相同。
+`--apply` 把整份計畫當成一批交給 da-guard 判定：任何一筆搬不成（目的地沒有讀者會讀、已存在、搬完會讓整棵樹變差），一個檔都不搬、結束碼 2。樹在 git 工作目錄裡時，每個來源都要是 git 追蹤的檔案，搬完後 index 的效果與 `git mv` 相同。`--dry-run` 不改任何檔，可以放進 PR 檢查。
 
 ## 背景
 

@@ -8,7 +8,7 @@ lang: zh
 
 # 跨機 A/A 稽核資料集（2026-08）
 
-[ADR-032](../../../adr/032-paired-interleaved-bench-measurement.md) §證據 4 引用的每一個數字，都由這個目錄重現。**ADR 裡出現、這裡跑不出來的數字，就是沒有依據的數字。**
+[ADR-032](../../../adr/032-paired-interleaved-bench-measurement.md) §證據 3 引用的每一個數字，都由這個目錄重現。**ADR 裡出現、這裡跑不出來的數字，就是沒有依據的數字。**
 
 ## 一行重現
 
@@ -36,7 +36,7 @@ python3 docs/internal/audit-reports/bench-xmachine-2026-08/reproduce.py
 |---|---|
 | `shard_meta.csv` | 16 列：shard、CPU 型號、nproc、Go 版本、**binary SHA-256** |
 | `measurements.csv` | 768 列 = 16 shard × 6 輪 × 2 側 × 4 bench；`ns_per_op_median` 是該次呼叫 `count=5` 的中位數 |
-| `reproduce.py` | 重現 ADR §證據 4 的每個數字 |
+| `reproduce.py` | 重現 ADR §證據 3 的每個數字 |
 | `selftest.py` | negative validation；匯入 `reproduce.py` 的 `estimators()`，不重寫算式 |
 
 ## 這批資料為什麼能當證據

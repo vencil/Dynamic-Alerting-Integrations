@@ -67,7 +67,7 @@ tenants:
     mysql_connection_usage_percent: "75"
 ```
 
-The output of `python3 scripts/tools/dx/migrate_conf_d.py --conf-d conf.d --dry-run` (exit code 0, nothing moved; the first line, a path, omitted):
+The output of `python3 scripts/tools/dx/migrate_conf_d.py --conf-d conf.d --dry-run` (it needs da-guard, `$DA_GUARD_BINARY` or a `da-guard` on `$PATH`, and exits 2 without one; exit code 0, nothing moved; the first line, a path, omitted):
 
 ```text
    Migratable:        1
@@ -86,7 +86,7 @@ Run with --apply to move them. (1 files will be moved)
     legacy-db.yaml
 ```
 
-`--apply` hands the whole plan to da-guard as one batch: if any move does not hold (a destination no reader reads, one that already exists, a tree the move would make worse), no file is moved and the exit code is 2. When the tree is in a git working tree, every source must be a file git tracks, and after the move the index looks as it would after `git mv`.
+`--apply` hands the whole plan to da-guard as one batch: if any move does not hold (a destination no reader reads, one that already exists, a tree the move would make worse), no file is moved and the exit code is 2. When the tree is in a git working tree, every source must be a file git tracks, and after the move the index looks as it would after `git mv`. `--dry-run` changes no file, so it can go into a PR check.
 
 ## Context
 

@@ -257,7 +257,7 @@ Views belong to no organisation either, so the handlers also require that `"*"` 
 
 ### 3.4 Why `_metadata` path-inference is NOT in scope
 
-ADR-016 mentions "if a flat tenant lacks `_metadata.{domain,region,environment}`, the scanner can infer them from parent directories." That's a **migration tool** feature (`migrate_conf_d.py`), not runtime tenant-api. This hardening deliberately doesn't expand RBAC core behaviour.
+ADR-016 originally decided that a tenant lacking `_metadata.{domain,region,environment}` gets them from its directory. That was never implemented and ADR-016 lists it as a known limit; threshold-exporter and tenant-api read `_metadata` only. (`migrate_conf_d.py` goes the other way: it uses `_metadata` to decide which directory a file moves to.) This hardening deliberately doesn't expand RBAC core behaviour.
 
 ### 3.5 Behaviour with no RBAC rules (no open mode)
 
