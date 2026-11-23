@@ -48,8 +48,10 @@
 #       series but another tenant's do → west's kube-state-metrics has the
 #       allowlist → silent.
 #   V7a only clusters where a tenant that DECLARED a version threshold runs:
-#       west runs only another tenant and emits no pod labels → silent.
-#       (drop the `and on(tenant) …thresholds` → fires for west.)
+#       west runs only another tenant and emits no pod labels → silent. That
+#       tenant has thresholds of its own (container/cpu with no version, and a
+#       version one for another metric): neither makes it a declaring tenant.
+#       (drop the `and on(tenant) …thresholds`, or its `version=~".+"` → fires for west.)
 #   V7b … and where such a tenant does run without pod labels it fires, for
 #       that cluster only: west (declaring tenant) fires, north (another
 #       tenant only, no labels either) does not.
@@ -440,6 +442,12 @@ tests:
         values: '1x48'
       - series: 'kube_pod_info{namespace="db-t2", pod="app-1", da_cluster="west"}'
         values: '1x48'
+      # db-t2 HAS thresholds, none of them a version-aware container/cpu one:
+      # the narrowing is on "declared a VERSION threshold", not "has a threshold".
+      - series: 'user_threshold{tenant="db-t2", component="container", metric="cpu", severity="warning"}'
+        values: '80x48'
+      - series: 'user_threshold{tenant="db-t2", component="container", metric="memory", severity="warning", version="v1"}'
+        values: '80x48'
     promql_expr_test:
       - expr: count without(alertgroup) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
         eval_time: 11m

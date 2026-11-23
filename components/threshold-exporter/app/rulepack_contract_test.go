@@ -409,9 +409,10 @@ var fixtureScrapeTargetLabels = map[string]bool{
 	"da_cluster": true,
 }
 
-// withoutScrapeTargetLabels returns vs minus its exact pod/instance matchers,
-// for the fixture guard only. Any other matcher (and a non-exact pod/instance
-// one) is kept, so the closed-label check still rejects it.
+// withoutScrapeTargetLabels returns vs minus its exact matchers on the labels
+// of fixtureScrapeTargetLabels (pod / instance / da_cluster), for the fixture
+// guard only. Any other matcher (and a non-exact one on those labels) is
+// kept, so the closed-label check still rejects it.
 func withoutScrapeTargetLabels(vs *promqlparser.VectorSelector) *promqlparser.VectorSelector {
 	out := *vs
 	out.LabelMatchers = nil
