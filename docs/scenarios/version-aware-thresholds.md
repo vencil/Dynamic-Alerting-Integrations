@@ -55,7 +55,7 @@ cutover 不是你按一個鈕，而是 **emergent**：pod 升到 v2 後，它的
 > **silent-inert 風險（務必知道）**：版本感知靠 kube-state-metrics 暴露 pod 的版號 label。**若平台的 KSM 沒開對應 allowlist，你宣告的版本閾值會靜默失效**（所有 pod 被當成 `default`、你的 v2 嚴閾值不生效），而**你這端不會收到直接回饋**。所以：
 >
 > 1. 第一次採用版本閾值前，**先與平台團隊確認 KSM 已設定**（見下方平台段）。
-> 2. 平台側有 runtime 安全網 `VersionAwareThresholdInert` 告警會在誤配時通知平台團隊。
+> 2. 平台側有 runtime 安全網 `VersionAwareThresholdInert` 告警會在誤配時通知平台團隊。它只看容器 CPU 的版本閾值：只對 memory 設版本閾值時，誤配不會有這條告警。
 
 ---
 
@@ -65,7 +65,7 @@ cutover 不是你按一個鈕，而是 **emergent**：pod 升到 v2 後，它的
 >
 > **多個叢集時**：每個叢集有自己的 kube-state-metrics。在收了各叢集資料的 Prometheus 上，這條告警對「設了版本閾值的租戶有 Pod、卻完全沒有 Pod label 資料」的每個叢集各發一則，告警的 `da_cluster` 與 annotation 指出要修的是哪個叢集的 KSM；別的叢集設好了不會讓它不響，只跑其他租戶的叢集不會響（[ADR-006](../adr/006-tenant-mapping-topologies.md)「多叢集同租戶」）。
 >
-> **它不響的一種情況**：設了版本閾值的租戶全都沒有 Pod 在跑。即使別的租戶有 Pod、KSM 也沒暴露 pod label，告警也不響（以前會響）；那個租戶的第一個 Pod 出現後才會響。
+> **它不響的一種情況**：設了版本閾值的租戶全都沒有任何 Pod（沒有 `kube_pod_info` 序列；不分 phase，Pending 或已結束但還沒刪掉的 Pod 也算有）。即使別的租戶有 Pod、KSM 也沒暴露 pod label，告警也不響（以前會響）；那個租戶的第一個 Pod 出現後才會響。
 
 ### 根因
 
