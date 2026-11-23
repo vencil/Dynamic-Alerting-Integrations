@@ -44,11 +44,13 @@ FN 清單 + indeterminate 清單 + 每條 series 的告警數 → verdict（ADR-
   * 每條 series 的告警數（``alerts_per_series``；ADR-030 §7）= 每個 hit case（一條
     series）在窗內歸因到的告警筆數；報告分位數（p50/p90/max）、只揭露不 gate、無魔術
     閾值。大於 1 代表同一條 series 同時觸發多筆告警（例如 warning 與 critical 同時響），
-    收斂靠 inhibit。另列 ``fanout_series_injected``：各輸入報告注入時的 fan-out series
-    數（inject 報告的 ``fanout``）。不報「每個故障事件帶出幾筆告警」：那個數等於 N ×
-    每條 series 的告警數，N 是注入參數；而把 fan-out series 聚合成一筆的規則會拿掉
-    ``series`` label、歸因不回任何一條，記為 indeterminate，收斂在開火層看不到
-    （跨主機的 group_by 收斂屬通知層，不在本工具範圍）。
+    收斂靠 inhibit。另列 ``fanout_series_injected``：輸入報告注入時的 fan-out series
+    數（inject 報告的 ``fanout``，取 >= 1 的整數，去重後排序；不保留哪份報告是哪個值）。
+    不報「每個故障事件帶出幾筆告警」：那個數是該事件各條 series 告警數的加總，條數由注入
+    參數決定；要看的是每條 series 的數。把 fan-out series 聚合成一筆的規則會拿掉
+    ``series`` label、歸因不回任何一條：它照樣顯形（unattributed → indeterminate；名字
+    在 ``ignored_unattributed`` 被 drain 時則是 FN），只是不能按事件計數（跨主機的
+    group_by 收斂屬通知層，不在本工具範圍）。
   * no-silent-caps 守恆（ADR-030 §8 第 2 道）：``scored 分母 + indeterminate + carve-out 排除
     == 總 must_detect case 數`` 且 ``hits + FN == scored 分母``——違反 = 工具自身
     bug → exit 2；分母的每一次縮小都顯性計數。零分母分流：**carve-out 致零分母
@@ -618,8 +620,9 @@ def score(reports: list[tuple[str, dict]], tol: dict, *,
             f"[fire, last_fire] 連續應有樣本數，fire→resolve→fire 斷續震盪）——resolve "
             f"不計分故不改 verdict，但震盪告警品質存疑；詳 --json 的 flapping_suspected 旗標")
     per_series_values = [len(c["hits"]) for c in hits]
-    fanout_injected = sorted({r.get("fanout") for _, r in reports
-                              if isinstance(r.get("fanout"), int)})
+    fanout_injected = sorted({f for _, r in reports
+                              for f in [r.get("fanout")]
+                              if isinstance(f, int) and not isinstance(f, bool) and f >= 1})
     ep_pairs, ep_caught = _episode_class_tally(cases)
     effective = sorted(
         {(h["alertname"], h["tolerance_s"], h["tolerance_source"])

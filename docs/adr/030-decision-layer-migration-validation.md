@@ -153,7 +153,7 @@ updated_at: 2026-11-22
 
 遷移盤點時要標出「舊系統一個告警 → 新系統多維同時開火」的規則群：這是預期中的 fan-out，差異分類記為中性，也是日後維度收斂與關聯分析的優先對象。
 
-報告另外揭露每條 series 的告警數（分位數），以及注入時的 fan-out series 數 N。告警數大於 1，代表同一條 series 同時觸發多筆告警（例如 warning 與 critical 同時響），要靠 inhibit 收斂。報告不揭露「每個故障事件帶出幾筆告警」：在開火層，那個數就是 N 乘上每條 series 的告警數，N 是注入時給的參數，不帶新資訊；而把 fan-out series 聚合成一筆的規則會拿掉區分 series 的 label，告警歸不回任何一條 series，記為判不出來（indeterminate），所以「規則有沒有收斂」在開火層看不到。跨主機的 `group_by` 收斂屬於通知層，不在本驗證的範圍，要另外以 Alertmanager 的路由測試（`amtool config routes test`）驗。這兩個數只揭露、不當門檻。
+報告另外揭露每條 series 的告警數（分位數），以及注入時的 fan-out series 數 N。告警數大於 1，代表同一條 series 同時觸發多筆告警（例如 warning 與 critical 同時響），要靠 inhibit 收斂。報告不揭露「每個故障事件帶出幾筆告警」：在開火層，那個數是該事件各條 series 告警數的加總，條數是注入時給的參數，要看的是每條 series 的數。把 fan-out series 聚合成一筆的規則會拿掉區分 series 的 label，告警歸不回任何一條 series：它照樣會顯形，記為判不出來（indeterminate；告警名稱在容差檔的忽略清單裡時則是漏報），但無法按事件計數。跨主機的 `group_by` 收斂屬於通知層，不在本驗證的範圍，要另外以 Alertmanager 的路由測試（`amtool config routes test`）驗。這兩個數只揭露、不當門檻。
 
 代價：定位較保守，不主導整個切換決策；換來範圍清楚、分工不必重談。若遷移方主動要求由本平台主導切換的放行判定，才重談範圍。
 

@@ -352,8 +352,8 @@ def _fanout_alert(series):
 
 
 def test_alerts_per_series_counts_each_series_not_the_fault():
-    # 一個故障、3 條 fan-out series 各響 1 筆：每條 series 是 1，不加總成 3
-    # （加總只是把注入參數 N 乘回去，見 module docstring；#4176）。
+    # 守的是「不按事件加總」：一個故障、3 條 fan-out series 各響 1 筆，報 1 不是 3
+    # （#4176；舊的 per-case 算法本來就是 1，這則防的是日後改成按事件加總）。
     series = ("f01", "f02", "f03")
     recs = [_record(variant="fanout", series=x, alerts=[_fanout_alert(x)]) for x in series]
     metas = [_meta(variant="fanout", series=x) for x in series]
@@ -367,6 +367,30 @@ def test_alerts_per_series_counts_each_series_not_the_fault():
 def test_fanout_series_injected_is_empty_when_no_report_says():
     out = _score_one(_record(alerts=[_alert(fire=1000)]), _meta())
     assert out["summary"]["fanout_series_injected"] == []
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, "3", None, 2.0])
+def test_fanout_series_injected_ignores_values_inject_never_writes(value):
+    rep = _report([_record(alerts=[_alert(fire=1000)])], [_meta()])
+    rep["fanout"] = value
+    assert ws.score([("r.json", rep)], _TOLS)["summary"]["fanout_series_injected"] == []
+
+
+def test_per_series_line_is_printed_in_full_and_redacted(capsys):
+    rep = _report([_record(alerts=[_alert(fire=1000)])], [_meta()])
+    rep["fanout"] = 3
+    full = ws.score([("r.json", rep)], _TOLS)
+    want = "每條 series 的告警數: p50=1 p90=1 max=1；注入的 fan-out series 數: 3"
+    ws._print_human(full)
+    assert want + "（只揭露不 gate）" in capsys.readouterr().out
+    ws._print_redacted_human(ws.redact_report(full))
+    assert want in capsys.readouterr().out
+
+
+def test_per_series_line_without_fanout_says_so(capsys):
+    full = _score_one(_record(alerts=[_alert(fire=1000)]), _meta())
+    ws._print_human(full)
+    assert "注入的 fan-out series 數: —" in capsys.readouterr().out
 
 
 def test_redacted_report_keeps_the_per_series_counts():
