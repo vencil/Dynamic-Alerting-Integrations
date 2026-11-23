@@ -2907,8 +2907,15 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "k8s/03-monitoring/; it takes no path. A refused target is held by "
         "tests/dx/test_generate_rulepack_configmaps.py "
         "(test_a_refused_configmap_leaves_the_others_unwritten).",
+    # #3981, sixth batch.
+    "dx/generate_crd_schemas.py":
+        "rewrites the vendored schemas under docs/schemas/crd/ and their lock, "
+        "named by SOURCES.yaml; it takes no path. A refused target and a later "
+        "source that fails are held by tests/dx/test_generate_crd_schemas.py "
+        "(test_a_refused_target_is_rc2_one_line_and_nothing_is_written, "
+        "test_a_later_failing_source_leaves_the_earlier_one_unwritten).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 18
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 19
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
