@@ -330,9 +330,12 @@ def test_percentiles():
     assert ws._percentiles([]) == {"p50": None, "p90": None, "max": None}
     assert ws._percentiles([3]) == {"p50": 3, "p90": 3, "max": 3}
     assert ws._percentiles([1, 2, 3])["p50"] == 2
-    # nearest-rank（round(p*(n-1))）：偶數長度取下中位——揭露用途、非統計精算
+    # nearest-rank：第 ceil(p·n) 小的值——揭露用途、非統計精算
     out = ws._percentiles(list(range(1, 11)))
     assert out["p50"] == 5 and out["p90"] == 9 and out["max"] == 10
+    # 偶數長度一律取下中位：round() 的五成雙會讓 [1,1,2,3] 取到 2（#4176）
+    assert ws._percentiles([1, 1, 2, 3])["p50"] == 1
+    assert ws._percentiles([1, 2])["p50"] == 1
 
 
 def test_alerts_per_series_reported():
@@ -362,6 +365,16 @@ def test_alerts_per_series_counts_each_series_not_the_fault():
     out = ws.score([("r.json", rep)], _TOLS)
     assert out["summary"]["alerts_per_series"] == {"p50": 1, "p90": 1, "max": 1}
     assert out["summary"]["fanout_series_injected"] == [3]
+
+
+def test_a_missed_series_counts_as_zero_alerts():
+    # 一條命中（1 筆）、一條漏報：分位數裡漏報那條是 0，p50 不能被拉成 1（#4176）。
+    recs = [_record(variant="base", alerts=[_alert(fire=1000)]),
+            _record(variant="noise", alerts=[])]
+    rep = _report(recs, [_meta(variant="base"), _meta(variant="noise")])
+    out = ws.score([("r.json", rep)], _TOLS)
+    assert out["summary"]["false_negatives"] == 1
+    assert out["summary"]["alerts_per_series"] == {"p50": 0, "p90": 1, "max": 1}
 
 
 def test_fanout_series_injected_is_empty_when_no_report_says():

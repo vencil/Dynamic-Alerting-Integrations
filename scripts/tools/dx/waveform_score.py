@@ -41,9 +41,10 @@ FN 清單 + indeterminate 清單 + 每條 series 的告警數 → verdict（ADR-
   * carve-out（ADR-030 §1）：容差檔 ``carve_outs``（鍵 = case 的 ``fault_class``——
     分母排除必須在開火前可決定的 case 側身分）→ 從分母排除 + 獨立列出（dual-
     control 人工審軌）。
-  * 每條 series 的告警數（``alerts_per_series``；ADR-030 §7）= 每個 hit case（一條
-    series）在窗內歸因到的告警筆數；報告分位數（p50/p90/max）、只揭露不 gate、無魔術
-    閾值。大於 1 代表同一條 series 同時觸發多筆告警（例如 warning 與 critical 同時響），
+  * 每條 series 的告警數（``alerts_per_series``；ADR-030 §7）= 每個計分的 case（一條
+    series，hit 或 fn；fn 記 0）在容差內歸因到的告警筆數；報告分位數（p50/p90/max）、只揭露不 gate、無魔術
+    閾值。大於 1 代表同一條 series 在容差內觸發了多筆告警（例如 warning 與 critical 都響；
+    只數筆數，不檢查開火時間是否重疊），
     收斂靠 inhibit。另列 ``fanout_series_injected``：輸入報告注入時的 fan-out series
     數（inject 報告的 ``fanout``，取 >= 1 的整數，去重後排序；不保留哪份報告是哪個值）。
     不報「每個故障事件帶出幾筆告警」：那個數是該事件各條 series 告警數的加總，條數由注入
@@ -89,6 +90,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -460,7 +462,9 @@ def _percentiles(values: list[int]) -> dict:
     v = sorted(values)
 
     def rank(p: float):
-        return v[min(len(v) - 1, max(0, int(round(p * (len(v) - 1)))))]
+        # nearest-rank：第 ceil(p·n) 小的值（1 起算）。不用 round：Python 的 round
+        # 是四捨六入五成雙，偶數長度時中位數一下取上、一下取下（#4176）。
+        return v[min(len(v), max(1, math.ceil(p * len(v)))) - 1]
 
     return {"p50": rank(0.5), "p90": rank(0.9), "max": v[-1]}
 
@@ -619,7 +623,9 @@ def score(reports: list[tuple[str, dict]], tol: dict, *,
             f"{flapping_suspected} 筆 hit 疑似 flapping（firing_sample_count 明顯少於 "
             f"[fire, last_fire] 連續應有樣本數，fire→resolve→fire 斷續震盪）——resolve "
             f"不計分故不改 verdict，但震盪告警品質存疑；詳 --json 的 flapping_suspected 旗標")
-    per_series_values = [len(c["hits"]) for c in hits]
+    # 每條計分的 series 都算一個值：漏報（fn）的 series 在容差內歸因到 0 筆。
+    # indeterminate 與 carve-out 不計（歸因判不出來，另列）。
+    per_series_values = [len(c["hits"]) for c in cases if c["status"] in ("hit", "fn")]
     fanout_injected = sorted({f for _, r in reports
                               for f in [r.get("fanout")]
                               if isinstance(f, int) and not isinstance(f, bool) and f >= 1})
