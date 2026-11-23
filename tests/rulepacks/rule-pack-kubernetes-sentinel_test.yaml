@@ -21,6 +21,13 @@
 #                    the Gemini scale-to-zero edge, proven eliminated.
 #   E) NO-PODS     → silent: version threshold but nothing running (leg 2 false) — KSM is
 #                    fine, there is just nothing to label.
+#   F) OTHER-TENANT'S PODS ONLY → silent (#4097): the tenant that declared the version
+#                    threshold runs nothing; ANOTHER tenant has pods and KSM emits no pod
+#                    labels. Leg 2 reads the declaring tenants' pods only (so that a
+#                    cluster running none of them carries no standing alert). The
+#                    fleet-wide leg 2 fired here; the threshold is inert because nothing
+#                    runs under it, and the alert comes back with the tenant's first pod
+#                    (F2).
 rule_files:
   - ../../rule-packs/rule-pack-kubernetes.yaml
 
@@ -126,3 +133,31 @@ tests:
       - eval_time: 11m
         alertname: VersionAwareThresholdInert
         exp_alerts: []
+
+  # ── F) the declaring tenant has no pods, another tenant does, no pod labels → SILENT ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-b", component="container", metric="cpu", severity="warning", version="v1"}'
+        values: '80x48'
+      - series: 'kube_pod_info{namespace="db-a", pod="app-1"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: VersionAwareThresholdInert
+        exp_alerts: []
+
+  # ── F2) … and once the declaring tenant runs a pod (still no pod labels) → FIRE ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-b", component="container", metric="cpu", severity="warning", version="v1"}'
+        values: '80x48'
+      - series: 'kube_pod_info{namespace="db-a", pod="app-1"}'
+        values: '1x48'
+      - series: 'kube_pod_info{namespace="db-b", pod="app-1"}'
+        values: '1x48'
+    promql_expr_test:
+      - expr: count without(alertgroup) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
+        eval_time: 11m
+        exp_samples:
+          - labels: '{alertname="VersionAwareThresholdInert", alertstate="firing", maintenance="page", severity="warning"}'
+            value: 1
