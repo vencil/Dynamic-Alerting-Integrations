@@ -87,9 +87,10 @@ Not judged (say so rather than look covered)
     is the same hiding as the first point — the left side has no cluster to
     keep, and no shipped rule is written that way any more: the two that were
     (CustomRecipeDiskInert, VersionAwareThresholdInert) now start from a
-    per-cluster row (the tenant's running pods; the clusters that have tenant
-    pods) and are judged like any other rule. A rule that brings the shape
-    back is still not reported; those two are held by
+    per-cluster row (the tenant's running pods; the clusters where a tenant
+    that declared a version threshold has pods) and are judged like any other
+    rule. A rule that brings the shape back is still not reported; those two
+    are held by
     rule-pack-kubernetes-sentinels-per-cluster_test.yaml.
   * a fleet-wide existence test: `count(x) == 0` / `group(a) unless group(b)`
     names no identity label, so one cluster's series answering for every

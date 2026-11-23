@@ -926,16 +926,38 @@ groups:
   #
   # Three legs, legs 2 and 3 judged PER CLUSTER (#4097, ADR-006):
   #   1. version-specific thresholds ARE declared (someone wants version-aware), AND
-  #   2. tenant pods ARE running in the cluster (kube_pod_info) — guards the
-  #      scale-to-zero false positive: if everything is scaled to 0 there is
-  #      legitimately nothing to label, AND
+  #   2. pods of a tenant that DECLARED such a threshold are running in the
+  #      cluster (kube_pod_info) — guards the scale-to-zero false positive: if
+  #      everything is scaled to 0 there is legitimately nothing to label — AND
   #   3. that cluster's KSM emits ZERO `kube_pod_labels` series for tenant namespaces.
   # Each cluster has its own kube-state-metrics, so one with the allowlist set
   # says nothing about another: counted fleet-wide, the configured cluster's pod
   # labels kept the alert quiet for the one that has none. One alert per such
-  # cluster, carrying its `da_cluster`. Where no series carries the label (a
-  # single Prometheus) everything is one group with no `da_cluster` and the
-  # alert fires exactly when the fleet-wide form did.
+  # cluster, carrying its `da_cluster`.
+  #
+  # Leg 2 looks at the declaring tenants' pods only: a cluster that runs none of
+  # them has no version threshold to apply, and may leave the allowlist off on
+  # purpose — it must not carry a standing alert.
+  # ⚠ ONE CHANGE WHERE NO SERIES CARRIES `da_cluster` (a single Prometheus):
+  # everything is one group with no `da_cluster`, and the alert fires as the
+  # fleet-wide form did EXCEPT when every tenant that declared a version
+  # threshold has no pod at all while some other tenant has pods and there are
+  # no pod labels. That used to fire; it is silent now (sentinel_test case F).
+  # Such a threshold is inert for another reason — nothing runs under it — and
+  # the alert returns with the tenant's first pod. "Has no pod" is read off the
+  # recording: a tenant whose threshold `tenant` is not its db-* namespace has
+  # none, as it has no version-aware evaluation anywhere in this pack.
+  #
+  # PREMISE (ADR-006): the two recordings of one cluster come through the same
+  # Prometheus and so carry the same `da_cluster` — both, or neither. Where
+  # that is broken the alert FIRES for a cluster that is fine (the fleet-wide
+  # form was silent): pod info labelled and pod labels not, or one cluster seen
+  # both through a labelled federated path and an unlabelled local scrape with
+  # the pod labels on one of them only. Deliberately no "a row without
+  # da_cluster answers for every cluster" escape (the liveness rules have one):
+  # it would let the central Prometheus's own, unlabelled cluster hide a
+  # labelled cluster that has no pod labels — a case judged correctly today
+  # (sentinels-per-cluster_test X-cases pin both sides).
   #
   # Why leg 3 counts ALL pod labels (not just version labels): empirically verified on
   # kind — with the allowlist ON, KSM emits a BASE `kube_pod_labels{ns,pod,uid}` series
@@ -985,18 +1007,27 @@ groups:
       #     per cluster: ADR-006 contract 3) and meets every cluster's row
       #     through `on() group_right()`; with no threshold declared `count()`
       #     returns nothing and so does the product — no `or vector(0)` needed.
-      #   * the gate is fleet-wide on purpose: narrowing it to clusters where a
-      #     tenant that HAS such a threshold runs would join the threshold's
-      #     `tenant` to the pod recordings' `tenant` (a db-* namespace), which
-      #     the fleet-wide form never did — in a single Prometheus the alert
-      #     would stop firing wherever the two do not meet. So a cluster that
-      #     runs only OTHER tenants alerts too when it has no pod labels.
+      #   * `and on(tenant) max by(tenant)(…)` keeps the pod rows of the
+      #     tenants that declared a version threshold (leg 2 above). The
+      #     thresholds are aggregated on both sides — `max by(tenant, version,
+      #     severity)` for the count, `max by(tenant)` for the gate (presence
+      #     only; `max` is the HA-invariant aggregation, §4.3) — so
+      #     threshold-exporter replicas, or the same thresholds federated from
+      #     several edges with a `da_cluster` each, neither double the value nor
+      #     break the match.
+      #   * the pod-label side is NOT narrowed to those tenants: the allowlist
+      #     is a kube-state-metrics setting, so any tenant's pod-label series
+      #     shows the cluster has it.
       - alert: VersionAwareThresholdInert
         expr: |
           count(max by(tenant, version, severity) (user_threshold{component="container", metric="cpu", version=~".+"}))
           * on() group_right()
           (
-            group by(da_cluster) (tenant:kube_pod_info:count)
+            group by(da_cluster) (
+              tenant:kube_pod_info:count
+              and on(tenant)
+              max by(tenant) (user_threshold{component="container", metric="cpu", version=~".+"})
+            )
             unless on(da_cluster)
             group by(da_cluster) (tenant:kube_pod_labels:count)
           )
@@ -1175,7 +1206,18 @@ groups:
   # Where no series carries `da_cluster` there is one row per tenant and the
   # alert is the one it was. The pods row is re-aggregated `by(tenant,
   # da_cluster)` so the alert carries those two labels and nothing a federation
-  # hop added to the recording (job / instance of the scrape).
+  # hop added to the recording (job / instance of the scrape, a replica label).
+  #
+  # PREMISE (ADR-006): the two recordings of one cluster come through the same
+  # Prometheus and so carry the same `da_cluster` — both, or neither. Where
+  # that is broken the alert FIRES for a tenant that is fine (the tenant-wide
+  # form was silent): running pods labelled and volume-stats not, or one
+  # cluster seen both through a labelled federated path and an unlabelled local
+  # scrape with the volume-stats on one of them only. Deliberately no "a row
+  # without da_cluster answers for every cluster" escape (the liveness rules
+  # have one): it would let the volume-stats of the central Prometheus's own,
+  # unlabelled cluster hide a labelled cluster that has none — a case judged
+  # correctly today (sentinels-per-cluster_test X-cases pin both sides).
   #
   # PER-TENANT (unlike the platform-scoped VersionAwareThresholdInert above): it
   # routes to the DECLARING tenant so they can self-serve the dominant case (their

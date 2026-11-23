@@ -27,10 +27,10 @@
 #       only) → silent: no pods there, nothing to be inert.
 #   D5  volume-stats in neither cluster → one alert per cluster.
 #   D6  D1 with the tenant in maintenance → silent (maintenance is per tenant).
-#   D7  the recordings as two federation hops deliver them for the SAME
-#       cluster (job / instance added by the scrape) → one alert for west,
-#       carrying tenant + da_cluster and no job / instance.
-#       (drop the `max by(tenant, da_cluster)` → two alerts with instance.)
+#   D7  the recordings as an HA pair of west's Prometheus delivers them over
+#       federation (job / instance from the scrape, prometheus_replica from
+#       each replica) → one alert for west, carrying tenant + da_cluster only.
+#       (drop the `max by(tenant, da_cluster)` → two alerts with the extras.)
 #   D8  either-absent, per cluster: west has available_bytes but no
 #       capacity_bytes → fires for west.
 #
@@ -47,15 +47,44 @@
 #   V6  per CLUSTER, not per tenant: in west one tenant's pods have no label
 #       series but another tenant's do → west's kube-state-metrics has the
 #       allowlist → silent.
-#   V7  the gate is "some tenant declared a version threshold", not "a tenant
-#       that declared one runs here": west runs only another tenant and emits
-#       no pod labels → fires for west (ADR-006 states this).
+#   V7a only clusters where a tenant that DECLARED a version threshold runs:
+#       west runs only another tenant and emits no pod labels → silent.
+#       (drop the `and on(tenant) …thresholds` → fires for west.)
+#   V7b … and where such a tenant does run without pod labels it fires, for
+#       that cluster only: west (declaring tenant) fires, north (another
+#       tenant only, no labels either) does not.
+#   V7c the thresholds arrive federated from two edges, each row with that
+#       edge's da_cluster → still one alert (west), value 1: no many-to-one
+#       error, nothing doubled.
+#   V8  the recordings as HA pairs deliver them over federation (job /
+#       instance / prometheus_replica) → one alert per cluster, da_cluster only.
 #
-# Where only "which alerts fire, with which identity" is asked, the case reads
-# `count by(tenant, da_cluster, job, instance) (ALERTS{…})` rather than the
-# ALERTS series itself: vmalert adds an `alertgroup` label to ALERTS, and this
-# file is replayed on it (test_vm_alert_parity.py). job / instance are in the
-# grouping so that an alert carrying them does not pass as one that does not.
+# The premise both rules rest on, and what happens when it is broken (ADR-006
+# "known limits"): the two recordings of one cluster carry the same da_cluster.
+#   XD1 ⚠ LIMITATION: running pods labelled east, volume-stats with no
+#       da_cluster → fires for east although the tenant is fine (main: silent).
+#   XD2 ⚠ LIMITATION: one cluster reached twice — a federated path (east) and
+#       a local scrape (no label) — with volume-stats on the local one only
+#       → fires for east; the unlabelled row is satisfied.
+#   XD3 the supported mix, judged correctly on both sides: the central
+#       Prometheus's own cluster (no label) next to a federated west.
+#       Tenant db-t1: local healthy, west has no volume-stats → west fires.
+#       Tenant db-t2: local has no volume-stats, west healthy → fires with no
+#       da_cluster. Neither cluster's volume-stats answer for the other.
+#   XV1 ⚠ LIMITATION: pod info labelled east, pod labels with no da_cluster
+#       → fires for east although its kube-state-metrics is fine.
+#   XV2 ⚠ LIMITATION: one cluster reached twice, pod labels on the local path
+#       only → fires for east.
+#   XV3 the supported mix: local cluster has pod labels, west has none → west.
+#   XV4 … and the other way round: local has none, west has them → one alert
+#       with no da_cluster.
+#
+# Where only "which alerts fire, with which labels" is asked, the case reads
+# `count without(alertgroup) (ALERTS{…})`: the WHOLE label set of every firing
+# alert is in the expected sample, so a leaked label (instance,
+# prometheus_replica, version, …) is a different sample. `alertgroup` is the
+# one label taken out: vmalert adds it to ALERTS and promtool does not, and
+# this file is replayed on both (test_vm_alert_parity.py).
 #
 # tenant ids are placeholders; they are db-* because the pod recordings are
 # derived from namespaces matching db-.+ (the pack's namespace convention).
@@ -180,12 +209,12 @@ tests:
       - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="west"}'
         values: '1x80'
     promql_expr_test:
-      - expr: count by(tenant, da_cluster, job, instance) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
+      - expr: count without(alertgroup) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
         eval_time: 16m
         exp_samples:
-          - labels: '{da_cluster="east", tenant="db-t1"}'
+          - labels: '{alertname="CustomRecipeDiskInert", alertstate="firing", da_cluster="east", maintenance="mute", severity="warning", tenant="db-t1"}'
             value: 1
-          - labels: '{da_cluster="west", tenant="db-t1"}'
+          - labels: '{alertname="CustomRecipeDiskInert", alertstate="firing", da_cluster="west", maintenance="mute", severity="warning", tenant="db-t1"}'
             value: 1
 
   # ── D6) D1's tenant in maintenance → silent ──
@@ -208,7 +237,7 @@ tests:
         alertname: CustomRecipeDiskInert
         exp_alerts: []
 
-  # ── D7) the recordings as federated twice for the same cluster → one alert, no job / instance ──
+  # ── D7) the recordings from an HA pair over federation → one alert, tenant + da_cluster only ──
   # No raw kube-state-metrics / kubelet series here (the central plane has
   # none): the recorded series are the input, with the labels the federation
   # scrape adds.
@@ -216,19 +245,19 @@ tests:
     input_series:
       - series: 'user_threshold{tenant="db-t1", component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__disk", name="disk_will_fill", mode="page", severity="warning"}'
         values: '0.15x80'
-      - series: 'tenant:kube_pods_running:count{tenant="db-t1", da_cluster="west", job="federate", instance="prom-west-0:9090"}'
+      - series: 'tenant:kube_pods_running:count{tenant="db-t1", da_cluster="west", job="federate", instance="prom-west-0:9090", prometheus_replica="a"}'
         values: '3x80'
-      - series: 'tenant:kube_pods_running:count{tenant="db-t1", da_cluster="west", job="federate", instance="prom-west-1:9090"}'
+      - series: 'tenant:kube_pods_running:count{tenant="db-t1", da_cluster="west", job="federate", instance="prom-west-1:9090", prometheus_replica="b"}'
         values: '3x80'
       - series: 'tenant:kube_pods_running:count{tenant="db-t1", da_cluster="east", job="federate", instance="prom-east-0:9090"}'
         values: '3x80'
       - series: 'tenant:kubelet_volume_stats:count{tenant="db-t1", da_cluster="east", job="federate", instance="prom-east-0:9090"}'
         values: '1x80'
     promql_expr_test:
-      - expr: count by(tenant, da_cluster, job, instance) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
+      - expr: count without(alertgroup) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
         eval_time: 16m
         exp_samples:
-          - labels: '{da_cluster="west", tenant="db-t1"}'
+          - labels: '{alertname="CustomRecipeDiskInert", alertstate="firing", da_cluster="west", maintenance="mute", severity="warning", tenant="db-t1"}'
             value: 1
 
   # ── D8) either-absent per cluster: west has available_bytes, no capacity_bytes → west fires ──
@@ -247,10 +276,10 @@ tests:
       - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="west"}'
         values: '800x80'
     promql_expr_test:
-      - expr: count by(tenant, da_cluster, job, instance) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
+      - expr: count without(alertgroup) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
         eval_time: 16m
         exp_samples:
-          - labels: '{da_cluster="west", tenant="db-t1"}'
+          - labels: '{alertname="CustomRecipeDiskInert", alertstate="firing", da_cluster="west", maintenance="mute", severity="warning", tenant="db-t1"}'
             value: 1
 
   # ── V1) version threshold, pods in both clusters, pod labels only from east → west fires ──
@@ -348,12 +377,12 @@ tests:
       - series: 'kube_pod_info{namespace="db-t2", pod="app-1", da_cluster="west"}'
         values: '1x48'
     promql_expr_test:
-      - expr: count by(tenant, da_cluster, job, instance) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
+      - expr: count without(alertgroup) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
         eval_time: 11m
         exp_samples:
-          - labels: '{da_cluster="east"}'
+          - labels: '{alertname="VersionAwareThresholdInert", alertstate="firing", da_cluster="east", maintenance="page", severity="warning"}'
             value: 1
-          - labels: '{da_cluster="west"}'
+          - labels: '{alertname="VersionAwareThresholdInert", alertstate="firing", da_cluster="west", maintenance="page", severity="warning"}'
             value: 1
     alert_rule_test:
       - eval_time: 11m
@@ -400,7 +429,7 @@ tests:
         alertname: VersionAwareThresholdInert
         exp_alerts: []
 
-  # ── V7) the declaring tenant does not run in west; west emits no pod labels → west fires ──
+  # ── V7a) west runs only a tenant with no version threshold, and emits no pod labels → silent ──
   - interval: 15s
     input_series:
       - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning", version="v1"}'
@@ -412,8 +441,221 @@ tests:
       - series: 'kube_pod_info{namespace="db-t2", pod="app-1", da_cluster="west"}'
         values: '1x48'
     promql_expr_test:
-      - expr: count by(tenant, da_cluster, job, instance) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
+      - expr: count without(alertgroup) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
+        eval_time: 11m
+        exp_samples: []
+
+  # ── V7b) the declaring tenant runs in west without pod labels → west fires; north (other tenant only) does not ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning", version="v1"}'
+        values: '80x48'
+      - series: 'kube_pod_info{namespace="db-t1", pod="app-1", da_cluster="east"}'
+        values: '1x48'
+      - series: 'kube_pod_labels{namespace="db-t1", pod="app-1", label_app_kubernetes_io_version="v1", da_cluster="east"}'
+        values: '1x48'
+      - series: 'kube_pod_info{namespace="db-t1", pod="app-1", da_cluster="west"}'
+        values: '1x48'
+      - series: 'kube_pod_info{namespace="db-t2", pod="app-1", da_cluster="west"}'
+        values: '1x48'
+      - series: 'kube_pod_info{namespace="db-t2", pod="app-1", da_cluster="north"}'
+        values: '1x48'
+    promql_expr_test:
+      - expr: count without(alertgroup) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
         eval_time: 11m
         exp_samples:
-          - labels: '{da_cluster="west"}'
+          - labels: '{alertname="VersionAwareThresholdInert", alertstate="firing", da_cluster="west", maintenance="page", severity="warning"}'
+            value: 1
+
+  # ── V7c) thresholds federated from two edges (a da_cluster on each row) → one alert, value 1 ──
+  # The same threshold of db-t1, once from each edge's threshold-exporter.
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning", version="v1", da_cluster="east"}'
+        values: '80x48'
+      - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning", version="v1", da_cluster="west"}'
+        values: '80x48'
+      - series: 'kube_pod_info{namespace="db-t1", pod="app-1", da_cluster="east"}'
+        values: '1x48'
+      - series: 'kube_pod_info{namespace="db-t1", pod="app-1", da_cluster="west"}'
+        values: '1x48'
+      - series: 'kube_pod_labels{namespace="db-t1", pod="app-1", label_app_kubernetes_io_version="v1", da_cluster="east"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: VersionAwareThresholdInert
+        exp_alerts:
+          - exp_labels: {maintenance: page, severity: warning, da_cluster: west}
+            exp_annotations:
+              summary: "Version-aware thresholds declared but kube-state-metrics exposes no pod labels in cluster west — feature inert"
+              summary_zh: "已宣告版本專屬閾值，但叢集 west 的 kube-state-metrics 未暴露 pod 標籤 — 功能靜默失效"
+              description: "1 version-specific container CPU threshold(s) declared and tenant pods are running in cluster west, but that cluster's kube-state-metrics emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version] there."
+              description_zh: "已宣告 1 個版本專屬容器 CPU 閾值且叢集 west 有租戶 Pod 正在運行，但該叢集的 kube-state-metrics 完全未暴露 pod 標籤。請為該叢集的 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。"
+              platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/version-aware-thresholds.md#for-platform-operators-ksm-allowlist-remediation"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── V8) the recordings from HA pairs over federation → one alert per cluster, da_cluster only ──
+  # No raw kube-state-metrics series (the central plane has none).
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning", version="v1"}'
+        values: '80x48'
+      - series: 'tenant:kube_pod_info:count{tenant="db-t1", da_cluster="east", job="federate", instance="prom-east-0:9090", prometheus_replica="a"}'
+        values: '2x48'
+      - series: 'tenant:kube_pod_info:count{tenant="db-t1", da_cluster="east", job="federate", instance="prom-east-1:9090", prometheus_replica="b"}'
+        values: '2x48'
+      - series: 'tenant:kube_pod_info:count{tenant="db-t1", da_cluster="west", job="federate", instance="prom-west-0:9090", prometheus_replica="a"}'
+        values: '2x48'
+      - series: 'tenant:kube_pod_info:count{tenant="db-t1", da_cluster="west", job="federate", instance="prom-west-1:9090", prometheus_replica="b"}'
+        values: '2x48'
+    promql_expr_test:
+      - expr: count without(alertgroup) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
+        eval_time: 11m
+        exp_samples:
+          - labels: '{alertname="VersionAwareThresholdInert", alertstate="firing", da_cluster="east", maintenance="page", severity="warning"}'
+            value: 1
+          - labels: '{alertname="VersionAwareThresholdInert", alertstate="firing", da_cluster="west", maintenance="page", severity="warning"}'
+            value: 1
+
+  # ── XD1) ⚠ LIMITATION: pods labelled east, volume-stats unlabelled → fires for east (the tenant is fine) ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-t1", component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__disk", name="disk_will_fill", mode="page", severity="warning"}'
+        values: '0.15x80'
+      - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="east"}'
+        values: '1x80'
+      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+        values: '800x80'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+        values: '1000x80'
+    promql_expr_test:
+      - expr: count without(alertgroup) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
+        eval_time: 16m
+        exp_samples:
+          - labels: '{alertname="CustomRecipeDiskInert", alertstate="firing", da_cluster="east", maintenance="mute", severity="warning", tenant="db-t1"}'
+            value: 1
+
+  # ── XD2) ⚠ LIMITATION: one cluster by a labelled and an unlabelled path, volume-stats on the unlabelled one only → fires for east ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-t1", component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__disk", name="disk_will_fill", mode="page", severity="warning"}'
+        values: '0.15x80'
+      - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="east"}'
+        values: '1x80'
+      - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running"}'
+        values: '1x80'
+      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+        values: '800x80'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+        values: '1000x80'
+    promql_expr_test:
+      - expr: count without(alertgroup) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
+        eval_time: 16m
+        exp_samples:
+          - labels: '{alertname="CustomRecipeDiskInert", alertstate="firing", da_cluster="east", maintenance="mute", severity="warning", tenant="db-t1"}'
+            value: 1
+
+  # ── XD3) central's own unlabelled cluster + a federated west: each judged on its own ──
+  # db-t1: local healthy, west without volume-stats. db-t2: local without, west healthy.
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-t1", component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__disk", name="disk_will_fill", mode="page", severity="warning"}'
+        values: '0.15x80'
+      - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running"}'
+        values: '1x80'
+      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+        values: '800x80'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+        values: '1000x80'
+      - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="west"}'
+        values: '1x80'
+      - series: 'user_threshold{tenant="db-t2", component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__disk", name="disk_will_fill", mode="page", severity="warning"}'
+        values: '0.15x80'
+      - series: 'kube_pod_status_phase{namespace="db-t2", pod="app-1", phase="Running"}'
+        values: '1x80'
+      - series: 'kube_pod_status_phase{namespace="db-t2", pod="app-1", phase="Running", da_cluster="west"}'
+        values: '1x80'
+      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t2", persistentvolumeclaim="data", da_cluster="west"}'
+        values: '800x80'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t2", persistentvolumeclaim="data", da_cluster="west"}'
+        values: '1000x80'
+    promql_expr_test:
+      - expr: count without(alertgroup) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
+        eval_time: 16m
+        exp_samples:
+          - labels: '{alertname="CustomRecipeDiskInert", alertstate="firing", da_cluster="west", maintenance="mute", severity="warning", tenant="db-t1"}'
+            value: 1
+          - labels: '{alertname="CustomRecipeDiskInert", alertstate="firing", maintenance="mute", severity="warning", tenant="db-t2"}'
+            value: 1
+
+  # ── XV1) ⚠ LIMITATION: pod info labelled east, pod labels unlabelled → fires for east (its KSM is fine) ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning", version="v1"}'
+        values: '80x48'
+      - series: 'kube_pod_info{namespace="db-t1", pod="app-1", da_cluster="east"}'
+        values: '1x48'
+      - series: 'kube_pod_labels{namespace="db-t1", pod="app-1", label_app_kubernetes_io_version="v1"}'
+        values: '1x48'
+    promql_expr_test:
+      - expr: count without(alertgroup) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
+        eval_time: 11m
+        exp_samples:
+          - labels: '{alertname="VersionAwareThresholdInert", alertstate="firing", da_cluster="east", maintenance="page", severity="warning"}'
+            value: 1
+
+  # ── XV2) ⚠ LIMITATION: one cluster by a labelled and an unlabelled path, pod labels on the unlabelled one only → fires for east ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning", version="v1"}'
+        values: '80x48'
+      - series: 'kube_pod_info{namespace="db-t1", pod="app-1", da_cluster="east"}'
+        values: '1x48'
+      - series: 'kube_pod_info{namespace="db-t1", pod="app-1"}'
+        values: '1x48'
+      - series: 'kube_pod_labels{namespace="db-t1", pod="app-1", label_app_kubernetes_io_version="v1"}'
+        values: '1x48'
+    promql_expr_test:
+      - expr: count without(alertgroup) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
+        eval_time: 11m
+        exp_samples:
+          - labels: '{alertname="VersionAwareThresholdInert", alertstate="firing", da_cluster="east", maintenance="page", severity="warning"}'
+            value: 1
+
+  # ── XV3) central's own unlabelled cluster has pod labels, federated west has none → west only ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning", version="v1"}'
+        values: '80x48'
+      - series: 'kube_pod_info{namespace="db-t1", pod="app-1"}'
+        values: '1x48'
+      - series: 'kube_pod_labels{namespace="db-t1", pod="app-1", label_app_kubernetes_io_version="v1"}'
+        values: '1x48'
+      - series: 'kube_pod_info{namespace="db-t1", pod="app-1", da_cluster="west"}'
+        values: '1x48'
+    promql_expr_test:
+      - expr: count without(alertgroup) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
+        eval_time: 11m
+        exp_samples:
+          - labels: '{alertname="VersionAwareThresholdInert", alertstate="firing", da_cluster="west", maintenance="page", severity="warning"}'
+            value: 1
+
+  # ── XV4) central's own unlabelled cluster has no pod labels, federated west has them → one alert, no da_cluster ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning", version="v1"}'
+        values: '80x48'
+      - series: 'kube_pod_info{namespace="db-t1", pod="app-1"}'
+        values: '1x48'
+      - series: 'kube_pod_info{namespace="db-t1", pod="app-1", da_cluster="west"}'
+        values: '1x48'
+      - series: 'kube_pod_labels{namespace="db-t1", pod="app-1", label_app_kubernetes_io_version="v1", da_cluster="west"}'
+        values: '1x48'
+    promql_expr_test:
+      - expr: count without(alertgroup) (ALERTS{alertname="VersionAwareThresholdInert", alertstate="firing"})
+        eval_time: 11m
+        exp_samples:
+          - labels: '{alertname="VersionAwareThresholdInert", alertstate="firing", maintenance="page", severity="warning"}'
             value: 1
