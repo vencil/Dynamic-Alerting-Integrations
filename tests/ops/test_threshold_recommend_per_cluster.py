@@ -6,15 +6,19 @@
 
   - 每個叢集各算各的；候選值取自「有建議值」的叢集裡不讓任何叢集多響的那個
     （上界 key 取最高，下界 key 取最低的 floor）
-  - 候選值再拿到**每一個**叢集自己的樣本上重放：沒有建議值的叢集（閒置的 DR
-    備援、全是 NaN、在 margin 內）不會單憑「沒有建議值」擋住整個 key，只有
-    它的樣本會——上界 key 抬到蓋住那些樣本，下界 key 不給建議
+  - 候選值只拿到**引擎沒給建議值的叢集**的樣本上重放（閒置的 DR 備援、在
+    margin 內）：這種叢集不會單憑「沒有建議值」擋住整個 key，只有它的樣本
+    會——上界 key 抬到蓋住那些樣本，下界 key 不給建議。自己有建議值的叢集
+    不重放：取最保守的值已經涵蓋它，引擎自己的容忍度（P5 floor 底下本來就
+    有約 5% 的樣本）照舊
   - 有叢集要人工審查時整個 key 跟著它；信心等級取有樣本的叢集裡最弱的
-  - 同一個叢集兩列（沒去重的 HA pair）不相加：算沒量成（query_error）
+  - 同一個叢集、時間重疊的兩列（沒去重的 HA pair）不相加：算沒量成
+    （query_error）；時間不重疊的兩列是同一條序列的前後段，接起來照常量
   - 沒有任何路徑會把多列的樣本當成一條序列
   - 只有一列時結果與先前相同，JSON 沒有新欄位
 """
 
+import random
 import re
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -57,6 +61,14 @@ def _floor(floor, days=9, pts_per_day=200, hi=None):
     return [((base + timedelta(days=d, seconds=i * step)).timestamp(),
              floor if i < pts_per_day * 0.10 else hi)
             for d in range(days) for i in range(pts_per_day)]
+
+
+def _continuous(seed, low=0.95, width=0.005, n=1500, step=600.0):
+    """連續值的下界序列（審查者的 `held`／`two` 形狀）：1500 點、每 10 分鐘一點、
+    均勻落在 [low, low + width)。P5 floor 底下必然有約 5% 的樣本——離散的
+    `_floor` 沒有任何樣本低於 floor，測不到這件事。"""
+    rng = random.Random(seed)
+    return [(_START + i * step, low + rng.random() * width) for i in range(n)]
 
 
 def _nan(n=500):
@@ -172,9 +184,10 @@ class TestAClusterWithNoRecommendationOfItsOwn:
         assert (rec.recommended, rec.delta_pct) == (80, -20.0)
         assert (rec.conservative_cluster, rec.held_by_cluster) == ("prod", "dr")
         assert rec.reason == (
-            'tighten to 50 held at 80 (decrease 20.0%): da_cluster="dr" has values up to 80 '
-            'at or below current — no new firing '
-            '[da_cluster="prod" of 2 clusters: highest value]')
+            'tighten floored at 50 above P95 20 (decrease 50.0%): one round tightens at most '
+            '50% (half of current, rounded up, is 50) — held at 80 instead of 50: '
+            'da_cluster="dr" has values up to 80 at or below current — no new firing '
+            '(decrease 20.0%) [da_cluster="prod" of 2 clusters: highest value]')
         assert [c["recommended"] for c in rec.clusters] == [None, 50]   # 各叢集自己的不變
         assert report.recommended_changes == 1
 
@@ -191,9 +204,9 @@ class TestAClusterWithNoRecommendationOfItsOwn:
         report, rec = _analyze([_row("dr", drill), _row("prod", _flat([20] * 1000))],
                                {"connections": 100}, _UPPER_MAP)
         assert (rec.recommended, rec.delta_pct, rec.held_by_cluster) == (100, 0.0, "dr")
-        assert rec.reason.startswith(
-            'within 5% margin, no change needed: tighten to 50 held at 100; da_cluster="dr" '
-            'has values up to 100 at or below current — no new firing')
+        assert rec.reason.startswith('within 5% margin, no change needed — tighten floored at 50 ')
+        assert ('— held at 100 instead of 50: da_cluster="dr" has values up to 100 at or below '
+                'current — no new firing [') in rec.reason
         assert not tr._exportable(rec) and report.recommended_changes == 0
 
     def test_a_drill_above_current_does_not_hold_the_tighten(self):
@@ -214,6 +227,54 @@ class TestAClusterWithNoRecommendationOfItsOwn:
             "p50": None, "p95": None, "p99": None, "recommended": None, "delta_pct": None,
             "confidence": "LOW", "force_manual": False, "reason": "no data points found"}
         assert report.recommended_changes == 1
+
+    def test_the_candidates_own_reason_survives_being_held(self):
+        """候選值本來就因為「資料只涵蓋 1 個小時」被判 LOW（#2941）：被 dr 抬高之後
+        那句解釋還在，不會只剩一個沒有原因的 LOW。"""
+        short = [(_START + i, 45.0) for i in range(2000)]          # 2000 點擠在 34 分鐘內
+        drill = [(_START + i * 900, 0.0) for i in range(1999)] + [(_START + 1999 * 900, 70.0)]
+        _, rec = _analyze([_row("a", short), _row("dr", drill)], {"connections": 80}, _UPPER_MAP)
+        assert (rec.recommended, rec.confidence, rec.held_by_cluster) == (70, "LOW", "dr")
+        assert rec.reason == (
+            'recommended at P95 (decrease 43.8%); data in 1 distinct hour(s) < 24 → LOW — held '
+            'at 70 instead of 45: da_cluster="dr" has values up to 70 at or below current — no '
+            'new firing (decrease 12.5%) [da_cluster="a" of 2 clusters: highest value]')
+
+    def test_upper_bound_guarantees_hold_over_random_clusters(self):
+        """隨機的 2–4 個叢集（閒置、尖峰、忙、混合、空）跑 400 輪：最後的建議值
+        (1) 在引擎沒給建議值的叢集裡，不會比現值多響任何一步；(2) 不低於任何一個
+        叢集自己的建議值；(3) 被擋下的叢集一定是自己沒有建議值的。"""
+        rng = random.Random(7)
+        checked = held = 0
+        for _ in range(400):
+            current = rng.choice([80, "80", "80.5", "0.5", "100.0", 7, "12.345"])
+            cur = tr.written_threshold_number(current)
+            clusters = {}
+            for c in range(rng.randint(2, 4)):
+                mode, n = rng.choice(["low", "idle", "spike", "high", "mix", "nan"]), rng.choice([150, 400])
+                values = {"low": [rng.uniform(0.1, 0.6) * cur for _ in range(n)],
+                          "idle": [0.0] * n,
+                          "spike": [0.0] * (n - 1) + [rng.uniform(0.5, 1.2) * cur],
+                          "high": [rng.uniform(0.9, 2) * cur for _ in range(n)],
+                          "mix": [rng.uniform(0, 1.3) * cur for _ in range(n)],
+                          "nan": []}[mode]
+                clusters[f"c{c}"] = [(_START + i * 900, v) for i, v in enumerate(values)]
+            groups = {c: [{"metric": {CLUSTER_IDENTITY_LABEL: c}, "pairs": p, "span": (0, 1)}]
+                      for c, p in clusters.items()}
+            rec = tr._across_clusters("k", current, ">", groups, 100)
+            own = {e["da_cluster"]: e["recommended"] for e in rec.clusters}
+            if rec.held_by_cluster:
+                held += 1
+                assert own[rec.held_by_cluster] is None
+            if rec.recommended is None:
+                continue
+            checked += 1
+            assert rec.recommended >= max(v for v in own.values() if v is not None)
+            for c, pairs in clusters.items():
+                if own[c] is None:
+                    assert not tr._new_firing(">", [v for _, v in pairs], cur, rec.recommended), (
+                        current, c, rec.recommended, rec.reason)
+        assert checked > 200 and held >= 5      # 這個測試確實走到了被擋下的情形
 
     def test_no_cluster_with_a_value_leaves_the_key_without_one(self):
         report, rec = _analyze([_row("a", _nan()), _row("b", _IDLE)],
@@ -239,6 +300,42 @@ class TestLowerBound:
         assert rec.reason.endswith('[da_cluster="east" of 2 clusters: lowest floor]')
         assert "miss-rate" in rec.reason and report.recommended_changes == 1
 
+    def test_a_floor_is_not_blocked_by_its_own_clusters_tail(self):
+        """審查者的 `held`：east 的值連續落在 [0.95, 0.955)，dr 全是 NaN，現值 0.9。
+        east 單獨交給引擎是 0.9502（miss-rate −50.2%）——它自己有 55 個樣本低於
+        這個 floor（P5 的定義）。那不是「多響」的理由：引擎對單一叢集就是這樣
+        容忍的，多一個全 NaN 的叢集不該讓建議消失。"""
+        east = _continuous(3)
+        alone = tr.recommend_threshold_lower("hit_ratio", "0.9", east, 100)
+        assert (alone.recommended, alone.delta_pct) == (0.9502, -50.2)
+        assert sum(1 for _, v in east if 0.9 <= v < 0.9502) == 55
+        report, rec = _analyze([_row("dr", _nan(1500)), _row("east", east)],
+                               {"hit_ratio": "0.9"}, _LOWER_MAP)
+        assert (rec.recommended, rec.delta_pct, rec.confidence) == (0.9502, -50.2, "HIGH")
+        assert (rec.conservative_cluster, rec.held_by_cluster) == ("east", "")
+        assert rec.reason == (alone.reason + ' [da_cluster="east" of 2 clusters: lowest floor]')
+        assert report.recommended_changes == 1
+        assert len(tg.build_governance_plan([report], 20.0)) == 1
+
+    def test_two_continuous_clusters_take_the_lower_floor(self):
+        """審查者的 `two`：兩個叢集各自有建議值（east 0.9502、west 0.9552）→ 取
+        較低的 0.9502。east 有 55 個樣本、west 沒有樣本低於它；兩邊都不重放。"""
+        east, west = _continuous(3), _continuous(4, low=0.955)
+        own = [tr.recommend_threshold_lower("hit_ratio", "0.9", p, 100).recommended
+               for p in (east, west)]
+        assert own == [0.9502, 0.9552]
+        report, rec = _analyze([_row("east", east), _row("west", west)],
+                               {"hit_ratio": "0.9"}, _LOWER_MAP)
+        assert (rec.recommended, rec.delta_pct) == (0.9502, -50.2)
+        assert (rec.conservative_cluster, rec.held_by_cluster) == ("east", "")
+        assert [c["recommended"] for c in rec.clusters] == own
+        assert report.recommended_changes == 1
+
+    def test_two_identical_continuous_clusters_recommend_what_one_does(self):
+        _, rec = _analyze([_row("east", _continuous(3)), _row("west", _continuous(3))],
+                          {"hit_ratio": "0.9"}, _LOWER_MAP)
+        assert (rec.recommended, rec.held_by_cluster) == (0.9502, "")
+
     def test_a_cluster_that_would_relax_routes_the_key_to_manual_review(self):
         """west 的 P5 低於現值（放寬 floor 一律人工）：整個 key 人工審查。"""
         report, rec = _analyze([_row("east", _floor(0.97)), _row("west", _floor(0.93))],
@@ -259,7 +356,8 @@ class TestLowerBound:
         assert rec.recommended is None and rec.delta_pct is None and not rec.force_manual
         assert (rec.conservative_cluster, rec.held_by_cluster) == ("prod", "mixed")
         assert rec.reason == (
-            'no recommendation: a floor of 0.97 would start firing in da_cluster="mixed" '
+            'lower-bound P5 floor → tighten (raise floor); miss-rate -70.0% — not recommended: '
+            'a floor of 0.97 would start firing in da_cluster="mixed" '
             '(1800 of its samples are at or above current and below it) '
             '[da_cluster="prod" of 2 clusters: lowest floor]')
         assert [c["recommended"] for c in rec.clusters] == [None, pytest.approx(0.97, abs=1e-9)]
@@ -296,11 +394,38 @@ class TestRowsTheLabelDoesNotTellApart:
     _DEDUP = ("— not one series, and never added up; query a deduplicated endpoint "
               "(one series per cluster)")
 
+    def test_rows_one_after_the_other_are_one_series(self):
+        """審查者的 `churn`：同一個叢集的 label 在視窗內換過一次（`prometheus=old-pod`
+        → `new-pod`），兩列的時間不重疊——是同一條序列的前後段，不是 HA pair。
+        接起來量，結果與把同一批樣本當一列完全相同（main 的結果）。"""
+        old, new = _WEST[:400], _WEST[400:]
+        _, one = _analyze([_row("east", _WEST)], {"connections": 50}, _UPPER_MAP)
+        for rows in ([_row("east", old, prometheus="old-pod"), _row("east", new, prometheus="new-pod")],
+                     [_row("east", new, prometheus="new-pod"), _row("east", old, prometheus="old-pod")],
+                     [_row(None, old, prometheus="old-pod"), _row(None, new, prometheus="new-pod")]):
+            _, rec = _analyze(rows, {"connections": 50}, _UPPER_MAP)
+            assert type(rec) is tr.KeyRecommendation
+            assert asdict(rec) == asdict(one)
+
+    def test_rows_one_after_the_other_in_one_of_two_clusters(self):
+        _, rec = _analyze([_row("east", _EAST[:300], pod="a"), _row("east", _EAST[300:], pod="b"),
+                           _row("west", _WEST)], {"connections": 50}, _UPPER_MAP)
+        assert not rec.query_error and (rec.recommended, rec.conservative_cluster) == (90, "west")
+        assert [(c["da_cluster"], c["sample_count"]) for c in rec.clusters] == [
+            ("east", 1000), ("west", 1000)]
+
+    def test_rows_sharing_one_timestamp_overlap(self):
+        """前一列的最後一點與後一列的第一點同一個時間：那一刻有兩條序列。"""
+        _, rec = _analyze([_row("east", _WEST[:401], pod="a"), _row("east", _WEST[400:], pod="b")],
+                          {"connections": 50}, _UPPER_MAP)
+        assert 'da_cluster="east": 2 series at the same time that differ only in pod' in (
+            rec.query_error)
+
     @pytest.mark.parametrize("rows,why", [
         ([_row("west", _EAST, replica="a"), _row("west", _WEST, replica="b")],
-         'da_cluster="west": 2 series that differ only in replica '),
+         'da_cluster="west": 2 series at the same time that differ only in replica '),
         ([_row(None, _EAST, replica="a"), _row(None, _WEST, replica="b")],
-         "no da_cluster: 2 series that differ only in replica "),
+         "no da_cluster: 2 series at the same time that differ only in replica "),
     ], ids=["ha-pair", "unlabelled-ha-pair"])
     def test_two_rows_of_one_cluster_are_not_measured(self, rows, why):
         """沒去重的 HA pair：不相加、沒有百分位數；與查詢沒被回答同一類結果
@@ -324,7 +449,7 @@ class TestRowsTheLabelDoesNotTellApart:
         assert rec.query_error and rec.recommended is None
         dr, prod = rec.clusters
         assert (dr["measured"], dr["reason"]) == (
-            False, "not measured: 2 series that differ only in replica " + self._DEDUP)
+            False, "not measured: 2 series at the same time that differ only in replica " + self._DEDUP)
         assert (prod["measured"], prod["recommended"], prod["sample_count"]) == (True, 90, 1000)
         assert report.recommended_changes == 0
 
@@ -332,7 +457,7 @@ class TestRowsTheLabelDoesNotTellApart:
         """dr 一列全是 NaN、一列有值：仍是同一個叢集的兩列，不能只看有值的那列。"""
         _, rec = _analyze([_row("dr", _nan(), replica="a"), _row("dr", _IDLE, replica="b"),
                            _row("prod", _WEST)], {"connections": 50}, _UPPER_MAP)
-        assert 'da_cluster="dr": 2 series that differ only in replica' in rec.query_error
+        assert 'da_cluster="dr": 2 series at the same time that differ only in replica' in rec.query_error
 
     def test_a_histogram_only_row_is_no_series(self):
         """沒有 float 樣本的列（native histogram）不算一條序列，照舊略過。"""
@@ -346,18 +471,24 @@ class TestNoPathPoolsRows:
     """沒有「把每一列的樣本當成一條」的後備：查詢函式只回逐列的結果，
     一個扁平的 (ts, value) list 不會被當成一條序列讀進去。"""
 
-    def test_there_is_no_function_returning_every_rows_samples(self):
-        assert not hasattr(tr, "query_prometheus_range_ts")
-        assert not hasattr(tr, "SeriesSamples")
-
     def test_rows_come_back_one_by_one_with_their_labels(self):
         rows = [_row("east", [(1.0, 1), (2.0, 2)]), _row("west", [(1.0, 3)]),
                 _row("idle", [(1.0, "NaN")]),
                 {"metric": {"tenant": "t-x"}, "histograms": [[1.0, {"count": "3"}]]}]
         with patch("threshold_recommend.prometheus_instant", return_value=rows):
             got = tr.query_prometheus_range_rows("http://prom:9090", "q")
-        assert [(m.get(CLUSTER_IDENTITY_LABEL), pairs) for m, pairs in got] == [
-            ("east", [(1.0, 1.0), (2.0, 2.0)]), ("west", [(1.0, 3.0)]), ("idle", [])]
+        assert [(m.get(CLUSTER_IDENTITY_LABEL), pairs, span) for m, pairs, span in got] == [
+            ("east", [(1.0, 1.0), (2.0, 2.0)], (1.0, 2.0)), ("west", [(1.0, 3.0)], (1.0, 1.0)),
+            ("idle", [], (1.0, 1.0))]
+
+    def test_two_rows_given_without_a_span_are_never_one_series_by_accident(self):
+        """double 給的 `(labels, samples)` 沒有時間範圍時用樣本自己的：同時間的
+        兩列仍是沒量成，不會被接成一條。"""
+        answer = [({"replica": "a"}, list(_EAST)), ({"replica": "b"}, list(_WEST))]
+        with patch("threshold_recommend.query_prometheus_range_rows", return_value=answer):
+            rec = tr.analyze_tenant("t-x", {"connections": 50}, prometheus_url="http://p:9090",
+                                    observed_map=_UPPER_MAP).keys[0]
+        assert rec.query_error and rec.recommended is None and rec.p95 is None
 
     @pytest.mark.parametrize("answer", [
         list(_EAST) + list(_WEST),                      # 兩個叢集的樣本倒在一起
@@ -476,7 +607,8 @@ class TestGovernanceSeesAHeldKey:
         return _analyze([_row("mixed", _floor(0.905)), _row("prod", _floor(0.97))],
                         {"hit_ratio": "0.90"}, _LOWER_MAP)[0]
 
-    _WHY = ('no recommendation: a floor of 0.97 would start firing in da_cluster="mixed" '
+    _WHY = ('lower-bound P5 floor → tighten (raise floor); miss-rate -70.0% — not recommended: '
+            'a floor of 0.97 would start firing in da_cluster="mixed" '
             '(1800 of its samples are at or above current and below it) '
             '[da_cluster="prod" of 2 clusters: lowest floor]')
 
@@ -504,7 +636,8 @@ class TestGovernanceSeesAHeldKey:
                               _row("prod", _flat([20] * 1000))], {"connections": 100}, _UPPER_MAP)
         (plan,) = tg.build_governance_plan([report], 20.0)
         assert (plan.changes[0].recommended, plan.changes[0].delta_pct) == (80, -20.0)
-        assert 'da_cluster="dr" has values up to 80' in plan.changes[0].reason
+        assert 'held at 80 instead of 50: da_cluster="dr" has values up to 80' in (
+            plan.changes[0].reason)
         assert tg.collect_cluster_held([report], 20.0) == []
         # 門檻調到 30%：−20% 進不了計畫 → 列為被擋下，不消失。
         assert tg.build_governance_plan([report], 30.0) == []

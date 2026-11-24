@@ -381,27 +381,46 @@ _DEDUP = ("— not one series, and never added up; query a deduplicated endpoint
           "(one series per cluster)")
 
 
-def _m(**labels):
-    return {"metric": labels, "values": [[1, "1"]]}
+def _m(first=0, last=9, **labels):
+    """A row holding samples from `first` to `last`."""
+    return {"metric": labels, "span": (first, last)}
+
+
+def _span(row):
+    return row.get("span")
 
 
 @pytest.mark.parametrize("groups, expected", [
     ({}, {}),
     ({"": [_m()], "east": [_m(da_cluster="east")], "west": [_m(da_cluster="west")]}, {}),
-    # an HA pair read without deduplication: the rows differ in `replica`
+    # an HA pair read without deduplication: at the same time, differing in `replica`
     ({"east": [_m(da_cluster="east")],
       "west": [_m(da_cluster="west", replica="a"), _m(da_cluster="west", replica="b")]},
-     {"west": "2 series that differ only in replica " + _DEDUP}),
+     {"west": "2 series at the same time that differ only in replica " + _DEDUP}),
     # a label one row has and the other does not is a difference too
     ({"": [_m(pod="x", replica="a"), _m(replica="b"), _m(replica="b")]},
-     {"": "3 series that differ only in pod, replica " + _DEDUP}),
+     {"": "3 series at the same time that differ only in pod, replica " + _DEDUP}),
     ({"west": [_m(da_cluster="west"), _m(da_cluster="west")]},
-     {"west": "2 series with identical labels " + _DEDUP}),
-    ({"west": [{"values": []}, {"metric": None}]},          # no `metric` at all
-     {"west": "2 series with identical labels " + _DEDUP}),
+     {"west": "2 series at the same time with identical labels " + _DEDUP}),
+    # one after the other (a label changed inside the window): one series, in any order
+    ({"west": [_m(0, 9, pod="old"), _m(10, 19, pod="new")]}, {}),
+    ({"west": [_m(20, 29, pod="c"), _m(0, 9, pod="a"), _m(10, 19, pod="b")]}, {}),
+    # sharing one timestamp, or one inside another, is at the same time
+    ({"west": [_m(0, 10, pod="old"), _m(10, 19, pod="new")]},
+     {"west": "2 series at the same time that differ only in pod " + _DEDUP}),
+    ({"west": [_m(0, 9, pod="a"), _m(10, 19, pod="b"), _m(5, 6, pod="c")]},
+     {"west": "3 series at the same time that differ only in pod " + _DEDUP}),
+    # a row with no sample has no time range to be after another's
+    ({"west": [{"metric": {}}, {"metric": None, "span": (0, 9)}]},
+     {"west": "2 series at the same time with identical labels " + _DEDUP}),
 ])
 def test_repeated_rows(groups, expected):
-    assert lib.repeated_rows(groups) == expected
+    assert lib.repeated_rows(groups, _span) == expected
+
+
+def test_in_time_order():
+    a, b, c, empty = _m(0, 9), _m(10, 19), _m(20, 29), {"metric": {}}
+    assert lib.in_time_order([c, a, empty, b], _span) == [empty, a, b, c]
 
 
 @pytest.mark.parametrize("text, expected", [

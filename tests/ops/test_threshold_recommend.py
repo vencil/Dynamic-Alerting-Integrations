@@ -733,7 +733,7 @@ class TestCLI:
                 _as_run(tr.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
         out, err = capsys.readouterr()
-        assert "ERROR: Prometheus query failed for 1 key(s)" in err, err
+        assert "ERROR: 1 key(s) not measured (the query failed, or rows the da_cluster label does not tell apart)" in err, err
         if fmt == ["--json"]:
             doc = json.loads(out)
             assert (doc["status"], doc["reason"]) == ("partial", "prometheus_query_error")
@@ -884,8 +884,9 @@ class TestQueryPrometheusRangeTs:
             "data": {"resultType": "matrix", "result": [{
                 "metric": {}, "values": [[1000, "0.95"], [1060, "0.96"]]}]},
         }, None)
-        (_labels, pairs), = tr.query_prometheus_range_rows("http://prom:9090", "q")
+        (_labels, pairs, span), = tr.query_prometheus_range_rows("http://prom:9090", "q")
         assert pairs == [(1000.0, 0.95), (1060.0, 0.96)]
+        assert span == (1000.0, 1060.0)
 
     @patch("_lib_prometheus.http_get_json")
     def test_error_raises(self, mock_get):
@@ -903,8 +904,9 @@ class TestQueryPrometheusRangeTs:
                 "metric": {}, "values": [
                     [1000, "0.95"], [1060, "NaN"], [1120, "0.96"], [1180, "Inf"]]}]},
         }, None)
-        (_labels, pairs), = tr.query_prometheus_range_rows("http://prom:9090", "q")
+        (_labels, pairs, span), = tr.query_prometheus_range_rows("http://prom:9090", "q")
         assert pairs == [(1000.0, 0.95), (1120.0, 0.96)]   # NaN + Inf dropped
+        assert span == (1000.0, 1180.0)   # the row's own time range, non-finite samples too
 
 
 class TestRecommendThresholdLowerGuard0:

@@ -66,7 +66,7 @@ from _lib_python import YamlFileError  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
 from _lib_cluster_identity import (  # noqa: E402  (#1200: one replay per cluster)
-    cluster_text, markdown_text, repeated_rows, rows_by_cluster)
+    cluster_text, in_time_order, markdown_text, repeated_rows, rows_by_cluster)
 import _lib_parse_tree  # noqa: E402  (#3206 the shared conf.d refusal)
 import _lib_input  # noqa: E402  (#3902 the two trees are declared inputs)
 import _lib_parse_cache  # noqa: E402  (#3902 their one judgement)
@@ -1143,6 +1143,26 @@ def _worst_cluster(replays):
         abs(cr[1]["new_breach_count"] - cr[1]["old_breach_count"]) / cr[1]["data_points"]))
 
 
+def _row_span(row):
+    """`(first, last)` sample timestamps of a range-query row, None without
+    a sample — what tells rows of one cluster in succession from rows at the
+    same time (`repeated_rows`)."""
+    stamps = [float(ts) for ts, _ in row.get("values", [])]
+    return (min(stamps), max(stamps)) if stamps else None
+
+
+def _joined_values(rows):
+    """The samples of one cluster's rows as ONE series: rows whose time
+    ranges do not overlap, in time order (a label changed inside the window
+    — the series goes on under the new label)."""
+    return [v for row in in_time_order(rows, _row_span) for v in row.get("values", [])]
+
+
+#: What a not-measured outcome says wherever it is counted (#3059, #1200):
+#: true of both causes.
+NOT_MEASURED_CAUSES = "the query failed, or rows the da_cluster label does not tell apart"
+
+
 def _per_cluster(change, groups, direction, query):
     """#1200: the result of a change whose series answered more than one row
     (`groups`: `rows_by_cluster`). Every cluster is replayed on its own and
@@ -1151,18 +1171,18 @@ def _per_cluster(change, groups, direction, query):
     message names that cluster. With no cluster analyzed the change is
     `no_data`, as the first cluster reads.
 
-    A cluster that answered more than one row (`repeated_rows`: an HA pair
-    read without deduplication, say) was queried and could not be measured:
+    A cluster that answered rows overlapping in time (`repeated_rows`: an HA
+    pair read without deduplication, say) was queried and could not be measured:
     its entry is `query_error`, and so is the change — the status of a
     change not measured, which ends the run at exit 2 (#3059). "Could not
     measure" is never a pass, and the clusters that were measured are still
     listed, each with its own replay."""
-    repeated = repeated_rows(groups)
+    repeated = repeated_rows(groups, _row_span)
     replays = [
         (cluster, {"status": "query_error", "risk": "UNKNOWN", "query": query,
                    "message": safe_label(repeated[cluster])}
          if cluster in repeated
-         else _replay(rows[0].get("values", []), change, direction, query))
+         else _replay(_joined_values(rows), change, direction, query))
         for cluster, rows in groups.items()]
     result = {
         "tenant": change["tenant"],
@@ -1252,9 +1272,12 @@ def backtest_change(prom_url, change, lookback_seconds):
     # no `values`) is no series of the alert's: skipped, as it always was.
     rows = [row for row in rows if row.get("values")]
     groups = rows_by_cluster(rows)
-    if len(rows) > 1:
+    # Rows of ONE cluster that do not overlap in time are one series in
+    # succession (a label changed inside the window): joined, and the
+    # answer is the one-series answer it always was.
+    if len(groups) > 1 or repeated_rows(groups, _row_span):
         return _per_cluster(change, groups, direction, query)
-    values = rows[0].get("values", []) if rows else []
+    values = _joined_values(rows)
     return {
         "tenant": tenant,
         "metric": metric,
@@ -1319,6 +1342,15 @@ def generate_report(results, lookback):
     if query_error:
         report["status"] = "partial"
         report["reason"] = "query_error"
+    # #1200: a change not measured because ONE of its clusters could not be
+    # is in no risk count above, yet its other clusters were replayed — and
+    # "0 HIGH" beside a cluster that is HIGH would be false. Their risks are
+    # counted apart, only when there are any.
+    partly = [e["risk"] for r in query_error for e in r.get("clusters", ())
+              if e["status"] == "analyzed"]
+    if partly:
+        report["partly_measured_risk"] = {
+            risk: partly.count(risk) for risk in ("HIGH", "MEDIUM", "LOW")}
     return report
 
 
@@ -1373,8 +1405,11 @@ def print_text_report(report):
     if report["no_data"] > 0:
         print(f"  No data: {report['no_data']} (no usable data in Prometheus)")
     if report["query_error"] > 0:
-        print(f"  Query error: {report['query_error']} (the Prometheus query failed; "
-              "not measured)")
+        print(f"  Query error: {report['query_error']} (not measured: {NOT_MEASURED_CAUSES})")
+    if report.get("partly_measured_risk"):
+        pm = report["partly_measured_risk"]
+        print(f"  Clusters measured in those: {pm['HIGH']} HIGH, {pm['MEDIUM']} MEDIUM, "
+              f"{pm['LOW']} LOW (not in the Risk line above)")
     skipped = _not_backtested_counts(report["changes"])
     if skipped:
         print(f"  Not backtested: {skipped}")
@@ -1441,7 +1476,11 @@ def generate_markdown(report):
 
     if report["query_error"] > 0:
         lines.append(f"\n> **{report['query_error']} change(s) not measured: "
-                     "the Prometheus query failed.**")
+                     f"{NOT_MEASURED_CAUSES}.**")
+    if report.get("partly_measured_risk"):
+        pm = report["partly_measured_risk"]
+        lines.append(f"\n> **Clusters measured in those: {pm['HIGH']} HIGH, {pm['MEDIUM']} "
+                     f"MEDIUM, {pm['LOW']} LOW** (not counted as analyzed).")
 
     rs = report["risk_summary"]
     if rs["HIGH"] > 0:
@@ -1912,14 +1951,27 @@ def _backtest(args):
     # the run cannot say "only these are high risk". Prometheus answered, so
     # this is not `--skip-if-unavailable`'s case either.
     if report["query_error"] > 0:
-        print(f"ERROR: {report['query_error']} change(s) not measured: the Prometheus "
-              "query failed (see each change's message)", file=sys.stderr)
+        print(f"ERROR: {report['query_error']} change(s) not measured: {NOT_MEASURED_CAUSES} "
+              "(see each change's message)", file=sys.stderr)
         if args.json:
             # #3617: a partial answer — the changes measured, and the ones
-            # Prometheus did not answer named (#3216: run() writes it).
-            return Report(report, EXIT_CALLER_ERROR, unanswered=[
-                f"{c['tenant']} {c['metric']}" for c in report["changes"]
-                if c["status"] == "query_error"], of=len(report["changes"]))
+            # not measured named (#3216: run() writes it). #1200: a change
+            # is as many parts as it has clusters, so one whose other
+            # clusters were replayed is an answer in part and is printed;
+            # stdout stays empty only when nothing at all was measured.
+            parts, unanswered = 0, []
+            for c in report["changes"]:
+                name = f"{c['tenant']} {c['metric']}"
+                clusters = c.get("clusters")
+                if not clusters:
+                    parts += 1
+                    if c["status"] == "query_error":
+                        unanswered.append(name)
+                    continue
+                parts += len(clusters)
+                unanswered += [f"{name} ({cluster_text(e['da_cluster'])})"
+                               for e in clusters if e["status"] == "query_error"]
+            return Report(report, EXIT_CALLER_ERROR, unanswered=unanswered, of=parts)
         sys.exit(EXIT_CALLER_ERROR)
     if args.json:
         return Report(report, EXIT_VIOLATION if high_count > 0 else EXIT_OK)

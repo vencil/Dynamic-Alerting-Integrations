@@ -615,8 +615,9 @@ class TestNotMeasured:
         assert exc.value.code == tg.EXIT_CALLER_ERROR
         captured = capsys.readouterr()
         err = captured.err.strip().splitlines()
-        assert err[-1].startswith("ERROR: Prometheus query failed for 2 threshold(s); "
-                                  "the report is partial (first: db-a/mysql_connections:")
+        assert err[-1].startswith(
+            "ERROR: 2 threshold(s) not measured (the query failed, or rows the da_cluster "
+            "label does not tell apart); the report is partial (first: db-a/mysql_connections:")
         if json_output:
             assert json.loads(captured.out)["status"] == "partial"
 

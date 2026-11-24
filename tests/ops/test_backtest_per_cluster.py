@@ -8,8 +8,9 @@ rule pack 把 `tenant:*` 逐 (tenant, da_cluster) 記錄，告警逐叢集觸發
   - 票上的三個數字例子（確切數字）
   - 兩個叢集同時超標不會加倍
   - 有 label 與沒 label 的列各自成組
-  - 同一個叢集兩列（或多列都沒 label，例如沒去重的 HA pair）不相加，算
-    「查了但量不到」：query_error、結束碼 2，量得到的叢集照列
+  - 同一個叢集、時間重疊的兩列（或都沒 label，例如沒去重的 HA pair）不相加，
+    算「查了但量不到」：query_error、結束碼 2，量得到的叢集照列（--json 也印）
+  - 同一個叢集、時間不重疊的兩列是同一條序列的前後段：接起來，結果與一列相同
   - 只有一列時，結果與先前逐欄相同
 """
 
@@ -28,12 +29,13 @@ _QUERY = _SERIES + '{tenant="t-x"}'
 _UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 
 
-def _row(cluster, vals, **extra):
-    """一個叢集的一列；`cluster=None` 是沒有 da_cluster label 的列。"""
+def _row(cluster, vals, t0=0, **extra):
+    """一個叢集的一列，樣本時間從 `t0` 起每步 1；`cluster=None` 是沒有
+    da_cluster label 的列。"""
     metric = {"__name__": _SERIES, "tenant": "t-x", **extra}
     if cluster is not None:
         metric[CLUSTER_IDENTITY_LABEL] = cluster
-    return {"metric": metric, "values": [(i, str(v)) for i, v in enumerate(vals)]}
+    return {"metric": metric, "values": [(t0 + i, str(v)) for i, v in enumerate(vals)]}
 
 
 def _backtest(monkeypatch, rows, old, new, metric=_KEY):
@@ -162,13 +164,13 @@ class TestRowsTheLabelDoesNotTellApart:
 
     @pytest.mark.parametrize("rows,message", [
         ([_row("west", _WEST_15, replica="a"), _row("west", _WEST_15, replica="b")],
-         'Not measured: da_cluster="west": 2 series that differ only in replica '),
+         'Not measured: da_cluster="west": 2 series at the same time that differ only in replica '),
         ([_row(None, _WEST_15, replica="a"), _row(None, _WEST_15, replica="b")],
-         "Not measured: no da_cluster: 2 series that differ only in replica "),
+         "Not measured: no da_cluster: 2 series at the same time that differ only in replica "),
         ([_row("", _EAST_QUIET, pod="x"), _row(None, _WEST_15, replica="b")],   # 空值＝沒有 label
-         "Not measured: no da_cluster: 2 series that differ only in da_cluster, pod, replica "),
+         "Not measured: no da_cluster: 2 series at the same time that differ only in da_cluster, pod, replica "),
         ([_row("west", _WEST_15), _row("west", _WEST_15)],
-         'Not measured: da_cluster="west": 2 series with identical labels '),
+         'Not measured: da_cluster="west": 2 series at the same time with identical labels '),
     ], ids=["ha-pair", "unlabelled-ha-pair", "empty-label", "identical"])
     def test_two_rows_of_one_cluster_are_not_measured(self, monkeypatch, rows, message):
         """沒去重的 HA pair 不是多叢集：先前串起來算（這裡是 HIGH、結束碼 1）；
@@ -184,13 +186,43 @@ class TestRowsTheLabelDoesNotTellApart:
         r = _backtest(monkeypatch, [_row("west", _WEST_15), _row("east", _EAST_QUIET, replica="a"),
                                     _row("east", _EAST_QUIET, replica="b")], None, "80")
         assert (r["status"], r["risk"]) == ("query_error", "UNKNOWN")
-        assert r["message"] == ('Not measured: da_cluster="east": 2 series that differ only in '
+        assert r["message"] == ('Not measured: da_cluster="east": 2 series at the same time that differ only in '
                                 "replica " + self._DEDUP)
         east, west = r["clusters"]
         assert east == {"da_cluster": "east", "status": "query_error", "risk": "UNKNOWN",
-                        "message": "2 series that differ only in replica " + self._DEDUP}
+                        "message": "2 series at the same time that differ only in replica " + self._DEDUP}
         assert (west["status"], west["risk"], west["new_breach_count"], west["data_points"]) == (
             "analyzed", "HIGH", 15, 100)
+
+    def test_rows_one_after_the_other_are_one_series(self, monkeypatch):
+        """審查者的 `churn`：同一個叢集的 label 在視窗內換過一次，兩列時間不重疊
+        ——同一條序列的前後段。接起來量；結果與一列逐欄相同（main 的結果），
+        沒有 `clusters`。"""
+        one = _backtest(monkeypatch, [_row("east", _WEST_15)], "70", "85")
+        for rows in ([_row("east", _WEST_15[:40], prometheus="old-pod"),
+                      _row("east", _WEST_15[40:], t0=40, prometheus="new-pod")],
+                     [_row("east", _WEST_15[40:], t0=40, prometheus="new-pod"),
+                      _row("east", _WEST_15[:40], prometheus="old-pod")],
+                     [_row(None, _WEST_15[:40], prometheus="old-pod"),
+                      _row(None, _WEST_15[40:], t0=40, prometheus="new-pod")]):
+            r = _backtest(monkeypatch, rows, "70", "85")
+            assert r == one and list(r) == list(one)
+        assert (one["data_points"], one["old_breach_count"]) == (100, 15)
+
+    def test_rows_one_after_the_other_in_one_of_two_clusters(self, monkeypatch):
+        r = _backtest(monkeypatch, [_row("east", _EAST_QUIET[:30], pod="a"),
+                                    _row("east", _EAST_QUIET[30:], t0=30, pod="b"),
+                                    _row("west", _WEST_15)], None, "80")
+        assert (r["status"], r["worst_cluster"]) == ("analyzed", "west")
+        assert [(c["da_cluster"], c["data_points"]) for c in r["clusters"]] == [
+            ("east", 100), ("west", 100)]
+
+    def test_rows_sharing_one_timestamp_overlap(self, monkeypatch):
+        """前一列的最後一點與後一列的第一點同一個時間：那一刻有兩條序列。"""
+        r = _backtest(monkeypatch, [_row("east", _WEST_15[:41], pod="a"),
+                                    _row("east", _WEST_15[40:], t0=40, pod="b")], None, "80")
+        assert r["status"] == "query_error"
+        assert 'da_cluster="east": 2 series at the same time that differ only in pod' in r["message"]
 
     def test_a_row_without_float_samples_is_no_series(self, monkeypatch):
         """native histogram 列沒有 `values`：照舊略過，不算第二條序列。"""
@@ -274,6 +306,11 @@ class TestReports:
         assert change["worst_cluster"] == "west"
         assert [c["da_cluster"] for c in change["clusters"]] == ["east", "west"]
 
+    def test_a_run_with_no_partly_measured_change_has_no_such_field(
+            self, monkeypatch, capsys, cli_argv, tmp_path):
+        _, out, _ = self._cli(monkeypatch, capsys, cli_argv, tmp_path, self._TWO, "--json")
+        assert "partly_measured_risk" not in json.loads(out)
+
     def test_one_row_reports_have_no_cluster_line(
             self, monkeypatch, capsys, cli_argv, tmp_path):
         rc, out, md = self._cli(monkeypatch, capsys, cli_argv, tmp_path,
@@ -288,9 +325,16 @@ class TestReports:
                                 [_row("west", _WEST_15, replica="a"),
                                  _row("west", _WEST_15, replica="b")])
         assert rc == 2
-        assert "Query error: 1" in out and "[UNKNOWN]" in out
-        assert 'Not measured: da_cluster="west": 2 series that differ only in replica' in out
-        assert "| UNKNOWN |" in md and "1 change(s) not measured" in md
+        assert ("Query error: 1 (not measured: the query failed, or rows the da_cluster label "
+                "does not tell apart)") in out and "[UNKNOWN]" in out
+        assert "Clusters measured in those" not in out
+        assert 'Not measured: da_cluster="west": 2 series at the same time that differ only in replica' in out
+        assert "| UNKNOWN |" in md and ("> **1 change(s) not measured: the query failed, or rows "
+                                         "the da_cluster label does not tell apart.**") in md
+        rc, out, _ = self._cli(monkeypatch, capsys, cli_argv, tmp_path,
+                               [_row("west", _WEST_15, replica="a"),
+                                _row("west", _WEST_15, replica="b")], "--json")
+        assert (rc, out) == (2, "")            # #3617：什麼都沒量到，沒有答案可印
 
     def test_could_not_measure_outranks_a_high_cluster(
             self, monkeypatch, capsys, cli_argv, tmp_path):
@@ -300,11 +344,33 @@ class TestReports:
         rc, out, md = self._cli(monkeypatch, capsys, cli_argv, tmp_path, rows)
         assert rc == 2
         assert 'da_cluster="west": HIGH (0 -> 15 of 100 points fire)' in out
-        assert 'da_cluster="east": not measured (2 series that differ only in replica' in out
+        assert 'da_cluster="east": not measured (2 series at the same time that differ only in replica' in out
         assert 'da\\_cluster="west": HIGH (0 -\\> 15 of 100 points fire)' in md
+        # 摘要不能在 west 是 HIGH 的時候只寫「0 HIGH」。
+        assert "  Risk: 0 HIGH, 0 MEDIUM, 0 LOW\n" in out
+        assert ("  Clusters measured in those: 1 HIGH, 0 MEDIUM, 0 LOW "
+                "(not in the Risk line above)\n") in out
+        assert ("> **Clusters measured in those: 1 HIGH, 0 MEDIUM, 0 LOW** "
+                "(not counted as analyzed).") in md
+
+    def test_json_is_printed_when_part_of_the_change_was_measured(
+            self, monkeypatch, capsys, cli_argv, tmp_path):
+        """審查者的 `dup_plus`：east 重複、west 量得到。量到了一部分就要印 JSON
+        （結束碼仍是 2）；stderr 不能說「nothing was answered」。"""
+        rows = [_row("west", _WEST_15), _row("east", _EAST_QUIET, replica="a"),
+                _row("east", _EAST_QUIET, replica="b")]
         rc, out, _ = self._cli(monkeypatch, capsys, cli_argv, tmp_path, rows, "--json")
-        # #3617：唯一的一筆變更沒量成，--json 沒有答案可印（stdout 為空）。
-        assert (rc, out) == (2, "")
+        err = capsys.readouterr().err
+        doc = json.loads(out)
+        assert rc == 2 and (doc["status"], doc["reason"], doc["query_error"]) == (
+            "partial", "query_error", 1)
+        assert doc["risk_summary"] == {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        assert doc["partly_measured_risk"] == {"HIGH": 1, "MEDIUM": 0, "LOW": 0}
+        change = doc["changes"][0]
+        assert change["status"] == "query_error"
+        assert [(c["da_cluster"], c["status"], c["risk"]) for c in change["clusters"]] == [
+            ("east", "query_error", "UNKNOWN"), ("west", "analyzed", "HIGH")]
+        assert "nothing was answered" not in err and "Prometheus query failed" not in err
 
     def test_a_cluster_name_cannot_break_the_markdown_row(
             self, monkeypatch, capsys, cli_argv, tmp_path):

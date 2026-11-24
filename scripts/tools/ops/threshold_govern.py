@@ -171,11 +171,16 @@ class NotMeasuredKey:
     error: str
 
 
+#: How much of a not-measured reason the text report and stderr carry.
+_NOT_MEASURED_MAX = 300
+
+
 @dataclass
 class ClusterHeldKey:
     """A key measured in several clusters (#1200) whose recommendation one
     cluster held back and that is therefore not in the plan: the value its
-    busiest cluster asks for would start firing in ``cluster``, so no value
+    other clusters ask for would start firing in ``cluster`` — one the
+    recommender had no value of its own for (idle, within margin) — so no value
     is proposed (a lower-bound floor), or the value was raised until the
     change fell under the gate (an upper-bound key). Listed with the
     recommender's ``reason`` so that it does not simply vanish from the
@@ -499,13 +504,17 @@ def format_text_report(
         if not nm:
             return []
         head = (
-            f"✗ {len(nm)} 個閾值沒量成（Prometheus 查詢沒得到回答，#3133），報告不完整："
+            f"✗ {len(nm)} 個閾值沒量成（查詢失敗，或 da_cluster 分不開的列；#3133、#1200），"
+            "報告不完整："
             if _LANG == "zh" else
-            f"✗ {len(nm)} threshold(s) not measured (the Prometheus query was not "
-            "answered — #3133); the report is partial:"
+            f"✗ {len(nm)} threshold(s) not measured ({recommend.NOT_MEASURED_CAUSES} "
+            "— #3133, #1200); the report is partial:"
         )
+        # The whole reason up to `_NOT_MEASURED_MAX`: it ends with what to do
+        # (which endpoint to query), and 80 characters cut that off.
         return ["", "-" * 78, head] + [
-            f"  {safe_label(u.tenant)}/{safe_label(u.key)}: {safe_label(u.error[:80])}"
+            f"  {safe_label(u.tenant)}/{safe_label(u.key)}: "
+            f"{safe_label(u.error[:_NOT_MEASURED_MAX])}"
             for u in nm]
 
     def _held_lines() -> list[str]:
@@ -779,9 +788,11 @@ def _main(args: argparse.Namespace) -> "Report | None":
     # (exit 2). A complete report is exit 0 whether or not it lists rot.
     if result.not_measured:
         first = result.not_measured[0]
-        print(f"ERROR: Prometheus query failed for {len(result.not_measured)} threshold(s); "
+        print(f"ERROR: {len(result.not_measured)} threshold(s) not measured "
+              f"({recommend.NOT_MEASURED_CAUSES}); "
               f"the report is partial (first: {safe_label(first.tenant)}/"
-              f"{safe_label(first.key)}: {safe_label(first.error[:80])})", file=sys.stderr)
+              f"{safe_label(first.key)}: {safe_label(first.error[:_NOT_MEASURED_MAX])})",
+              file=sys.stderr)
         status = EXIT_CALLER_ERROR
     else:
         status = EXIT_OK

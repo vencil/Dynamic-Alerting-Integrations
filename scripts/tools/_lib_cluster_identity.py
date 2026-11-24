@@ -184,9 +184,9 @@ def rows_by_cluster(rows: "list[dict[str, Any]]") -> "dict[str, list[dict[str, A
 
     ADR-006 (#1200): a `tenant:*` recording rule has one series per (tenant,
     cluster) and its alert fires per cluster, so the samples of two groups
-    are never one series. Nothing is merged here: a group holding more than
-    one row (`repeated_rows`) is two series the label does not tell
-    apart, and what that means is the caller's to say — never to add up."""
+    are never one series. Nothing is merged here: what a group holding more
+    than one row means is `repeated_rows`' to say (two series at once, or one
+    series in succession) — never to add up."""
     groups: "dict[str, list[dict[str, Any]]]" = {}
     for row in rows:
         metric = row.get("metric") if isinstance(row, dict) else None
@@ -195,16 +195,33 @@ def rows_by_cluster(rows: "list[dict[str, Any]]") -> "dict[str, list[dict[str, A
     return {cluster: groups[cluster] for cluster in sorted(groups)}
 
 
-def repeated_rows(groups: "dict[str, list[dict[str, Any]]]") -> "dict[str, str]":
+def in_time_order(rows: "list[Any]", span: Any) -> "list[Any]":
+    """*rows* by the time of their first sample (`span(row)` is a row's
+    ``(first, last)`` sample timestamps, None for a row with no sample,
+    which sorts first)."""
+    return sorted(rows, key=lambda row: (span(row) is not None, span(row) or (0, 0)))
+
+
+def repeated_rows(groups: "dict[str, list[dict[str, Any]]]", span: Any) -> "dict[str, str]":
     """``{cluster: why}`` for every group of *groups* (`rows_by_cluster`)
-    that holds more than one row — series the `da_cluster` label does not
-    tell apart, so the cluster cannot be read as one series. Typically an
-    HA pair read without deduplication (the rows differ in `replica`), not
-    several clusters. *why* names the labels the rows differ in and what to
-    do; it is never a reason to add the rows up or to pick one."""
+    that cannot be read as one series: it holds rows whose samples OVERLAP
+    in time (`span(row)`: a row's ``(first, last)`` sample timestamps, or
+    None) — two series at once that the `da_cluster` label does not tell
+    apart. Typically an HA pair read without deduplication (the rows differ
+    in `replica`), not several clusters. *why* names the labels the rows
+    differ in and what to do; it is never a reason to add the rows up or to
+    pick one.
+
+    Rows of one cluster whose time ranges do not overlap are not in the
+    answer: they are ONE series in succession — a label that changed once
+    inside the window (the pod that evaluates the rule was replaced) starts
+    a new row where the old one ends — and the caller joins them in time
+    order (`in_time_order`)."""
     out: "dict[str, str]" = {}
     for cluster, rows in groups.items():
-        if len(rows) < 2:
+        spans = sorted(s for s in (span(row) for row in rows) if s is not None)
+        if (len(rows) < 2 or len(spans) == len(rows) and all(
+                later[0] > earlier[1] for earlier, later in zip(spans, spans[1:]))):
             continue
         metrics = [row.get("metric") if isinstance(row.get("metric"), dict) else {}
                    for row in rows]
@@ -213,8 +230,8 @@ def repeated_rows(groups: "dict[str, list[dict[str, Any]]]") -> "dict[str, str]"
                   if len({repr(metric.get(name)) for metric in metrics}) > 1]
         how = ("that differ only in " + ", ".join(differ) if differ
                else "with identical labels")
-        out[cluster] = (f"{len(rows)} series {how} — not one series, and never added up; "
-                        "query a deduplicated endpoint (one series per cluster)")
+        out[cluster] = (f"{len(rows)} series at the same time {how} — not one series, and "
+                        "never added up; query a deduplicated endpoint (one series per cluster)")
     return out
 
 
