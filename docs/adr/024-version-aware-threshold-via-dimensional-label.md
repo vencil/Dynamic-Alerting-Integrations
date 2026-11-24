@@ -343,7 +343,7 @@ portal 的 recipe 表單在瀏覽器執行、不跑 Go：它只做即時提示�
 
 設計受三條既有約束：
 
-- **只宣告**：平台寫 rule pack 的 PromQL，租戶只在 YAML 填數字或參數。要租戶寫 PromQL 的方案都違反這條（[ADR-008](008-operator-native-integration-path.md)）。
+- **只宣告**：平台寫 rule pack 的 PromQL，租戶只在 YAML 填數字或參數。要租戶寫 PromQL 的方案都違反這條。
 - **`user_threshold` 本來就帶維度**：`user_threshold{tenant, component, metric, severity, <維度標籤>}` 已支援 `env`、`tablespace_re` 等維度。
 - **複雜度留在平台的 rule pack**，不下放給租戶；每租戶的序列數上限既已存在（`max_metrics_per_tenant`，超過就截斷）。
 
@@ -400,7 +400,7 @@ portal 的 recipe 表單在瀏覽器執行、不跑 Go：它只做即時提示�
 
 - [ADR-003: Sentinel Alert 模式](003-sentinel-alert-pattern.md) — 靜默所用的 sentinel 與 inhibit
 - [ADR-006: 租戶映射拓撲](006-tenant-mapping-topologies.md) — 基礎設施指標的租戶歸屬
-- [ADR-008: Operator-Native 整合路徑](008-operator-native-integration-path.md) — 只宣告的約束
+- [ADR-008: Operator-Native 整合路徑](008-operator-native-integration-path.md) — Operator 路徑與「不建 controller」的邊界
 - [ADR-017: `_defaults.yaml` 繼承](017-defaults-yaml-inheritance-dual-hash.md) — 閾值的目錄樹繼承（`_custom_alerts` 不走這條，見 §3）
 - [ADR-020: Tenant Federation](020-tenant-federation.md) — 跨租戶讀取路徑的隔離
 - [ADR-031: SLO burn-rate recipe](031-slo-burn-rate-recipe.md) — 第 7 種 recipe

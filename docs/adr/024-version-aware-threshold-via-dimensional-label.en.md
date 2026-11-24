@@ -337,7 +337,7 @@ Tenants need: (1) rules that can be committed to `conf.d/` without taking effect
 
 The design works within three existing constraints:
 
-- **Declarative only**: the platform writes the rule packs' PromQL; tenants fill in numbers or parameters in YAML. Any approach that asks tenants to write PromQL violates this ([ADR-008](008-operator-native-integration-path.en.md)).
+- **Declarative only**: the platform writes the rule packs' PromQL; tenants fill in numbers or parameters in YAML. Any approach that asks tenants to write PromQL violates this.
 - **`user_threshold` already carries dimensions**: `user_threshold{tenant, component, metric, severity, <dimensional labels>}` already supports dimensions such as `env` and `tablespace_re`.
 - **Complexity stays in the platform's rule packs**, not pushed down to tenants; a per-tenant series cap already exists (`max_metrics_per_tenant`, truncating beyond it).
 
@@ -394,7 +394,7 @@ The scheduled thresholds of [config-driven design](../design/config-driven.en.md
 
 - [ADR-003: Sentinel Alert Pattern](003-sentinel-alert-pattern.en.md) — the sentinel and inhibit that silence uses
 - [ADR-006: Tenant Mapping Topologies](006-tenant-mapping-topologies.en.md) — tenant attribution of infrastructure metrics
-- [ADR-008: Operator-Native Integration Path](008-operator-native-integration-path.en.md) — the declarative-only constraint
+- [ADR-008: Operator-Native Integration Path](008-operator-native-integration-path.en.md) — the Operator path and the "no controller" boundary
 - [ADR-017: `_defaults.yaml` inheritance](017-defaults-yaml-inheritance-dual-hash.en.md) — directory-tree inheritance of thresholds (`_custom_alerts` does not take it, see §3)
 - [ADR-020: Tenant Federation](020-tenant-federation.md) — isolation of the cross-tenant read path
 - [ADR-031: SLO burn-rate recipe](031-slo-burn-rate-recipe.md) — the 7th recipe
