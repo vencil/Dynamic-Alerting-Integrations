@@ -8,6 +8,7 @@ from __future__ import annotations
 import http.client
 import json
 import math
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Optional
@@ -36,6 +37,21 @@ TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
 
 #: The most of an exception's own text :func:`transport_error_text` keeps.
 ERROR_TEXT_MAX = 200
+
+
+class HttpErrorText(str):
+    """The error text of a request the server answered with an HTTP error
+    status — a ``str`` like every other error text, that also says which
+    status (``http_status``). A caller that must tell "this endpoint does not
+    exist here" (404) from every other failure reads the attribute; nobody
+    reads the status out of the message."""
+
+    http_status: int
+
+    def __new__(cls, text: str, http_status: int) -> "HttpErrorText":
+        self = super().__new__(cls, text)
+        self.http_status = http_status
+        return self
 
 
 def transport_error_text(exc: BaseException, *, with_type: bool = False) -> str:
@@ -88,6 +104,9 @@ class QueryError(CallerError):
         super().__init__(message, reason if reason is not None
                          else f"{source.lower()}_query_error")
         self.source = source
+        #: The HTTP error status the server answered with, when that is why
+        #: (:class:`HttpErrorText`); None for every other failure.
+        self.http_status: Optional[int] = getattr(message, "http_status", None)
 
     @property
     def error_line(self) -> str:
@@ -159,6 +178,8 @@ def http_get_json(
             body = resp.read().decode("utf-8")
             data = json.loads(body) if body else {}
             return data, None
+    except urllib.error.HTTPError as exc:
+        return None, HttpErrorText(transport_error_text(exc), exc.code)
     except TRANSPORT_ERRORS as exc:
         return None, transport_error_text(exc)
 

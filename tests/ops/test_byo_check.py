@@ -1479,6 +1479,7 @@ _CONFIG_SET = ("global:\n  scrape_interval: 15s\n  external_labels:\n    da_clus
 _CONFIG_OTHER_LABELS = "global:\n  external_labels:\n    env: prod\n"
 _CONFIG_NO_EXTERNAL_LABELS = "global:\n  scrape_interval: 15s\n"
 _CONFIG_EMPTY_VALUE = "global:\n  external_labels:\n    da_cluster: \"\"\n"
+_CONFIG_BLANK_VALUE = "global:\n  external_labels:\n    da_cluster: '  '\n"
 #: `da_cluster` written on a scrape job is not the external label.
 _CONFIG_ELSEWHERE = ("global:\n  external_labels:\n    env: prod\nscrape_configs:\n"
                      "  - job_name: tenant-exporters\n    relabel_configs:\n"
@@ -1498,8 +1499,9 @@ class TestJudgeClusterIdentity:
         }
 
     @pytest.mark.parametrize("config", [
-        _CONFIG_OTHER_LABELS, _CONFIG_NO_EXTERNAL_LABELS, _CONFIG_EMPTY_VALUE, _CONFIG_ELSEWHERE, "",
-    ], ids=["other-labels", "no-external-labels", "empty-value", "elsewhere-in-the-file", "empty-config"])
+        _CONFIG_OTHER_LABELS, _CONFIG_NO_EXTERNAL_LABELS, _CONFIG_EMPTY_VALUE, _CONFIG_BLANK_VALUE,
+        _CONFIG_ELSEWHERE,
+    ], ids=["other-labels", "no-external-labels", "empty-value", "blank-value", "elsewhere-in-the-file"])
     def test_no_value_fails_and_says_what_to_add_and_where(self, config):
         c = bc._judge_cluster_identity(config, None)
         assert c == {
@@ -1516,11 +1518,44 @@ class TestJudgeClusterIdentity:
         assert c["detail"] == ("Config not read (/api/v1/status/config): HTTP 503 — "
                                "external_labels.da_cluster could not be checked")
 
+    @pytest.mark.parametrize("text", ["", "\n", "scrape_configs: []\n", "external_labels:\n  da_cluster: x\n"],
+                             ids=["empty", "blank", "no-global", "external-labels-not-under-global"])
+    def test_a_text_that_is_not_a_config_rendering_was_not_read(self, text):
+        """Prometheus always prints a top-level `global:`; without one the
+        answer is not a config — "not read" (exit 2), not "not set" (exit 1)."""
+        c = bc._judge_cluster_identity(text, None)
+        assert (c["status"], c.get("caller_error")) == ("fail", True), c
+        assert c["detail"].startswith("Config not read (/api/v1/status/config): not a Prometheus"), c
+        assert "is not set" not in c["detail"]
+
+    def test_an_endpoint_that_does_not_exist_is_a_skip_that_says_where_to_look(self):
+        c = bc._judge_cluster_identity(None, "HTTP Error 404: Not Found", True)
+        assert c == {
+            "check": "cluster_identity",
+            "status": "skip",
+            "detail": "Not checked: this endpoint does not serve /api/v1/status/config "
+                      "(HTTP 404) — a query layer such as Thanos Querier or VictoriaMetrics; "
+                      "check each Prometheus behind it with "
+                      "`da-tools federation-check edge --prometheus <url>`",
+        }
+
+    def test_the_command_the_skip_names_is_one_federation_check_takes(self, capsys):
+        import entrypoint
+        import federation_check as fc
+        assert entrypoint.COMMAND_MAP["federation-check"] == "federation_check.py"
+        seen = []
+        ok = {"check": "edge_prometheus_reachable", "status": "pass", "detail": "ok"}
+        with patch.object(fc, "check_edge", side_effect=lambda url: seen.append(url) or [ok]):
+            with patch("sys.argv", ["federation_check.py", "edge", "--prometheus", "http://p:9090"]):
+                rc = _exit_code(fc.main)
+        assert (rc, seen) == (0, ["http://p:9090"])
+
     def test_the_wording_is_federation_checks(self):
         """One wording, one reader: what `federation-check edge` says."""
         import federation_check as fc
         import _lib_cluster_identity as lib
-        assert bc._judge_cluster_identity("", None)["detail"] == lib.CLUSTER_IDENTITY_UNSET
+        assert (bc._judge_cluster_identity(_CONFIG_NO_EXTERNAL_LABELS, None)["detail"]
+                == lib.CLUSTER_IDENTITY_UNSET)
         assert bc.external_labels is fc.external_labels is lib.external_labels
         assert bc.cluster_identity is fc.cluster_identity is lib.cluster_identity
         assert bc.CLUSTER_IDENTITY_LABEL == fc.CLUSTER_IDENTITY_LABEL == "da_cluster"
@@ -1619,3 +1654,97 @@ class TestClusterIdentityInTheRun:
         assert by["step1_tenant_label"]["status"] == "pass"
         rc, doc = self._main(answer, capsys)
         assert rc == 2
+
+
+class TestClusterIdentityOverHttp:
+    """The status the server answers with decides, over the real fetch
+    (`_lib_prometheus.http_get_json` is not replaced here, only the socket):
+    404 on `/api/v1/status/config` is a query layer with no configuration of
+    its own — a skip; every other failure is a caller error."""
+
+    @staticmethod
+    def _urlopen(config_outcome):
+        import io
+        import json
+        import urllib.error
+        get = TestClusterIdentityInTheRun._get(None)
+
+        def urlopen(req, **_kw):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if url.endswith("/-/healthy"):
+                return _healthy()
+            if "/api/v1/status/config" in url:
+                if isinstance(config_outcome, int):
+                    raise urllib.error.HTTPError(url, config_outcome, "said the server", {},
+                                                 io.BytesIO(b'{"status":"error"}'))
+                if isinstance(config_outcome, BaseException):
+                    raise config_outcome
+                body = config_outcome
+            else:
+                body = json.dumps(get(url)[0]).encode("utf-8")
+            resp = MagicMock()
+            resp.read.return_value = body
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+        return urlopen
+
+    def _main(self, config_outcome, capsys):
+        import json
+        with patch("urllib.request.urlopen", side_effect=self._urlopen(config_outcome)):
+            with patch("sys.argv", ["byo_check.py", "prometheus", "--json"]):
+                rc = _exit_code(bc.main)
+        out = capsys.readouterr().out
+        doc = json.loads(out)
+        return rc, doc, {c["check"]: c for c in doc["sections"][0]["checks"]}
+
+    def test_404_is_a_skip_and_does_not_fail_the_run(self, capsys):
+        rc, doc, by = self._main(404, capsys)
+        c = by["cluster_identity"]
+        assert c["status"] == "skip" and "caller_error" not in c, c
+        assert "does not serve /api/v1/status/config (HTTP 404)" in c["detail"]
+        assert "da-tools federation-check edge --prometheus <url>" in c["detail"]
+        assert [x["check"] for x in by.values() if x["status"] == "fail"] == []
+        assert (rc, doc["status"]) == (0, "pass")
+
+    def test_404_in_the_text_output_is_the_skip_mark_and_exit_0(self, capsys):
+        with patch("urllib.request.urlopen", side_effect=self._urlopen(404)):
+            with patch("sys.argv", ["byo_check.py", "prometheus"]):
+                rc = _exit_code(bc.main)
+        out = capsys.readouterr().out
+        line = next(line for line in out.splitlines() if "cluster_identity" in line)
+        assert line.lstrip().startswith("⊘ cluster_identity") and "Not checked:" in line
+        assert rc == 0 and "Overall: PASS" in out
+
+    @pytest.mark.parametrize("outcome", [
+        500, 503, 403, 401,
+        TimeoutError("timed out"),
+        OSError("connection reset"),
+        b"not json",
+        b'{"status":"error","error":"bad_data"}',
+        b'{"status":"success","data":{}}',
+        b'{"status":"success","data":{"yaml":""}}',
+        b'{"status":"success","data":{"yaml":"scrape_configs: []\\n"}}',
+    ], ids=["500", "503", "403", "401", "timeout", "reset", "invalid-json", "status-error",
+            "no-data-yaml", "empty-yaml", "yaml-without-global"])
+    def test_every_other_unreadable_outcome_is_a_caller_error(self, outcome, capsys):
+        rc, _doc, by = self._main(outcome, capsys)
+        c = by["cluster_identity"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True), c
+        assert c["detail"].startswith("Config not read (/api/v1/status/config): "), c
+        assert rc == 2
+
+    def test_a_404_on_another_endpoint_is_not_this_skip(self):
+        """Only the config endpoint's own 404: the lib says which status."""
+        import urllib.error
+        import _lib_prometheus
+
+        def urlopen(req, **_kw):
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        with patch("urllib.request.urlopen", side_effect=urlopen):
+            with pytest.raises(_lib_prometheus.QueryError) as exc:
+                _lib_prometheus.prometheus_status_config("http://p:9090")
+            _data, err = _lib_prometheus.http_get_json("http://p:9090/api/v1/rules")
+        assert exc.value.http_status == 404
+        assert err.http_status == 404 and isinstance(err, str)
+        assert _lib_prometheus.QueryError("refused").http_status is None

@@ -11,7 +11,6 @@ without becoming a tool that can use HTTP.
 """
 from __future__ import annotations
 
-import re
 from typing import Any
 
 #: ADR-006: the external label that says which cluster a Prometheus is in.
@@ -23,8 +22,55 @@ CLUSTER_IDENTITY_UNSET = (
     f"external_labels.{CLUSTER_IDENTITY_LABEL} is not set — add it under "
     "global.external_labels with this cluster's id (ADR-006)")
 
-_EXTERNAL_LABELS = re.compile(r"(?m)^(?P<indent>[ ]*)external_labels:[ ]*$")
-_LABEL_LINE = re.compile(r"^(?P<indent>[ ]+)(?P<key>[A-Za-z_][A-Za-z0-9_]*):[ ]*(?P<value>.*?)[ ]*$")
+class NotAConfigRendering(ValueError):
+    """The text is not Prometheus' rendering of a configuration — nothing can
+    be said about its external labels. "Could not read", never "not set"."""
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _key_and_rest(line: str) -> "tuple[str, str]":
+    """``(key, text after the colon)`` of the mapping line *line* as yaml
+    prints one: a plain key runs to the first ``: `` (or the colon that ends
+    the line), a quoted key (``'note: x': v``, ``"a b": v``) to its closing
+    quote. Label names are UTF-8 in Prometheus 3 (``cluster.name``)."""
+    s = line.strip()
+    if s[:1] in ("'", '"'):
+        quote, i, key = s[0], 1, []
+        while i < len(s):
+            c = s[i]
+            if quote == "'" and s[i:i + 2] == "''":
+                key.append("'")
+                i += 2
+            elif quote == '"' and c == "\\" and i + 1 < len(s):
+                key.append(s[i + 1])
+                i += 2
+            elif c == quote:
+                break
+            else:
+                key.append(c)
+                i += 1
+        after = s[i + 1:]
+        if i < len(s) and (after == ":" or after.startswith(": ")):
+            return "".join(key), after[1:].strip()
+    else:
+        at = s.find(": ")
+        if at > 0:
+            return s[:at], s[at + 2:].strip()
+        if len(s) > 1 and s.endswith(":"):
+            return s[:-1], ""
+    raise NotAConfigRendering(f"not a `key: value` line: {s[:40]!r}")
+
+
+def _scalar(text: str) -> str:
+    """The value yaml printed on a key's own line, without its quotes."""
+    if len(text) >= 2 and text[0] == text[-1] == "'":
+        return text[1:-1].replace("''", "'")
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        return text[1:-1]
+    return text
 
 
 def external_labels(config_yaml: str) -> "dict[str, str] | None":
@@ -33,22 +79,73 @@ def external_labels(config_yaml: str) -> "dict[str, str] | None":
     the file (a scrape job's `labels:` or `target_label:` is not it). None
     when the configuration has no such mapping.
 
+    Raises :class:`NotAConfigRendering` when the text is not that rendering:
+    Prometheus always prints a top-level ``global:`` section, so a text
+    without one (an empty one among them) was not read, and is not a
+    configuration without external labels.
+
     The text is Prometheus' own rendering (block style, one key a line), which
     is what makes reading it line by line safe; it is not a YAML reader for a
     hand-written file (that one is :func:`config_external_labels`, on the
-    document Prometheus' loader parsed).
+    document Prometheus' loader parsed). Read as that rendering is laid out:
+
+    - the mapping is the `external_labels:` key of the top-level `global:`
+      section — the same words anywhere else (a label value among them) are
+      not it;
+    - its keys are exactly the lines at the indent of its first key. A line
+      indented deeper continues the value above it (a multi-line value is
+      printed as a block scalar) and is never read as a key, whatever it
+      looks like;
+    - line endings are normalised first.
     """
-    m = _EXTERNAL_LABELS.search(config_yaml)
-    if m is None:
+    lines = config_yaml.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    start = next((i for i, line in enumerate(lines) if line.rstrip() == "global:"), None)
+    if start is None:
+        raise NotAConfigRendering("no top-level `global:` section")
+    section = []
+    for line in lines[start + 1:]:
+        if line.strip() and not line.startswith(" "):
+            break
+        section.append(line)
+    first = next((line for line in section if line.strip()), None)
+    if first is None:
         return None
-    base, out = len(m["indent"]), {}
-    for line in config_yaml[m.end():].split("\n")[1:]:
+    key_indent = _indent(first)
+    at = rest = None
+    for i, line in enumerate(section):
+        if line.strip() and _indent(line) == key_indent:
+            key, text = _key_and_rest(line)
+            if key == "external_labels":
+                at, rest = i, text
+                break
+    if at is None:
+        return None
+    if rest:
+        if rest == "{}":
+            return {}
+        raise NotAConfigRendering(f"external_labels is not a block mapping: {rest[:40]!r}")
+    body = []
+    for line in section[at + 1:]:
+        if line.strip() and _indent(line) <= key_indent:
+            break
+        body.append(line)
+    first = next((line for line in body if line.strip()), None)
+    if first is None:
+        return {}
+    label_indent, out, block = _indent(first), {}, None
+    for line in body:
         if not line.strip():
             continue
-        k = _LABEL_LINE.match(line)
-        if k is None or len(k["indent"]) <= base:
-            break
-        out[k["key"]] = k["value"].strip("\"'")
+        if _indent(line) > label_indent:
+            # a continuation line of the value above: never a key
+            if block is not None:
+                out[block] += ("\n" if out[block] else "") + line.strip()
+            continue
+        key, text = _key_and_rest(line)
+        if text[:1] in ("|", ">"):
+            out[key], block = "", key
+        else:
+            out[key], block = _scalar(text), None
     return out
 
 

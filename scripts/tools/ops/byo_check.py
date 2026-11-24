@@ -42,7 +42,8 @@ from _lib_prometheus import (  # noqa: E402
 # #4097: the one reading of the running config's cluster identity
 # (federation_check's — no second reader here).
 from _lib_cluster_identity import (  # noqa: E402
-    CLUSTER_IDENTITY_LABEL, CLUSTER_IDENTITY_UNSET, cluster_identity, external_labels)
+    CLUSTER_IDENTITY_LABEL, CLUSTER_IDENTITY_UNSET, NotAConfigRendering, cluster_identity,
+    external_labels)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 # #1132 structural check is the SINGLE implementation in _grar_validate.py (the
@@ -112,7 +113,7 @@ def _judge_reachable(err):
     }
 
 
-def _judge_cluster_identity(config_yaml, err):
+def _judge_cluster_identity(config_yaml, err, endpoint_absent=False):
     """Judge `cluster_identity` (ADR-006 contract 1 and 7, #4097): the running
     Prometheus says which cluster it is in — `global.external_labels.da_cluster`
     — a single cluster too.
@@ -120,8 +121,31 @@ def _judge_cluster_identity(config_yaml, err):
     `config_yaml` is the loaded config as `/api/v1/status/config` prints it,
     `err` why it was not read (then `config_yaml` is None). Not read is a
     caller error, as a query not answered is: "could not measure" never reads
-    as "measured, missing", and never as a pass.
+    as "measured, missing", and never as a pass. A text that is not a
+    Prometheus config rendering (empty, no top-level `global:`) was not read
+    either.
+
+    `endpoint_absent`: the server answered HTTP 404 for the endpoint — it is
+    not a Prometheus but a query layer in front of some (Thanos Querier,
+    VictoriaMetrics), which has no configuration of its own to show. There is
+    nothing to read here and no way for the operator to make it readable, so
+    the check is a skip that says so and where to look instead; every other
+    failure stays a caller error.
     """
+    if endpoint_absent:
+        return {
+            "check": "cluster_identity",
+            "status": "skip",
+            "detail": "Not checked: this endpoint does not serve /api/v1/status/config "
+                      "(HTTP 404) — a query layer such as Thanos Querier or VictoriaMetrics; "
+                      "check each Prometheus behind it with "
+                      "`da-tools federation-check edge --prometheus <url>`",
+        }
+    if not err:
+        try:
+            labels = external_labels(config_yaml)
+        except NotAConfigRendering as exc:
+            err = f"not a Prometheus configuration ({exc})"
     if err:
         return {
             "check": "cluster_identity",
@@ -130,7 +154,7 @@ def _judge_cluster_identity(config_yaml, err):
             "detail": f"Config not read (/api/v1/status/config): {str(err)[:60]} — "
                       f"external_labels.{CLUSTER_IDENTITY_LABEL} could not be checked",
         }
-    identity = cluster_identity(external_labels(config_yaml))
+    identity = cluster_identity(labels)
     if identity:
         return {
             "check": "cluster_identity",
@@ -516,11 +540,14 @@ def check_prometheus(args):
 
     # Cluster identity: the running config's external labels, before the
     # steps (it is a fact about this Prometheus, not about a tenant's data).
+    config_absent = False
     try:
         config_yaml, config_err = prometheus_status_config(prom_url), None
     except QueryError as exc:
         config_yaml, config_err = None, str(exc)
-    checks.append(_judge_cluster_identity(config_yaml, config_err))
+        # The status the server answered with, not a reading of the message.
+        config_absent = exc.http_status == 404
+    checks.append(_judge_cluster_identity(config_yaml, config_err, config_absent))
 
     # Step 1: tenant label injection (fallback query stays here in the orchestrator)
     results, err = query_prometheus(

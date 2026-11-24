@@ -41,7 +41,8 @@ from _lib_prometheus import (  # noqa: E402
 # The one reading of "which cluster is this Prometheus in" (#4097): byo_check
 # and onboard_platform judge with the same names.
 from _lib_cluster_identity import (  # noqa: E402
-    CLUSTER_IDENTITY_LABEL, CLUSTER_IDENTITY_UNSET, cluster_identity, external_labels)
+    CLUSTER_IDENTITY_LABEL, CLUSTER_IDENTITY_UNSET, NotAConfigRendering, cluster_identity,
+    external_labels)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 
@@ -96,7 +97,11 @@ def check_edge(prom_url):
     # 2. external_labels configured
     try:
         config_yaml = prometheus_status_config(prom_url)
-    except QueryError as exc:
+        # A text that is not Prometheus' rendering of a config (empty, no
+        # top-level `global:`) was not read: "no external_labels" would be a
+        # measurement that never happened.
+        labels = external_labels(config_yaml)
+    except (QueryError, NotAConfigRendering) as exc:
         # #3133: unreachable, an error status or a malformed answer — all
         # caller-error; a `status: error` used to read as "no external_labels".
         checks.append({
@@ -106,7 +111,6 @@ def check_edge(prom_url):
             "detail": f"Config API failed: {str(exc)[:60]}",
         })
     else:
-        labels = external_labels(config_yaml)
         if labels is None:
             checks.append({
                 "check": "edge_external_labels",
