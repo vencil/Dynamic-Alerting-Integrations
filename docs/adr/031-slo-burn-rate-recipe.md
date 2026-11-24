@@ -9,148 +9,146 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-07-12
-updated_at: 2026-10-21
+updated_at: 2026-11-24
 ---
 # ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯
 
 ## 狀態
 
-✅ **Accepted**（2026-07-12）
+✅ **Accepted**（2026-07-12）。recipe 已上線。
 
-📝 **修訂（2026-10-16）**：一組租戶共用的 SLO 宣告寫在 profile；`_defaults.yaml` 頂層或 `defaults:` 底下的 `_custom_alerts` exporter 不會送出，不能用來共用（見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3「宣告位置」、[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
+2026-10-16 修訂：一組租戶共用的 SLO 宣告寫在 profile；`_defaults.yaml` 裡的 `_custom_alerts` exporter 不送出，不能用來共用（[ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3）。
 
-📝 **修訂（2026-10-17）**：每租戶 cap 改由 tenant-api 寫入檢查、da-guard 與 validate-config 計算，profile 的 recipe 不計；壞 recipe 由 exporter 逐條拒收、編譯器不為它產生規則（§3 護欄 1、2）。
+2026-10-17 修訂：每租戶 cap 由 tenant-api 寫入檢查、da-guard 與 validate-config 計算，profile 的 recipe 不計；壞宣告由 exporter 逐條拒收。
 
-📝 **修訂（2026-10-21）**：燒錯窗口與倍數都寫在 Go 的 recipe 契約檔，編譯器也改在 Go（[ADR-024](024-version-aware-threshold-via-dimensional-label.md) §9）。下文凡提到「Python/Go lockstep」、倍數與選窗分在兩種語言、或 objective／min_events「於 Python/Go 兩側各自加驗證」之處（§2 的代價、§5、選項 E、後果與實作順序），描述的都是遷移完成前的實作；遷移完成後只有 Go 一份，這些成本不再存在。
+2026-10-21 修訂：燒錯窗口與倍數寫在 Go 的 recipe 契約檔，編譯器也在 Go（[ADR-024](024-version-aware-threshold-via-dimensional-label.md) §9），不再有 Python／Go 兩份要同步。
 
-> **決策一句話**：新增第 7 個平台自撰 recipe `slo_burn_rate`——一條宣告在編譯期展開成多窗 SLI recording rules ＋ multi-window AND 的 fast/slow burn-rate 告警；objective 走**既有** `user_threshold{severity}` 通道（exporter resolve 期算好係數）；v1 範圍＝availability/error-ratio 型 only；custom 子樹 outbound delivery 列硬前置。
-
-設計歷經內部對抗 critic pass（9 findings 全數 triage）與外部 adversarial review（3 銳角修入）——完整對抗軌跡與 triage 表見 feature issue [#1092](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1092)（decision trail 進 issue、本 ADR 留決策＋理由）。
-
-> 依語言政策（自 ADR-019 預設 ZH-only），本 ADR 不另製 `.en.md`。
-
-## TL;DR
-
-- **新增第 7 個平台自撰 recipe `slo_burn_rate`**：一條宣告 → 編譯期展開成多窗 SLI recording rules + multi-window AND 的 fast/slow burn-rate 告警。租戶**零 PromQL**（ADR-008/024 declarative-only 不動）。
-- **v1 範圍 = availability/error-ratio SLI only**；latency-quantile 與 freshness 型 **defer-with-trigger**（宣告介面表達不了，硬塞會產生「永不觸發且靜默」的告警）。
-- **objective 不開新資料平面**：exporter 在 resolve 期算好 `14.4×(1−obj)`／`6×(1−obj)`，以**既有** `user_threshold{severity}` 通道餵值 → 規則端零新表達式類別、落回現行 per-severity core join。
-- **硬前置**：custom 子樹 outbound delivery（現況 firehose receiver 無 notifier——沒有它，「critical/page」page 不到任何人）。
-- **主推模式 = profile 共用**（profile 定義 recipe 與預設 objective，租戶綁定該 profile；同一 shape、自動向量化）。編譯器照 exporter 的讀法編譯，profile 裡的 recipe 也產生規則（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
-- **明確不做**：raw-PromQL 逃生門（ADR-029 T1）；平台代管錯誤預算政策。
-
-## 背景
-
-### 問題
-
-SLO burn-rate 告警（SRE Workbook ch.5）是「該設多嚴、何時吵醒人」的業界標準答案，但從「SLO 表格」到「正確的 Prometheus 規則」的最後一哩（多窗 recording、倍率換算、AND 合成、reset 語意、低流量防誤報）對缺乏概念的團隊是斷崖。本平台的核心形狀（config-driven、租戶宣告 YAML、編譯器 own PromQL）正是這一哩的載體。
-
-### Spike 實證（能力邊界）
-
-| burn-rate 需求 | 現況 |
-|---|---|
-| ratio-of-rates SLI | ✅ 原生（`ratio` recipe；promtool fixture 已驗；`(den > 0)` 除零守衛） |
-| recording rule 輸出 | ✅ 預設架構（每 recipe 展開 recording + alerts；forecast 已有一 shape 多 recording 先例） |
-| per-severity 閾值比較 | ✅ 原生（`user_threshold{severity}` core join） |
-| **多視窗 AND** | ❌ **編譯器唯一缺口**——每 instance 單 window、無合成原語。非底層限制（`and on(tenant)` 複合先例：mariadb pack 4 處、全 packs 9 處） |
-| **latency/freshness SLI** | ❌ 宣告介面表達不了（selector 同時套分子分母 → latency 的 `le` 會套到 `_count` 上 → 分母空向量、告警靜默不觸發；freshness 是 timestamp 差值、非 counter ratio）→ **v1 排除** |
-| **custom 告警通知出口** | ❌ **MVP 缺**——`component="custom"` 全數 `continue:false` 進 `custom-alerts-firehose`，該 receiver 無 outbound notifier（僅 AM UI 可見）→ **硬前置** |
+2026-11-24 修訂：改寫為現行行為；標籤名照實作（`slo_burn`），`tiers` 參數未實作、列為延後項。
 
 ## 決策
 
-### 1. 宣告形狀（v1：availability/error-ratio only）
+**新增平台自撰的 recipe `slo_burn_rate`：一條宣告在編譯時展開成多窗口的 SLI recording rule，以及 fast／slow 兩檔、多窗口 AND 的 burn-rate 告警。** 租戶不寫 PromQL。
+
+- **只支援 availability／error-ratio 型 SLI**（兩個 counter 的比率）。latency 分位數與 freshness 型延後：宣告介面表達不了，硬塞會產生永遠不觸發、也不出聲的告警。
+- **objective 走既有的 `user_threshold{severity}` 通道。** exporter 在解析設定時算好 `倍數 × (1 − objective/100)` 當閾值送出，規則端不新增任何表達式類別。
+- **嚴重度由 recipe 固定**：fast 檔 critical、slow 檔 warning；這個 recipe 不接受 `threshold`。
+- **建議用 profile 共用**：profile 定義 recipe 與預設 objective，租戶綁定該 profile，同一個 shape、規則數不隨租戶數成長。
+- **不做**：raw PromQL 逃生門（[ADR-029](029-custom-alert-cross-tenant-query-scoping.md)）、平台代管錯誤預算政策。
+
+### 範例
+
+宣告（租戶檔或 profile 的 `_custom_alerts`）：
 
 ```yaml
-_custom_alerts:
-  - recipe: slo_burn_rate
-    name: checkout_availability          # 必填（沿用既有 required；入 slug；charset [a-zA-Z_][a-zA-Z0-9_]*，禁連字號）
-    metric: <壞事件 counter>              # 如 http_requests_errors_total
-    denominator_metric: <總事件 counter>   # 如 http_requests_total
-    selectors: { ... }                     # 既有機制；v1 同時套用於分子分母（此即 latency 型排除的原因）
-    objective: "99.9"                      # SLO 目標（百分比）；"disable" 沿用三態關閉慣例
-    slo_period: 30d                        # 預算窗（enum：28d|30d）；倍率語意的錨、Phase 2 儀表板的分母
-    min_events: 10                         # N_min：fast 短窗（5m）內壞事件絕對數下限；低流量防誤報
-    # 進階（有預設）：tiers: two_tier（預設）| four_tier
+tenants:
+  shop-a:
+    _custom_alerts:
+      - recipe: slo_burn_rate
+        name: checkout_availability
+        metric: http_requests_errors_total        # 壞事件 counter
+        denominator_metric: http_requests_total   # 總事件 counter
+        objective: "99.9"                         # SLO 目標（百分比，字串）
+        slo_period: 30d                           # 預算窗：28d 或 30d，預設 30d
+        min_events: 10                            # fast 檔 5m 窗內壞事件數下限，預設 10
 ```
 
-- **`objective` 取代 `threshold` 欄位**（schema if/then 第三分支）：值域驗證 `(0,100)` **開區間**（`objective=100` → 閾值 0 → 恆 fire，直接 reject）；`"disable"` 保留三態關閉語意。severity **不再**來自 threshold 尾巴慣例——由 recipe 固定（fast→critical、slow→warning），為刻意偏離、於 recipe 文件明示。
-- **`min_events` 是編譯期宣告參數**（shape-affecting）：主推的 profile 共用模式下由 profile 統一設定→單一 shape；租戶自寫不同的 `min_events`＝shape 分岔（可接受：改動罕見）。slow 檔的下限由**編譯器按窗長線性換算**（30m = 5m×6）寫成字面值，換算歸屬明確在編譯側。
-  - ⚠️ 此處推翻早期草案「`N_min` 走資料平面」：那是為「per-tenant 各異 + 共 shape」優化，但 profile 共用模式下不成立；編譯期字面值換得零新管線。
-- **latency-quantile／freshness 型 → Deferred**（見下）；模板文件仍教 instrumentation 路徑（pushgateway／textfile／Vector `log_to_metric`），但 recipe 支援不假裝存在。
+編譯器產生的形狀（節錄自 recipe 的契約說明）：
 
-### 2. 編譯輸出（兩段預設檔位）
+```text {.quote src="rule-packs/recipes/slo_burn_rate.yaml"}
+  custom:metric:<id>:<win> = sum by(tenant)(rate(<bad><sel>[<win>]))
+                             / (sum by(tenant)(rate(<total><sel>[<win>])) > 0)
+                             # <win> ∈ 1h / 5m / 6h / 30m (fixed recipe semantics)
+  custom:bad:<id>:<win>    = sum by(tenant)(increase(<bad><sel>[<win>]))   # 5m / 30m
+# ...
+  custom:<id>:critical:core =  (ratio:1h > thr_crit) and on(tenant)
+                               (ratio:5m > thr_crit) and on(tenant)
+                               (bad:5m  > <min_events>)          # fast burn
+  custom:<id>:warning:core  =  (ratio:6h > thr_warn) and on(tenant)
+                               (ratio:30m > thr_warn) and on(tenant)
+                               (bad:30m > <min_events>*6)        # slow burn
+```
 
-- Recording：`custom:metric:{rid}:<win>` — SLI error-ratio × 4 窗（1h／5m／6h／30m）+ 壞事件絕對數 × 2 短窗（5m／30m）。
-- Fast-burn core（critical）：`(ratio:1h > thr_crit) and on(tenant) (ratio:5m > thr_crit) and on(tenant) (bad:5m > N_min)`。
-- Slow-burn core（warning）：`(ratio:6h > thr_warn) and on(tenant) (ratio:30m > thr_warn) and on(tenant) (bad:30m > N_min×6)`。
-- **`thr_crit`／`thr_warn` = 既有 `user_threshold{severity}` series**：exporter 在 resolve 期算好倍率×(1−obj) 餵入——**規則端零新表達式類別**，比較 RHS 維持裸 threshold series（現行所有 core 同形）；promtool fixture 落在既有類別。
-  - **倍率不 hardcode、由 `slo_period` 動態導出**：常數的真正定義是**預算消耗語意**——fast＝「1h 燒掉 2% 預算」、slow＝「6h 燒掉 5% 預算」；倍率 M＝消耗比 × period ÷ 偵測窗（30d→14.4／6；28d→13.44／5.6）。golden vectors 兩種 period 都涵蓋。
-  - **好性質（明寫）**：此案下 `slo_period` 只影響 exporter 算出的**值**、不進規則文本 → **不是 shape 成分**——換 period 不 re-slug、不分岔規則。
-  - **原始 objective 的可見性 = exporter 原生 gauge**：`user_slo_objective{tenant, recipe_id} 99.9`（命名落在既有 `user_*` 家族，最終名照 OQ-B 與 maintainer 定），供 Phase 2 儀表板與除錯。**禁用 recording rule 反推**：反推式（`1 − thr/M`）必須把 period 相依倍率寫進規則文本 → `slo_period` 變 shape-affecting，毀掉上一條性質。
-  - 代價（明列）：倍率導出邏輯進 Go resolver、與 Python 編譯器的窗選擇跨語言 lockstep（golden vector 必涵蓋）。被拒的表達式側方案見選項表 E′。
-- Alert 標籤：沿用 custom 家族標籤 + **補 `metric_group: "slo_{name}"`**——沒有它 Severity Dedup 的 inhibit（source/target 均要求 `metric_group=~".+"`）對 custom alerts 永不匹配，fast+slow 同時 firing（大事故常態）會雙發通知；補上後 critical 抑制 warning 落回既有 dedup 機制，零新 inhibit 規則。
-- 每 shape 規則數 = 12（1 threshold + 4 ratio 窗 + 2 事件數窗 + 1 info + 2 core + 2 alert；現行 recipe 約 4–5）——rule-group `limit` 餘裕需在實作期實測列帳（實作 checklist 項）。
+以 `objective: "99.9"`、`slo_period: 30d` 為例：exporter 送出 `thr_crit = 14.4 × 0.001 = 0.0144`、`thr_warn = 6 × 0.001 = 0.006`，兩者都是 `user_threshold{severity}` 序列。
+
+## 背景
+
+SLO burn-rate 告警（Google SRE Workbook 第 5 章）是「該設多嚴、何時吵醒人」的業界標準答案，但從一張 SLO 表格到正確的 Prometheus 規則，還要經過多窗口 recording、倍數換算、AND 合成與低流量防誤報，對沒有這些概念的團隊是一道斷崖。本平台的形狀（租戶宣告 YAML、編譯器產生 PromQL）正好接得住這一段。
+
+決定之前檢查過既有能力：
+
+| burn-rate 需要的 | 既有能力 |
+|---|---|
+| 兩個 counter 的比率 | ✅ `ratio` recipe，含除零守衛 |
+| recording rule 輸出 | ✅ 每個 recipe 都展開 recording 與告警 |
+| 依嚴重度比較閾值 | ✅ `user_threshold{severity}` |
+| **多窗口 AND** | ❌ 編譯器缺的唯一一塊：每個 recipe 只有一個窗口。不是底層限制，rule pack 裡已有 `and on(tenant)` 的寫法 |
+| latency／freshness SLI | ❌ 宣告介面表達不了：selector 同時套在分子分母，latency 的 `le` 會套到 `_count` 上，分母成了空向量；freshness 是時間戳差值，不是 counter 比率 |
+| custom 告警的通知出口 | ❌ 當時所有 custom 告警都進一個沒有通知出口的 receiver，「critical」叫不醒任何人 → 列為硬前置，已完成（見「分階段交付」） |
+
+## 決定的細節
+
+### 1. 宣告形狀
+
+- **`objective` 取代 `threshold`**：字串，開區間 (0, 100)。`100` 代表預算為 0、永遠觸發，`0` 也拒收；`"disable"` 是三態的關閉。objective 不是 shape 的一部分，改它不會產生新規則。
+- **`slo_period`**：`28d` 或 `30d`，預設 `30d`。它只決定 exporter 算閾值用的倍數，不進規則文字，也不是 shape 的一部分。
+- **`min_events`**：fast 檔 5 分鐘窗內壞事件數的下限，防低流量誤報；正整數，預設 10。slow 檔的下限由編譯器按窗長換算（30m = 5m × 6）寫成字面值。它**是** shape 的一部分：改它會產生另一組規則。
+- **selector 同時套在分子與分母**，這正是 latency 型無法表達的原因。這個 recipe 不接受 `group_by`。
+
+### 2. 編譯輸出
+
+- **recording**：四個窗口（1h／5m／6h／30m）的 SLI 錯誤率，加上兩個短窗（5m／30m）的壞事件數。這一層不受維護窗抑制：維護期間預算燒蝕照樣記在 TSDB。
+- **兩檔 core**：fast 檔 `1h 與 5m 的錯誤率都超過 thr_crit，且 5m 壞事件數超過 min_events`；slow 檔 `6h 與 30m 都超過 thr_warn，且 30m 壞事件數超過 min_events × 6`。
+- **倍數由預算消耗率導出，不寫死**：fast 檔是「1 小時燒掉 2% 預算」，slow 檔是「6 小時燒掉 5% 預算」；倍數 = 消耗比例 × 預算窗 ÷ 偵測窗。30d 是 14.4／6，28d 是 13.44／5.6，寫在 Go 的 recipe 契約檔（`recipe_contract.json`），`tests/dx/fixtures/slo_burn_multiplier_vectors.json` 釘住兩種預算窗的數值。
+- **原始 objective 另有自己的 gauge**：`user_slo_objective{tenant, recipe_id}`，供儀表板與除錯。不在規則裡從閾值反推：反推要把倍數寫進規則文字，`slo_period` 就會變成 shape 的一部分。
+- **告警標籤**：沿用 custom 告警的標籤，另加 `metric_group: "slo_{name}"` 與 `slo_burn: "true"`。前者讓既有的嚴重度去重（同一個 `metric_group` 的 critical 抑制 warning）生效：大事故時 fast 與 slow 常同時觸發，沒有它會通知兩次。後者是基礎設施整體故障時 inhibit 的目標（護欄 3）。
 
 ### 3. 護欄
 
-1. **Cap 帳**：一條宣告固定展開 fast(critical)+slow(warning) → **計 2**（cap 數的是清單要 exporter 送出的 `user_threshold` 列，tenant-api 寫入檢查與 da-guard `custom_alert_over_cap`（validate-config 經 `guard_errors` 列報它）同一個數，明定不另開特例）。**覆寫的代價誠實告知**：租戶要不同的 objective 或 `min_events`，就得寫自己的 `_custom_alerts`＝自有宣告 → **計入自身 cap 額度（2）**；它會**整個取代** profile 的清單（profile 裡其他 recipe 要一併照抄，否則該租戶就沒有了）；改 `min_events`（或任何 shape 成分）還會 **shape 分岔（+12 條規則）**，只改 objective 不會。架構上可接受（改動罕見），但 recipe 文件必須明寫，防「免費覆寫」的錯誤預期。profile 送出的 recipe 是選用它的租戶共用的 shape，不計入 cap。
-2. **Cardinality**：`group_by` 白名單、rule-group limit、promtool hard gate 全數繼承；壞宣告由 exporter 逐條拒收，編譯器不為它產生規則、其餘照編（同其他 recipe）。
-3. **通知風暴（infra 全局震盪）**：**量測永不抑制**；抑制通知 fan-out——`vibe_slo_burn="true"` 標籤（命名照 pack 標籤慣例實作期覆核）+ 文件化 infra-outage sentinel inhibit pattern。
-4. **維護窗（三態）交互——刻意取捨**：SLO **alert** 沿用 pack 慣例，維護窗期間 `unless` 抑制（三態對租戶的承諾就是「維護窗零告警干擾」）；SLI **recording rules 不受 unless 影響、持續評估**——預算燒蝕在 TSDB 全程留痕，「量測永不抑制」哲學由 recording 層承擔，alert 層的抑制是通知承諾、不是量測缺口。此取捨明寫進 recipe 文件。
-5. **表達力邊界**：編譯期展開、輸入仍為受限參數（bare metric name、enum、已驗純量）——**不新增租戶查詢表達力類別、不觸發 ADR-029 T1**（T1 定義=「超出固定 recipe 模板+已驗純量參數」；objective/min_events 為新增已驗純量——objective 經 ParseFloat 驗證、**永不進規則文本**；min_events 為**編譯期字面值**，經嚴格整數驗證（tag/charset/範圍）後寫入規則文本，無注入面，與 §1/§2 的編譯期換算語意一致）。objective/min_events 依 ADR-029 Consequences 慣例**於 Python/Go 兩側各自加驗證**。
-6. **誠實邊界**：SLI 源指標必須已存在——平台編譯宣告、不發明量測。v1 只接 counter-ratio 形；latency/freshness 的 instrumentation 指引在文件、recipe 支援在 deferred。
+1. **cap 計 2，覆寫有代價。** 一條宣告固定產生兩條告警，計入租戶自訂告警上限的 2 個名額；tenant-api 寫入檢查、da-guard 與 validate-config 用同一個數。profile 裡的 recipe 是綁定它的租戶共用的 shape，不計入。租戶要不同的 objective 或 `min_events`，得寫自己的 `_custom_alerts`：花掉自己的 2 個名額，而且**整份取代** profile 的清單（profile 裡其他 recipe 要一併照抄）；改 `min_events` 還會多一組約 12 條規則，只改 objective 不會。recipe 文件寫明這一點。
+2. **壞宣告逐條拒收。** exporter 逐條判定，編譯器不為壞宣告產生規則，其餘照常編譯；規則群組上限與 promtool 閘門照舊。
+3. **基礎設施整體故障時的通知風暴：量測不抑制，只抑制通知。** 告警帶 `slo_burn: "true"`，可作為 inhibit 的目標；「整體故障時 SLO 告警該不該靜音」是組織決策，所以平台只把 inhibit pattern 寫進文件（[設定驅動設計](../design/config-driven.md#27-三態運營模式-operational-modes)），不預設出貨。
+4. **維護窗只抑制告警，不抑制量測。** 告警照 rule pack 慣例在維護期間不觸發；recording 不受影響。
+5. **不擴大租戶的查詢表達力。** 輸入仍是受限參數：metric 名、列舉值、驗證過的數值。objective 永遠不進規則文字；`min_events` 經嚴格整數驗證後才寫成字面值，沒有注入面。所以不觸發 [ADR-029](029-custom-alert-cross-tenant-query-scoping.md) 的跨租戶隔離重評。
+6. **平台不發明量測。** SLI 的來源指標必須已存在。
 
-## 選項與取捨
+## 後果與已知限制
 
-| 方案 | 取 | 捨 | 採用 |
-|---|---|---|---|
-| **A：第 7 recipe、編譯期展開** | 落在既有 emit_shape 模式；零新表達力；cap 友善 | 檔位 opinionated | ✅ |
-| B：raw-PromQL / bounded-DSL | 表達力全開 | ADR-029 T1（跨租戶隔離重評）成本階躍 | ❌ |
-| C：租戶手拼多條 `ratio` | 零開發 | 無 AND 合成（失 reset 語意）；cap ~8 條/SLO；門檻沒降 | ❌ |
-| D：adopt Sloth／Pyrra 引擎 | 現成慣例 | 靜態 per-SLO 規則：無租戶向量化、繞過 conf.d/三態/dedup/canary 管線 | ❌（**慣例✅**） |
-| **E：係數 exporter 側算（resolve 期）** | 走既有 `user_threshold{severity}` 通道；規則端零新形狀；砍掉整條新資料平面管線 | 倍率常數跨語言 lockstep；原始 objective 需原生 gauge 補可見性 | ✅ |
-| E′：係數 PromQL 側算（`> group_left 14.4×(1−obj_series)`） | 常數留在編譯器單側 | **全新表達式類別**（現行 RHS 全為裸 series）、疊上 version fallback 雙分支後表達式面積倍增、需新 promtool fixture 類別、需新 objective series 家族（新 resolver/collector 觸點） | ❌ |
+- **租戶不寫 PromQL 就有含低流量防護的 burn-rate 告警**；規則數隨 shape 成長，不隨租戶數；改 objective 不產生新規則。
+- **兩檔是刻意偏離 SRE Workbook**：Workbook 裡 14.4× 與 6× 都叫人，本設計把 6× 降為 warning（6× 約 5 天燒光 30 天的預算，判斷為「今天處理、不必半夜叫醒」）。四檔全譜延後。
+- **每個 shape 約 12 條規則**，比其他 recipe（4–5 條）多。
+- **只涵蓋 availability 型**，SLO 的故事不完整，以延後項管理預期。
+- **portal 的 recipe-builder 不提供表單**：它對 `slo_burn_rate` 只顯示「直接寫 YAML」的提示，因為 objective 不是它的表單欄位。
 
-## 後果
+## 考慮過的替代方案
 
-**正面**：租戶零 PromQL 得到含低流量防護的 burn-rate 告警；profile→tenant 分工（profile 定 shape 與預設 objective，租戶綁定）；規則 O(shapes)；**objective 改值不 re-slug**（editable 友善——objective 是 series 值、非 shape 成分）。
+| 方案 | 為什麼不採用 |
+|---|---|
+| raw PromQL 或受限 DSL | 表達力全開，觸發 ADR-029 的跨租戶隔離重評，成本跳一階 |
+| 租戶自己拼多條 `ratio` | 沒有 AND 合成，一個 SLO 吃掉約 8 個 cap 名額，門檻沒有降低 |
+| 採用 Sloth 或 Pyrra | 靜態的逐 SLO 規則，無法依租戶向量化，也繞過 conf.d、三態、嚴重度去重與 canary 管線（但沿用它們的慣例） |
+| 在 PromQL 裡算係數（`> group_left 14.4 × (1 − objective_series)`） | 新的表達式類別（現有規則右側全是裸 series），疊上版本 fallback 後面積倍增，還要一個新的 objective series 家族 |
 
-**負面／待審視**：
+## 分階段交付
 
-- recipe 家族 6→7，Python/Go lockstep 面積 +1，且 E 案把倍率常數也納入 lockstep。
-- **preview 缺口**：ratio 預覽本就延後 → 出貨時 would-fire 預覽不可用，UI 誠實標示（既有慣例）。
-- 兩段檔位對 Workbook 的**刻意偏離**：Workbook 中 14.4× 與 6× 均為 page 檔（ticket 為 3×/1×）；本設計把 6× 降為 warning/ticket 是入門簡化（6× = 5 天燒光 30d 預算，判斷為「今天處理、不必吵醒」尚可辯護），`four_tier` 參數還原全譜。此偏離於 recipe 文件明示。
-- v1 只覆蓋 availability 型——SLO 故事不完整，靠 deferred triggers 誠實管理預期。
-
-## 分階段交付與 gates
-
-| Phase | 內容 | Gate |
+| 階段 | 內容 | 狀態 |
 |---|---|---|
-| **0-pre（硬前置）** | **custom 子樹 outbound delivery**（per-tenant 子路由、沿用既有 `tenant-<name>` receiver；定案見 OQ-C）——否則 fast-burn critical 無人收到 | 本 ADR accepted 即做；**獨立工作項，現有 custom alerts 同受益** |
-| 0 | recipe（availability 型）+ 模板文件 + inhibit pattern 文件 + 公開文（告警系列篇二）功能段補寫 | ADR accepted + 0-pre 完成 |
-| 1 | Portal 精靈（兩題定位→建議檔位；歷史 SLI 回查建議 objective——獨立 range query；**主動詢問 min_events**）+ ratio preview 解凍（前置） | 首客戶實際使用 Phase 0 模板 |
-| 2 | Grafana SLO 儀表板 pack（預算餘額=f(objective, slo_period)、burn rate、趨勢；讀 `user_slo_objective`） | Phase 1 上線且 ≥1 租戶有活 recipe |
+| 前置 | custom 告警依租戶送出：custom 告警的路由下，每個有主路由的租戶一條子路由，指向既有的 `tenant-<name>` receiver；沒有的才落到 `custom-alerts-firehose` | ✅ 已完成 |
+| 0 | recipe（availability 型）、recipe 文件、inhibit pattern 文件 | ✅ 已完成 |
+| 1 | portal 引導精靈：以歷史 SLI 建議 objective、主動詢問 `min_events` | 未做；觸發條件是第一個客戶實際使用 recipe |
+| 2 | Grafana SLO 儀表板（預算餘額、burn rate、趨勢；讀 `user_slo_objective`） | 未做；觸發條件是階段 1 上線且至少一個租戶有在用的 recipe |
 
-## Deferred（附 trigger）
+## 延後的項目
 
-- **latency-quantile 型**：需 per-side selectors + good-ratio 語意開關（比較方向反轉）——trigger＝首個客戶提出 latency SLO 需求。
-- **freshness 型**：timestamp 差值形狀、非 ratio——trigger＝首個客戶具備 completion-timestamp instrumentation 且提出需求。
-- **四段全譜檔位**：`tiers: four_tier` 參數位保留——trigger＝首個客戶要求更細分級。
-- **歷史回查引擎泛化**：trigger＝第二個真實消費者（n=2；已三度拒 pre-build）。
-- **錯誤預算政策自動化**：**永久平台範圍外**。
+- **latency 分位數型**：需要分子分母各自的 selector，以及比較方向反轉的「好事件比率」。觸發條件：第一個客戶提出 latency SLO 需求。
+- **freshness 型**：時間戳差值，不是比率。觸發條件：第一個客戶有完成時間戳的 instrumentation 並提出需求。
+- **四檔全譜（`tiers` 參數）**：未實作。觸發條件：第一個客戶要求更細的分級。
+- **歷史回查引擎泛化**：觸發條件：第二個真實的使用者。
+- **錯誤預算政策自動化**：永久不在平台範圍內。
 
-## 同步清單（doc-as-code cascade）
+## 相關
 
-`RECIPES` enum（`shape.py`+`custom_alert.go` lockstep）→ 倍率常數 lockstep（Go resolver 算值×Python 選窗，golden vector 涵蓋）→ `recipe_id_vectors.json` → schema：enum + `objective`/`slo_period`/`min_events` 欄位 + **if/then 第三分支**（slo_burn_rate → objective 必填、threshold 禁用）→ `rule-packs/recipes/` 文件 + count 同步 → promtool fixture（含低流量情境：2 請求 1 錯不觸發）→ CHANGELOG/CLAUDE.md/README 計數。
-
-## Open Questions
-
-- OQ-A `min_events` 預設值（保守起點候選 5–10；配低流量 fixture 定案）。
-- OQ-B `metric_group: "slo_{name}"` 與 `vibe_slo_burn` 標籤命名——照 pack 標籤慣例（現行無前綴家族）實作期與 maintainer 定。
-- ~~OQ-C 0-pre（custom 子樹 delivery）的 receiver 形狀~~——已定案（2026-07-12）：custom 子樹內 per-tenant 子路由、沿用既有 `tenant-<name>` receiver、fallback firehose；本 ADR 只立依賴，設計細節見 feature issue [#1092](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1092) 與 0-pre PR。
-
-## 關聯
-
-- [ADR-008](008-operator-native-integration-path.md)/[ADR-024](024-version-aware-threshold-via-dimensional-label.md)（declarative-only、custom-alerts 能力線）、[ADR-025](025-alerting-plane-self-liveness.md)（編譯 canary，新 recipe 自動納入）、[ADR-029](029-custom-alert-cross-tenant-query-scoping.md)（表達力邊界；objective/min_events 驗證義務）。
-- feature 追蹤 issue [#1092](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1092)（TRK-333；含完整對抗軌跡 triage 表）。
-- [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) recipe-preview（ratio 預覽解凍為 Phase 1 前置）、[#1008](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1008) 逐 recipe fail-soft（繼承；現由 exporter 逐條判定，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3）。
-- 告警驗證能力階梯的 deferred 端：[#1090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1090)（chaos-for-alerts）、[#1091](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1091)（公開驗證 guide）。
+- [ADR-024](024-version-aware-threshold-via-dimensional-label.md) —— 自訂告警與 recipe 契約
+- [ADR-025](025-alerting-plane-self-liveness.md) —— 編譯 canary，新 recipe 自動納入
+- [ADR-029](029-custom-alert-cross-tenant-query-scoping.md) —— 租戶查詢表達力的邊界
+- [`rule-packs/recipes/slo_burn_rate.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/slo_burn_rate.yaml) —— recipe 的人讀契約
+- [#1092](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1092) —— 功能追蹤與設計討論
