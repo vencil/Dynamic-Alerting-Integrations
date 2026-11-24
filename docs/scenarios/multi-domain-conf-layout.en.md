@@ -42,7 +42,6 @@ conf.d/
 1. Finding all Finance tenants requires `grep` on filenames
 2. Finance, Infra, Ops each maintain a separate defaults copy → impossible to sync
 3. Cannot clearly express "EU-West defaults" or "Staging defaults" concept
-4. RBAC cannot be distributed by domain+region
 
 ## Solution: Hierarchical Configuration Design
 

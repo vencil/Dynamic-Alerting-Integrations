@@ -13,7 +13,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (v1.12.0)
+✅ **Accepted** (2026-03)
 
 ## Terms
 
