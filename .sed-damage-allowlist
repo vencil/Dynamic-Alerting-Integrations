@@ -291,3 +291,6 @@ helm/threshold-exporter/values.yaml
 components/threshold-exporter/config/conf.d/_defaults.yaml
 try-local/seed/conf.d/_defaults.yaml
 tests/lint/test_check_threshold_reachability.py
+# #2789 batch 8: ADR-036 rewritten to describe current behavior (dated amendments folded, cost tables and appendix dropped); both halves shrink to about a third.
+docs/adr/036-single-parser-effective-config.md
+docs/adr/036-single-parser-effective-config.en.md

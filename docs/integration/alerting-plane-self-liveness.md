@@ -12,7 +12,7 @@ lang: zh
 
 > **受眾**：**部署並維運本平台的 Operator / SRE**。本文是讓「Prometheus / Alertmanager 自己死掉也能被察覺」的設定與維運合約——你需要備妥一個平台**外部**的監測點、完成設定、並遵守靜音/抑制禁區。
 >
-> 設計依據見 [ADR-025 告警平面自我存活性](../adr/025-alerting-plane-self-liveness.md)（D1 心跳 / D2 斷網被動探測 / D3 HA 邊界）。租戶告警的 receiver / Secret / 抑制規則設定見 [Operator Alertmanager 整合指南](operator-alertmanager-integration.md)。
+> 設計依據見 [ADR-025 告警平面自我存活性](../adr/025-alerting-plane-self-liveness.md)（決策 1 心跳／決策 2 斷網被動探測／決策 3 高可用邊界）。租戶告警的 receiver / Secret / 抑制規則設定見 [Operator Alertmanager 整合指南](operator-alertmanager-integration.md)。
 
 ## 它解什麼
 

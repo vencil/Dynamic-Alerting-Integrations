@@ -1,6 +1,6 @@
 package main
 
-// write.go — `da-guard write` (ADR-036 §2 "寫 conf.d：Go 是唯一的寫者",
+// write.go — `da-guard write` (ADR-036 §2 "寫 conf.d 檔：只有 Go 一個寫者",
 // step 10): how a Python tool changes conf.d (tenant-api, the other Go
 // writer, shares pkg/confedit). A Python tool decides what to change from
 // the parse result and hands that intent here; da-guard edits the node trees

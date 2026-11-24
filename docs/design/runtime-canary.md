@@ -14,7 +14,7 @@ parent: architecture-and-design.md
 
 > ← [返回主文件](../architecture-and-design.md)
 >
-> **相關**：[ADR-025 告警平面自我存活性](../adr/025-alerting-plane-self-liveness.md)。本文是該 ADR「之後再說」表中 **runtime canary** 項的**設計就緒 (design-readiness)** 產出——常駐部署仍 defer，觸發條件見文末。
+> **相關**：[ADR-025 告警平面自我存活性](../adr/025-alerting-plane-self-liveness.md)。本文是該 ADR〈還沒做、各自的觸發條件〉表中 **runtime canary** 項的**設計就緒 (design-readiness)** 產出——常駐部署仍 defer，觸發條件見文末。
 
 ## 它補的盲點
 
@@ -22,7 +22,7 @@ parent: architecture-and-design.md
 
 | 既有防線 | 證明什麼 | 看**不到**什麼 |
 |---|---|---|
-| **D1 Watchdog**（[ADR-025](../adr/025-alerting-plane-self-liveness.md)，`vector(1)` + 外部 dead-man's-switch） | Prometheus 引擎活著、且 Alertmanager → receiver 投遞鏈通 | 引擎活著、但租戶自訂告警的**資料側/規則側**悄悄斷了 |
+| **Watchdog**（[ADR-025](../adr/025-alerting-plane-self-liveness.md)，`vector(1)` + 外部 dead-man's-switch） | Prometheus 引擎活著、且 Alertmanager → receiver 投遞鏈通 | 引擎活著、但租戶自訂告警的**資料側/規則側**悄悄斷了 |
 | **pint**（CI 規則靜態檢查） | 規則在**作者時**語法/語意正確（如聚合不會砍掉 template 用到的 label） | 部署後的**執行期**——規則有沒有真的拿到資料、有沒有被載入 |
 
 兩者之間有一條**端到端的活性**沒有人守：
@@ -100,7 +100,7 @@ canary 由**同一個** single-replica Prometheus 評估——它守的是「引
 
 ## 「壞租戶隔離」——誠實的兩層說明
 
-ADR-025「之後再說」表原本把 canary 的信任資產寫成：「故意注入一個損壞的租戶設定，canary 仍**成功編譯**、繞過單點錯誤、正確送出」。這句話寫下當時對照程式碼是**錯**的（編譯彼時整批 fail-closed，一個壞租戶讓所有人一起紅）；[#1008](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1008) 把編譯器改為 per-recipe fail-soft 後，它才真的在**編譯層**成立（現在逐條判定的是 exporter，見第一層）。但單句敘述仍掩蓋了結構——本平台的「壞租戶不拖垮好租戶」其實是**兩個不同的層**達成的，不是「壞的還能編譯」（壞 recipe 從不編譯，是被 exporter 拒收）：
+ADR-025〈還沒做〉表原本把 canary 的信任資產寫成：「故意注入一個損壞的租戶設定，canary 仍**成功編譯**、繞過單點錯誤、正確送出」。這句話寫下當時對照程式碼是**錯**的（編譯彼時整批 fail-closed，一個壞租戶讓所有人一起紅）；[#1008](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1008) 把編譯器改為 per-recipe fail-soft 後，它才真的在**編譯層**成立（現在逐條判定的是 exporter，見第一層）。但單句敘述仍掩蓋了結構——本平台的「壞租戶不拖垮好租戶」其實是**兩個不同的層**達成的，不是「壞的還能編譯」（壞 recipe 從不編譯，是被 exporter 拒收）：
 
 **第一層 — exporter 逐條判定、編譯器只編 exporter 的判定 + 租戶可定位。** 編譯**不是**整批 fail-closed（舊行為：一個 schema 損壞的租戶設定讓**整個** `compile_custom_alerts.py` 回 exit 2——等於任一租戶的壞設定都能弄紅共用 CI gate、擋下**所有**租戶的 PR merge，一種跨租戶 availability DoS；[#1008](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1008) 起改為逐 recipe 處理）。判定一條 recipe 的是 **exporter**，不是編譯器（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）：exporter 的 resolver 逐條判定每個租戶 `_custom_alerts` 的每一條——收下（`served`）、停用（`disabled`：給了值就會收下的那種）、拒收（`rejected`：缺必要欄位、非法 shape 參數如非法 window 或非法的 threshold severity 標記），或因與前面某條同 shape 同 severity 而丟掉（`duplicate`）——`da-guard served-values` 的 `custom_alerts` 逐條列出這些判定。編譯器編的就是這份判定（`da-guard compile-custom-alerts`，與 exporter 是同一份 Go 程式，[#3229](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3229)）：只為 `served` 與 `disabled` 建規則；`rejected`／`duplicate` 不編，stderr 逐筆一行，**指名 tenant、第幾條、name 與原因**；exporter 整份讀不進來的檔，其餘照編、stderr 點名該檔（[`compile_custom_alerts.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/dx/compile_custom_alerts.py) 的 stderr 報告）——**其餘 recipe 照編**。每租戶自訂告警上限不在編譯器判，由 da-guard `custom_alert_over_cap`（validate-config 經 `guard_errors` 列報它）與 tenant-api 的寫入檢查擋。關鍵不變式：**exporter 不送出的 recipe 不進 pack、永不部署**。所以隔離靠的是**exporter 逐條拒收 + 可定位診斷**：壞的被指名、不進 pack，好的照編照部署。**canary 在此沒有特殊魔法**——鄰居租戶的壞 recipe 不會拖垮它的編譯，而租戶清單裡 exporter 不送的每一條，編譯器都在 CI log 留一行；寫在 exporter 根本不讀的位置（`_defaults.yaml` 的 `_custom_alerts`）的，由 da-guard 的 `subtree_default_reserved_key` 與 `defaults_toplevel_ignored` 報出（validate-config 經 `guard_errors` 列報）。編譯以 exit 2 整個拒絕的情形只剩：exporter 整棵樹都拒收或 `/metrics` 收集不了的情形（例如同一租戶跨檔重複宣告；此時 exporter 本身也一個租戶都不送）、兩個不同 shape 撞同一個 recipe_id，以及 config 層級錯誤（config dir 不存在、沒有 da-guard、emit-time template-safety invariant）。（租戶本來就**不寫 PromQL**，編譯器代寫，所以租戶無法注入會在執行期炸掉的表達式。）由此可知：一個**畸形的 recipe**（非法 window、非法的 threshold severity 標記）在這一層即被 exporter 拒收、編譯器不為它建規則、**永不進入執行期**——所以第二層的執行期隔離測試（demo case 2）餵的是壞**資料**（鄰居帶極端值），而非壞 recipe；「執行期還在跑的壞 recipe 鄰居」在這個架構裡**不存在**。
 
@@ -146,6 +146,6 @@ ADR-025「之後再說」表原本把 canary 的信任資產寫成：「故意�
 ## 範圍邊界
 
 - **不做** canary 自己的告警內容正確性測試（那是各 recipe 的 promtool golden 的事）；canary 只證**管線活性**。
-- **不做** HA——canary 由 single-replica Prometheus 評估；整個引擎死掉是 Watchdog + 外部 DMS 的職責（[ADR-025 §D3](../adr/025-alerting-plane-self-liveness.md)）。
+- **不做** HA——canary 由 single-replica Prometheus 評估；整個引擎死掉是 Watchdog + 外部 DMS 的職責（[ADR-025 §3](../adr/025-alerting-plane-self-liveness.md)）。
 - **不取代** Watchdog 或 pint——三者互補（見上表）。
 - 保留租戶 id（`platform-canary`）須排除於 tenant-count / chargeback / quota / **maintenance window**（後者：maintenance 會讓 core 消失而誤觸 meta-alert，見上方誠實邊界）；命名前綴依 operator 慣例可調。
