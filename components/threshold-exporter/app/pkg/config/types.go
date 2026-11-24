@@ -67,8 +67,11 @@ type ResolvedThresholdExpiry struct {
 	Tenant    string
 	MetricKey string // full conf.d key, e.g. "mysql_connections"
 	Expires   time.Time
-	Reason    string
-	Expired   bool
+	// ExpiresText is the `expires:` as written (#4263: the value may be
+	// one the merge at the instant left out, so readers take it from here).
+	ExpiresText string
+	Reason      string
+	Expired     bool
 }
 
 // silentModeStructured is the intermediate struct for parsing structured _silent_mode YAML.
@@ -170,16 +173,15 @@ type TimeWindowOverride struct {
 type ScheduledValue struct {
 	Default   string
 	Overrides []TimeWindowOverride
-	// Expiry (PREVENT #656): non-nil makes this a *time-boxed* override that,
-	// after Expiry.Expires, gives way to what the tenant gets without it
-	// (liveValue, expiry_lapse.go, #4263) — never to silence — and emits
-	// da_config_event{event="threshold_expired"}.
+	// Expiry (PREVENT #656): non-nil makes this a *time-boxed* override that
+	// auto-reverts to the platform default after Expiry.Expires (fail-safe: more
+	// protection, never silent) and emits da_config_event{event="threshold_expired"}.
 	// nil = permanent override. Behind a POINTER so the common (no-expiry)
 	// ScheduledValue stays small — it is held per-override in
 	// map[tenant]map[metric]ScheduledValue and copied on every config merge /
 	// scrape, so two inline strings measurably regressed ResolveSilentModes /
-	// MergePartialConfigs (bench-gate #871). Read on every threshold key the
-	// same way (liveValue).
+	// MergePartialConfigs (bench-gate #871). Honored only on base standard metrics
+	// (those in _defaults.yaml); ignored elsewhere (v1).
 	Expiry *ExpiryMeta
 	// deleted marks a reserved (`_`) key a `tenants:` / `profiles:` body
 	// wrote as null: "delete the inherited value" (#3341,
@@ -208,14 +210,6 @@ type ScheduledValue struct {
 type ExpiryMeta struct {
 	Expires string // RFC3339 instant; empty = no time-box
 	Reason  string // human-readable reason (surfaced on expiry)
-	// lapse is the value this one gives way to once it expires (#4263):
-	// the value the merge would have given the tenant without it — the
-	// layer beneath that the merge skipped because this value was there
-	// (stackLapse, expiry_lapse.go). nil: nothing beneath in the tenant's
-	// merged map, so it lapses to the root `defaults:` (expiryHonoured).
-	// Here, behind the Expiry pointer, so a value with no `expires:` pays
-	// nothing (#871).
-	lapse *lapseTarget
 }
 
 // DefaultMaxMetricsPerTenant is the per-tenant cardinality limit used when
@@ -308,6 +302,11 @@ type ThresholdConfig struct {
 	// header per note (#3269: ThresholdConfig is held per file and copied on
 	// every merge).
 	notes *fileNotes
+
+	// expiry is what the build decided about `expires:` at its instant
+	// (expiry.go, #4263): nil for a config assembled by hand or one file's
+	// decode, which read `expires:` at resolve time against the root alone.
+	expiry *expiryState
 }
 
 // fileNotes is what one file's decode records, without changing any value

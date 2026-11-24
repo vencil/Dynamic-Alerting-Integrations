@@ -763,7 +763,7 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 		}
 	}
 
-	cfg, rep, written, allUnreadable, ok := loadJSONTree(f.configDir, servedValuesCmd, errOut)
+	cfg, rep, written, allUnreadable, ok := loadJSONTree(f.configDir, servedValuesCmd, errOut, at)
 	if !ok {
 		return exitCallerErr
 	}
@@ -885,12 +885,12 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 // walk cannot list too, named as "." (walk_error). Only a tree with no
 // config file at all is refused. ok=false: refused, the reason already on
 // errOut (exit 2).
-func loadJSONTree(dir, cmd string, errOut io.Writer) (cfg *config.ThresholdConfig, rep config.LoadReport,
+func loadJSONTree(dir, cmd string, errOut io.Writer, at time.Time) (cfg *config.ThresholdConfig, rep config.LoadReport,
 	written map[string]map[string]string, allUnreadable, ok bool) {
 	if refuseNonUTF8Tree(dir, programName+" "+cmd, errOut) {
 		return nil, rep, nil, false, false
 	}
-	cfg, rep, written, err := config.LoadDirReportWritten(dir, log.New(errOut, "", 0))
+	cfg, rep, written, err := config.LoadDirReportWrittenAt(dir, log.New(errOut, "", 0), at)
 	allUnreadable = errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) > 0
 	if err != nil && !allUnreadable {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, cmd, err)
@@ -1370,7 +1370,9 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
 		view := cfg.FamilyView(tenant)
-		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at, recordedReasons(cfg, tenant, at),
+		// #4263: keys are the tenant's lines as written — an expired one
+		// included, which the merge at --at left out of what is served.
+		tv.Keys = servedKeys(tv, cfg.WrittenTenants()[tenant], undeliverable[tenant], at, recordedReasons(cfg, tenant, at),
 			func(k string) bool { return view.SwitchedOffWithBase(k, at, at) })
 		addRootRefused(tv, overrides, rootRefused)
 		addRootDisabled(tv, cfg, tenant, at)

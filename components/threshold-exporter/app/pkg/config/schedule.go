@@ -268,24 +268,20 @@ func (c *ThresholdConfig) ScheduleCuts() []int {
 }
 
 // addScheduleCuts adds to seen the start of every DaySegments segment of
-// every value of overrides that has a schedule — and of every value one gives
-// way to on expiry (#4263) — and returns it. A nil seen
+// every value of overrides that has a schedule, and returns it. A nil seen
 // is made (holding 0) on the first schedule, so addScheduleCuts(nil, m) is
 // nil when no value of one tenant's map m has a schedule.
 func addScheduleCuts(seen map[int]bool, overrides map[string]ScheduledValue) map[int]bool {
-	for _, top := range overrides {
-		// #4263: a value given way to on expiry is served too (lapseChain).
-		lapseChain(top, func(sv ScheduledValue) {
-			if len(sv.Overrides) == 0 {
-				return
-			}
-			if seen == nil {
-				seen = map[int]bool{0: true}
-			}
-			for _, seg := range sv.DaySegments() {
-				seen[seg.From] = true
-			}
-		})
+	for _, sv := range overrides {
+		if len(sv.Overrides) == 0 {
+			continue
+		}
+		if seen == nil {
+			seen = map[int]bool{0: true}
+		}
+		for _, seg := range sv.DaySegments() {
+			seen[seg.From] = true
+		}
 	}
 	return seen
 }
@@ -311,10 +307,7 @@ func (c *ThresholdConfig) AtMinuteOfDay(minute int) *ThresholdConfig {
 	for tenant, overrides := range c.Tenants {
 		var fixed map[string]ScheduledValue
 		for k, sv := range overrides {
-			// #4263: the values it gives way to on expiry are read at
-			// minute too (fixedAtMinute).
-			fv, changed := fixedAtMinute(sv, minute)
-			if !changed {
+			if len(sv.Overrides) == 0 {
 				continue
 			}
 			if fixed == nil {
@@ -323,7 +316,7 @@ func (c *ThresholdConfig) AtMinuteOfDay(minute int) *ThresholdConfig {
 					fixed[k2] = v2
 				}
 			}
-			fixed[k] = fv
+			fixed[k] = ScheduledValue{Default: sv.valueAtMinute(minute, nil), Expiry: sv.Expiry}
 		}
 		if fixed == nil {
 			out.Tenants[tenant] = overrides

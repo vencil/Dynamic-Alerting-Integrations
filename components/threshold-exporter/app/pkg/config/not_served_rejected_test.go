@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
 )
@@ -31,7 +32,7 @@ func TestRejectedShownCache_FailedResolveIsNotCached(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger, discardLogger.Printf)
+		built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger, discardLogger.Printf, time.Time{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -94,7 +95,7 @@ func TestRejectedShownCache_AnotherTenantDoesNotMoveTheVerdict(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger, discardLogger.Printf)
+		built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger, discardLogger.Printf, time.Time{})
 		if err != nil {
 			t.Fatal(err)
 		}

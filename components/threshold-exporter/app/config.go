@@ -169,6 +169,10 @@ type debouncerState struct {
 	mu             sync.Mutex      // guards timer + pendingReasons
 	pendingReasons []string        // accumulates reload triggers during a window
 	fired          uint64          // count of fires; read via DebounceFiredCount()
+	// expiryTimer reloads at the committed config's ValidUntil (#4263):
+	// the next `expires:` of the tree, after which the tree answers
+	// differently and must be merged again. Guarded by mu.
+	expiryTimer clockwork.Timer
 }
 
 // builtinCommit is what one load did with the built-in defaults layer
@@ -538,6 +542,8 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 		// reads m.hierarchy would slip past the check.
 		afterUnlock()
 	}
+	// #4263: the tree answers differently from its next `expires:` on.
+	m.armExpiryReload(cfg)
 
 	logConfigStats(m.getLogger(), cfg, logHeader)
 	warnInvalidTenantIDs(m.getLogger(), cfg)
@@ -679,10 +685,9 @@ func (m *ConfigManager) Load() error {
 	// #3832: the single file is the root carrier, read and parsed (an
 	// error returned above), so the built-in layer goes under its values —
 	// after the shape, which is the file's as written.
-	seeded := config.SeedBuiltinDefaults(cfg.Defaults)
-
-	// Expand profile values into tenant overrides (v1.12.0)
-	cfg.ApplyProfiles()
+	// The built-in layer and the profiles (v1.12.0), with the file's
+	// `expires:` decided at this instant (#4263, config.SingleFileAt).
+	cfg, seeded := config.SingleFileAt(cfg, m.now(), log.Printf)
 	// #3556: directory mode logs this in applyBoundaryRules; the single file
 	// applies no boundary rules, so it is logged here.
 	config.WarnRefusedDimensionBases(m.path, cfg.Dimensions, m.getLogger())
@@ -781,7 +786,9 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// maps it then threw away (the bench gate's +37% bytes on
 	// IncrementalLoad_1000_NoChange_MtimeGuard).
 	compositeHash := scan.Composite
-	if compositeHash == prevHash {
+	// #4263: an unchanged tree is merged again once the committed config
+	// has reached its next `expires:` (it answered for an earlier instant).
+	if compositeHash == prevHash && !m.expiredCommit() {
 		return nil
 	}
 	newHashes, newMtimes, dataCache := scan.RelHashes(), scan.RelMtimes(), scan.DataCache()
@@ -1075,8 +1082,10 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// cannot read withholds it (TreeScan.RootBuiltinWithheld). The patch
 	// copies prev's Defaults, so it is taken only while that state holds.
 	withhold := scan.RootBuiltinWithheld()
+	// #4263: a patch keeps prev's merge, which decided `expires:` for
+	// another instant — a tree holding a time-boxed value is merged whole.
 	patchBranch := isTenantOnlyChange(changed, added, removed) && prev != nil &&
-		(len(prev.Defaults) == 0) == withhold
+		(len(prev.Defaults) == 0) == withhold && !config.HoldsTimedValue(newConfigs)
 	reportPlatformOrphans(newConfigs, exists, m.getLogger())
 	builtin := builtinCommit{withheld: withhold}
 	if patchBranch {
@@ -1090,10 +1099,9 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		builtin = prevBuiltin
 	} else {
 		// Full rebuild: _defaults or _profiles changed, must re-merge everything
-		merged = mergePartialConfigs(newConfigs, exists)
-		if !withhold {
-			builtin.seeded = config.SeedBuiltinDefaults(merged.Defaults)
-		}
+		// #4263: the tree's `expires:` decided at this instant, as
+		// BuildFlatConfig decides them.
+		merged, builtin.seeded = config.MergeFlatAt(newConfigs, exists, withhold, m.now())
 	}
 	// ⛔ BOTH BRANCHES, NOT JUST THE REBUILD. `ApplyProfiles` used to sit inside
 	// the else above, so the tenant-patch path published tenants exactly as
@@ -1667,6 +1675,7 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 		ParsedDefaults: parsedDefaults,
 		Obs:            scanObserverFor(m.getMetrics()),
 		Logger:         m.getLogger(),
+		At:             m.now(), // #4263: the instant the tree answers for
 	})
 	if err != nil {
 		return err
@@ -2089,6 +2098,12 @@ func (m *ConfigManager) tickOnce() {
 			// ops tool that rapidly rewrites multiple files coalesces
 			// into a single reload.
 			m.triggerDebouncedReload(reason)
+			return
+		}
+		// #4263: nothing moved on disk, but the committed config may have
+		// reached its next `expires:` (armExpiryReload's safety net).
+		if m.expiredCommit() {
+			m.triggerDebouncedReload(reasonThresholdExpiry)
 			return
 		}
 		// #2100: nothing moved, so no reload will run — but a tenant whose

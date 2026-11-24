@@ -34,7 +34,7 @@ lang: en
 | 2026-11-21 | The keys the platform ships no value for are in the built-in layer too, valued off: the root need not declare them, and a tenant's value, its `<key>_critical` and a profile's value are served | Decision 11 |
 | 2026-11-21 | A `<key>_critical` under the root `defaults:` is every tenant's critical default, which a tenant overrides; it is not served while its base has no value, and goes off with its base | Decisions 3, 11 |
 | 2026-11-22 | The Helm chart's `thresholdConfig.defaults` is empty by default and writes no registry key; init no longer writes an `optional_overrides:` list either | Decision 11, Alternatives E |
-| 2026-11-24 | A threshold past its `expires:` serves what the tenant would get with that line deleted (the value of the layer beneath, else the root's), for `<key>_critical` and dimensional keys too; with nothing beneath the value is still served | Decisions 10, 11 |
+| 2026-11-24 | A threshold past its `expires:` serves what the tenant would get with that line deleted (the value of the layer beneath, else the root's), for `<key>_critical` and dimensional keys too; with nothing beneath the value is still served. At the next `expires:` the tree is merged again even with no file changed | Decisions 7, 10, 11 |
 
 ## Terms
 
@@ -242,6 +242,8 @@ So `sha256sum` of any file never matches a `merged_hash`. And because `merged_ha
 The built-in values are in the effective config too: when the platform changes one value of the built-in table, the `merged_hash` of every tenant that does not override that key moves, which is exactly the question it answers. A tree whose root writes every built-in key with the platform's number gets the same effective config and `merged_hash` for every tenant with or without the built-in layer.
 
 **When reloads happen**: the exporter scans conf.d/ every 30 seconds (`-reload-interval`). After it sees a change it waits 300 ms (`-scan-debounce`) before reloading. This wait is called debouncing: changes that arrive close together are folded into one, so a `git pull` that changes 20 files triggers a single reload.
+
+A reload also happens with no file changed: the config is merged for the current instant, and a threshold past its `expires:` is as if not written (Decision 10). So at the tree's next `expires:` the exporter merges again, after the same debounce; when the clock is set back before the last `expires:` that passed, the next scan merges again too.
 
 **Every reload rebuilds the whole config.** The two hashes decide what a change is recorded as, for the metrics, including the affected-tenant count (`da_config_blast_radius_tenants_affected`, how many tenants one change affected):
 

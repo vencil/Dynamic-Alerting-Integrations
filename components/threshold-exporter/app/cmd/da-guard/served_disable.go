@@ -87,7 +87,9 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 ) {
 	perTenant := map[string][]string{}
 	rounds := 0
-	for tenant, overrides := range cfg.Tenants {
+	// #4263: the tenant's lines as written — an expired `disable` is one,
+	// gone from what is served (its effect, below, is then none).
+	for tenant, overrides := range cfg.WrittenTenants() {
 		for k, sv := range overrides {
 			if switchedOff(sv) && !registeredReserved(k) {
 				perTenant[tenant] = append(perTenant[tenant], k)

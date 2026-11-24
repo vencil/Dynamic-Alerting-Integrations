@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"io"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,8 +35,9 @@ type lapseCase struct {
 	// key is the line's key as written; base is the threshold key the root,
 	// `dimensions:` and the critical row hang on.
 	key, base string
-	// place is where the expiring line is written: "tenant" (s/t.yaml) or
-	// "platform" (_platform.yaml's `tenants:` entry).
+	// place is where the expiring line is written: "tenant" (s/t.yaml),
+	// "platform" (_platform.yaml's `tenants:` entry) or "subtree"
+	// (s/_defaults.yaml).
 	place string
 	// beneath is the layer under the line that values key: "" (none),
 	// "root", "root-disable", "platform", "profile", "subtree".
@@ -81,6 +84,12 @@ func (c lapseCase) files(deleted bool) map[string]string {
 	if c.beneath == "subtree" {
 		files["s/_defaults.yaml"] = "defaults:\n" + strings.Replace(beneath, "    ", "  ", 1)
 	}
+	if c.place == "subtree" {
+		files["s/_defaults.yaml"] = "defaults:\n"
+		if !deleted {
+			files["s/_defaults.yaml"] += strings.ReplaceAll(line, "\n    ", "\n  ")[2:]
+		}
+	}
 	return files
 }
 
@@ -97,10 +106,13 @@ func lapseCases() []lapseCase {
 	}
 	var out []lapseCase
 	for _, s := range shapes {
-		for _, place := range []string{"tenant", "platform"} {
+		for _, place := range []string{"tenant", "platform", "subtree"} {
 			for _, b := range []string{"", "root", "root-disable", "platform", "profile", "subtree"} {
 				if place == "platform" && b == "platform" {
 					continue
+				}
+				if place == "subtree" && b != "" && b != "root" && b != "root-disable" {
+					continue // a layer above the subtree is no layer beneath it
 				}
 				if s.name == "dimensional" && b == "root-disable" {
 					continue // a root dimensional value takes no `disable`
@@ -165,9 +177,15 @@ func TestExpiry_TenantAPIMergeReadsAsMetrics(t *testing.T) {
 				}
 			}
 			sort.Strings(got)
-			want := tenantRows(loadTree(t, files), "tx", expiryAt)
+			metrics := loadTree(t, files)
+			want := tenantRows(metrics, "tx", expiryAt)
 			if strings.Join(got, "|") != strings.Join(want, "|") {
 				t.Errorf("tenant-api merge serves\n  %v\n/metrics serves\n  %v", got, want)
+			}
+			// The write gate refuses the `expires:` exactly when /metrics'
+			// own check does.
+			if a, b := expiresRefused(m.ValidateTenantKeys().Errors), expiresRefused(metrics.ValidateTenantKeys().Errors); a != b {
+				t.Errorf("tenant-api refuses the expires: %v, /metrics' check %v", a, b)
 			}
 		})
 	}
@@ -206,38 +224,51 @@ func TestExpiry_EventAndWriteCheckFollowTheResolver(t *testing.T) {
 	}
 }
 
-// #4263: a value it gives way to may expire in turn — the chain is read to
-// its end, and the cache edge (ValuesNotServedExpiryEdge) is the next
-// `expires:` along it, not only the tenant's own.
+// loadTreeAt is loadTree answering for at (LoadDirAt).
+func loadTreeAt(t *testing.T, files map[string]string, at time.Time) *ThresholdConfig {
+	t.Helper()
+	cfg, _, err := LoadDirAt(writeUndeliverableTree(t, files), log.New(io.Discard, "", 0), at)
+	if err != nil {
+		t.Fatalf("LoadDirAt: %v", err)
+	}
+	return cfg
+}
+
+// #4263: a value it gives way to may expire in turn — each instant is the
+// merge of what has not expired by then, the config holds until the next
+// `expires:` (ValidUntil), and the value now served names its own expiry.
 func TestExpiry_ChainOfExpiries(t *testing.T) {
 	t.Parallel()
 	k := "redis_connected_clients"
-	cfg := loadTree(t, map[string]string{
+	files := map[string]string{
 		"_defaults.yaml": "defaults:\n  " + k + ": 50\n",
 		"_platform.yaml": "tenants:\n  tx:\n    " + k + ":\n      default: \"70\"\n      expires: \"2040-01-01T00:00:00Z\"\n",
 		"t.yaml":         "tenants:\n  tx:\n    " + k + ":\n      default: \"5\"\n      expires: \"2020-01-01T00:00:00Z\"\n",
-	})
-	at := func(y int) []string {
-		return offRows(cfg, "tx", "redis", time.Date(y, 1, 1, 0, 0, 0, 0, time.UTC))
 	}
-	if got := strings.Join(at(2019), "|"); got != k+" warning 5" {
-		t.Errorf("2019: %s, want the tenant's 5", got)
+	year := func(y int) time.Time { return time.Date(y, 1, 1, 0, 0, 0, 0, time.UTC) }
+	for y, want := range map[int]string{2019: "5", 2030: "70", 2041: "50"} {
+		cfg := loadTreeAt(t, files, year(y))
+		if got := strings.Join(offRows(cfg, "tx", "redis", year(y)), "|"); got != k+" warning "+want {
+			t.Errorf("%d: %s, want %s", y, got, want)
+		}
 	}
-	if got := strings.Join(at(2030), "|"); got != k+" warning 70" {
-		t.Errorf("2030: %s, want the platform entry's 70", got)
+	cfg := loadTreeAt(t, files, year(2030))
+	if until, ok := cfg.ValidUntil(); !ok || !until.Equal(year(2040)) {
+		t.Errorf("ValidUntil at 2030 = %v %v, want 2040 (the platform entry's expires:)", until, ok)
 	}
-	if got := strings.Join(at(2041), "|"); got != k+" warning 50" {
-		t.Errorf("2041: %s, want the root's 50", got)
+	var named []string
+	for _, e := range cfg.ResolveThresholdExpiriesAt(year(2030)) {
+		named = append(named, fmt.Sprintf("%s:%v", e.Expires.Format("2006"), e.Expired))
 	}
-	edge, ok := ValuesNotServedExpiryEdge(cfg.Tenants["tx"], time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
-	if !ok || !edge.Equal(time.Date(2040, 1, 1, 0, 0, 0, 0, time.UTC)) {
-		t.Errorf("expiry edge at 2030 = %v %v, want 2040 (the platform entry's)", edge, ok)
+	sort.Strings(named)
+	if got := strings.Join(named, ","); got != "2020:true,2040:false" {
+		t.Errorf("expiry events at 2030 = %s, want the tenant's (expired) and the platform entry's now served (2020:true,2040:false)", got)
 	}
 }
 
-// #4263: AtMinuteOfDay reads the schedule of a value given way to at that
-// minute too.
-func TestExpiry_AtMinuteOfDayReadsTheChain(t *testing.T) {
+// #4263: AtMinuteOfDay and ScheduleCuts read the schedule of the value an
+// expired one gave way to — it is the merged value.
+func TestExpiry_TheValueGivenWayToIsAnOrdinaryValue(t *testing.T) {
 	t.Parallel()
 	k := "redis_connected_clients"
 	cfg := loadTree(t, map[string]string{
@@ -245,14 +276,10 @@ func TestExpiry_AtMinuteOfDayReadsTheChain(t *testing.T) {
 		"_platform.yaml": "tenants:\n  tx:\n    " + k + ":\n      default: \"70\"\n      overrides:\n        - window: \"00:00-12:00\"\n          value: \"80\"\n",
 		"t.yaml":         "tenants:\n  tx:\n    " + k + ":\n      default: \"5\"\n      expires: \"2020-01-01T00:00:00Z\"\n",
 	})
-	// The window's edges are cuts of the day (ScheduleCuts: da-guard's
-	// served schedules split the day there).
 	if cuts := fmt.Sprint(cfg.ScheduleCuts()); cuts != "[0 720]" {
-		t.Errorf("ScheduleCuts = %s, want [0 720] (the platform entry's window, beneath the tenant's)", cuts)
+		t.Errorf("ScheduleCuts = %s, want [0 720] (the platform entry's window)", cuts)
 	}
 	for minute, want := range map[int]string{60: "80", 13 * 60: "70"} {
-		// An instant whose time of day is not the minute: the fixed copy
-		// must not read its schedule at the instant.
 		got := offRows(cfg.AtMinuteOfDay(minute), "tx", "redis", time.Date(2030, 1, 1, 18, 0, 0, 0, time.UTC))
 		if strings.Join(got, "|") != k+" warning "+want {
 			t.Errorf("minute %d: %v, want %s", minute, got, want)
@@ -260,31 +287,70 @@ func TestExpiry_AtMinuteOfDayReadsTheChain(t *testing.T) {
 	}
 }
 
-// #4263: re-running a fill over an already merged config stacks nothing
-// twice — the exporter's incremental reload runs ApplyProfiles on the
-// previous merge every time, and a chain that grew per reload would grow
-// without bound.
-func TestExpiry_RefillStacksNothingTwice(t *testing.T) {
+// #4263: a value beneath that no reader takes (`abc`) is no value: with no
+// root value either, the expired line is served past `expires:`, and its
+// `expires:` is refused — as a refused root value is none.
+func TestExpiry_ARefusedValueBeneathIsNone(t *testing.T) {
 	t.Parallel()
 	k := "redis_connected_clients"
 	cfg := loadTree(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  " + k + ": 50\n",
-		"_profiles.yaml": "profiles:\n  p:\n    " + k + ":\n      default: \"70\"\n      expires: \"2040-01-01T00:00:00Z\"\n",
+		"_defaults.yaml": "defaults: {}\n",
+		"_profiles.yaml": "profiles:\n  p:\n    " + k + ": abc\n",
 		"t.yaml":         "tenants:\n  tx:\n    _profile: p\n    " + k + ":\n      default: \"5\"\n      expires: \"2020-01-01T00:00:00Z\"\n",
 	})
-	links := func() int {
-		n := 0
-		lapseChain(cfg.Tenants["tx"][k], func(ScheduledValue) { n++ })
-		return n
+	if got := strings.Join(offRows(cfg, "tx", "redis", expiryAt), "|"); got != k+" warning 5" {
+		t.Errorf("rows %s, want the tenant's 5 served past expires:", got)
 	}
-	want := links()
-	if want != 2 {
-		t.Fatalf("chain has %d links, want 2 (the tenant's value, then the profile's)", want)
+	if errs := strings.Join(cfg.ValidateTenantKeys().Errors, "\n"); !strings.Contains(errs, "`expires:` on \""+k+"\" is refused") {
+		t.Errorf("write check: %s, want the expires: refused", errs)
 	}
-	for i := 0; i < 3; i++ {
-		cfg.ApplyProfiles()
+}
+
+// #4263: InheritedRootDisables reads the merged value: an expired tenant
+// value over a profile's number does not hand the tenant the root `disable`.
+func TestExpiry_InheritedRootDisablesReadsTheMerge(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  pg_connections: disable\n",
+		"_profiles.yaml": "profiles:\n  p:\n    pg_connections: \"70\"\n",
+		"t.yaml":         "tenants:\n  tx:\n    _profile: p\n    pg_connections:\n      default: \"5\"\n      expires: \"2020-01-01T00:00:00Z\"\n",
 	}
-	if got := links(); got != want {
-		t.Errorf("after re-running ApplyProfiles the chain has %d links, want %d", got, want)
+	if got := loadTree(t, files).InheritedRootDisables("tx", expiryAt); len(got) != 0 {
+		t.Errorf("InheritedRootDisables = %v, want none (the profile's 70 is served)", got)
+	}
+}
+
+// expiresRefused reports whether errs refuse an `expires:` of tenant tx.
+func expiresRefused(errs []string) bool {
+	for _, line := range errs {
+		if strings.Contains(line, "tenant=tx") && strings.Contains(line, "`expires:`") {
+			return true
+		}
+	}
+	return false
+}
+
+// #4263: under two root platform files the tenant-api merge gives way to
+// the same file /metrics does — the earlier file's value when the later
+// one's has expired too.
+func TestExpiry_TenantAPIMergeStacksEveryPlatformFile(t *testing.T) {
+	t.Parallel()
+	k := "redis_connected_clients"
+	files := map[string]string{
+		"_defaults.yaml": "defaults: {}\n",
+		"_a.yaml":        "tenants:\n  tx:\n    " + k + ": \"70\"\n",
+		"_b.yaml":        "tenants:\n  tx:\n    " + k + ":\n      default: \"60\"\n      expires: \"2020-01-01T00:00:00Z\"\n",
+		"t.yaml":         "tenants:\n  tx:\n    " + k + ":\n      default: \"5\"\n      expires: \"2020-01-01T00:00:00Z\"\n",
+	}
+	m := MergeTenantWithRootDefaults(writeUndeliverableTree(t, files), "tx", []byte(files["t.yaml"]))
+	var api []string
+	for _, r := range m.ResolveAt(expiryAt) {
+		if r.Component == "redis" {
+			api = append(api, r.Component+"_"+r.Metric+" "+r.Severity+" "+strconv.FormatFloat(r.Value, 'g', -1, 64))
+		}
+	}
+	metrics := offRows(loadTree(t, files), "tx", "redis", expiryAt)
+	if strings.Join(api, "|") != strings.Join(metrics, "|") || strings.Join(metrics, "|") != k+" warning 70" {
+		t.Errorf("tenant-api %v, /metrics %v, want both the earlier file's 70", api, metrics)
 	}
 }

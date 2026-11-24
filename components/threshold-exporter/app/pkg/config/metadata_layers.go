@@ -112,31 +112,7 @@ func overlayMetadataValue(prev, next ScheduledValue) ScheduledValue {
 // none) costs one map lookup.
 func overlayTenantLayer(dst, src map[string]ScheduledValue) {
 	prev, had := dst[metadataKey]
-	// #4263: an earlier file's value of a threshold a later file writes
-	// with an `expires:` is what that value gives way to (stackLapse).
-	// Nothing earlier to give way to when dst is empty — the common case,
-	// a tenant declared by its own file alone (#2420 bench gate).
-	var under map[string]ScheduledValue
-	for k, v := range src {
-		if len(dst) == 0 {
-			break
-		}
-		if v.Expiry == nil {
-			continue
-		}
-		if held, ok := heldAcrossSpellings(dst, k); ok {
-			if under == nil {
-				under = map[string]ScheduledValue{}
-			}
-			under[k] = dst[held]
-		}
-	}
 	overlayAcrossSpellings(dst, src)
-	for k, v := range under {
-		if sv, ok := stackLapse(dst[k], v, lapseLayerFile); ok {
-			dst[k] = sv
-		}
-	}
 	if !had {
 		return
 	}
