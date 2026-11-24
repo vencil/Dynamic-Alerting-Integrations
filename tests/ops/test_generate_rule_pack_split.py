@@ -113,73 +113,32 @@ class TestSafeWrite:
 
 
 # ---------------------------------------------------------------------------
-# extract_metrics_from_expr — pure regex
+# metrics_read — off Prometheus' parse tree (#4219)
 # ---------------------------------------------------------------------------
-class TestExtractMetricsFromExpr:
-    def test_empty_expr_returns_empty(self):
-        assert grps.extract_metrics_from_expr("") == set()
+class TestMetricsRead:
+    def test_no_expression_reads_nothing(self):
+        assert grps.metrics_read([]) == set()
 
-    def test_non_string_returns_empty(self):
-        assert grps.extract_metrics_from_expr(None) == set()
-        assert grps.extract_metrics_from_expr(123) == set()
+    def test_reads_every_selector_of_every_expression(self):
+        exprs = ['sum(rate(http_requests_total{tenant="t"}[5m])) by (tenant)',
+                 "metric_a \n or \n metric_b \n and on(x) metric_c offset 90s > bool 1"]
+        assert grps.metrics_read(exprs) == {
+            "http_requests_total", "metric_a", "metric_b", "metric_c"}
 
-    def test_extracts_metric_with_label_selector(self):
-        expr = 'http_requests_total{tenant="db-a"}'
-        metrics = grps.extract_metrics_from_expr(expr)
-        assert "http_requests_total" in metrics
+    def test_reads_what_a_name_scan_missed(self):
+        # A capitalised name, a metric right before a comma or `)`, and a
+        # `__name__` matcher are reads; a string or a label is not.
+        exprs = ['ClickHouseMetrics_TCPConnection > 0',
+                 'label_replace(rabbitmq_node_mem_alarm, "a", "kube_pod_info", "", "")',
+                 '(time() - foo_seconds)',
+                 '{__name__="bar_total"} unless on(Region) ALERTS']
+        assert grps.metrics_read(exprs) == {
+            "ClickHouseMetrics_TCPConnection", "rabbitmq_node_mem_alarm",
+            "foo_seconds", "bar_total", "ALERTS"}
 
-    def test_extracts_metric_with_range_vector(self):
-        expr = "rate(node_cpu_seconds_total[5m])"
-        metrics = grps.extract_metrics_from_expr(expr)
-        assert "node_cpu_seconds_total" in metrics
-        # Built-in functions filtered out.
-        assert "rate" not in metrics
-
-    def test_filters_builtin_funcs(self):
-        expr = "sum(rate(http_requests[5m])) by (tenant)"
-        metrics = grps.extract_metrics_from_expr(expr)
-        # http_requests is the metric; sum/rate/by are builtins.
-        assert "http_requests" in metrics
-        for builtin in ("sum", "rate", "by"):
-            assert builtin not in metrics
-
-    def test_filters_uppercase_labels(self):
-        # Tokens starting with uppercase are treated as labels (skipped).
-        expr = "metric_name{Region=\"us\"}"
-        metrics = grps.extract_metrics_from_expr(expr)
-        assert "metric_name" in metrics
-        assert "Region" not in metrics
-
-    def test_multiple_metrics_extracted(self):
-        expr = "metric_a{x=1} + on(tenant) metric_b{y=2}"
-        metrics = grps.extract_metrics_from_expr(expr)
-        assert "metric_a" in metrics
-        assert "metric_b" in metrics
-
-    def test_set_operators_or_and_filtered(self):
-        # Defect i: un-parenthesised `or`/`and` set operators must NOT be
-        # extracted as metric names. Tokens are captured only when followed by
-        # `{`, `[`, or whitespace, so lay the operands out with trailing spaces
-        # (mirrors the multi-line `metric_a \n or \n metric_b` rule-pack shape).
-        expr = "metric_a \n or \n metric_b \n and on(x) metric_c "
-        metrics = grps.extract_metrics_from_expr(expr)
-        assert metrics == {"metric_a", "metric_b", "metric_c"}
-        assert "or" not in metrics
-        assert "and" not in metrics
-
-    def test_modifier_keywords_filtered(self):
-        # #3833: `offset` and `bool` follow whitespace like a metric would.
-        expr = "metric_a offset 90s \n and metric_b > bool 1 "
-        metrics = grps.extract_metrics_from_expr(expr)
-        assert metrics == {"metric_a", "metric_b"}
-
-    def test_promql_functions_not_captured(self):
-        # Functions are always written `fn(` (followed by `(`), so the regex
-        # never captures them — they need no builtin listing.
-        expr = "label_replace(vector(0), \"t\", \"$1\", \"ns\", \"(.*)\")"
-        metrics = grps.extract_metrics_from_expr(expr)
-        assert "label_replace" not in metrics
-        assert "vector" not in metrics
+    def test_an_expression_the_parser_refuses_raises_naming_it(self):
+        with pytest.raises(grps._lib_consumer_read.InputRefused, match=r"sum\(rate\(x"):
+            grps.metrics_read(["up", "sum(rate(x[5m])"])
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +288,12 @@ class TestIsExternalPipelineInput:
         assert grps.is_federated_exporter_metric("mysql_up") is True
         assert grps.is_federated_exporter_metric("nosuchexporter_up") is False
         assert grps._is_external_pipeline_input("nosuchexporter_up") is False
+
+    def test_the_series_prometheus_writes_are_available_on_central(self):
+        """#4219: the alert series are read now (a capitalised name was
+        skipped); central's own Prometheus writes them, as it does `up`."""
+        for m in ("up", "ALERTS", "ALERTS_FOR_STATE"):
+            assert grps._is_external_pipeline_input(m) is True, m
 
     def test_platform_config_metrics_external(self):
         for m in ("tenant_metadata_info", "tenant_expected_exporter",

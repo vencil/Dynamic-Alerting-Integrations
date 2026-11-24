@@ -43,6 +43,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_output.py",      # #4223: the output entries, no PyYAML / _lib_constants (_lib_io re-exports them)
     "_lib_validation.py",
     "_lib_prometheus.py",
+    "_lib_cluster_identity.py",  # #4097: the one reading of a Prometheus' cluster identity, stdlib only
     "_lib_atomic_write.py",  # #3107: the one atomic writer (was dx/_atomic_write.py)
     "_lib_kubectl.py",     # #3207/#3210: the one cluster reader (kubectl get -o json)
     "_lib_engine.py",      # #3611: external-engine locate/run + proof of running

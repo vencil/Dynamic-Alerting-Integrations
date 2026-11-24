@@ -16,22 +16,13 @@ Two readers, one table (#1595 D1b):
 The table lives here, not in the lint, because the operator question is
 answered at run time inside the da-tools image, which ships ``scripts/tools``
 flat and does not ship the lints (``components/da-tools/app/build.sh``).
-Standard library plus ``generate_rule_pack_split``'s extractor (shipped).
+Which metrics a rule reads, and which `job` each read pins, come from
+Prometheus' parse tree (``_lib_consumer_read.promql_shape``), never from the
+text of the expression (#4219).
 """
 from __future__ import annotations
 
-import re
-import sys
-from pathlib import Path
-
-_HERE = Path(__file__).resolve().parent
-# generate_rule_pack_split lives in ops/ in the repo; the image ships it flat
-# beside this module. Appended, so nothing there shadows a module already found.
-if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
-    sys.path.append(str(_HERE / "ops"))
-
-from generate_rule_pack_split import extract_metrics_from_expr  # noqa: E402
-import _lib_consumer_read  # noqa: E402  (#4137: label_flow; it does not import this module)
+import _lib_consumer_read  # (#4137, #4219) it does not import this module
 
 # ── the charts behind the helm-service families ─────────────────────────────
 # A chart is what a helm-service family's target comes from: its Service carries
@@ -123,63 +114,19 @@ def resolve_family(metric: str):
     return best
 
 
-# ── PromQL extraction (patched superset of the split tool's extractor) ──────
-# generate_rule_pack_split.extract_metrics_from_expr requires the metric name
-# to be followed by `{`, `[` or whitespace, so it misses a metric directly
-# followed by `)` or end-of-string (e.g. `(time() - foo_seconds) > 600`) and
-# bare `absent(foo)`. The patch strips grouping clauses (by/on/... lists would
-# otherwise leak label names as metrics) and string literals, then re-scans
-# with a trailing charset that includes `)`/EOL. Keyword/function names the
-# wider scan can capture are subtracted below. Verified against every rule in
-# both trees by the sanity tests (tests/lint/test_check_scrape_reachability.py).
-EXTRA_KEYWORDS = frozenset({
-    "without", "bool", "offset", "vector", "time", "absent", "absent_over_time",
-    "label_replace", "label_join", "changes", "clamp_min", "clamp_max",
-    "max_over_time", "min_over_time", "avg_over_time", "count_over_time",
-    "sum_over_time", "last_over_time", "quantile_over_time", "stddev_over_time",
-    "predict_linear", "deriv", "round", "ceil", "floor", "abs", "scalar",
-    "count_values", "quantile", "stddev", "stdvar", "idelta", "resets",
-    "sort", "sort_desc", "day_of_week", "hour", "minute", "sgn", "exp", "ln",
-    # the split extractor's own builtin set (its filter only applies to ITS
-    # matches; the wider re-scan here captures these again)
-    "rate", "sum", "max", "min", "avg", "count", "topk", "bottomk",
-    "histogram_quantile", "increase", "delta", "irate", "group",
-    "on", "ignoring", "group_left", "group_right", "unless", "by",
-    "or", "and",
-})
-GROUPING_CLAUSE_RE = re.compile(
-    r"\b(by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)")
-# Lookahead allowlist = what may legally follow a METRIC reference: selector
-# `{`, range `[`, whitespace, `)`, EOF — plus compact-writing operators like
-# `metric>60` (Gemini review of #1221 — verified miss). Two DELIBERATE
-# exclusions, both verified regressions when attempted: `,` / bare
-# negative-lookahead-on-`(` leak function-argument labels (label_replace/
-# group_left args); `=` and `!` leak selector label-matcher names (this
-# extractor does NOT strip brace interiors — the lookahead IS the brace
-# filter: `{condition="Ready"}` must not yield `condition`). The compact
-# comparisons `a==1` / `a!=1` are caught by a second scan, COMPARISON_RE, run on
-# the text with every `{...}` emptied — so no matcher name can reach it (#1595
-# D1b: a rule `mysql_up==0` otherwise read as reading no metric, and
-# operator_unportable kept it).
-TOKEN_RE = re.compile(r"\b([a-zA-Z_:][a-zA-Z0-9_:]*)\b(?=[{\[\s)+\-*/<>^%]|$)")
-COMPARISON_RE = re.compile(r"\b([a-zA-Z_:][a-zA-Z0-9_:]*)\b(?=[=!]=)")
-BRACE_RE = re.compile(r"\{[^}]*\}")
-ABSENT_RE = re.compile(r"absent(?:_over_time)?\(\s*([a-zA-Z_:][a-zA-Z0-9_:]*)")
-STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
-
-
-def extract_metrics(expr: str) -> set[str]:
-    """Metric names consumed by *expr* (see patch note above)."""
-    if not expr or not isinstance(expr, str):
-        return set()
-    base = extract_metrics_from_expr(expr)
-    stripped = STRING_RE.sub('""', expr)
-    stripped = GROUPING_CLAUSE_RE.sub(r"\1 ", stripped)
-    extra = {m for m in TOKEN_RE.findall(stripped) if not m[0].isupper()}
-    unbraced = BRACE_RE.sub("{}", stripped)
-    extra |= {m for m in COMPARISON_RE.findall(unbraced) if not m[0].isupper()}
-    extra |= set(ABSENT_RE.findall(expr))
-    return (base | extra) - EXTRA_KEYWORDS
+# ── what a rule reads (#4219) ───────────────────────────────────────────────
+def job_matchers(tree: dict) -> "dict[str, list[tuple[str, str] | None]]":
+    """Per metric a parse tree reads: for each selector reading it, in tree
+    order, its `job` matcher as (op, value), or None when it has none."""
+    out: "dict[str, list[tuple[str, str] | None]]" = {}
+    for node in _lib_consumer_read.shape_nodes(tree):
+        matchers = node.get("matchers") or []
+        jobs = [(m["type"], m["value"]) for m in matchers if m["name"] == "job"]
+        for m in matchers:
+            # every name the selector pins, as shape_metric_names reads them
+            if m["name"] == "__name__" and m["type"] == "=":
+                out.setdefault(m["value"], []).append(jobs[0] if jobs else None)
+    return out
 
 
 # ── the Prometheus Operator face (#1595 D1b) ────────────────────────────────
@@ -225,11 +172,6 @@ CHART_SERVICEMONITOR_JOBS: dict[str, frozenset] = {
 #: tests/k8s/test_tenant_scrape_contract.py.
 TENANT_EXPORTER_JOB = "tenant-exporters"
 
-#: Series Prometheus itself manufactures (no exporter, no /metrics line):
-#: `up` per scrape target, `ALERTS` per alert. `up` carries the target's job,
-#: so its source is whatever job its selector names.
-MANUFACTURED = frozenset({"up", "ALERTS"})
-
 #: Series every scrape target yields with its target's labels and no others
 #: of its own (#4137): Prometheus' per-scrape series and the families the
 #: Prometheus client libraries register in every process. The platform's
@@ -242,6 +184,15 @@ PER_TARGET_PREFIXES = ("scrape_", "go_", "process_", "promhttp_", "net_conntrack
 #: Series Prometheus writes per alert, labelled as the alert is (#4137):
 #: whether they carry `tenant` is each alert's business.
 ALERT_SERIES = frozenset({"ALERTS", "ALERTS_FOR_STATE"})
+
+#: ⛔ THE series Prometheus itself manufactures (no exporter, no /metrics
+#: line): `up` per scrape target, the alert series per alert. `up` carries
+#: the target's job, so its source is whatever job its selector names. The
+#: scrape gate takes none of them as a leaf, and the split validator takes
+#: none of them as a dangling central reference (#4219: they were unseen
+#: until metric names came from the parse tree — a capitalised name was
+#: skipped).
+MANUFACTURED = PER_TARGET_EXACT | ALERT_SERIES
 
 #: The label the scrape writes per tenant: the tenant exporters' job writes it
 #: from the namespace (k8s/03-monitoring/configmap-prometheus.yaml; the
@@ -282,46 +233,13 @@ def label_flow(label: str, exprs: "list[str]", records: "dict[str, list[dict]] |
     if label == TENANT_LABEL:
         jobs = (TENANT_EXPORTER_JOB,)
         read = list(exprs) + [d.get("expr", "") for defs in (records or {}).values() for d in defs]
-        for names in _lib_consumer_read.promql_metric_names(read):
-            if isinstance(names, _lib_consumer_read.InputRefused):
-                raise names
+        for names in _lib_consumer_read.promql_metric_names(read, raise_refused=True):
             for name in names:
                 if name not in (records or {}):
                     presence = tenant_presence(name)
                     if presence is not None:
                         metrics[name] = presence
     return _lib_consumer_read.promql_label_flow(label, exprs, records, metrics=metrics, jobs=jobs)
-
-
-_MATCHER_RE = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"')
-
-
-def _occurrences(metric: str, expr: str) -> list[str | None]:
-    """The selector body of every reference to *metric* in *expr* (None for a
-    reference without braces). String literals are blanked first, so a label
-    VALUE spelling the name is not a reference."""
-    blank = STRING_RE.sub(lambda m: '"' + "_" * (len(m.group(0)) - 2) + '"', expr)
-    found: list[str | None] = []
-    for m in re.finditer(r"(?<![\w:])" + re.escape(metric) + r"(?![\w:])", blank):
-        rest = blank[m.end():]
-        brace = re.match(r"\s*\{", rest)
-        if brace is None:
-            found.append(None)
-            continue
-        start = m.end() + brace.end()
-        close = blank.find("}", start)
-        found.append(expr[start:close if close >= 0 else len(expr)])
-    return found
-
-
-def _job_matchers(metric: str, expr: str) -> list[tuple[str, str] | None]:
-    """Per reference to *metric*: its `job` matcher as (op, value), or None."""
-    out: list[tuple[str, str] | None] = []
-    for body in _occurrences(metric, expr):
-        jobs = [(op, value) for name, op, value in _MATCHER_RE.findall(body or "")
-                if name == "job"]
-        out.append(jobs[0] if jobs else None)
-    return out
 
 
 def operator_jobs() -> frozenset:
@@ -331,8 +249,9 @@ def operator_jobs() -> frozenset:
     return frozenset().union(*CHART_SERVICEMONITOR_JOBS.values(), {TENANT_EXPORTER_JOB})
 
 
-def operator_unportable(expr: str, produced: "dict[str, list[str]] | None" = None) -> list[str]:
-    """Why *expr* cannot run under a kube-prometheus-stack install, or [] when
+def operator_unportable(tree: dict, produced: "dict[str, list[str]] | None" = None) -> list[str]:
+    """Why the expression whose parse tree is *tree*
+    (``_lib_consumer_read.promql_shape``) cannot run under a kube-prometheus-stack install, or [] when
     every metric it reads has a source there.
 
     *produced* maps a recording-rule output to the reasons its own rule is not
@@ -347,13 +266,14 @@ def operator_unportable(expr: str, produced: "dict[str, list[str]] | None" = Non
     """
     produced = produced or {}
     reasons: list[str] = []
-    for metric in sorted(extract_metrics(expr)):
+    reads = job_matchers(tree)
+    for metric in sorted(reads):
         if metric in produced:
             if produced[metric]:
                 reasons.append(f"{metric}: its recording rule is not portable")
             continue
-        jobs = _job_matchers(metric, expr)
-        if metric == "ALERTS":
+        jobs = reads[metric]
+        if metric in ALERT_SERIES:
             continue
         if metric == "up":
             have = operator_jobs()
@@ -404,15 +324,19 @@ def operator_split(groups: list) -> tuple[list, list[tuple[str, list[str]]]]:
 
     A rule is left out when :func:`operator_unportable` names a reason; a group
     left with no rule is dropped. Rule order and content are untouched, so what
-    is emitted is the source minus exactly the named rules.
+    is emitted is the source minus exactly the named rules. A rule whose
+    expression Prometheus' parser refuses raises its ``InputRefused``.
     """
     produced: dict[str, list[str]] = {}
     kept_groups: list = []
     dropped: list[tuple[str, list[str]]] = []
+    trees = iter(_lib_consumer_read.promql_shape_each(
+        [str(rule.get("expr", "")) for group in groups or [] for rule in group.get("rules") or []],
+        raise_refused=True))
     for group in groups or []:
         kept_rules = []
         for rule in group.get("rules") or []:
-            reasons = operator_unportable(str(rule.get("expr", "")), produced)
+            reasons = operator_unportable(next(trees), produced)
             if "record" in rule:
                 produced[rule["record"]] = reasons
             if reasons:

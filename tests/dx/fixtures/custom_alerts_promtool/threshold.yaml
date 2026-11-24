@@ -2,7 +2,7 @@
 # Run: promtool test rules tests/rulepacks/rule-pack-custom-alerts-threshold_test.yaml
 #
 # Proves the dominant custom-alert path: a tenant app metric with NO `version`
-# label at scrape time is collapsed by `by(tenant,version)` + normalized to
+# label at scrape time is collapsed by `by(tenant,version,da_cluster)` + normalized to
 # version="default" and joins the (also version-less) user_threshold. Also
 # asserts the alertname/name DECOUPLING: alertname is the static shape slug,
 # while the human title comes from the `{{ $labels.name }}` label carried by

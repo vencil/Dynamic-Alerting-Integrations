@@ -3026,8 +3026,8 @@ from check_scrape_reachability import (  # noqa: E402
     TENANT_API_CHART,
     THRESHOLD_EXPORTER_CHART,
     VECTOR_CHART,
-    extract_metrics,
 )
+import _lib_consumer_read  # noqa: E402
 
 EDGE_LOCAL = "edge-local"
 PLATFORM_LOCAL = "platform-local-on-central"
@@ -3040,14 +3040,26 @@ _CENTRAL_NAMESPACES = frozenset({"monitoring", "tenant-api"})
 # home cluster is what decides. Resolving these by prefix would misclassify the
 # six legitimate central kube_* readers below.
 _CLUSTER_LOCAL_PREFIXES = ("kube_", "kubelet_", "container_")
-# `(?<!\w)` is load-bearing: without a left boundary this also matches inside a
-# LONGER label name — `exported_namespace="monitoring"` (a routine Prometheus
-# relabel artifact when a job's own `namespace` label collides with the
-# target's) would be read as a central-namespace pin and flip the verdict from
-# UNRESOLVED to PLATFORM_LOCAL, i.e. silently default to central, which is the
-# one thing this module promises not to do (CodeRabbit, PR #1290). Zero
-# occurrences in the tree today — this keeps it that way.
-_NAMESPACE_MATCHER_RE = re.compile(r'(?<!\w)namespace\s*=\s*"([^"]+)"')
+# The namespace pin is the selector's `namespace` equality matcher, read off
+# the parse tree (#4219): a LONGER label name — `exported_namespace="monitoring"`,
+# a routine relabel artifact — is another label, never a central-namespace
+# pin (the text match this replaced needed a left boundary for that;
+# CodeRabbit, PR #1290).
+
+
+def _selectors(expr: str) -> "list[tuple[str | None, str | None]]":
+    """(metric, namespace) of every selector of *expr*, off Prometheus' parse
+    tree (#4219): the metric its `__name__` equality matcher pins (None when
+    it pins none — a `__name__=~` regex or a nameless selector), the value
+    of its `namespace` equality matcher (None when it has none)."""
+    out = []
+    tree = _lib_consumer_read.promql_shape_each([expr], raise_refused=True)[0]
+    for node in _lib_consumer_read.shape_nodes(tree):
+        if node["kind"] != "selector":
+            continue
+        eq = {m["name"]: m["value"] for m in node["matchers"] if m["type"] == "="}
+        out.append((eq.get("__name__"), eq.get("namespace")))
+    return out
 
 # Alerts whose plane cannot be derived from the metric family because the
 # family is cluster-local AND the selector pins no central namespace. Each one
@@ -3124,7 +3136,17 @@ def _alert_plane(alert: str, expr: str) -> tuple[str, list[str]]:
     """
     verdicts: set[str] = set()
     why: list[str] = []
-    for metric in sorted(extract_metrics(expr)):
+    selectors = _selectors(expr)
+    namespaces_of: "dict[str, set]" = {}
+    for metric, namespace in selectors:
+        if metric is None:
+            # A selector whose metric no `__name__=` pins could read any
+            # family: never default it to central.
+            verdicts.add(UNRESOLVED)
+            why.append("a selector pins no metric name (a __name__ regex or none)")
+            continue
+        namespaces_of.setdefault(metric, set()).add(namespace)
+    for metric in sorted(namespaces_of):
         if metric.startswith("vector_"):
             verdicts.add(EDGE_LOCAL)
             why.append(f"{metric}: vector_ family -> {VECTOR_CHART} (edge)")
@@ -3133,11 +3155,7 @@ def _alert_plane(alert: str, expr: str) -> tuple[str, list[str]]:
             why.append(f"{metric}: unpinned-ns ledger -> "
                        f"{PLANE_OF_UNPINNED_SOURCE[metric]}")
         elif metric.startswith(_CLUSTER_LOCAL_PREFIXES):
-            selectors = re.findall(re.escape(metric) + r"\s*\{([^}]*)\}", expr)
-            namespaces = set()
-            for body in selectors:
-                found = _NAMESPACE_MATCHER_RE.search(body)
-                namespaces.add(found.group(1) if found else None)
+            namespaces = namespaces_of[metric]
             if namespaces and all(ns in _CENTRAL_NAMESPACES for ns in namespaces):
                 verdicts.add(PLATFORM_LOCAL)
             elif alert in _EDGE_LOCAL_BY_SELECTOR:
@@ -3224,7 +3242,7 @@ class TestPlatformAlertPlaneContract:
         # trivially checkable only in one direction.
         assert derived, (
             "no platform alert derived as edge-local — the scan reached no "
-            "platform ConfigMap, or extract_metrics stopped returning vector_ "
+            "platform ConfigMap, or promql_metric_names stopped returning vector_ "
             "metrics; every plane assertion here is vacuous")
         assert derived == _EXPECTED_EDGE_LOCAL_ALERTS, (
             "the set of platform alerts that can ONLY be evaluated on an edge "
@@ -3249,12 +3267,13 @@ class TestPlatformAlertPlaneContract:
                 assert alert in by_name, (
                     f"{alert} is declared in {table_name} but no longer exists in "
                     "the platform tree — drop the entry")
-                metrics = extract_metrics(by_name[alert])
-                assert any(m.startswith(_CLUSTER_LOCAL_PREFIXES) for m in metrics), (
+                selectors = _selectors(by_name[alert])
+                assert any((m or "").startswith(_CLUSTER_LOCAL_PREFIXES)
+                           for m, _ns in selectors), (
                     f"{alert} no longer reads a cluster-local metric family, so its "
                     f"plane is derivable now — remove it from {table_name} "
                     "instead of pinning a verdict by hand")
-                assert not _NAMESPACE_MATCHER_RE.search(by_name[alert]), (
+                assert not any(ns for _m, ns in selectors), (
                     f"{alert} pins a namespace again, so its plane derives from "
                     f"the selector — remove it from {table_name}")
         assert not set(_EDGE_LOCAL_BY_SELECTOR) & set(_PLATFORM_LOCAL_BY_SELECTOR)
@@ -3283,6 +3302,13 @@ class TestPlatformAlertPlaneContract:
         # one edge input is enough, even mixed with central ones
         ('sum(vector_buffer_discarded_events_total) + '
          'sum(alertmanager_notifications_failed_total)', EDGE_LOCAL),
+        # #4219: read off the parse tree — a name given as a `__name__`
+        # matcher keeps its namespace pin, and a `__name__` regex pins no
+        # family, so it is never defaulted to central
+        ('max({__name__="kube_pod_status_phase",namespace="monitoring"}) > 0',
+         PLATFORM_LOCAL),
+        ('max({__name__=~"vector_.+"}) > 0', UNRESOLVED),
+        ('vector(1)', PLATFORM_LOCAL),
     ])
     def test_plane_classifier(self, expr, expected):
         assert _alert_plane("SyntheticAlert", expr)[0] == expected

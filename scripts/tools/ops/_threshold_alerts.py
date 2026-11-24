@@ -48,7 +48,6 @@ import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads 
 _PACKS = _lib_consumer_read.RULE_PACKS
 
 _THRESHOLD_RE = re.compile(r"tenant(?:_version)?:alert_threshold:([A-Za-z0-9_]+)")
-_TOKEN_RE = re.compile(r"[A-Za-z_:][A-Za-z0-9_:]*")
 
 _INDEX_CACHE: "dict[str, tuple[str, ...]] | None" = None
 _INDEX_LOADED = False
@@ -77,33 +76,41 @@ def build_index(pack_paths) -> "dict[str, tuple[str, ...]]":
     """{threshold key: sorted alert names reaching it} over the given packs,
     each read by Prometheus' rule loader (``RuleFilesRefused`` when it
     refuses one)."""
-    records: "dict[str, list[str]]" = {}
-    alerts: "list[tuple[str, str]]" = []
+    rules: "list[tuple[str, str, str]]" = []  # (record | alert, name, expr)
     for rule_file in _lib_consumer_read.prometheus_rule_files(list(pack_paths)):
         for group in rule_file.groups:
             for rule in group.get("rules") or []:
-                if not isinstance(rule, dict):
-                    continue
-                expr = str(rule.get("expr", ""))
-                if "record" in rule:
-                    records.setdefault(str(rule["record"]), []).append(expr)
-                elif "alert" in rule:
-                    alerts.append((str(rule["alert"]), expr))
+                if isinstance(rule, dict) and ("record" in rule or "alert" in rule):
+                    kind = "record" if "record" in rule else "alert"
+                    rules.append((kind, str(rule[kind]), str(rule.get("expr", ""))))
+    # What each rule reads, off its parse tree (#4219), in one da-read run: a
+    # name inside a label value is not a reference.
+    records: "dict[str, list[list[str]]]" = {}
+    alerts: "list[tuple[str, list[str]]]" = []
+    for (kind, name, _), names in zip(rules, _lib_consumer_read.promql_metric_names(
+            [expr for _, _, expr in rules], raise_refused=True)):
+        if kind == "record":
+            records.setdefault(name, []).append(names)
+        else:
+            alerts.append((name, names))
 
-    def keys_in(expr, seen):
-        keys = set(_THRESHOLD_RE.findall(expr))
-        for token in set(_TOKEN_RE.findall(expr)) - seen:
-            # A threshold recording rule is the key itself, already counted;
-            # its body reads user_threshold, not other keys.
-            if token in records and not _THRESHOLD_RE.fullmatch(token):
-                seen.add(token)
-                for body in records[token]:
+    def keys_in(names, seen):
+        keys = set()
+        for name in names:
+            m = _THRESHOLD_RE.fullmatch(name)
+            if m:
+                # A threshold recording rule is the key itself, already
+                # counted; its body reads user_threshold, not other keys.
+                keys.add(m.group(1))
+            elif name in records and name not in seen:
+                seen.add(name)
+                for body in records[name]:
                     keys |= keys_in(body, seen)
         return keys
 
     index: "dict[str, set[str]]" = {}
-    for name, expr in alerts:
-        for key in keys_in(expr, set()):
+    for name, names in alerts:
+        for key in keys_in(names, set()):
             index.setdefault(key, set()).add(name)
     return {key: tuple(sorted(names)) for key, names in index.items()}
 

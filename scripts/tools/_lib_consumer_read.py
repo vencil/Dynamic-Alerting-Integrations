@@ -1034,42 +1034,60 @@ def shape_nodes(node: dict):
         yield from shape_nodes(arg)
 
 
-def promql_metric_names(exprs: "list[str]", binary: str | None = None) -> "list[list[str] | InputRefused]":
-    """⛔ THE one answer to "which metrics does this PromQL read" (#4150): per
-    expression of *exprs*, the value of every selector's ``__name__``
-    equality matcher (``x``, ``x{…}``, ``{__name__="x"}``), in the order
-    Prometheus' parse tree holds them (``promql_shape``: left before right),
-    each once — or the ``InputRefused`` of an expression the parser refuses.
-    A batch with one refused expression is re-read one expression at a time,
-    so a refusal names its expression and no other is lost (the batch
-    refusal does not say which). ⛔ Read metric names here, never off the
-    text of an expression: a list of the function and keyword names to skip
-    goes stale with every Prometheus release (``holt_winters``). Text
-    scanners still left are tracked in #4219."""
+def promql_shape_each(exprs: "list[str]", binary: str | None = None, *,
+                      raise_refused: bool = False) -> "list[dict | InputRefused]":
+    """``promql_shape`` that does not lose the batch to one refusal: per
+    expression of *exprs*, its tree, or the ``InputRefused`` of an expression
+    Prometheus' parser refuses. A batch with one refused expression is re-read
+    one expression at a time, so a refusal is known to be its expression's
+    and no other is lost (the batch refusal does not say which).
+
+    *raise_refused*: raise the first refusal instead, its one line naming the
+    expression — for a caller whose every expression must be read (#4219: a
+    rule that cannot be read is not taken as reading nothing)."""
     exprs = list(exprs)
     if not exprs:
         return []
     try:
-        trees: "list" = promql_shape(exprs, binary)
+        return list(promql_shape(exprs, binary))
     except InputRefused:
-        trees = []
+        trees: "list[dict | InputRefused]" = []
         for e in exprs:
             try:
                 trees.append(promql_shape([e], binary)[0])
             except InputRefused as exc:
+                if raise_refused:
+                    raise InputRefused(
+                        f"Prometheus' parser refuses the expression {e!r}",
+                        exc.stderr_lines) from exc
                 trees.append(exc)
-    out: "list[list[str] | InputRefused]" = []
-    for tree in trees:
-        if isinstance(tree, InputRefused):
-            out.append(tree)
-            continue
-        names: "list[str]" = []
-        for node in shape_nodes(tree):
-            for m in node.get("matchers") or []:
-                if m["name"] == "__name__" and m["type"] == "=" and m["value"] not in names:
-                    names.append(m["value"])
-        out.append(names)
-    return out
+        return trees
+
+
+def shape_metric_names(tree: dict) -> "list[str]":
+    """The metrics one ``promql_shape`` tree reads: the value of every
+    selector's ``__name__`` equality matcher (``x``, ``x{…}``,
+    ``{__name__="x"}``), in tree order (left before right), each once."""
+    names: "list[str]" = []
+    for node in shape_nodes(tree):
+        for m in node.get("matchers") or []:
+            if m["name"] == "__name__" and m["type"] == "=" and m["value"] not in names:
+                names.append(m["value"])
+    return names
+
+
+def promql_metric_names(exprs: "list[str]", binary: str | None = None, *,
+                        raise_refused: bool = False) -> "list[list[str] | InputRefused]":
+    """⛔ THE one answer to "which metrics does this PromQL read" (#4150): per
+    expression of *exprs*, ``shape_metric_names`` of its tree — or the
+    ``InputRefused`` of an expression the parser refuses
+    (``promql_shape_each``, which *raise_refused* is passed to). ⛔ Read
+    metric names here, never off the text of an expression: a list of the
+    function and keyword names to skip goes stale with every Prometheus
+    release (``holt_winters``), and a name scan misses ``ALERTS`` and a
+    metric before a comma (#4219)."""
+    return [t if isinstance(t, InputRefused) else shape_metric_names(t)
+            for t in promql_shape_each(exprs, binary, raise_refused=raise_refused)]
 
 
 class RuleFileRefused(InputRefused):
