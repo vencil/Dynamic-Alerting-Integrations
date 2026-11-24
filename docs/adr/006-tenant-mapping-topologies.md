@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-03-16
-updated_at: 2026-11-22
+updated_at: 2026-11-24
 ---
 # ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N)
 
@@ -17,52 +17,40 @@ updated_at: 2026-11-22
 
 ## 狀態
 
-✅ **Accepted** (v2.1.0) — 工具鏈已完成，1:N 端到端整合待生產驗證
-📎 **Addendum** (v2.10.0) — 基礎設施指標（disk/PVC/node）的租戶歸屬政策，見下方 §Addendum
-🧭 **修訂** (2026-11-21) — 多叢集同租戶的叢集身分 `da_cluster`（由每台 Prometheus 的 external label 提供）與逐叢集的告警粒度，見下方「多叢集同租戶」；實作進行中。2026-11-22：通知的分組預設不按叢集拆；租戶可以逐叢集宣告預期的 exporter（`種類@叢集`）；Kubernetes 的兩項「設定了卻沒有對應資料」檢查逐叢集判定
+✅ **Accepted**（v2.1.0）。
 
-## 背景
+2026-06-14 修訂：磁碟、PVC、節點這類基礎設施指標只支援 1:1 歸屬（見「基礎設施指標的租戶歸屬（Addendum）」）。
 
-企業環境中，資料庫實例與租戶之間的映射關係並非總是一對一。隨著平台規模擴大，我們遇到三種常見的拓撲模式：
+2026-11-21 修訂：同一個租戶跑在多個叢集時，以每台 Prometheus 的 external label `da_cluster` 標出叢集，規則與告警逐叢集計算（見「多叢集同租戶」）。
 
-### 拓撲分類
+2026-11-22 修訂：通知的分組預設不按叢集拆；租戶可以逐叢集宣告預期的 exporter（`種類@叢集`）；Kubernetes 的兩項「設定了卻沒有對應資料」檢查逐叢集判定。
 
-| 拓撲 | 說明 | 典型場景 |
-|:-----|:-----|:---------|
-| **1:1** | 一個 namespace/實例對應一個租戶 | 獨立部署的微服務、專用 DB |
-| **N:1** | 多個 namespace/實例聚合為一個租戶 | 多叢集同租戶、DR 對、讀寫分離 |
-| **1:N** | 單一實例內含多個邏輯租戶 | Oracle 多 schema、DB2 多 tablespace、共享 RDS |
-
-### 問題陳述
-
-目前平台的 1:1 映射是隱式的（`namespace` label = tenant ID），N:1 已透過 `scaffold_tenant.py --namespaces` 的 `relabel_configs` regex 實現。但 **1:N 拓撲**缺乏原生支援：
-
-- 單一 DB 實例的 metrics 中僅包含 `instance` label，不含租戶維度
-- Exporter 無法感知實例內部的 schema/tablespace 劃分
-- 告警規則無法區分同一實例上不同租戶的閾值
-
-需要一個通用方案將實例級指標拆分為租戶級指標，而不修改 threshold-exporter 核心邏輯。
+2026-11-24 修訂：改寫為現行行為。決策不變。補上兩項限制：產生的 1:N 映射規則不在平台附的 Prometheus 部署裡，平台的規則包也不讀映射後的序列。
 
 ## 決策
 
-**在資料平面 (Data Plane) 透過 Prometheus Recording Rules 解決映射，控制平面 (Control Plane) 的 threshold-exporter 保持零變更。**
+**租戶與實例的對應關係在資料平面處理：抓取設定與 Prometheus 的 recording rule（預先計算並存成新序列的查詢）。threshold-exporter 不處理映射。** 三種拓撲各用一種做法：
 
-具體機制：
+1. **1:1（預設）**：一個 namespace 是一個租戶。抓取時把 `namespace` 寫成 `tenant`，不需要額外設定。
+2. **N:1**：多個 namespace 屬於同一個租戶。抓取設定用 `relabel_configs` 的 regex 把這幾個 namespace 都標成同一個 `tenant`；`scaffold_tenant.py --namespaces ns1,ns2` 產生這段設定。
+3. **1:N**：一個資料庫實例裡有好幾個邏輯租戶（例如 Oracle 的多個 schema）。在設定目錄根層放 `_instance_mapping.yaml`，由 `generate_tenant_mapping_rules.py` 產生 recording rule，把實例層級的序列按 filter 切開、各加上 `tenant`。
 
-1. **1:1（預設）**：維持現行 `namespace` label = tenant ID 的隱式映射
-2. **N:1（已實現）**：Prometheus `relabel_configs` regex 聚合多個 namespace 至單一 tenant label
-3. **1:N（新增）**：Config-driven `instance_tenant_mapping` → 自動產生 Rule Pack Part 1 Recording Rules
+N:1 的一個常見情形是同一個租戶跑在好幾個叢集。這時每台 Prometheus 另外標出自己在哪個叢集，規則逐（租戶、叢集）計算，見下方「多叢集同租戶」。
 
-### 1:N 實現架構
+### 範例：1:N 映射
 
-```yaml
-# _instance_mapping.yaml — 新配置檔（位於 config-dir）
+設定目錄根層的 `_instance_mapping.yaml`（repo 內的範例檔）：
+
+```yaml {.quote src="components/threshold-exporter/config/conf.d/examples/_instance_mapping.yaml"}
 instance_tenant_mapping:
+  # Oracle: single instance, multiple schemas → multiple tenants
   oracle-prod-01:
     - tenant: db-a
       filter: 'schema=~"app_a_.*"'
     - tenant: db-b
       filter: 'schema=~"app_b_.*"'
+
+  # DB2: single instance, multiple tablespaces → multiple tenants
   db2-shared-01:
     - tenant: db-c
       filter: 'tablespace="ts_client_c"'
@@ -70,142 +58,84 @@ instance_tenant_mapping:
       filter: 'tablespace="ts_client_d"'
 ```
 
+`generate_tenant_mapping_rules.py --config-dir <目錄> --metrics oracle_sessions` 的輸出（結束碼 0）：
+
 ```yaml
-# 自動產生的 Recording Rule (Rule Pack Part 1: Data Normalization)
 groups:
-  - name: tenant_mapping_oracle-prod-01
-    rules:
-      - record: tenant_mapped:oracle_sessions:current
-        expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_a_.*"}
-        labels:
-          tenant: db-a
-      - record: tenant_mapped:oracle_sessions:current
-        expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_b_.*"}
-        labels:
-          tenant: db-b
+- name: tenant_mapping_db2-shared-01
+  interval: 30s
+  rules:
+  - record: tenant_mapped:oracle_sessions:current
+    expr: oracle_sessions{instance="db2-shared-01", tablespace="ts_client_c"}
+    labels:
+      tenant: db-c
+  - record: tenant_mapped:oracle_sessions:current
+    expr: oracle_sessions{instance="db2-shared-01", tablespace="ts_client_d"}
+    labels:
+      tenant: db-d
+- name: tenant_mapping_oracle-prod-01
+  interval: 30s
+  rules:
+  - record: tenant_mapped:oracle_sessions:current
+    expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_a_.*"}
+    labels:
+      tenant: db-a
+  - record: tenant_mapped:oracle_sessions:current
+    expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_b_.*"}
+    labels:
+      tenant: db-b
 ```
 
-## 基本原理
+每個實例一個規則群組，每個（條目、指標）一條規則。`filter` 是逗號分隔的 `label=`、`label=~`、`label!=` 比對；其他寫法原樣放進選擇器。省略 `--metrics` 時，用 `metric-dictionary.yaml` 裡的每一個指標。`--format configmap` 把同樣的規則包成名為 `rules-tenant-mapping` 的 ConfigMap（key 是 `tenant-mapping-rules.yaml`）。
 
-### 為何選擇資料平面映射
-
-**Exporter 零變更**：threshold-exporter 的職責是「YAML → Metrics」，不應承擔實例到租戶的映射邏輯。映射屬於資料正規化，應在 Prometheus 層級處理。
-
-**Recording Rule 的天然優勢**：
-- 產生的時間序列自帶 `tenant` label，後續的告警規則、Dashboard 查詢無需任何修改
-- TSDB 同時保留原始實例指標與映射後的租戶指標，支援雙視角分析
-- Recording Rule 的計算在 Prometheus 評估週期內完成，無額外延遲
-
-**統一管理**：三種拓撲的最終表現一致 — 所有告警規則都能假設 `tenant` label 存在。
-
-### 為何拒絕在 Exporter 中解決
-
-- **職責越界**：Exporter 變成了「資料正規化引擎」，違反單一職責
-- **重啟成本**：映射變更需重啟 exporter，影響所有租戶的指標採集
-- **多 exporter 同步**：HA 部署下兩個 exporter 需一致映射，增加分佈式一致性問題
-
-### Why Reject Solving in Alertmanager
-
-- **太晚**：Alertmanager 只處理已觸發的告警，無法在指標層級進行拆分
-- **Dashboard 盲區**：Grafana 等工具直接查詢 Prometheus，繞過 Alertmanager
-
-## 後果
-
-### 正面影響
-
-✅ threshold-exporter 完全不感知拓撲複雜度，保持簡潔
-✅ 三種拓撲透過統一的 `tenant` label 收斂，下游規則和 Dashboard 零修改
-✅ Recording Rule 支援熱更新（config-reloader sidecar，#1246 才真正補上部署；在那之前需人工 reload），無需重啟 Prometheus
-✅ TSDB 同時保留原始與映射後指標，支援多維度回溯分析
-✅ 與現有 Rule Pack 架構（ADR-005 Projected Volume）完美整合
-
-### 負面影響
-
-⚠️ Recording Rule 產生額外時間序列，增加 TSDB 存儲 (~2× per mapped metric)
-⚠️ 需開發 `generate_tenant_mapping_rules.py` 工具自動產生 Recording Rules
-⚠️ 1:N 映射的 filter 語法需租戶理解底層 DB 的 schema/tablespace 結構
-
-### 運維考量
-
-- `generate_tenant_mapping_rules.py` 產出為 Rule Pack Part 1 ConfigMap，走 Projected Volume 分發
-- CI 驗證：映射中引用的 tenant ID 必須在 `config-dir` 中存在對應的 tenant YAML
-- Cardinality 評估：每個映射 entry 產生 M 條 recording rules（M = mapped metric 數量），需評估對 TSDB 的影響
-- 建議為 1:N 租戶設定 `_cardinality_multiplier` 標記，供 capacity planning 參考
-
-## 替代方案考量
-
-### 方案 A：Exporter 內建映射 (已拒絕)
-- 優點：單一元件處理
-- 缺點：職責越界、重啟影響大、HA 一致性問題
-
-### Approach B: Alertmanager-Level Mapping (Rejected)
-- 優點：僅影響通知路徑
-- 缺點：指標層級無法拆分、Dashboard 盲區
-
-### 方案 C：外部 Proxy (已考量)
-- 優點：完全解耦
-- 缺點：引入新元件、延遲增加、運維複雜度高
-
-## v2.1.0 Implementation Summary
-
-- `generate_tenant_mapping_rules.py` — 從 `_instance_mapping.yaml` 自動產生 Recording Rules，支援 Oracle/DB2/通用 filter 語法（36 tests）
-- `discover_instance_mappings.py` — 自動偵測 Prometheus 中的實例拓撲（1:1/N:1/1:N），輸出建議映射配置
-- `scaffold_tenant.py --topology=1:N` — Onboarding 整合（含 `--mapping-instance`, `--mapping-filter`）
-- 範例配置 `conf.d/examples/_instance_mapping.yaml`
-- Go/Python 雙端 reserved key 同步
-
-## 演進狀態
-
-- **v2.1.0**（已完成）：核心工具鏈（generate_tenant_mapping_rules / discover_instance_mappings / scaffold_tenant --topology=1:N）
-- **v2.1.0**（已完成）：Federation 場景 B（`rule-pack-split`）支援邊緣/中央分層架構下的映射行為
-
-**殘留**：
-- 在實際多 schema Oracle 環境驗證端到端流程（待生產環境回饋）
-- Schema validation（`_instance_mapping.yaml` JSON Schema）排入後續
-
-## 多叢集同租戶：叢集身分與告警粒度
-
-**決策：同一個租戶可以出現在多個叢集。每台 Prometheus 用一個 external label `da_cluster` 說明自己在哪個叢集；凡是以租戶 exporter 序列為輸入的規則，聚合與比對都以 (tenant, da_cluster) 為單位，告警也逐叢集各發一次。**
-
-這一節是上表 N:1「多叢集同租戶、DR 對（主站與備援站各一套）」的契約。**它描述的是完成後的行為，目前只完成一部分**：rule pack 已經逐叢集計算，Alertmanager 的 warning／critical 去重也已經逐叢集（第 5 點）；通知的分組依決策維持原樣、不按叢集拆（第 5 點）；逐叢集的存在判定（第 6 點）已經用在租戶 exporter 的缺席告警上；Kubernetes 的兩項「設定了卻沒有對應資料」檢查也逐叢集判定，不需要宣告；還沒涵蓋的檢查列在「後果與已知限制」。實作分階段進行，進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
-
-### 為什麼需要
-
-規則裡有兩類寫法在同租戶跨叢集時會出錯：
-
-- **互相遮蔽。** 存活判定寫成「預期存在的實例，扣掉有成功回報的實例」，兩邊以 `on(tenant, instance)` 配對。兩個叢集各有一台位址相同的實例時（各叢集內部網段重複很常見），健康的那台會把故障的那台消掉，故障的叢集不告警。
-- **悄悄合併。** `sum by(tenant)` 會把兩個叢集加在一起，`max by(tenant)` 只留下較大的那個。值班人員看不出是哪個叢集，數值也不再對應任何一個資料庫。
-
-### 契約
-
-1. **叢集身分的來源。** 每台 Prometheus 在 `global.external_labels` 設 `da_cluster: <叢集 ID>`，一台一行，抓取 job 不必寫任何東西。external label 是 Prometheus 在資料離開它時加上的——送往 Alertmanager 的告警、`/federate`、remote write 都會帶。所以兩個叢集的序列或告警相遇的地方（中央 Prometheus、Alertmanager）看到的資料已經分得出叢集；只評估自己叢集的 Prometheus，序列上沒有這個 label，規則的分組自然等同逐租戶。單一叢集的部署也要設，值固定即可。
-2. **叢集 ID。** 在整個平台內唯一，每個叢集一個、不隨時間改變；同一個叢集裡的 Prometheus 副本（HA 對）用同一個值。已經照 [Federation 整合指南](../integration/federation-integration.md) 設了 `external_labels.cluster` 的部署，`da_cluster` 用同一個值、與它並列。
-3. **閾值仍是租戶一份。** 閾值、維護狀態、租戶 metadata 由 threshold-exporter 送出，一個租戶一組，不分叢集。這些序列若是從別的叢集 federate 上來，身上也會帶 `da_cluster`；規則一律先以 `by(tenant)` 收成一份，再用 `on(tenant) group_left` 套到該租戶的每個叢集（`group_left` 表示右邊一條序列可以配左邊多條），所以帶不帶結果相同。前提是各叢集送上來的閾值內容一致。
-4. **規則的寫法。** 輸入是租戶 exporter 序列的聚合，`by(...)` 只要含 `tenant`、`instance`、`pod`、`namespace`、`node` 任一個，就必須同時含 `da_cluster`。兩邊都是這類序列的配對（`on(...)`）也一樣。
-5. **告警帶 `da_cluster`。** 送到 Alertmanager 的告警都有這個 label：規則算出來的告警若已經帶著（它讀的序列來自哪個叢集），就是那個值；沒有的，Prometheus 送出時補上自己的 external label，也就是「評估這條規則的那台 Prometheus 所在的叢集」。Alertmanager 的 warning／critical 去重（[ADR-001](./001-severity-dedup-via-inhibit.md)）把它納入，兩個叢集的同名告警互不壓制。通知的分組（`group_by`，決定哪些告警合成同一則通知）預設不變：同一條告警在幾個叢集同時觸發時是一則通知，裡面裝著各叢集的告警；會不會逐條列出告警與它的 `da_cluster`，取決於接收端用的模板（Alertmanager 內建的 email、PagerDuty、webhook 會，內建的 Slack 不會，見下面的已知限制）。要每個叢集各收一則的部署或租戶，把 `da_cluster` 加進自己的 `group_by`。租戶自助告警（`Custom_*`）例外：它們走另一條分組固定的路由，租戶的 `group_by` 對它們不適用。只讀 threshold-exporter 序列的告警（例如「租戶沒設定閾值」）屬於後一種：它講的是整個租戶，label 上的叢集只代表是哪一台算出來的。
-6. **「該有卻沒有」逐叢集判定。** 租戶可以在設定裡宣告自己預期出現在哪些叢集；有宣告時，任一個宣告的叢集沒有回報就告警。沒宣告時，只要在至少一個叢集出現就算存在。宣告的位置是租戶頂層的 `_expected_exporters`（見 [ADR-010](./010-multi-tenant-grouping.md)），它列出租戶跑哪些種類的 exporter：條目只寫種類（`mariadb`）就是沒宣告叢集；寫成 `種類@叢集`（`mariadb@edge-a`）就是宣告「這個叢集要有這一種 exporter 在回報」，其中叢集是該叢集 Prometheus 的 `da_cluster` 值。同一個種類只能擇一寫法，兩種並寫會被拒收。叢集 ID 只能用英數字與 `.`、`_`、`-`（英數字開頭與結尾，最長 63 個字元，大小寫有別）；`da_cluster` 的值含其他字元（例如 `/`、`:`）的叢集目前無法逐叢集宣告。逐叢集的缺席告警（`TenantExporterAbsent`）帶的 `da_cluster` 就是宣告的那個叢集。平台沒有叢集清單，不檢查宣告的叢集是否存在：叢集 ID 打錯時，結果是對那個不存在的叢集發缺席告警。
-7. **沒設 `da_cluster` 的 Prometheus 在上線時被指出來。** `da-tools federation-check edge` 讀實際那台 Prometheus 的設定，`external_labels.da_cluster` 沒有值就失敗；本 repo 自己的設定由抓取設定的 lint 檢查同一件事。兩者都只看一個地方，不需要推算 relabel 的結果。
-
-### 範例
-
-每台 Prometheus 的設定（各自的值）：
-
-```yaml
-global:
-  external_labels:
-    da_cluster: edge-a
-```
-
-同一個租戶 `t1` 在 `edge-a`、`edge-b` 各有一台位址同為 `10.0.0.5:50000` 的資料庫，`edge-a` 那台故障。中央 Prometheus 從兩個叢集收到的序列：
+加上 `--validate` 時，檢查每個條目的租戶是否在設定目錄裡有租戶檔。上面的目錄若只有 `db-a`、`db-b` 的租戶檔，輸出這兩行並以結束碼 1 結束、不產生規則：
 
 ```text
-db_expected{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}  1
-db_expected{tenant="t1", da_cluster="edge-b", instance="10.0.0.5:50000"}  1
-db_up{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}        0
-db_up{tenant="t1", da_cluster="edge-b", instance="10.0.0.5:50000"}        1
+ERROR: instance=db2-shared-01: tenant 'db-c' not found in config-dir
+ERROR: instance=db2-shared-01: tenant 'db-d' not found in config-dir
 ```
 
-配對不含叢集身分——沒有結果，不告警（`edge-b` 的成功把 `edge-a` 遮掉）：
+相關工具：`da-tools discover-mappings`（`discover_instance_mappings.py`）讀 exporter 的 `/metrics` 或查 Prometheus，列出實例裡 schema、tablespace 這類 label 的值，產生一份待填租戶名的 `_instance_mapping.yaml` 草稿；`scaffold_tenant.py --topology=1:N --mapping-instance <實例> --mapping-filter <filter>` 在它的草稿設定目錄裡多產生一份只含這個租戶的 `_instance_mapping.yaml`，要自己併進正式的那份。
+
+### 多叢集同租戶：叢集身分與告警粒度
+
+**同一個租戶可以出現在多個叢集。每台 Prometheus 用一個 external label `da_cluster` 說明自己在哪個叢集；凡是以租戶 exporter 序列為輸入的規則，聚合與比對都以（tenant、da_cluster）為單位，告警也逐叢集各發一次。**
+
+這是 N:1 裡「多叢集同租戶、DR 對（主站與備援站各一套）」的契約。規則包、Alertmanager 的 warning／critical 去重、exporter 缺席告警、Kubernetes 的兩項「設定了卻沒有對應資料」檢查都已逐叢集；還沒逐叢集的檢查列在「後果與已知限制」，追蹤於 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
+
+#### 契約
+
+1. **叢集身分的來源。** 每台 Prometheus 在 `global.external_labels` 設 `da_cluster: <叢集 ID>`，一台一行，抓取 job 不必寫任何東西。external label 是 Prometheus 在資料離開它時加上的：送往 Alertmanager 的告警、`/federate`、remote write 都會帶。所以兩個叢集的序列或告警相遇的地方（中央 Prometheus、Alertmanager）看到的資料已經分得出叢集；只評估自己叢集的 Prometheus，序列上沒有這個 label，規則的分組自然等同逐租戶。單一叢集的部署也要設，值固定即可。
+2. **叢集 ID。** 在整個平台內唯一，每個叢集一個、不隨時間改變；同一個叢集裡的 Prometheus 副本（HA 對）用同一個值。已經照 [Federation 整合指南](../integration/federation-integration.md) 設了 `external_labels.cluster` 的部署，`da_cluster` 用同一個值、與它並列。
+3. **閾值仍是租戶一份。** 閾值、維護狀態、租戶 metadata 由 threshold-exporter 送出，一個租戶一組，不分叢集。這些序列若是從別的叢集 federate 上來，身上也會帶 `da_cluster`；規則一律先以 `by(tenant)` 收成一份，再用 `on(tenant) group_left` 套到該租戶的每個叢集（`group_left` 表示右邊一條序列可以配左邊多條），所以帶不帶結果相同。前提是各叢集送上來的閾值內容一致。
+4. **規則的寫法。** 輸入是租戶 exporter 序列的聚合，`by(...)` 只要含 `tenant`、`instance`、`pod`、`namespace`、`node` 任一個，就必須同時含 `da_cluster`。兩邊都是這類序列的配對（`on(...)`）也一樣。`check_cluster_identity.py`（pre-commit）讀規則的語法樹檢查這一點；刻意跨叢集看的規則，在規則正上方寫 `# da_cluster: tenant-wide <finding 種類> (<labels>) — <理由>` 宣告，例如 `TenantExporterReplicaDown`。
+5. **告警帶 `da_cluster`。** 送到 Alertmanager 的告警都有這個 label：規則算出來的告警若已經帶著（它讀的序列來自哪個叢集），就是那個值；沒有的，Prometheus 送出時補上自己的 external label，也就是「評估這條規則的那台 Prometheus 所在的叢集」。Alertmanager 的 warning／critical 去重（[ADR-001](./001-severity-dedup-via-inhibit.md)）把它納入，兩個叢集的同名告警互不壓制。通知的分組（`group_by`，決定哪些告警合成同一則通知）預設不變：同一條告警在幾個叢集同時觸發時是一則通知，裡面裝著各叢集的告警；會不會逐條列出告警與它的 `da_cluster`，取決於接收端用的模板（見已知限制）。要每個叢集各收一則的部署或租戶，把 `da_cluster` 加進自己的 `group_by`。租戶自助告警（`Custom_*`）例外：它們走另一條分組固定為 `[tenant, alertname]` 的路由，租戶的 `group_by` 對它們不適用。只讀 threshold-exporter 序列的告警（例如「租戶沒設定閾值」）帶的是後一種值：它講的是整個租戶，label 上的叢集只代表是哪一台算出來的。
+6. **「該有卻沒有」逐叢集判定。** 租戶可以在設定裡宣告自己預期出現在哪些叢集；有宣告時，任一個宣告的叢集沒有回報就告警。沒宣告時，只要在至少一個叢集出現就算存在。宣告的位置是租戶頂層的 `_expected_exporters`（見 [ADR-010](./010-multi-tenant-grouping.md)），它列出租戶跑哪些種類的 exporter：條目只寫種類（`mariadb`）就是沒宣告叢集；寫成 `種類@叢集`（`mariadb@edge-a`）就是宣告「這個叢集要有這一種 exporter 在回報」，其中叢集是該叢集 Prometheus 的 `da_cluster` 值。同一個種類只能擇一寫法，兩種並寫會被拒收。叢集 ID 只能用英數字與 `.`、`_`、`-`（英數字開頭與結尾，最長 63 個字元，大小寫有別）；`da_cluster` 的值含其他字元（例如 `/`、`:`）的叢集目前無法逐叢集宣告。逐叢集的缺席告警（`TenantExporterAbsent`）帶的 `da_cluster` 就是宣告的那個叢集。平台沒有叢集清單，不檢查宣告的叢集是否存在：叢集 ID 打錯時，結果是對那個不存在的叢集發缺席告警。
+7. **沒設 `da_cluster` 的 Prometheus 在上線時被指出來。** `da-tools federation-check edge` 讀實際那台 Prometheus 的設定，`external_labels.da_cluster` 沒有值時 `edge_cluster_identity` 這項檢查失敗；本 repo 自己的 Prometheus 設定由 `check_scrape_reachability.py` 檢查同一件事（`CLUSTER-IDENTITY`）。兩者都只看一個地方，不需要推算 relabel 的結果。
+
+這些條款由下列測試守住：`tests/rulepacks/rule-pack-cluster-masking_test.yaml`（一個叢集健康、另一個故障時只對故障的叢集告警）與 `tests/rulepacks/test_cluster_metamorphic.py`（每個規則包測試加上叢集 label 重跑）守第 4 點；`tests/alertmanager-inhibit/inhibit_semantics_test.go` 守第 5 點的去重；`tests/rulepacks/rule-pack-liveness-per-cluster_test.yaml` 與 `components/threshold-exporter/app/pkg/config/expected_exporters_test.go` 守第 6 點；`tests/ops/test_federation_check.py` 與 `tests/lint/test_check_scrape_reachability.py` 守第 7 點。
+
+#### 範例
+
+本 repo 的 Prometheus 設定（每台各填自己的值）：
+
+```yaml {.quote src="k8s/03-monitoring/configmap-prometheus.yaml"}
+global:
+# ...
+  external_labels:
+    da_cluster: lab
+```
+
+同一個租戶 `db-a` 在 `edge-a`、`edge-b` 各有一台位址同為 `10.0.0.5:50000` 的資料庫，`edge-a` 那台故障。中央 Prometheus 從兩個叢集收到的序列：
+
+```text
+db_expected{tenant="db-a", da_cluster="edge-a", instance="10.0.0.5:50000"}  1
+db_expected{tenant="db-a", da_cluster="edge-b", instance="10.0.0.5:50000"}  1
+db_up{tenant="db-a", da_cluster="edge-a", instance="10.0.0.5:50000"}        0
+db_up{tenant="db-a", da_cluster="edge-b", instance="10.0.0.5:50000"}        1
+```
+
+配對不含叢集身分：沒有結果，不告警（`edge-b` 的成功把 `edge-a` 遮掉）。
 
 ```promql
 max by(tenant, instance) (db_expected)
@@ -213,7 +143,7 @@ max by(tenant, instance) (db_expected)
 max by(tenant, instance) (db_up == 1)
 ```
 
-配對含叢集身分——一筆結果 `{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}`：
+配對含叢集身分：一筆結果 `{tenant="db-a", da_cluster="edge-a", instance="10.0.0.5:50000"}`。
 
 ```promql
 max by(tenant, da_cluster, instance) (db_expected)
@@ -221,29 +151,71 @@ max by(tenant, da_cluster, instance) (db_expected)
 max by(tenant, da_cluster, instance) (db_up == 1)
 ```
 
-`db_expected` 與 `db_up` 是為了說明而取的名字，不是平台的指標。
+`db_expected` 與 `db_up` 是為了說明而取的名字，不是平台的指標。規則包裡同樣形狀的實際案例（`DB2DatabaseDown`，兩個叢集的實例位址相同）在 `tests/rulepacks/rule-pack-cluster-masking_test.yaml`。
 
-逐叢集宣告的實際樣子（第 6 點）。租戶 `t1` 的設定：
+逐叢集宣告的實際樣子（第 6 點）。租戶 `db-a` 的設定：
 
 ```yaml
 tenants:
-  t1:
+  db-a:
     _expected_exporters: [mariadb@edge-a, mariadb@edge-b, redis]
 ```
 
 `edge-a` 的 MariaDB exporter 消失、`edge-b` 的還在，Redis exporter 只在 `edge-b`。中央 Prometheus 上的序列：
 
 ```text
-tenant_expected_exporter{tenant="t1", pack="mariadb", expected_cluster="edge-a"}  1
-tenant_expected_exporter{tenant="t1", pack="mariadb", expected_cluster="edge-b"}  1
-tenant_expected_exporter{tenant="t1", pack="redis"}                               1
-mysql_up{job="tenant-exporters", tenant="t1", da_cluster="edge-b"}                1
-redis_up{job="tenant-exporters", tenant="t1", da_cluster="edge-b"}                1
+tenant_expected_exporter{tenant="db-a", pack="mariadb", expected_cluster="edge-a"}  1
+tenant_expected_exporter{tenant="db-a", pack="mariadb", expected_cluster="edge-b"}  1
+tenant_expected_exporter{tenant="db-a", pack="redis"}                               1
+mysql_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}                1
+redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}                1
 ```
 
-三分鐘後有一則告警：`TenantExporterAbsent{tenant="t1", pack="mariadb", da_cluster="edge-a"}`。`edge-b` 的 MariaDB 與只寫種類的 Redis 都不告警。同樣的序列，若租戶只寫 `_expected_exporters: [mariadb, redis]`，沒有任何告警：`edge-b` 有一台在回報就算存在。
+三分鐘後有一則告警：`TenantExporterAbsent{tenant="db-a", pack="mariadb", da_cluster="edge-a"}`。`edge-b` 的 MariaDB 與只寫種類的 Redis 都不告警。同樣的序列，若租戶只寫 `_expected_exporters: [mariadb, redis]`，沒有任何告警：`edge-b` 有一台在回報就算存在。這兩種情形是 `tests/rulepacks/rule-pack-liveness-per-cluster_test.yaml` 的 L1 與 L2（測試用的叢集名是 `east`、`west`）。
 
-### 後果與已知限制
+### 基礎設施指標的租戶歸屬（Addendum）
+
+**磁碟、PVC、節點這類基礎設施指標，只支援 1:1 的租戶歸屬（一個 namespace 是一個租戶）。**
+
+[ADR-024](024-version-aware-threshold-via-dimensional-label.md) 的自助告警讓租戶對平台的基礎設施指標（例如 kubelet 的 `kubelet_volume_stats_*`）設條件。這些指標原生只帶 `namespace`、不帶 `tenant`，所以在抓取階段直接把 `namespace` 複製成 `tenant`。平台附的 Prometheus 設定（`k8s/03-monitoring/configmap-prometheus.yaml`）在 kubelet 抓取 job 的 `metric_relabel_configs` 這樣做，只保留 `db-` 開頭的 namespace。
+
+## 背景
+
+企業環境中，資料庫實例與租戶的對應並非總是一對一：
+
+| 拓撲 | 說明 | 典型場景 |
+|:-----|:-----|:---------|
+| **1:1** | 一個 namespace／實例對應一個租戶 | 獨立部署的微服務、專用 DB |
+| **N:1** | 多個 namespace／實例聚合為一個租戶 | 多叢集同租戶、DR 對、讀寫分離 |
+| **1:N** | 單一實例內含多個邏輯租戶 | Oracle 多 schema、DB2 多 tablespace、共享 RDS |
+
+**1:N。** 共享實例的指標只帶 `instance`，不帶租戶。exporter 不知道實例內部怎麼按 schema 或 tablespace 劃分給租戶，告警規則也就無法對同一個實例上的不同租戶套用不同的閾值。需要一個通用的方法把實例層級的指標拆成租戶層級，而不改 threshold-exporter。
+
+**多叢集同租戶。** 規則裡有兩類寫法在同租戶跨叢集時會出錯：
+
+- **互相遮蔽。** 存活判定寫成「預期存在的實例，扣掉有成功回報的實例」，兩邊以 `on(tenant, instance)` 配對。兩個叢集各有一台位址相同的實例時（各叢集內部網段重複很常見），健康的那台會把故障的那台消掉，故障的叢集不告警。
+- **悄悄合併。** `sum by(tenant)` 會把兩個叢集加在一起，`max by(tenant)` 只留下較大的那個。值班人員看不出是哪個叢集，數值也不再對應任何一個資料庫。
+
+**基礎設施指標。** 本 ADR 的 N:1 與 1:N 靠額外的映射規則，而基礎設施指標走的是抓取階段的直接改名，拿不到那層映射：
+
+- **N:1 會靜默漏告警。** 指標被標成 `tenant="db-a-read"`，但租戶的設定用的是 `db-a` 這個名字，兩者對不上，告警永遠不觸發。
+- **1:N 本質上做不到。** 一顆 PVC 無法按 schema／tablespace 拆給不同租戶。
+
+## 後果與已知限制
+
+### 1:N 映射
+
+- **threshold-exporter 不感知拓撲。** 它不讀 `_instance_mapping.yaml`；三種拓撲最後都收斂成序列上的 `tenant` label。
+- **原始序列與映射後的序列並存。** recording rule 產生新序列，原始的實例序列照留，兩種視角都查得到。代價是被映射的那部分序列數加倍：每條規則把它選到的原始序列各複製一份、多加 `tenant`。`--dry-run` 印出的估計是「條目數 × 指標數」，假設每條規則只選到一條序列。
+- **映射後的序列晚至多一個評估間隔。** 產生的規則群組 `interval` 是 30s。
+- **平台的規則包不讀映射後的序列。** 產生的序列名稱是 `tenant_mapped:<原指標>:current`，`rule-packs/` 裡沒有任何規則讀這個名字；要對它們告警，得自己寫規則。
+- **產生的規則不在平台附的 Prometheus 部署裡。** `k8s/03-monitoring/deployment-prometheus.yaml` 的規則 projected volume 沒有 `rules-tenant-mapping` 這個來源，Prometheus 只載入 `/etc/prometheus/rules/*.yml`。要用就把這個 ConfigMap 加進那個 projected volume，並投影成 `.yml` 檔名；加進去之後，改動由 config-reloader sidecar 觸發 Prometheus 重新載入，不必重啟（[ADR-005](./005-projected-volume-for-rule-packs.md)）。
+- **租戶存在與否的檢查要自己接進管線。** `--validate` 檢查映射裡的租戶在設定目錄裡有租戶檔，但 repo 的 CI 不跑這支工具。
+- **沒有 schema 驗證。** `_instance_mapping.yaml` 沒有 JSON Schema；缺 `tenant` 或 `filter` 為空的條目以 WARN 略過，不讓工具失敗。
+- **filter 要懂底層資料庫的結構。** 寫 filter 的人得知道 schema／tablespace 怎麼對應到 exporter 的 label。
+- **沒有端到端驗證。** repo 內只有產生器的單元測試（`tests/ops/test_generate_tenant_mapping_rules.py`），沒有把產生的規則載進 Prometheus 的測試，也沒有在實際多 schema 的 Oracle 環境跑過。
+
+### 多叢集同租戶的已知限制
 
 - **升級順序不拘。** 規則在沒有 `da_cluster` 的序列上照樣運作，結果與不分叢集時相同；external label 設上去之後，離開那台 Prometheus 的資料才開始帶它。
 - **告警在 Alertmanager 那一端多一個 label。** 設上 external label 之後，Alertmanager 把帶新 label 的告警視為另一條：新的立刻出現並通知一次，舊的那條要等到它過期才消失，中間兩條並存。
@@ -251,63 +223,45 @@ redis_up{job="tenant-exporters", tenant="t1", da_cluster="edge-b"}              
 - **在邊緣叢集本地看不到叢集。** 邊緣 Prometheus 的查詢、`ALERTS` 序列、告警 annotation 裡的 `$labels.da_cluster` 都是空的；值在資料到了 Alertmanager 或中央之後才有。
 - **一台 Prometheus 直接抓好幾個叢集時不適用。** external label 只有一個值。這種部署要自己在各叢集的抓取 job 上寫 `da_cluster`（序列上已有的值優先於 external label），lint 不檢查那個寫法。
 - **各叢集的閾值要一致。** 每個叢集各有一份 threshold-exporter 並 federate 到中央時，中央以 `by(tenant)` 把它們收成一份，取其中較大的值；內容不一致時，中央用的不是任何一個叢集自己的那組。
-- **有些抓取代理在抓取時就加上 external label**（不是 Prometheus 本身的行為）。那樣的話序列在本地就帶著 `da_cluster`，規則的結果相同。
 - **加總是逐叢集的。** 「該租戶所有實例加總」的規則（例如鎖等待、deadlock 次數）在每個叢集各自加總、各自比對閾值。
 - **逐叢集的存在判定要在序列帶 `da_cluster` 的地方評估。** 也就是收了各叢集資料的中央 Prometheus；規則分層部署時告警規則本來就放在那裡。各叢集拿同一份租戶設定、各自評估告警規則的部署，本地序列沒有 `da_cluster`，`種類@叢集` 在那裡等同只寫種類：本地有這一種 exporter 就全部算存在，本地沒有時則對該種類每一個宣告的叢集各發一則，告警上的叢集是本地 Prometheus 看不到的那些。這種部署請只寫種類，各叢集用各自的租戶設定。邊緣 Prometheus 若在抓取 job 上自己寫了 `da_cluster`、又拿共用的租戶設定自行評估，情況更糟：本地序列只帶本地那個叢集，其他宣告的叢集即使全部健康也會一直告警。
 - **沒有 `da_cluster` 的存在序列，對每個宣告的叢集都算存在。** 上一項的另一面：中央 Prometheus 若自己也直接抓租戶 exporter，那份本地序列會讓所有宣告的叢集都不告警。要逐叢集判定，就在那個抓取 job 上寫 `da_cluster`。
-- **「設定了卻沒有對應資料」的兩項 Kubernetes 檢查逐叢集判定，不需要宣告。** 「設了自訂 recipe 的磁碟告警卻沒有對應資料」（`CustomRecipeDiskInert`）以（租戶、叢集）為單位：租戶在某個叢集有 Pod 在跑、那個叢集卻沒有它的磁碟資料，就對那個叢集告警，別的叢集有資料不算數；租戶沒有 Pod 在跑的叢集不告警。「設了依版本區分的閾值卻沒有版本資料」（`VersionAwareThresholdInert`）以叢集為單位：設了這種閾值的租戶有 Pod、卻完全沒有 Pod label 資料的叢集各發一則。它只看容器 CPU 的版本閾值；只設了 memory 版本閾值的租戶不在這條告警的範圍內（它的閾值同樣會因為沒有 Pod label 而不生效，但這條告警不會指出來）。只跑其他租戶的叢集不告警，那裡沒有要套用的版本閾值。兩條告警都帶 `da_cluster`，annotation 會寫出是哪個叢集。在序列都沒有 `da_cluster` 的單一 Prometheus 上，兩條的行為與不分叢集時相同，只有一處例外：設了版本閾值的租戶全都沒有 Pod、別的租戶有 Pod、又沒有 Pod label 資料時，`VersionAwareThresholdInert` 以前會響，現在不響；那個閾值沒有生效的原因是底下沒有 Pod 在跑，租戶的第一個 Pod 出現後告警就會回來。
-- **這兩項檢查假設同一個叢集的兩種資料帶同一個 `da_cluster`。** 兩種資料指的是「有 Pod 在跑」與它要對照的那一種（磁碟資料、Pod label 資料）；它們經過同一台 Prometheus，所以要嘛都帶、要嘛都不帶。假設不成立時，結果可能是誤報，也可能是漏報。誤報：一種帶 `da_cluster`、另一種不帶，或同一個叢集同時經由帶 label 的 federation 與不帶 label 的本地抓取進來、而對照的資料只在其中一條路徑上，告警會對其實正常的叢集響（不分叢集時不響）。漏報：對照的資料以「另一個叢集」的身分進來時會替它消掉告警——例如叢集 A 的 Pod 資料不帶 label、也真的沒有 Pod label 資料，而叢集 B 的 Pod label 資料不帶 label，B 的資料就被當成 A 的。這裡刻意不採用「沒有 `da_cluster` 的資料替每個叢集都算數」的寬鬆規則（exporter 缺席告警有這條）：那樣中央 Prometheus 自己抓的叢集有資料時，會遮住另一個真的缺資料的叢集。中央自己抓的叢集（不帶 label）與 federate 上來的叢集（帶 label）並存時，兩邊各自判定，結果正確。
-- **還沒逐叢集的檢查。** 「多個租戶的 exporter 同時缺席」的彙總告警（`MassExporterOutage`）以（租戶、種類）為單位計數，一個種類宣告了幾個叢集都算一組，不會指出是哪個叢集大量缺席。租戶自助告警（`Custom_*`）讀的彙整序列仍以租戶為單位彙整，不分叢集。「同租戶還有健康的抓取目標、但其中一個掛了」的告警（`TenantExporterReplicaDown`）刻意維持跨叢集比對：只寫種類的租戶某個叢集整個掛掉時，只要那個叢集的抓取目標仍被發現、讀到 `up=0`，那是唯一的訊號。目標本身已經不在（例如 Service 被移除）時這條告警也不會響，而只寫種類的租戶因為另一個叢集有回應，exporter 缺席告警（`TenantExporterAbsent`）同樣不響——這種情形沒有任何訊號，要逐叢集宣告才有。進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
+- **「設定了卻沒有對應資料」的兩項 Kubernetes 檢查逐叢集判定，不需要宣告。** 「設了自訂 recipe 的磁碟告警卻沒有對應資料」（`CustomRecipeDiskInert`）以（租戶、叢集）為單位：租戶在某個叢集有 Pod 在跑、那個叢集卻沒有它的磁碟資料，就對那個叢集告警，別的叢集有資料不算數；租戶沒有 Pod 在跑的叢集不告警。「設了依版本區分的閾值卻沒有版本資料」（`VersionAwareThresholdInert`）以叢集為單位：設了這種閾值的租戶有 Pod、卻完全沒有 Pod label 資料的叢集各發一則。它只看容器 CPU 的版本閾值；只設了 memory 版本閾值的租戶不在這條告警的範圍內（它的閾值同樣會因為沒有 Pod label 而不生效，但這條告警不會指出來）。只跑其他租戶的叢集不告警，那裡沒有要套用的版本閾值。兩條告警都帶 `da_cluster`，annotation 會寫出是哪個叢集。在序列都沒有 `da_cluster` 的單一 Prometheus 上，設了版本閾值的租戶全都沒有 Pod 時，`VersionAwareThresholdInert` 不響，即使別的租戶有 Pod、也沒有 Pod label 資料；租戶的第一個 Pod 出現後才會響。這些情形由 `tests/rulepacks/rule-pack-kubernetes-sentinels-per-cluster_test.yaml` 守住。
+- **這兩項檢查假設同一個叢集的兩種資料帶同一個 `da_cluster`。** 兩種資料指的是「有 Pod 在跑」與它要對照的那一種（磁碟資料、Pod label 資料）；它們經過同一台 Prometheus，所以要嘛都帶、要嘛都不帶。假設不成立時，結果可能是誤報，也可能是漏報。誤報：一種帶 `da_cluster`、另一種不帶，或同一個叢集同時經由帶 label 的 federation 與不帶 label 的本地抓取進來、而對照的資料只在其中一條路徑上，告警會對其實正常的叢集響（不分叢集時不響）。漏報：對照的資料以「另一個叢集」的身分進來時會替它消掉告警。例如叢集 A 的 Pod 資料不帶 label、也真的沒有 Pod label 資料，而叢集 B 的 Pod label 資料不帶 label，B 的資料就被當成 A 的。這裡刻意不採用「沒有 `da_cluster` 的資料替每個叢集都算數」的寬鬆規則（exporter 缺席告警有這條）：那樣中央 Prometheus 自己抓的叢集有資料時，會遮住另一個真的缺資料的叢集。中央自己抓的叢集（不帶 label）與 federate 上來的叢集（帶 label）並存時，兩邊各自判定，結果正確。
+- **還沒逐叢集的檢查。** 「多個租戶的 exporter 同時缺席」的彙總告警（`MassExporterOutage`）以（租戶、種類）為單位計數，一個種類宣告了幾個叢集都算一組，告警不帶 `da_cluster`，不會指出是哪個叢集大量缺席。租戶自助告警（`Custom_*`）讀的彙整序列仍以租戶為單位彙整，不分叢集。「同租戶還有健康的抓取目標、但其中一個掛了」的告警（`TenantExporterReplicaDown`）刻意維持跨叢集比對：只寫種類的租戶某個叢集整個掛掉時，只要那個叢集的抓取目標仍被發現、讀到 `up=0`，那是唯一的訊號。目標本身已經不在（例如 Service 被移除）時這條告警也不會響，而只寫種類的租戶因為另一個叢集有回應，exporter 缺席告警（`TenantExporterAbsent`）同樣不響：這種情形沒有任何訊號，要逐叢集宣告才有。進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
 - **維護模式是整個租戶。** 無法只對一個叢集進維護。
 - **各叢集不能有不同的閾值。** 同一個租戶在所有叢集用同一組閾值。
-- **通知預設不按叢集拆。** 平台不附通知模板，看到的是 Alertmanager 內建模板的輸出。兩個叢集同時觸發時，email 內文、PagerDuty 的 details、webhook payload 逐條列出告警與它的 `da_cluster`；單行標題是 `[FIRING:2] <告警名> <租戶> (<其他共同 label>)`，沒有叢集（只有一個叢集觸發時，標題會帶出叢集，因為那時它是整組共同的 label）。內建的 Slack 模板只有標題、沒有內文，兩個叢集同時觸發時看不出是哪兩個，要用逐條列出告警的自訂模板。PagerDuty 一組是一個 incident，所有叢集都恢復後才 resolve。預設不改的原因：租戶的 route 帶不帶 `group_by`，看部署的 `_routing_defaults`、routing profile 與租戶自己的 `_routing` 合起來最後有沒有值（工具產生的 `_defaults.yaml` 有給）；最後沒有值的租戶——哪一層都沒給，或租戶把它寫成 `null` 或空列表蓋掉——才沿用根 route 的分組，所以改平台預設值只會影響到這一部分租戶，不是全部；另一個原因是下面的第一項代價。
+- **通知預設不按叢集拆。** 平台不附通知模板，看到的是 Alertmanager 內建模板的輸出。兩個叢集同時觸發時，email 內文、PagerDuty 的 details、webhook payload 逐條列出告警與它的 `da_cluster`；單行標題是 `[FIRING:2] <告警名> <租戶> (<其他共同 label>)`，沒有叢集（只有一個叢集觸發時，標題會帶出叢集，因為那時它是整組共同的 label）。內建的 Slack 模板只有標題、沒有內文，兩個叢集同時觸發時看不出是哪兩個，要用逐條列出告警的自訂模板。PagerDuty 一組是一個 incident，所有叢集都恢復後才 resolve。預設不改的原因：租戶的 route 帶不帶 `group_by`，看部署的 `_routing_defaults`、routing profile 與租戶自己的 `_routing` 合起來最後有沒有值（`da-tools init` 產生的 `_defaults.yaml` 有給）；最後沒有值的租戶（哪一層都沒給，或租戶把它寫成 `null` 或空列表蓋掉）才沿用根 route 的分組，所以改平台預設值只會影響到這一部分租戶，不是全部；另一個原因是下面的第一項代價。
 - **把 `da_cluster` 加進 `group_by` 有兩項代價。** 一、講整個租戶的告警（第 5 點後半）帶的是評估它的那台 Prometheus 的叢集，幾台 Prometheus 評估同一批規則時會變成每台各一則。二、在運作中的 Alertmanager 上改一條 route 的 `group_by`，該 route 當下觸發中的每一組都會再通知一次（分組的 key 變了），以分組為 key 的接收端（PagerDuty）會開新的 incident；舊的 incident Alertmanager 不會替它 resolve（恢復通知送到的是新的 key），要手動關閉。設定寫法見 [BYO Alertmanager 整合指南](../integration/byo-alertmanager-integration.md)。
 
-### 考慮過的替代方案
+### 基礎設施指標
+
+- **N:1 客戶在遷移當天就會收到訊號。** [ADR-024](024-version-aware-threshold-via-dimensional-label.md) 的看門告警 `CustomRecipeDiskInert`：租戶設了磁碟告警、它的 Pod 也在跑，但歸屬後的磁碟指標一直沒出現，它就會響。N:1 客戶因此收到「這條告警沒生效」的明確訊號，而不是無聲漏報。
+- **N:1 與 1:N 不支援。** 等真有 N:1 客戶（例如讀寫分離的資料庫）需要基礎設施告警，再把映射補上。
+
+## 考慮過的替代方案
+
+### 1:N 映射放在哪一層
+
+- **在 exporter 內建映射**：單一元件處理，但 exporter 的職責是把 YAML 設定轉成指標，映射屬於資料正規化，放進去就越界；映射一改就要重啟 exporter，影響所有租戶的指標；HA 部署下兩個 exporter 還得維持一致的映射。
+- **在 Alertmanager 映射**：只影響通知路徑，但太晚：Alertmanager 只處理已觸發的告警，無法在指標層級拆分；Grafana 這類工具直接查 Prometheus，看不到映射。
+- **外部 proxy**：完全解耦，但多一個元件、多一段延遲、運維更複雜。
+
+### 多叢集的叢集身分
 
 - **沿用 `cluster` 這個名字。** RabbitMQ、Elasticsearch 的 exporter 自己就輸出 `cluster`（該服務自己的叢集名），而 Prometheus 遇到同名 label 有兩種行為，兩種都會出錯。預設情況下保留抓取設定寫的值、把 exporter 的改名為 `exported_cluster`，讀 exporter 那個 `cluster` 的規則就讀到平台的叢集 ID。設了 `honor_labels: true` 時（中央從邊緣拉資料的 federation job 就是）保留 exporter 的值，叢集身分被換成服務自己的叢集名。所以用平台專屬的名字。
-- **在每個抓取 job 用 relabel 寫入 `da_cluster`。** 這是本節最初的做法，好處是規則評估時序列上就有值。但要寫的地方有四處（租戶 exporter、容器指標、volume 指標、Pod 狀態指標），其中一處還得限定在單一 Service 上；只寫了一部分時，需要把兩種來源配對的容器告警會配不上而靜默。要在部署前擋下這種設定，檢查工具就得靜態推算 relabel 的結果，等於重做一遍 Prometheus 的行為，補不完。而規則真正需要叢集身分的地方只有兩個叢集的資料相遇之處，那裡的資料已經帶著 external label。
-- **只在已經帶 `instance` 這類 label 的地方加 `da_cluster`，租戶層級的聚合維持跨叢集一份。** 要改的地方少得多。但規則分層部署時（[ADR-004](./004-federation-central-exporter-first.md)、[Federation 整合指南](../integration/federation-integration.md) 的「邊緣評估」一節），租戶層級的 recording rule 是在各邊緣叢集算的：兩個邊緣各送一條同名序列到中央，結果與「全部在中央評估」時不同。逐叢集是兩種部署方式下結果一致的最粗粒度。比值類的規則也無法把各邊緣的比值再合成整個租戶的比值。
+- **在每個抓取 job 用 relabel 寫入 `da_cluster`。** 好處是規則評估時序列上就有值。但要寫的地方有四處（租戶 exporter、容器指標、volume 指標、Pod 狀態指標），其中一處還得限定在單一 Service 上；只寫了一部分時，需要把兩種來源配對的容器告警會配不上而靜默。要在部署前擋下這種設定，檢查工具就得靜態推算 relabel 的結果，等於重做一遍 Prometheus 的行為，補不完。而規則真正需要叢集身分的地方只有兩個叢集的資料相遇之處，那裡的資料已經帶著 external label。
+- **只在已經帶 `instance` 這類 label 的地方加 `da_cluster`，租戶層級的聚合維持跨叢集一份。** 要改的地方少得多。但規則分層部署時（[ADR-004](./004-federation-central-exporter-first.md)、[Federation 整合指南](../integration/federation-integration.md) §8 的邊緣評估），租戶層級的 recording rule 是在各邊緣叢集算的：兩個邊緣各送一條同名序列到中央，結果與「全部在中央評估」時不同。逐叢集是兩種部署方式下結果一致的最粗粒度。比值類的規則也無法把各邊緣的比值再合成整個租戶的比值。
 - **不支援，並擋下跨叢集的租戶。** 要擋也得先有叢集身分；而 DR 對與多地部署正是 N:1 列出的典型場景。
 
-## Addendum：基礎設施指標的租戶歸屬 (v2.10.0)
+## 相關
 
-**決策：磁碟、PVC、節點這類基礎設施指標，只支援 1:1 的租戶歸屬（一個 namespace = 一個租戶）。**
-
-ADR-024 的自助告警開始讓租戶對平台的基礎設施指標（例如 kubelet 的 `kubelet_volume_stats_*`）設條件。這些指標原生只帶 `namespace`、不帶 `tenant`，所以在抓取階段直接把 `namespace` 當成 `tenant`——沿用本 ADR 既有的 1:1 做法。
-
-**為什麼 N:1 與 1:N 不在這次的支援範圍。** 本 ADR 的 N:1（多個 namespace 聚合成一個租戶）和 1:N（一個實例切成多個邏輯租戶）靠的是額外的映射規則，而基礎設施指標走的是抓取階段的直接改名、拿不到那層映射：
-
-- **N:1 會靜默漏告警。** 指標被標成 `tenant="db-a-read"`，但租戶的設定用的是 `db-a` 這個名字——兩者對不上，告警永遠不觸發。
-- **1:N 本質上做不到。** 一顆 PVC 無法按 schema / tablespace 拆給不同租戶。
-
-**怎麼讓「不支援」不變成「悄悄壞掉」。** ADR-024 有一條對每個租戶的看門告警 `CustomRecipeDiskInert`：租戶設了磁碟告警、相關 Pod 也在跑，但歸屬後的指標一直沒出現，它就會響。於是 N:1 客戶在遷移當天就會收到「這條告警沒生效」的明確訊號，而不是無聲漏報。等真有 N:1 客戶（例如讀寫分離的資料庫）需要基礎設施告警，再把映射補上。
-
-相關：[ADR-024](024-version-aware-threshold-via-dimensional-label.md)、節點健康告警（#809，也用同一套 1:1 歸屬）、本 epic（#692）。
-
-## 相關決策
-
-- [ADR-005: 投影卷掛載 Rule Pack](./005-projected-volume-for-rule-packs.md) — Recording Rules 透過同一 Projected Volume 機制分發
-- [ADR-004: Federation 架構——中央 Exporter 優先](./004-federation-central-exporter-first.md) — Federation 下的映射一致性
-- [ADR-001: 嚴重度 Dedup 採用 Inhibit 規則](./001-severity-dedup-via-inhibit.md) — 映射後指標仍適用 inhibit dedup
-
-## 參考資料
-
-- [`docs/architecture-and-design.md`](../architecture-and-design.md) §2.3 — Tenant-Namespace 映射模式
-- [`scaffold_tenant.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/scaffold_tenant.py) — 現行 `--namespaces` N:1 支援
-- [`generate_alertmanager_routes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/generate_alertmanager_routes.py) — 路由產生器（ADR-007 相關）
-- [Prometheus Recording Rules](https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/) — 官方文件
-
-## 相關資源
-
-| 資源 | 相關性 |
-|------|--------|
-| [001-severity-dedup-via-inhibit](001-severity-dedup-via-inhibit.md) | ⭐⭐ |
-| [002-oci-registry-over-chartmuseum](002-oci-registry-over-chartmuseum.md) | ⭐ |
-| [003-sentinel-alert-pattern](003-sentinel-alert-pattern.md) | ⭐⭐ |
-| [004-federation-central-exporter-first](004-federation-central-exporter-first.md) | ⭐⭐⭐ |
-| [005-projected-volume-for-rule-packs](005-projected-volume-for-rule-packs.md) | ⭐⭐⭐ |
-| [006-tenant-mapping-topologies](006-tenant-mapping-topologies.md) | ⭐⭐⭐ |
-| [README](README.md) | ⭐⭐⭐ |
-| ["架構與設計 — 動態多租戶警報平台技術白皮書"](../architecture-and-design.md) | ⭐⭐⭐ |
-| ["架構與設計 — 附錄 A"](../architecture-and-design.md#附錄角色與工具速查) | ⭐⭐ |
+- [ADR-001](./001-severity-dedup-via-inhibit.md) — 嚴重度去重的 inhibit 規則，逐叢集配對
+- [ADR-004](./004-federation-central-exporter-first.md) — Federation 架構
+- [ADR-005](./005-projected-volume-for-rule-packs.md) — 規則包以 projected volume 分發
+- [ADR-010](./010-multi-tenant-grouping.md) — `_expected_exporters`
+- [ADR-024](024-version-aware-threshold-via-dimensional-label.md) — 自助告警與基礎設施指標
+- [Federation 整合指南](../integration/federation-integration.md)
+- [BYO Alertmanager 整合指南](../integration/byo-alertmanager-integration.md)
+- [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097) — 尚未逐叢集的檢查
+- [Prometheus Recording Rules](https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/)

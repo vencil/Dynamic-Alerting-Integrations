@@ -12,52 +12,40 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (v2.1.0) — Toolchain completed, 1:N end-to-end integration pending production validation
-📎 **Addendum** (v2.10.0) — Tenant-attribution policy for infrastructure metrics (disk/PVC/node), see §Addendum below
-🧭 **Revision** (2026-11-21) — cluster identity `da_cluster` (one external label per Prometheus) and per-cluster alert granularity for a tenant in several clusters, see "One tenant in several clusters" below; implementation in progress. 2026-11-22: notification grouping is not split per cluster by default; a tenant can declare the exporters it expects per cluster (`kind@cluster`); the two Kubernetes "configured but no matching data" checks are judged per cluster
+✅ **Accepted** (v2.1.0).
 
-## Background
+Revised 2026-06-14: infrastructure metrics such as disk, PVC and node support 1:1 attribution only (see "Tenant attribution of infrastructure metrics (Addendum)").
 
-In enterprise environments, the mapping between database instances and tenants is not always one-to-one. As the platform scales, three common topology patterns emerge:
+Revised 2026-11-21: when one tenant runs in several clusters, each Prometheus names its cluster with the external label `da_cluster`, and rules and alerts are computed per cluster (see "One tenant in several clusters").
 
-### Topology Classification
+Revised 2026-11-22: notification grouping is not split per cluster by default; a tenant can declare the exporters it expects per cluster (`kind@cluster`); the two Kubernetes "configured but no matching data" checks are judged per cluster.
 
-| Topology | Description | Typical Scenarios |
-|:---------|:------------|:------------------|
-| **1:1** | One namespace/instance maps to one tenant | Independently deployed microservices, dedicated DB |
-| **N:1** | Multiple namespaces/instances aggregate to one tenant | Multi-cluster same tenant, DR pairs, read-write splitting |
-| **1:N** | Single instance contains multiple logical tenants | Oracle multi-schema, DB2 multi-tablespace, shared RDS |
-
-### Problem Statement
-
-The platform's current 1:1 mapping is implicit (`namespace` label = tenant ID), and N:1 is already supported via `scaffold_tenant.py --namespaces` with `relabel_configs` regex. However, **1:N topology** lacks native support:
-
-- Metrics from a single DB instance contain only an `instance` label, without tenant dimensions
-- The exporter cannot perceive internal schema/tablespace partitioning within an instance
-- Alert rules cannot differentiate thresholds for different tenants on the same instance
-
-A general-purpose solution is needed to split instance-level metrics into tenant-level metrics without modifying the threshold-exporter core logic.
+Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged. Two limitations added: the generated 1:N mapping rules are not in the Prometheus deployment the platform ships, and the platform's rule packs do not read the mapped series.
 
 ## Decision
 
-**Resolve mapping at the Data Plane via Prometheus Recording Rules; the Control Plane (threshold-exporter) requires zero changes.**
+**The mapping between tenants and instances is handled in the data plane: scrape configuration and Prometheus recording rules (queries computed ahead of time and stored as new series). threshold-exporter does not handle mapping.** Each of the three topologies has one mechanism:
 
-Specific mechanisms:
+1. **1:1 (default)**: one namespace is one tenant. The scrape writes `namespace` into `tenant`; no extra configuration.
+2. **N:1**: several namespaces belong to one tenant. A `relabel_configs` regex in the scrape configuration labels all of them with the same `tenant`; `scaffold_tenant.py --namespaces ns1,ns2` produces that snippet.
+3. **1:N**: one database instance holds several logical tenants (for example several Oracle schemas). An `_instance_mapping.yaml` at the root of the config directory drives `generate_tenant_mapping_rules.py`, which produces recording rules that split the instance-level series by filter and add `tenant` to each part.
 
-1. **1:1 (Default)**: Maintain current implicit mapping of `namespace` label = tenant ID
-2. **N:1 (Already Implemented)**: Prometheus `relabel_configs` regex aggregates multiple namespaces to a single tenant label
-3. **1:N (New)**: Config-driven `instance_tenant_mapping` → auto-generated Rule Pack Part 1 Recording Rules
+A common case of N:1 is one tenant running in several clusters. Each Prometheus then also says which cluster it is in, and rules are computed per (tenant, cluster); see "One tenant in several clusters" below.
 
-### 1:N Implementation Architecture
+### Example: a 1:N mapping
 
-```yaml
-# _instance_mapping.yaml — new config file (in config-dir)
+`_instance_mapping.yaml` at the root of the config directory (the example file in the repository):
+
+```yaml {.quote src="components/threshold-exporter/config/conf.d/examples/_instance_mapping.yaml"}
 instance_tenant_mapping:
+  # Oracle: single instance, multiple schemas → multiple tenants
   oracle-prod-01:
     - tenant: db-a
       filter: 'schema=~"app_a_.*"'
     - tenant: db-b
       filter: 'schema=~"app_b_.*"'
+
+  # DB2: single instance, multiple tablespaces → multiple tenants
   db2-shared-01:
     - tenant: db-c
       filter: 'tablespace="ts_client_c"'
@@ -65,142 +53,84 @@ instance_tenant_mapping:
       filter: 'tablespace="ts_client_d"'
 ```
 
+Output of `generate_tenant_mapping_rules.py --config-dir <dir> --metrics oracle_sessions` (exit code 0):
+
 ```yaml
-# Auto-generated Recording Rule (Rule Pack Part 1: Data Normalization)
 groups:
-  - name: tenant_mapping_oracle-prod-01
-    rules:
-      - record: tenant_mapped:oracle_sessions:current
-        expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_a_.*"}
-        labels:
-          tenant: db-a
-      - record: tenant_mapped:oracle_sessions:current
-        expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_b_.*"}
-        labels:
-          tenant: db-b
+- name: tenant_mapping_db2-shared-01
+  interval: 30s
+  rules:
+  - record: tenant_mapped:oracle_sessions:current
+    expr: oracle_sessions{instance="db2-shared-01", tablespace="ts_client_c"}
+    labels:
+      tenant: db-c
+  - record: tenant_mapped:oracle_sessions:current
+    expr: oracle_sessions{instance="db2-shared-01", tablespace="ts_client_d"}
+    labels:
+      tenant: db-d
+- name: tenant_mapping_oracle-prod-01
+  interval: 30s
+  rules:
+  - record: tenant_mapped:oracle_sessions:current
+    expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_a_.*"}
+    labels:
+      tenant: db-a
+  - record: tenant_mapped:oracle_sessions:current
+    expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_b_.*"}
+    labels:
+      tenant: db-b
 ```
 
-## Rationale
+One rule group per instance, one rule per (entry, metric). `filter` is a comma-separated list of `label=`, `label=~` and `label!=` matchers; anything else goes into the selector as written. Without `--metrics`, every metric of `metric-dictionary.yaml` is used. `--format configmap` wraps the same rules in a ConfigMap named `rules-tenant-mapping` (key `tenant-mapping-rules.yaml`).
 
-### Why Data Plane Mapping
-
-**Zero Exporter Changes**: The threshold-exporter's responsibility is "YAML → Metrics"; it should not bear instance-to-tenant mapping logic. Mapping is data normalization and belongs at the Prometheus layer.
-
-**Natural Advantages of Recording Rules**:
-- Generated time series carry the `tenant` label natively; downstream alert rules and Dashboard queries require no modification
-- TSDB retains both original instance metrics and mapped tenant metrics, supporting dual-perspective analysis
-- Recording Rule computation completes within the Prometheus evaluation cycle, with no additional latency
-
-**Unified Management**: All three topologies converge to the same representation — all alert rules can assume the `tenant` label exists.
-
-### Why Reject Solving in the Exporter
-
-- **Scope Creep**: The exporter would become a "data normalization engine", violating single responsibility
-- **Restart Cost**: Mapping changes require exporter restart, affecting metric collection for all tenants
-- **Multi-Exporter Sync**: Under HA deployment, two exporters need consistent mappings, introducing distributed consistency challenges
-
-### Why Reject Solving in Alertmanager
-
-- **Too Late**: Alertmanager only processes already-triggered alerts; it cannot split at the metric level
-- **Dashboard Blind Spot**: Tools like Grafana query Prometheus directly, bypassing Alertmanager
-
-## Consequences
-
-### Positive Impact
-
-✅ threshold-exporter remains completely unaware of topology complexity, staying simple
-✅ All three topologies converge via a unified `tenant` label; downstream rules and Dashboards require zero changes
-✅ Recording Rules support hot reload (config-reloader sidecar — actually deployed only in #1246; before that a manual reload was required), no Prometheus restart needed
-✅ TSDB retains both original and mapped metrics, supporting multi-dimensional retrospective analysis
-✅ Integrates seamlessly with existing Rule Pack architecture (ADR-005 Projected Volume)
-
-### Negative Impact
-
-⚠️ Recording Rules generate additional time series, increasing TSDB storage (~2× per mapped metric)
-⚠️ Need to develop `generate_tenant_mapping_rules.py` tool to auto-generate Recording Rules
-⚠️ 1:N mapping filter syntax requires tenants to understand underlying DB schema/tablespace structure
-
-### Operational Considerations
-
-- `generate_tenant_mapping_rules.py` outputs as Rule Pack Part 1 ConfigMap, distributed via Projected Volume
-- CI validation: tenant IDs referenced in mappings must have corresponding tenant YAML in `config-dir`
-- Cardinality assessment: each mapping entry generates M recording rules (M = number of mapped metrics); evaluate TSDB impact
-- Recommend setting `_cardinality_multiplier` marker for 1:N tenants for capacity planning reference
-
-## Alternative Approaches Considered
-
-### Approach A: Exporter Built-in Mapping (Rejected)
-- Pros: Single component handles everything
-- Cons: Scope creep, high restart impact, HA consistency issues
-
-### Approach B: Alertmanager-Level Mapping (Rejected)
-- Pros: Only affects notification path
-- Cons: Cannot split at metric level, Dashboard blind spot
-
-### Approach C: External Proxy (Considered)
-- Pros: Fully decoupled
-- Cons: Introduces new component, increased latency, high operational complexity
-
-## v2.1.0 Implementation Summary
-
-- `generate_tenant_mapping_rules.py` — auto-generates Recording Rules from `_instance_mapping.yaml`, supporting Oracle/DB2/generic filter syntax (36 tests)
-- `discover_instance_mappings.py` — auto-detects instance topology in Prometheus (1:1/N:1/1:N) and outputs suggested mapping configuration
-- `scaffold_tenant.py --topology=1:N` — Onboarding integration (with `--mapping-instance`, `--mapping-filter`)
-- Example config `conf.d/examples/_instance_mapping.yaml`
-- Go/Python dual-side reserved key sync
-
-## Evolution Status
-
-- **v2.1.0** (completed): Core toolchain (`generate_tenant_mapping_rules.py` / `discover_instance_mappings.py` / `scaffold_tenant.py --topology=1:N`), Federation Scenario B support via `rule-pack-split` with edge/central layered mapping behavior
-- **v2.1.0 & v2.6.0** (completed): Federated topology validation across central and edge clusters
-
-**Remaining**:
-- End-to-end validation in real multi-schema Oracle environments (pending production feedback)
-- Schema validation (`_instance_mapping.yaml` JSON Schema) deferred to next cycle
-
-## One tenant in several clusters: cluster identity and alert granularity
-
-**Decision: one tenant may appear in several clusters. Each Prometheus says which cluster it is in with one external label, `da_cluster`; every rule whose input is tenant-exporter series aggregates and matches per (tenant, da_cluster), and alerts fire once per cluster.**
-
-This section is the contract for the N:1 row above ("multi-cluster same tenant, DR pairs" — a primary site and a standby site, one set each). **It describes the behaviour once the work is complete, and only part of it is in place**: the rule packs already evaluate per cluster, and Alertmanager's warning/critical dedup is per cluster too (point 5); notification grouping stays as it is by decision and is not split per cluster (point 5); per-cluster presence (point 6) is in use for the tenant-exporter absence alert; the two Kubernetes "configured but no matching data" checks are judged per cluster too, with nothing to declare; the checks not covered yet are listed under "Consequences and known limits". It is being implemented in stages, tracked in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
-
-### Why it is needed
-
-Two shapes of rule go wrong when a tenant spans clusters:
-
-- **Masking.** Liveness is written as "instances expected to exist, minus instances that reported success", the two sides paired with `on(tenant, instance)`. When two clusters each have an instance at the same address (overlapping internal ranges are common), the healthy one cancels the failed one and the failed cluster raises no alert.
-- **Silent merging.** `sum by(tenant)` adds the two clusters together and `max by(tenant)` keeps only the larger. The on-call engineer cannot tell which cluster it is, and the value no longer corresponds to any one database.
-
-### Contract
-
-1. **Where cluster identity comes from.** Each Prometheus sets `da_cluster: <cluster id>` under `global.external_labels` — one line per Prometheus, and nothing in any scrape job. Prometheus attaches external labels to data as it leaves: alerts sent to Alertmanager, `/federate` and remote write all carry them. So wherever two clusters' series or alerts meet (a central Prometheus, Alertmanager) the data already tells the clusters apart; a Prometheus that evaluates only its own cluster has no such label on its series, and the rules' grouping then reads as per tenant. A single-cluster deployment sets it as well, with one fixed value.
-2. **The cluster id.** Unique across the platform, one per cluster, and stable over time; the Prometheus replicas of one cluster (an HA pair) share one value. A deployment that already sets `external_labels.cluster` as the [Federation integration guide](../integration/federation-integration.en.md) describes gives `da_cluster` the same value, next to it.
-3. **Thresholds stay one per tenant.** Thresholds, maintenance state and tenant metadata come from threshold-exporter: one set per tenant, not per cluster. When these series arrive federated from another cluster they carry `da_cluster` too; the rules always collapse them `by(tenant)` first and then apply them to each of the tenant's clusters with `on(tenant) group_left` (`group_left` lets one series on the right match several on the left), so the result is the same either way — provided every cluster sends the same thresholds.
-4. **How rules are written.** In an aggregation over tenant-exporter series, a `by(...)` that contains any of `tenant`, `instance`, `pod`, `namespace`, `node` must also contain `da_cluster`. The same holds for a pairing (`on(...)`) whose two sides are both such series.
-5. **Alerts carry `da_cluster`.** Every alert that reaches Alertmanager has the label: an alert the rules computed with it (the cluster its series came from) keeps that value; one without gets the external label of the Prometheus that sends it — "the cluster of the Prometheus that evaluated this rule". Alertmanager's warning/critical dedup ([ADR-001](./001-severity-dedup-via-inhibit.en.md)) includes it, so the same alert in two clusters does not inhibit its counterpart. Notification grouping (`group_by`, which decides which alerts are combined into one notification) is unchanged by default: the same alert firing in several clusters at once is one notification that holds the alerts of all those clusters; whether each alert is listed with its `da_cluster` depends on the template the receiver uses (Alertmanager's built-in email, PagerDuty and webhook do, its built-in Slack does not — see the known limitations below). A deployment or tenant that wants one notification per cluster adds `da_cluster` to its own `group_by`. Tenant self-service alerts (`Custom_*`) are the exception: they go through a separate route whose grouping is fixed, and a tenant's `group_by` does not apply to them. An alert that reads only threshold-exporter series (for example "tenant has not configured a threshold") is of the second kind: it is about the whole tenant, and the cluster on its label only says which Prometheus computed it.
-6. **"Expected but absent" is judged per cluster.** A tenant may declare in its configuration which clusters it is expected in; when it does, any declared cluster that reports nothing raises an alert. Without a declaration, appearing in at least one cluster counts as present. The declaration lives in the tenant's top-level `_expected_exporters` (see [ADR-010](./010-multi-tenant-grouping.en.md)), which lists the kinds of exporter the tenant runs: an entry that is only a kind (`mariadb`) declares no cluster; written as `kind@cluster` (`mariadb@edge-a`) it declares "this cluster must have an exporter of this kind reporting", the cluster being the `da_cluster` value of that cluster's Prometheus. One kind is written one way or the other; both in the same list are refused. A cluster id may use letters, digits and `.`, `_`, `-` only (starting and ending with a letter or digit, at most 63 characters, case-sensitive); a cluster whose `da_cluster` value holds other characters (`/`, `:` for instance) cannot be declared per cluster for now. The per-cluster absence alert (`TenantExporterAbsent`) carries the declared cluster as its `da_cluster`. The platform keeps no list of clusters and does not check that a declared cluster exists: a misspelt cluster id shows up as an absence alert for that non-existent cluster.
-7. **A Prometheus without `da_cluster` is pointed out when it goes live.** `da-tools federation-check edge` reads the running Prometheus' configuration and fails when `external_labels.da_cluster` has no value; the repo's own configuration is held to the same by the scrape-configuration lint. Both look in one place, with no relabelling to work out.
-
-### Example
-
-Each Prometheus' configuration (its own value):
-
-```yaml
-global:
-  external_labels:
-    da_cluster: edge-a
-```
-
-Tenant `t1` has one database at `10.0.0.5:50000` in each of `edge-a` and `edge-b`, and the one in `edge-a` is down. The series a central Prometheus receives from the two clusters:
+With `--validate`, the tool checks that every entry's tenant has a tenant file in the config directory. If the directory above holds tenant files for `db-a` and `db-b` only, it prints these two lines, exits with code 1 and produces no rules:
 
 ```text
-db_expected{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}  1
-db_expected{tenant="t1", da_cluster="edge-b", instance="10.0.0.5:50000"}  1
-db_up{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}        0
-db_up{tenant="t1", da_cluster="edge-b", instance="10.0.0.5:50000"}        1
+ERROR: instance=db2-shared-01: tenant 'db-c' not found in config-dir
+ERROR: instance=db2-shared-01: tenant 'db-d' not found in config-dir
 ```
 
-Pairing without cluster identity — no result, no alert (the success in `edge-b` masks `edge-a`):
+Related tools: `da-tools discover-mappings` (`discover_instance_mappings.py`) reads an exporter's `/metrics` or queries Prometheus, lists the values of labels such as schema and tablespace in an instance, and writes an `_instance_mapping.yaml` draft whose tenant names you fill in; `scaffold_tenant.py --topology=1:N --mapping-instance <instance> --mapping-filter <filter>` adds to its draft config directory an `_instance_mapping.yaml` holding only this tenant, which you merge into the real one yourself.
+
+### One tenant in several clusters: cluster identity and alert granularity
+
+**One tenant may appear in several clusters. Each Prometheus says which cluster it is in with one external label, `da_cluster`; every rule whose input is tenant-exporter series aggregates and matches per (tenant, da_cluster), and alerts fire once per cluster.**
+
+This is the contract for the N:1 scenarios "one tenant in several clusters" and "DR pairs (a primary and a standby site, one stack each)". The rule packs, Alertmanager's warning/critical dedup, the exporter-absence alerts and the two Kubernetes "configured but no matching data" checks are per cluster; the checks that are not yet per cluster are listed under "Consequences and known limitations", tracked in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
+
+#### Contract
+
+1. **Where the cluster identity comes from.** Each Prometheus sets `da_cluster: <cluster id>` under `global.external_labels`, one line per Prometheus; scrape jobs write nothing. Prometheus attaches external labels to data as it leaves: alerts sent to Alertmanager, `/federate` and remote write all carry them. So wherever two clusters' series or alerts meet (a central Prometheus, Alertmanager) they are already told apart; a Prometheus that evaluates only its own cluster has no such label on its series, and the rules' groupings read as per tenant. A single-cluster deployment sets it too, to a fixed value.
+2. **Cluster id.** Unique across the platform, one per cluster, stable over time; Prometheus replicas of the same cluster (an HA pair) use the same value. A deployment that already sets `external_labels.cluster` per the [Federation integration guide](../integration/federation-integration.en.md) uses the same value for `da_cluster`, next to it.
+3. **Thresholds stay one per tenant.** Thresholds, maintenance state and tenant metadata come from threshold-exporter, one set per tenant, not per cluster. Federated from another cluster, these series also carry `da_cluster`; rules always collapse them with `by(tenant)` first and apply them to each of the tenant's clusters with `on(tenant) group_left` (`group_left` lets one series on the right match many on the left), so the result is the same either way. This assumes every cluster sends the same thresholds.
+4. **How rules are written.** When the input is an aggregation of tenant-exporter series, a `by(...)` that contains any of `tenant`, `instance`, `pod`, `namespace`, `node` must also contain `da_cluster`. The same holds for a match (`on(...)`) whose two sides are both such series. `check_cluster_identity.py` (pre-commit) checks this on each rule's syntax tree; a rule that deliberately looks across clusters declares so directly above the rule with `# da_cluster: tenant-wide <finding kind> (<labels>) — <reason>`, as `TenantExporterReplicaDown` does.
+5. **Alerts carry `da_cluster`.** Every alert sent to Alertmanager has this label: an alert that already carries it from the series it read has that value; one that does not gets the external label of the Prometheus that sends it, i.e. "the cluster of the Prometheus that evaluated this rule". Alertmanager's warning/critical dedup ([ADR-001](./001-severity-dedup-via-inhibit.en.md)) includes it, so same-named alerts in two clusters do not suppress each other. Notification grouping (`group_by`, which decides which alerts are combined into one notification) is unchanged by default: when the same alert fires in several clusters at once it is one notification holding each cluster's alert; whether the alerts are listed one by one with their `da_cluster` depends on the receiver's template (see known limitations). A deployment or tenant that wants one notification per cluster adds `da_cluster` to its own `group_by`. Tenant self-service alerts (`Custom_*`) are the exception: they go through a separate route whose grouping is fixed at `[tenant, alertname]`, and the tenant's `group_by` does not apply to them. An alert that reads only threshold-exporter series (for example "tenant has no thresholds configured") carries the second kind of value: it is about the whole tenant, and the cluster on the label only says which Prometheus computed it.
+6. **"Expected but absent" is judged per cluster.** A tenant can declare in its configuration which clusters it expects to appear in; with a declaration, any declared cluster that does not report raises an alert. Without one, appearing in at least one cluster counts as present. The declaration goes in the tenant's top-level `_expected_exporters` (see [ADR-010](./010-multi-tenant-grouping.en.md)), which lists the kinds of exporter the tenant runs: an entry with only a kind (`mariadb`) declares no cluster; an entry written `kind@cluster` (`mariadb@edge-a`) declares "this cluster must have an exporter of this kind reporting", the cluster being the `da_cluster` value of that cluster's Prometheus. One kind is written one way only; writing it both ways is refused. A cluster id may use only letters, digits, `.`, `_` and `-` (starting and ending with a letter or digit, at most 63 characters, case-sensitive); a cluster whose `da_cluster` value contains other characters (for example `/` or `:`) cannot be declared per cluster today. The per-cluster absence alert (`TenantExporterAbsent`) carries the declared cluster as `da_cluster`. The platform has no list of clusters and does not check that a declared cluster exists: a misspelt cluster id results in an absence alert for that non-existent cluster.
+7. **A Prometheus without `da_cluster` is caught at onboarding.** `da-tools federation-check edge` reads the configuration of the actual Prometheus, and its `edge_cluster_identity` check fails when `external_labels.da_cluster` has no value; this repository's own Prometheus configuration is checked for the same thing by `check_scrape_reachability.py` (`CLUSTER-IDENTITY`). Both look at one place and need not work out what relabeling would produce.
+
+These clauses are held by the following tests: `tests/rulepacks/rule-pack-cluster-masking_test.yaml` (with one cluster healthy and another broken, only the broken one alerts) and `tests/rulepacks/test_cluster_metamorphic.py` (every rule-pack test replayed with a cluster label) hold clause 4; `tests/alertmanager-inhibit/inhibit_semantics_test.go` holds the dedup of clause 5; `tests/rulepacks/rule-pack-liveness-per-cluster_test.yaml` and `components/threshold-exporter/app/pkg/config/expected_exporters_test.go` hold clause 6; `tests/ops/test_federation_check.py` and `tests/lint/test_check_scrape_reachability.py` hold clause 7.
+
+#### Example
+
+This repository's Prometheus configuration (each Prometheus fills in its own value):
+
+```yaml {.quote src="k8s/03-monitoring/configmap-prometheus.yaml"}
+global:
+# ...
+  external_labels:
+    da_cluster: lab
+```
+
+Tenant `db-a` has one database in each of `edge-a` and `edge-b`, both at address `10.0.0.5:50000`, and the one in `edge-a` fails. The series the central Prometheus receives from the two clusters:
+
+```text
+db_expected{tenant="db-a", da_cluster="edge-a", instance="10.0.0.5:50000"}  1
+db_expected{tenant="db-a", da_cluster="edge-b", instance="10.0.0.5:50000"}  1
+db_up{tenant="db-a", da_cluster="edge-a", instance="10.0.0.5:50000"}        0
+db_up{tenant="db-a", da_cluster="edge-b", instance="10.0.0.5:50000"}        1
+```
+
+Matching without the cluster identity: no result, no alert (`edge-b`'s success masks `edge-a`).
 
 ```promql
 max by(tenant, instance) (db_expected)
@@ -208,7 +138,7 @@ max by(tenant, instance) (db_expected)
 max by(tenant, instance) (db_up == 1)
 ```
 
-Pairing with cluster identity — one result, `{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}`:
+Matching with the cluster identity: one result, `{tenant="db-a", da_cluster="edge-a", instance="10.0.0.5:50000"}`.
 
 ```promql
 max by(tenant, da_cluster, instance) (db_expected)
@@ -216,93 +146,117 @@ max by(tenant, da_cluster, instance) (db_expected)
 max by(tenant, da_cluster, instance) (db_up == 1)
 ```
 
-`db_expected` and `db_up` are names made up for the illustration, not platform metrics.
+`db_expected` and `db_up` are names chosen for illustration, not platform metrics. A real case of the same shape in the rule packs (`DB2DatabaseDown`, with the same instance address in two clusters) is in `tests/rulepacks/rule-pack-cluster-masking_test.yaml`.
 
-What a per-cluster declaration looks like in practice (point 6). Tenant `t1`'s configuration:
+What a per-cluster declaration looks like (clause 6). Tenant `db-a`'s configuration:
 
 ```yaml
 tenants:
-  t1:
+  db-a:
     _expected_exporters: [mariadb@edge-a, mariadb@edge-b, redis]
 ```
 
-The MariaDB exporter in `edge-a` disappears, the one in `edge-b` is still there, and the Redis exporter runs only in `edge-b`. The series on the central Prometheus:
+`edge-a`'s MariaDB exporter disappears, `edge-b`'s is still there, and the Redis exporter runs only in `edge-b`. The series on the central Prometheus:
 
 ```text
-tenant_expected_exporter{tenant="t1", pack="mariadb", expected_cluster="edge-a"}  1
-tenant_expected_exporter{tenant="t1", pack="mariadb", expected_cluster="edge-b"}  1
-tenant_expected_exporter{tenant="t1", pack="redis"}                               1
-mysql_up{job="tenant-exporters", tenant="t1", da_cluster="edge-b"}                1
-redis_up{job="tenant-exporters", tenant="t1", da_cluster="edge-b"}                1
+tenant_expected_exporter{tenant="db-a", pack="mariadb", expected_cluster="edge-a"}  1
+tenant_expected_exporter{tenant="db-a", pack="mariadb", expected_cluster="edge-b"}  1
+tenant_expected_exporter{tenant="db-a", pack="redis"}                               1
+mysql_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}                1
+redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}                1
 ```
 
-After three minutes there is one alert: `TenantExporterAbsent{tenant="t1", pack="mariadb", da_cluster="edge-a"}`. MariaDB in `edge-b` and Redis, written as a kind only, raise nothing. With the same series and a tenant that writes only `_expected_exporters: [mariadb, redis]`, there is no alert at all: one reporting in `edge-b` counts as present.
+Three minutes later there is one alert: `TenantExporterAbsent{tenant="db-a", pack="mariadb", da_cluster="edge-a"}`. Neither `edge-b`'s MariaDB nor Redis (declared by kind only) alerts. With the same series, if the tenant writes only `_expected_exporters: [mariadb, redis]`, nothing alerts: one exporter reporting in `edge-b` counts as present. These two cases are L1 and L2 of `tests/rulepacks/rule-pack-liveness-per-cluster_test.yaml` (the test names its clusters `east` and `west`).
 
-### Consequences and known limits
+### Tenant attribution of infrastructure metrics (Addendum)
 
-- **Upgrade order does not matter.** The rules work on series without `da_cluster` exactly as they did before clusters were told apart; once the external label is set, data leaving that Prometheus starts to carry it.
-- **Alerts gain a label on the Alertmanager side.** Once the external label is set, Alertmanager treats an alert carrying it as a different alert: the new one appears and notifies at once, the old one stays until it expires, and the two coexist in between.
-- **Existing silences still apply.** A silence matches on the labels it lists; one more label on the alert does not affect it.
-- **The cluster is not visible locally in an edge cluster.** Queries against an edge Prometheus, its `ALERTS` series and `$labels.da_cluster` in alert annotations are all empty; the value exists once the data has reached Alertmanager or the central Prometheus.
-- **It does not cover one Prometheus that scrapes several clusters directly.** An external label has one value. Such a deployment writes `da_cluster` on each cluster's scrape jobs itself (a value already on a series wins over the external label), and the lint does not check that.
-- **Thresholds must agree across clusters.** When each cluster runs its own threshold-exporter and federates it to the centre, the centre collapses the copies `by(tenant)` and takes the larger value; if they differ, the centre uses a set that is no single cluster's own.
-- **Some scrape agents add external labels at scrape time** (Prometheus itself does not). Series then carry `da_cluster` locally as well, and the rules give the same result.
-- **Sums are per cluster.** Rules that sum "all of the tenant's instances" (for example lock wait and deadlock counts) sum within each cluster and compare each against the threshold.
-- **Per-cluster presence has to be evaluated where series carry `da_cluster`.** That is the central Prometheus that receives every cluster's data; when the rules are deployed in layers, the alert rules are placed there anyway. In a deployment where each cluster takes the same tenant configuration and evaluates the alert rules itself, local series carry no `da_cluster`, and `kind@cluster` reads there as the kind alone: with an exporter of the kind present locally every declared cluster counts as present, and with none locally one alert fires for each declared cluster of that kind, naming clusters the local Prometheus cannot see. Such a deployment should write kinds only and give each cluster its own tenant configuration. It is worse when an edge Prometheus writes `da_cluster` on its own scrape job and still evaluates the rules itself from the shared tenant configuration: its local series carry only the local cluster, so every other declared cluster alerts permanently even when all of them are healthy.
-- **A presence series without `da_cluster` counts as present for every declared cluster.** The other side of the previous point: if the central Prometheus also scrapes tenant exporters directly, those local series keep every declared cluster from alerting. To judge per cluster, write `da_cluster` on that scrape job.
-- **The two Kubernetes "configured but no matching data" checks are judged per cluster, with nothing to declare.** "A custom-recipe disk alert is configured but has no matching data" (`CustomRecipeDiskInert`) is judged per (tenant, cluster): if the tenant has pods running in a cluster and that cluster has none of its disk data, the alert fires for that cluster, and another cluster's data does not count; a cluster where the tenant runs no pod does not alert. "A version-specific threshold is configured but there is no version data" (`VersionAwareThresholdInert`) is judged per cluster: one alert for each cluster where a tenant that configured such a threshold has pods and there is no pod-label data at all. It reads the container CPU version thresholds only; a tenant that configured a version threshold for memory alone is outside this alert (its threshold is just as ineffective without pod labels, and this alert does not say so). A cluster that runs only other tenants does not alert; no version threshold applies there. Both alerts carry `da_cluster`, and their annotations name the cluster. On a single Prometheus whose series carry no `da_cluster`, both behave as they did before clusters were told apart, with one exception: when every tenant that configured a version threshold has no pod, another tenant has pods, and there is no pod-label data, `VersionAwareThresholdInert` used to fire and is now silent; that threshold is not in effect because nothing runs under it, and the alert returns with the tenant's first pod.
-- **Both checks assume that the two kinds of data of one cluster carry the same `da_cluster`.** The two kinds are "pods are running" and what it is compared with (disk data, pod-label data); they come through the same Prometheus, so both carry the label or neither does. Where the assumption is broken the result can be a false alert or a missed one. False: if one kind carries `da_cluster` and the other does not, or if one cluster arrives both through labelled federation and through an unlabelled local scrape with the compared data on only one of the two paths, the alert fires for a cluster that is fine (it stayed silent before clusters were told apart). Missed: compared data that arrives under another cluster's identity cancels that cluster's alert — for example cluster A's pod data carries no label and A really has no pod-label data, while cluster B's pod-label data carries no label either, so B's data is taken for A's. The looser rule "data without `da_cluster` counts for every cluster" (the exporter-absence alert has it) is deliberately not used here: with it, data in the central Prometheus's own cluster would hide another cluster that really has none. A cluster the central Prometheus scrapes itself (no label) next to federated clusters (labelled) is judged correctly, each on its own.
-- **Checks that are not per cluster yet.** The roll-up alert for "many tenants' exporters absent at once" (`MassExporterOutage`) counts (tenant, kind) pairs — a kind declared for several clusters is one pair — and does not say which cluster lost many. The aggregated series that tenant self-service alerts (`Custom_*`) read are still aggregated per tenant, not per cluster. The alert for "one scrape target of the tenant is down while another is healthy" (`TenantExporterReplicaDown`) deliberately keeps matching across clusters: for a tenant that writes kinds only, it is the one signal when a whole cluster goes down, as long as that cluster's scrape targets are still discovered and read `up=0`. When the targets themselves are gone (a Service removed, for example) this alert does not fire either, and for a tenant that writes kinds only the exporter-absence alert (`TenantExporterAbsent`) stays silent as well, because another cluster answers — that case has no signal at all unless the kind is declared per cluster. Progress is tracked in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
-- **Maintenance mode is the whole tenant.** One cluster cannot be put into maintenance alone.
+**Infrastructure metrics such as disk, PVC and node support only 1:1 tenant attribution (one namespace is one tenant).**
+
+The self-service alerts of [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) let tenants set conditions on the platform's infrastructure metrics (for example kubelet's `kubelet_volume_stats_*`). These metrics natively carry only `namespace`, not `tenant`, so `namespace` is copied into `tenant` at scrape time. The Prometheus configuration the platform ships (`k8s/03-monitoring/configmap-prometheus.yaml`) does this in the `metric_relabel_configs` of the kubelet scrape job, keeping only namespaces that start with `db-`.
+
+## Background
+
+In enterprise environments, the mapping between database instances and tenants is not always one-to-one:
+
+| Topology | Description | Typical scenarios |
+|:---------|:------------|:------------------|
+| **1:1** | One namespace/instance maps to one tenant | Independently deployed microservices, dedicated DB |
+| **N:1** | Several namespaces/instances aggregate to one tenant | One tenant in several clusters, DR pairs, read-write splitting |
+| **1:N** | One instance holds several logical tenants | Oracle multi-schema, DB2 multi-tablespace, shared RDS |
+
+**1:N.** A shared instance's metrics carry only `instance`, not a tenant. The exporter does not know how the instance is divided among tenants by schema or tablespace, so alert rules cannot apply different thresholds to different tenants on the same instance. A general way is needed to split instance-level metrics into tenant-level ones without changing threshold-exporter.
+
+**One tenant in several clusters.** Two kinds of rule expression go wrong when one tenant spans clusters:
+
+- **Masking.** A liveness check written as "instances expected to exist, minus instances that report success" matches the two sides with `on(tenant, instance)`. When each of two clusters has an instance at the same address (overlapping internal address ranges across clusters are common), the healthy one cancels the failed one and the failed cluster does not alert.
+- **Silent merging.** `sum by(tenant)` adds the two clusters together, and `max by(tenant)` keeps only the larger one. The on-call engineer cannot tell which cluster it is, and the value no longer corresponds to any single database.
+
+**Infrastructure metrics.** N:1 and 1:N in this ADR rely on extra mapping rules, while infrastructure metrics are renamed directly at scrape time and never see that mapping:
+
+- **N:1 would silently miss alerts.** The metric is labelled `tenant="db-a-read"` while the tenant's configuration uses the name `db-a`; the two never match and the alert never fires.
+- **1:N is impossible in principle.** A PVC cannot be split between tenants by schema or tablespace.
+
+## Consequences and known limitations
+
+### 1:N mapping
+
+- **threshold-exporter is unaware of topology.** It does not read `_instance_mapping.yaml`; all three topologies converge on the `tenant` label of the series.
+- **Original and mapped series coexist.** A recording rule produces new series and keeps the original instance series, so both views can be queried. The cost is that the mapped part doubles in series count: each rule copies every original series it selects and adds `tenant`. The estimate `--dry-run` prints is "entries × metrics", assuming each rule selects exactly one series.
+- **Mapped series lag by up to one evaluation interval.** The generated rule groups have `interval: 30s`.
+- **The platform's rule packs do not read the mapped series.** The generated series are named `tenant_mapped:<original metric>:current`, and no rule in `rule-packs/` reads that name; to alert on them, you write the rules yourself.
+- **The generated rules are not in the Prometheus deployment the platform ships.** The rules projected volume in `k8s/03-monitoring/deployment-prometheus.yaml` has no `rules-tenant-mapping` source, and Prometheus loads only `/etc/prometheus/rules/*.yml`. To use them, add the ConfigMap to that projected volume and project it to a `.yml` file name; once added, changes are reloaded by the config-reloader sidecar without restarting Prometheus ([ADR-005](./005-projected-volume-for-rule-packs.en.md)).
+- **The tenant-existence check has to be wired into your pipeline.** `--validate` checks that every tenant in the mapping has a tenant file in the config directory, but the repository's CI does not run this tool.
+- **No schema validation.** `_instance_mapping.yaml` has no JSON Schema; an entry missing `tenant` or with an empty `filter` is skipped with a WARN and does not fail the tool.
+- **Filters require knowing the database's structure.** Whoever writes a filter has to know how schemas/tablespaces map onto the exporter's labels.
+- **No end-to-end validation.** The repository has only unit tests for the generator (`tests/ops/test_generate_tenant_mapping_rules.py`); no test loads the generated rules into Prometheus, and it has not been run against a real multi-schema Oracle environment.
+
+### Known limitations of one tenant in several clusters
+
+- **Upgrade order does not matter.** Rules work on series without `da_cluster`, with the same results as without clusters; data starts carrying the label once the external label is set on the Prometheus it leaves.
+- **Alerts gain a label at the Alertmanager end.** Once the external label is set, Alertmanager treats the alert with the new label as a different alert: the new one appears and notifies once right away, the old one disappears only when it expires, and the two coexist in between.
+- **Existing silences still work.** A silence matches on the labels it lists; an extra label on the alert does not affect it.
+- **The cluster is not visible locally in an edge cluster.** In an edge Prometheus's queries, the `ALERTS` series and `$labels.da_cluster` in alert annotations, it is empty; the value appears only once the data reaches Alertmanager or the centre.
+- **Not applicable when one Prometheus directly scrapes several clusters.** An external label has only one value. Such a deployment writes `da_cluster` on each cluster's scrape jobs itself (a value already on a series takes precedence over the external label); the lint does not check that form.
+- **Thresholds must be the same in every cluster.** When each cluster has its own threshold-exporter federated to the centre, the centre collapses them with `by(tenant)`, taking the larger value; if they differ, the centre uses a set that is not any single cluster's own.
+- **Sums are per cluster.** A rule that sums "all instances of the tenant" (for example lock waits or deadlock counts) sums each cluster separately and compares each with the threshold.
+- **Per-cluster presence must be evaluated where series carry `da_cluster`.** That is the central Prometheus that collects every cluster's data; in a layered rule deployment the alert rules live there anyway. In a deployment where each cluster evaluates alert rules itself with a shared tenant configuration, local series carry no `da_cluster`, and `kind@cluster` there reads as the kind alone: if an exporter of that kind is present locally, every declared cluster counts as present; if not, one alert fires per declared cluster of that kind, naming clusters the local Prometheus cannot see. Such deployments should write kinds only, with each cluster having its own tenant configuration. Worse, if an edge Prometheus writes `da_cluster` on its scrape jobs itself and evaluates with a shared tenant configuration, local series carry only the local cluster, and every other declared cluster alerts permanently even when all are healthy.
+- **A presence series without `da_cluster` counts as present for every declared cluster.** The other side of the previous item: if the central Prometheus also scrapes tenant exporters directly, those local series silence every declared cluster. For per-cluster judgment, write `da_cluster` on that scrape job.
+- **The two Kubernetes "configured but no matching data" checks are judged per cluster and need no declaration.** "A custom-recipe disk alert is configured but there is no matching data" (`CustomRecipeDiskInert`) is per (tenant, cluster): if the tenant has running pods in a cluster and that cluster has none of its disk data, the alert fires for that cluster, and data in another cluster does not count; a cluster where the tenant has no running pods does not alert. "A version-specific threshold is configured but there is no version data" (`VersionAwareThresholdInert`) is per cluster: it fires once for each cluster where a tenant with such a threshold has pods but there is no pod-label data at all. It looks only at container CPU version thresholds; a tenant that set only memory version thresholds is outside this alert's scope (its thresholds equally have no effect without pod labels, but this alert does not point that out). A cluster that runs only other tenants does not alert; there are no version thresholds to apply there. Both alerts carry `da_cluster`, and their annotations name the cluster. On a single Prometheus where no series carries `da_cluster`, `VersionAwareThresholdInert` does not fire while every tenant with a version threshold has no pods, even if other tenants have pods and there is no pod-label data; it fires once that tenant's first pod appears. These cases are held by `tests/rulepacks/rule-pack-kubernetes-sentinels-per-cluster_test.yaml`.
+- **These two checks assume both kinds of data from one cluster carry the same `da_cluster`.** The two kinds are "has running pods" and the data compared against it (disk data, pod-label data); they come through the same Prometheus, so either both carry it or neither does. When the assumption breaks, the result can be a false alert or a missed one. False alert: one kind carries `da_cluster` and the other does not, or one cluster arrives both through a labelled federation path and an unlabelled local scrape with the compared data on only one path; the alert then fires for a cluster that is actually fine (it would not without clusters). Missed alert: compared data arriving under the identity of "another cluster" can cancel the alert. For example, cluster A's pod data carries no label and really has no pod-label data, while cluster B's pod-label data also carries no label; B's data is then taken as A's. The lenient rule "data without `da_cluster` counts for every cluster" (which the exporter-absence alert has) is deliberately not used here: with it, data from the cluster the central Prometheus scrapes itself would mask another cluster that really lacks data. When the central Prometheus's own cluster (unlabelled) coexists with federated clusters (labelled), each side is judged separately and correctly.
+- **Checks not yet per cluster.** The aggregate alert "exporters of many tenants absent at once" (`MassExporterOutage`) counts per (tenant, kind); one kind counts as one however many clusters it is declared for, the alert carries no `da_cluster`, and it does not say which cluster has the mass absence. The aggregated series that tenant self-service alerts (`Custom_*`) read are still aggregated per tenant, not per cluster. The alert "the tenant still has a healthy scrape target but one of them is down" (`TenantExporterReplicaDown`) deliberately keeps matching across clusters: when one cluster of a kind-only tenant is entirely down, as long as that cluster's scrape targets are still discovered and read `up=0`, this is the only signal. If the targets themselves are gone (for example the Service was removed), this alert does not fire either, and for a kind-only tenant the exporter-absence alert (`TenantExporterAbsent`) also stays silent because another cluster answers: that case has no signal at all unless the tenant declares per cluster. Progress in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
+- **Maintenance mode covers the whole tenant.** One cluster cannot be put into maintenance alone.
 - **Clusters cannot have different thresholds.** A tenant uses one set of thresholds in all its clusters.
-- **Notifications are not split per cluster by default.** The platform ships no notification template, so what people see is the output of Alertmanager's built-in templates. When two clusters fire at once, the email body, the PagerDuty details and the webhook payload list each alert with its `da_cluster`; the one-line title is `[FIRING:2] <alert name> <tenant> (<other common labels>)`, without the cluster (when a single cluster fires, the title does show the cluster, because it is then a label common to the whole group). The built-in Slack template has a title and no body, so with two clusters firing it does not show which two; that needs a custom template that lists the alerts. In PagerDuty one group is one incident, resolved once every cluster has recovered. The default is left alone because whether a tenant's route carries a `group_by` depends on what the deployment's `_routing_defaults`, a routing profile and the tenant's own `_routing` add up to (the scaffolded `_defaults.yaml` gives one); a tenant left with none — no layer gives one, or the tenant overrides it with `null` or an empty list — inherits the root route's grouping, so changing the platform default would reach only those tenants, not all of them; the other reason is the first cost below.
-- **Adding `da_cluster` to `group_by` has two costs.** First, an alert about the whole tenant (second half of point 5) carries the cluster of the Prometheus that evaluated it, so with several Prometheus evaluating the same rules it becomes one notification per Prometheus. Second, changing a route's `group_by` on a running Alertmanager makes every currently firing group of that route notify once more (the group key changes), and receivers keyed on the group (PagerDuty) open new incidents; Alertmanager does not resolve the old incidents (the resolve goes to the new key), so they have to be closed by hand. The configuration is shown in the [BYO Alertmanager integration guide](../integration/byo-alertmanager-integration.en.md).
+- **Notifications are not split per cluster by default.** The platform ships no notification templates; what you see is Alertmanager's built-in template output. When two clusters fire at once, the email body, PagerDuty details and webhook payload list each alert with its `da_cluster`; the one-line title is `[FIRING:2] <alert name> <tenant> (<other common labels>)`, without the cluster (when only one cluster fires the title does show the cluster, because it is then a label common to the whole group). The built-in Slack template has only a title and no body, so when two clusters fire at once you cannot tell which two; use a custom template that lists the alerts one by one. In PagerDuty one group is one incident, resolved only after every cluster recovers. Why the default is unchanged: whether a tenant's route carries `group_by` depends on whether the deployment's `_routing_defaults`, the routing profile and the tenant's own `_routing` end up with a value (the `_defaults.yaml` that `da-tools init` generates has one); only tenants left without a value (no layer gave one, or the tenant overrode it with `null` or an empty list) fall back to the root route's grouping, so changing the platform default would affect only those tenants, not all; the other reason is the first cost below.
+- **Adding `da_cluster` to `group_by` has two costs.** First, alerts about the whole tenant (second half of clause 5) carry the cluster of the Prometheus that evaluated them, so when several Prometheus servers evaluate the same rules there is one notification per Prometheus. Second, changing a route's `group_by` on a running Alertmanager re-notifies every group currently firing on that route (the group key changes), and a receiver keyed by group (PagerDuty) opens new incidents; Alertmanager does not resolve the old incidents (recovery notifications go to the new key), so they must be closed by hand. For configuration, see the [BYO Alertmanager integration guide](../integration/byo-alertmanager-integration.en.md).
 
-### Alternatives considered
+### Infrastructure metrics
 
-- **Reuse the name `cluster`.** The RabbitMQ and Elasticsearch exporters emit their own `cluster` (that service's own cluster name), and Prometheus has two behaviours for a label of the same name, both of which go wrong. By default it keeps the value the scrape configuration writes and renames the exporter's to `exported_cluster`, so a rule that reads the exporter's `cluster` reads the platform's cluster id. With `honor_labels: true` (which the central job that federates from the edges sets) it keeps the exporter's value, and cluster identity becomes the service's own cluster name. Hence a platform-specific name.
-- **Write `da_cluster` with a relabel step on every scrape job.** This was the first form of this section; its appeal is that series carry the value at rule-evaluation time. But there are four places to write it (tenant exporters, container metrics, volume metrics, Pod state metrics), one of them limited to a single Service; with only some of them written, the container alerts that match two of those sources find no match and go silent. Stopping such a configuration before deployment means a checker has to work out statically what the relabelling leaves — redoing Prometheus' own behaviour, with no end to the cases. And the only place the rules need cluster identity is where two clusters' data meet, where the data already carries the external label.
-- **Add `da_cluster` only where a label like `instance` is already present, and keep tenant-level aggregates one per tenant across clusters.** Far fewer places to change. But when rules are deployed in layers ([ADR-004](./004-federation-central-exporter-first.en.md), and the "edge evaluation" section of the [Federation integration guide](../integration/federation-integration.en.md)) the tenant-level recording rules are computed in each edge cluster: two edges each send a series of the same name to the centre, and the result differs from "everything evaluated centrally". Per cluster is the coarsest granularity at which both deployment modes agree. Ratio rules also cannot have per-edge ratios recombined into a whole-tenant ratio.
-- **Do not support it, and reject tenants that span clusters.** Rejecting them needs cluster identity first; and DR pairs and multi-site deployments are exactly what the N:1 row lists.
+- **An N:1 customer gets a signal on migration day.** The watchdog alert `CustomRecipeDiskInert` of [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) fires when a tenant has configured a disk alert and its pods are running, but the attributed disk metrics never appear. An N:1 customer therefore receives an explicit "this alert is not in effect" signal instead of a silent miss.
+- **N:1 and 1:N are not supported.** When an N:1 customer (for example a read-write split database) actually needs infrastructure alerts, the mapping will be added.
 
-## Addendum: Tenant Attribution for Infrastructure Metrics (v2.10.0)
+## Alternatives considered
 
-**Decision: disk, PVC, and node metrics support 1:1 tenant attribution only (one namespace = one tenant).**
+### Which layer does 1:N mapping
 
-ADR-024's self-service alerts now let tenants set conditions on platform infrastructure metrics (e.g. kubelet's `kubelet_volume_stats_*`). These metrics natively carry only `namespace`, not `tenant`, so at scrape time the `namespace` is used directly as the `tenant` — the 1:1 approach this ADR already uses.
+- **Built into the exporter**: one component does it all, but the exporter's job is turning YAML configuration into metrics; mapping is data normalization and does not belong there. A mapping change would require restarting the exporter, affecting every tenant's metrics, and in an HA deployment two exporters would have to keep identical mappings.
+- **In Alertmanager**: affects only the notification path, but it is too late: Alertmanager handles only alerts that have already fired and cannot split at the metric level; tools such as Grafana query Prometheus directly and never see the mapping.
+- **An external proxy**: fully decoupled, but adds a component, latency and operational complexity.
 
-**Why N:1 and 1:N are out of scope here.** This ADR's N:1 (several namespaces aggregated into one tenant) and 1:N (one instance split into several logical tenants) rely on an extra mapping layer; infrastructure metrics are attributed by a plain rename at scrape time and never reach that layer:
+### Cluster identity for several clusters
 
-- **N:1 would silently miss alerts.** The metric is labeled `tenant="db-a-read"`, but the tenant's config uses the name `db-a` — they don't match, so the alert never fires.
-- **1:N is structurally impossible.** A single PVC cannot be split per schema / tablespace across tenants.
+- **Reuse the name `cluster`.** The RabbitMQ and Elasticsearch exporters emit `cluster` themselves (the service's own cluster name), and Prometheus has two behaviors for a clashing label, both wrong here. By default it keeps the value from the scrape configuration and renames the exporter's to `exported_cluster`, so rules reading the exporter's `cluster` read the platform's cluster id instead. With `honor_labels: true` (as on the federation job by which the centre pulls from the edges) it keeps the exporter's value, and the cluster identity is replaced by the service's own cluster name. Hence a platform-specific name.
+- **Write `da_cluster` with relabeling on every scrape job.** The advantage is that the series already carry the value when rules are evaluated. But it has to be written in four places (tenant exporters, container metrics, volume metrics, pod-state metrics), one of them restricted to a single Service; when only some are written, container alerts that match two sources fail to match and go silent. Catching such a configuration before deployment would require the checker to work out relabeling results statically, re-implementing Prometheus's behavior, which never ends. And the only place rules actually need the cluster identity is where two clusters' data meet, where the data already carries the external label.
+- **Add `da_cluster` only where labels such as `instance` already exist, keeping tenant-level aggregations one across clusters.** Far fewer places to change. But in a layered rule deployment ([ADR-004](./004-federation-central-exporter-first.en.md), §8 edge evaluation of the [Federation integration guide](../integration/federation-integration.en.md)), tenant-level recording rules are computed at each edge: two edges each send a same-named series to the centre, giving a result different from "everything evaluated centrally". Per cluster is the coarsest granularity that gives the same result under both deployment styles. Ratio rules also cannot combine the edges' ratios back into the whole tenant's ratio.
+- **No support, and block tenants that span clusters.** Blocking would need a cluster identity first; and DR pairs and multi-site deployments are exactly the typical N:1 scenarios.
 
-**Keeping "unsupported" from becoming "silently broken."** ADR-024 ships a per-tenant watchdog alert, `CustomRecipeDiskInert`: if a tenant declared a disk alert and its pods are running but the attributed metric never appears, it fires. So an N:1 customer gets a clear "this alert isn't working" signal on migration day instead of a silent miss. When an N:1 customer (e.g. a read/write-split database) actually needs infrastructure alerts, the mapping can be added then.
+## Related
 
-Related: [ADR-024](024-version-aware-threshold-via-dimensional-label.md), node-health alerting (#809, which uses the same 1:1 attribution), the epic (#692).
-
-## Related Decisions
-
-- [ADR-005: Projected Volume for Rule Packs](./005-projected-volume-for-rule-packs.md) — Recording Rules distributed via same Projected Volume mechanism
-- [ADR-004: Federation Central Exporter First](./004-federation-central-exporter-first.en.md) — Mapping consistency under federation
-- [ADR-001: Severity Dedup via Inhibit Rules](./001-severity-dedup-via-inhibit.md) — Mapped metrics still subject to inhibit dedup
-
-## References
-
-- [`docs/architecture-and-design.en.md`](../architecture-and-design.md) §2.3 — Tenant-Namespace Mapping
-- [`scaffold_tenant.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/scaffold_tenant.py) — Current `--namespaces` N:1 support
-- [`generate_alertmanager_routes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/generate_alertmanager_routes.py) — Route generator (ADR-007 related)
-- [Prometheus Recording Rules](https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/) — Official documentation
-
-## Related Resources
-
-| Resource | Relevance |
-|----------|-----------|
-| [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ⭐⭐ |
-| [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ⭐ |
-| [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ⭐⭐ |
-| [004-federation-central-exporter-first.en](004-federation-central-exporter-first.en.md) | ⭐⭐⭐ |
-| [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐⭐⭐ |
-| [006-tenant-mapping-topologies.en](006-tenant-mapping-topologies.en.md) | ⭐⭐⭐ |
-| [README.en](README.en.md) | ⭐⭐⭐ |
-| ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐⭐ |
-| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |
+- [ADR-001](./001-severity-dedup-via-inhibit.en.md) — severity dedup inhibit rules, matched per cluster
+- [ADR-004](./004-federation-central-exporter-first.en.md) — federation architecture
+- [ADR-005](./005-projected-volume-for-rule-packs.en.md) — rule packs distributed by projected volume
+- [ADR-010](./010-multi-tenant-grouping.en.md) — `_expected_exporters`
+- [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) — self-service alerts and infrastructure metrics
+- [Federation integration guide](../integration/federation-integration.en.md)
+- [BYO Alertmanager integration guide](../integration/byo-alertmanager-integration.en.md)
+- [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097) — checks not yet per cluster
+- [Prometheus Recording Rules](https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/)

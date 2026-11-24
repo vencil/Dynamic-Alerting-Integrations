@@ -113,6 +113,6 @@ The exporter does not refuse a tenant with an invalid id; on each reload it logs
 
 ## Related
 
-- [ADR-008](008-operator-native-integration-path.en.md) — withdrawal of the operator path
+- [ADR-008](008-operator-native-integration-path.en.md) — the Operator path generates no AlertmanagerConfig and builds no operator of its own
 - [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655) — discussion and decision
 - `scripts/tools/dx/gen_recipe_contract.py` — the same precedent: a generated copy read by Go and the portal, with a drift guard
