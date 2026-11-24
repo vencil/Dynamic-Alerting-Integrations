@@ -304,8 +304,8 @@ TOOL_FILES=(
     # below); imported by ops/onboard_platform. Stdlib-only.
     _lib_consumer_read.py
     # #1595 D1b — the metric-family → source table and the Prometheus Operator
-    # portability derivation; imported by ops/operator_generate. Imports
-    # ops/generate_rule_pack_split (above).
+    # portability derivation; imported by ops/operator_generate and
+    # ops/generate_rule_pack_split. Imports _lib_consumer_read (above).
     _lib_metric_sources.py
     # Data files
     metric-dictionary.yaml
