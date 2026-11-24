@@ -267,6 +267,16 @@ modules:
       _malformed: "Message templating for QueryError"
       QueryError.error_line: "Message templating (stderr / envelope line); exact text pinned in tests/shared/test_query_error.py"
 
+  scripts/tools/_lib_cluster_identity.py:
+    covered: []
+    excluded:
+      external_labels: "#4097 line reader of global.external_labels in Prometheus' own rendering of its config; held to texts Prometheus' config.Load(...).String() printed (UTF-8 and quoted keys, block-scalar values, look-alikes in a scrape job, CRLF, not-a-rendering) by tests/shared/test_lib_cluster_identity.py"
+      _indent: "#4097 count of leading spaces; exercised by every external_labels case in tests/shared/test_lib_cluster_identity.py"
+      _key_and_rest: "#4097 one mapping line split into key and value text (plain, spaced, single- and double-quoted keys); pinned on Prometheus-printed lines by tests/shared/test_lib_cluster_identity.py::TestKeys"
+      _scalar: "#4097 unquote of a one-line yaml value; pinned by tests/shared/test_lib_cluster_identity.py::TestKeys::test_quoted_values_lose_their_quotes"
+      config_external_labels: "#4097 two-key lookup in a parsed config (no global → None, else the mapping or {}); table in tests/shared/test_lib_cluster_identity.py::test_config_external_labels, and through da-read in tests/ops/test_onboard_platform.py::TestClusterIdentity"
+      cluster_identity: "#4097 one-key lookup (a non-blank string or None) shared by federation_check, byo_check, onboard_platform and check_scrape_reachability; table in tests/shared/test_lib_cluster_identity.py::test_cluster_identity"
+
   scripts/tools/_lib_godispatch.py:
     # Note: members of this module are class methods on
     # GoBinaryDispatcher, so the manifest uses dotted Class.method

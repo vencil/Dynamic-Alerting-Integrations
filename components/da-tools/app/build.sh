@@ -222,6 +222,10 @@ TOOL_FILES=(
     # Stdlib-only by design; safe to bundle without extra deps.
     _lib_compat.py
     _lib_prometheus.py
+    # #4097 — the one reading of a Prometheus' cluster identity
+    # (global.external_labels.da_cluster); imported by ops/federation_check,
+    # ops/byo_check and ops/onboard_platform. Stdlib-only, no I/O.
+    _lib_cluster_identity.py
     # #3207/#3210 — the one cluster reader (kubectl get -o json) of
     # ops/operator_check.py; #3539 — the one place kubectl is started, for
     # the writes too (grafana_import, cutover_tenant, _grar_render).

@@ -83,6 +83,10 @@ from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (A
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 import _lib_write_check  # noqa: E402  (the draft conf.d's name and layout check, #4014)
 import _lib_input  # noqa: E402  (#3463: the one wording of "selected nothing")
+# #4097: the one reading of a Prometheus' cluster identity (federation_check's
+# and byo_check's) — judged here on the document Phase 3 already parsed.
+from _lib_cluster_identity import (  # noqa: E402
+    CLUSTER_IDENTITY_LABEL, CLUSTER_IDENTITY_UNSET, cluster_identity, config_external_labels)
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
 # writer names that flag; an unusable path is rc=2 + one line, not a
@@ -1056,9 +1060,10 @@ def write_migration_csv(candidates, output_path):
 # Phase 3: Prometheus Scrape Config Analysis
 # ============================================================
 
-def parse_scrape_configs(path, crdecode_binary=None, da_read_binary=None, *, text=None):
-    """The ``scrape_configs`` of the Prometheus config at *path*, as
-    Prometheus loads it.
+def parse_prometheus_config(path, crdecode_binary=None, da_read_binary=None, *, text=None):
+    """The Prometheus config at *path*, as Prometheus loads it — the one
+    parsed document every Phase 3 judgement reads (the scrape jobs, and
+    `global.external_labels` for the cluster identity, #4097).
 
     ADR-036 §12 (#3206), as Phase 1 reads the Alertmanager config: the file is
     first read the way Kubernetes reads a manifest (``da-crdecode``) to tell
@@ -1070,10 +1075,10 @@ def parse_scrape_configs(path, crdecode_binary=None, da_read_binary=None, *, tex
     spelling, a secret as its value). A config Prometheus refuses (an unknown
     key, a duplicate job name, an invalid regex) is refused here.
 
-    Returns the list of scrape configs (``[]`` when the config has none, an
-    empty file among them). Raises :class:`PrometheusConfigError` when the
-    config cannot be read — never returns "nothing" for it. *text*: the
-    file's content as the CLI read it once (#3797); None reads *path* here.
+    Returns the config as a dict (``{}`` for an empty file). Raises
+    :class:`PrometheusConfigError` when the config cannot be read — never
+    returns "nothing" for it. *text*: the file's content as the CLI read it
+    once (#3797); None reads *path* here.
     """
     path = str(path)
     text, inner, k8s_refusal = _config_text(path, text, crdecode_binary, _PROM_CONFIGMAP_KEY,
@@ -1089,7 +1094,52 @@ def parse_scrape_configs(path, crdecode_binary=None, da_read_binary=None, *, tex
         raise PrometheusConfigError(
             f"Prometheus' config loader cannot read {where}: {e}", detail,
             refused_by_reader=isinstance(e, _lib_consumer_read.InputRefused)) from e
+    return config
+
+
+def parse_scrape_configs(path, crdecode_binary=None, da_read_binary=None, *, text=None):
+    """The ``scrape_configs`` of the Prometheus config at *path*
+    (:func:`parse_prometheus_config`): ``[]`` when the config has none, an
+    empty file among them."""
+    return scrape_configs_of(parse_prometheus_config(
+        path, crdecode_binary=crdecode_binary, da_read_binary=da_read_binary, text=text))
+
+
+def scrape_configs_of(config):
+    """The scrape jobs of the parsed Prometheus *config*."""
     return config.get("scrape_configs") or []
+
+
+#: `da-tools byo-check prometheus` reads the running Prometheus' own config.
+_CLUSTER_IDENTITY_UNKNOWN = (
+    "this file has no `global` section, so it cannot tell whether "
+    f"external_labels.{CLUSTER_IDENTITY_LABEL} is set — check the running Prometheus "
+    "with `da-tools byo-check prometheus --prometheus <url>`")
+
+
+def analyze_cluster_identity(config):
+    """Whether the parsed Prometheus *config* says which cluster it is in —
+    `global.external_labels.da_cluster` (ADR-006 contract 1 and 7, #4097).
+    The label comes from the external labels alone: no relabelling writes it,
+    so the suggested ``relabel_configs`` never carry it.
+
+    Returns ``{"status", "value", "detail"}``; *status* is one of
+
+    - ``set`` — *value* is the cluster id;
+    - ``missing`` — the file has a `global` section and no value for the
+      label: a finding, the operator adds it;
+    - ``unknown`` — the file has no `global` section (a ``scrape_configs``
+      fragment, a piece of a ConfigMap): it cannot say, and that is not
+      reported as missing.
+    """
+    labels = config_external_labels(config)
+    if labels is None:
+        return {"status": "unknown", "value": None, "detail": _CLUSTER_IDENTITY_UNKNOWN}
+    identity = cluster_identity(labels)
+    if identity:
+        return {"status": "set", "value": identity,
+                "detail": f"external_labels.{CLUSTER_IDENTITY_LABEL} = {identity}"}
+    return {"status": "missing", "value": None, "detail": CLUSTER_IDENTITY_UNSET}
 
 
 def analyze_relabel_configs(scrape_config, tenant_label=DEFAULT_TENANT_LABEL):
@@ -1453,15 +1503,18 @@ def _write_phase2_outputs(output_dir, phase2_results, report, confd=None):
     }
 
 
-def _write_phase3_outputs(output_dir, phase3_results, report):
+def _write_phase3_outputs(output_dir, phase3_results, report, cluster_identity=None):
     """寫入 Phase 3（Scrape config 分析）輸出檔案。
 
     Args:
         output_dir: 輸出目錄路徑。
-        phase3_results: ``(job_analyses, summary)`` 二元組。
+        phase3_results: ``(job_analyses, summary)`` 二元組；None 表示設定檔沒有
+            scrape job（Phase 3 沒有結果），此時只寫叢集身分。
         report: 報告 dict，會被就地更新。
+        cluster_identity: 同一份設定的叢集身分判定（#4097）；有給就寫進
+            scrape-analysis.yaml 的頂層 ``cluster_identity``。
     """
-    job_analyses, summary = phase3_results
+    job_analyses, summary = phase3_results or ([], None)
 
     p3 = Path(output_dir) / _ARTIFACT_DIR
     ensure_dir_or_die(p3, flag=_OUTPUT_FLAG)
@@ -1490,28 +1543,31 @@ def _write_phase3_outputs(output_dir, phase3_results, report):
         "# Generated by onboard_platform.py — Phase 3\n"
         "# Scrape config analysis summary\n\n"
         + yaml.dump({
-            "summary": summary,
-            "jobs": [
-                {
-                    "job_name": j["job_name"],
-                    "has_tenant_mapping": j["has_tenant_mapping"],
-                    "mapping_type": j["mapping_type"],
-                }
-                for j in job_analyses
-            ],
+            **({"cluster_identity": cluster_identity} if cluster_identity is not None else {}),
+            # No scrape jobs: Phase 3 has no result, the identity is all there is.
+            **({"summary": summary,
+                "jobs": [
+                    {
+                        "job_name": j["job_name"],
+                        "has_tenant_mapping": j["has_tenant_mapping"],
+                        "mapping_type": j["mapping_type"],
+                    }
+                    for j in job_analyses
+                ]} if phase3_results else {}),
         }, default_flow_style=False, allow_unicode=True, sort_keys=False)
     )
     write_operator_output_or_die(summary_path, summary_content, flag=_OUTPUT_FLAG)
     report["files_written"].append(summary_path)
 
-    report["phases"]["phase3"] = {
-        "jobs_analyzed": len(job_analyses),
-        "summary": summary,
-    }
+    if phase3_results:
+        report["phases"]["phase3"] = {
+            "jobs_analyzed": len(job_analyses),
+            "summary": summary,
+        }
 
 
 def write_outputs(output_dir, phase1_results=None, phase2_results=None,
-                  phase3_results=None, dry_run=False, json_output=False):
+                  phase3_results=None, dry_run=False, json_output=False, cluster_identity=None):
     """Write all analysis outputs to the output directory.
 
     委派至 :func:`_write_phase1_outputs`、:func:`_write_phase2_outputs`、
@@ -1520,6 +1576,11 @@ def write_outputs(output_dir, phase1_results=None, phase2_results=None,
     Returns report dict summarizing what was generated.
     """
     report = {"phases": {}, "files_written": [], "warnings": []}
+    # #4097: the Prometheus config's cluster identity, at report level — one
+    # place, there whenever `--scrape-config` was read, with or without scrape
+    # jobs (Phase 3 has a result only with jobs). The hints read it from here.
+    if cluster_identity is not None:
+        report["cluster_identity"] = cluster_identity
 
     if dry_run:
         # Collect all output for display
@@ -1565,12 +1626,13 @@ def write_outputs(output_dir, phase1_results=None, phase2_results=None,
     if phase2_results:
         _write_phase2_outputs(output_dir, phase2_results, report, confd=confd2)
 
-    if phase3_results:
-        _write_phase3_outputs(output_dir, phase3_results, report)
+    if phase3_results or cluster_identity is not None:
+        _write_phase3_outputs(output_dir, phase3_results, report, cluster_identity)
 
     # Write onboard hints for scaffold pipeline (--auto-scaffold)
     if not dry_run and not json_output:
-        hints = _build_onboard_hints(phase1_results, phase2_results, phase3_results)
+        hints = _build_onboard_hints(phase1_results, phase2_results, phase3_results,
+                                     report.get("cluster_identity"))
         if hints.get("tenants"):
             # Library writer: RAISES OutputWriteError; main() catches it (#1641).
             hints_path = write_onboard_hints(output_dir, hints, flag=_OUTPUT_FLAG)
@@ -1580,9 +1642,14 @@ def write_outputs(output_dir, phase1_results=None, phase2_results=None,
     return report
 
 
-def _build_onboard_hints(phase1_results, phase2_results, phase3_results):
-    """Build onboard hints dict from analysis results for scaffold consumption."""
+def _build_onboard_hints(phase1_results, phase2_results, phase3_results, cluster_identity=None):
+    """Build onboard hints dict from analysis results for scaffold consumption.
+
+    *cluster_identity*: the report's (#4097) — whether the Prometheus config
+    says which cluster it is in; absent when no Prometheus config was read."""
     hints = {"tenants": [], "db_types": {}, "routing_hints": {}}
+    if cluster_identity is not None:
+        hints["cluster_identity"] = cluster_identity
 
     # From Phase 1: tenant names + routing info
     if phase1_results:
@@ -1700,6 +1767,7 @@ def main():
     phase1_results = None
     phase2_results = None
     phase3_results = None
+    identity = None  # #4097: set whenever --scrape-config was read
 
     # Phase 1: Alertmanager
     # #1112: all phase progress lines go to stderr — stdout is reserved for the
@@ -1785,7 +1853,7 @@ def main():
     if scrape_text is not None:
         print(f"Phase 3: Analyzing scrape config: {args.scrape_config}", file=sys.stderr)
         try:
-            scrape_configs = parse_scrape_configs(
+            prom_config = parse_prometheus_config(
                 args.scrape_config, crdecode_binary=args.da_crdecode_binary,
                 da_read_binary=args.da_read_binary, text=scrape_text)
         except PrometheusConfigError as e:
@@ -1795,6 +1863,10 @@ def main():
                 raise YamlFileError(args.scrape_config, e) from e
             print(f"ERROR: {safe_label(str(e))}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
+        # The scrape jobs and the cluster identity come from the one parsed
+        # document (#4097): the file is not read a second way.
+        scrape_configs = scrape_configs_of(prom_config)
+        identity = analyze_cluster_identity(prom_config)
         if not scrape_configs:
             print(f"  WARN: No scrape_configs found in: {args.scrape_config}",
                   file=sys.stderr)
@@ -1806,6 +1878,11 @@ def main():
             print(f"  Found {summary['total_jobs']} job(s): "
                   f"{summary['with_tenant_mapping']} with tenant mapping, "
                   f"{summary['without_tenant_mapping']} without", file=sys.stderr)
+        # Said whether or not the file has jobs. A finding like a job without
+        # a tenant mapping: reported, the exit code unchanged.
+        print("  " + {"set": "Cluster identity: ", "missing": "WARN: cluster identity: ",
+                      "unknown": "NOTE: cluster identity: "}[identity["status"]]
+              + safe_label(identity["detail"]), file=sys.stderr)
 
     # Generate outputs. #1641: the phase writers exit on their own via the
     # _or_die sisters; the shared write_onboard_hints raises instead, so the
@@ -1818,6 +1895,7 @@ def main():
             phase3_results=phase3_results,
             dry_run=args.dry_run,
             json_output=args.json,
+            cluster_identity=identity,
         )
     except OutputWriteError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -1833,6 +1911,9 @@ def main():
             for k, v in info.items():
                 if k != "summary":
                     print(f"  {k}: {v}")
+        if "cluster_identity" in report:
+            print(f"\ncluster_identity: {report['cluster_identity']['status']} — "
+                  f"{safe_label(report['cluster_identity']['detail'])}")
     else:
         print(f"\nOutputs written to: {args.output_dir}")
         for f in report["files_written"]:
