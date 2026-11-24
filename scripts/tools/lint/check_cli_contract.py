@@ -1923,7 +1923,12 @@ def write_baseline(findings: list[Finding], existing: list[BaselineEntry],
                      f'ticket: {q(tickets.get(key, "#TODO"))}}}')
     if not counts:
         lines[-1] = "entries: []"
-    write_repo_artifact(path, "\n".join(lines) + "\n")  # #3981: the artifact entry
+    text = "\n".join(lines) + "\n"
+    # #3981 (review): an unchanged ledger is not rewritten — only a file that
+    # is replaced must pass the entry's checks (it refuses this process's
+    # stdin, harmless to leave alone). is_file() is False for a FIFO.
+    if not (path.is_file() and path.read_text(encoding="utf-8") == text):
+        write_repo_artifact(path, text)  # the artifact entry
     return len(counts)
 
 
@@ -2284,7 +2289,8 @@ def main() -> "int | Report":
 
     result = scan()
     findings, stats = result.findings, result.stats
-    entries, ledger_errors = load_baseline()
+    # The module global, read at call time (a test points it elsewhere).
+    entries, ledger_errors = load_baseline(BASELINE_PATH)
     if args.write_baseline:
         if result.fatal:
             # A ledger regenerated on a machine where a parser did not load
@@ -2294,7 +2300,7 @@ def main() -> "int | Report":
             print("refusing to write the baseline: the scan did not complete",
                   file=sys.stderr)
             return EXIT_CALLER_ERROR
-        n = write_baseline(findings, entries)
+        n = write_baseline(findings, entries, BASELINE_PATH)
         print(f"wrote {n} entries to {_rel(BASELINE_PATH, REPO_ROOT)} "
               f"(fill every `#TODO` ticket; the check rejects placeholders)")
         return EXIT_OK

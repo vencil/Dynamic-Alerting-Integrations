@@ -2037,7 +2037,56 @@ def test_write_baseline_refuses_a_ledger_that_is_no_regular_file(tmp_path):
     assert stat_.S_ISFIFO(os.stat(fifo).st_mode)
 
 
-def test_main_is_wrapped_so_a_refused_ledger_is_rc2_one_line():
-    """#3981: `main` carries exit_on_output_write_error — the decorator's
-    wrapper, not the bare function, is what `_lib_exitcodes.run` calls."""
-    assert mod.main.__wrapped__.__name__ == "main"
+def _empty_scan(*_a, **_k):
+    return mod.ScanResult([], {}, [], [], {}, {})
+
+
+def test_write_baseline_with_a_fifo_ledger_is_rc2_one_line(tmp_path, monkeypatch, capsys):
+    """#3981 (review): end to end through `main` — a refused ledger ends rc 2
+    with the one standard line, not the crash handler's traceback (a wrapper
+    that kept `__wrapped__` but caught nothing passed the old structural
+    test). The scan is stubbed; the ledger path is the module global."""
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    fifo = tmp_path / "cli-contract-baseline.yaml"
+    os.mkfifo(fifo)
+    monkeypatch.setattr(mod, "BASELINE_PATH", fifo)
+    monkeypatch.setattr(mod, "scan", _empty_scan)
+    monkeypatch.setattr(sys, "argv", ["check_cli_contract.py", "--write-baseline"])
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            mod.main()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2 and str(fifo) in err, err
+    assert len(err.strip().splitlines()) == 1 and err.startswith("ERROR: cannot write "), err
+
+
+def test_an_unchanged_ledger_on_stdin_is_left_alone(tmp_path, monkeypatch, capsys):
+    """#3981 (review): only a ledger that changes is replaced, so one that is
+    also this process's stdin and already current stays rc 0 (the entry
+    refuses to replace a standard stream)."""
+    ledger = tmp_path / "cli-contract-baseline.yaml"
+    mod.write_baseline([], [], ledger)
+    before = ledger.read_bytes()
+    monkeypatch.setattr(mod, "BASELINE_PATH", ledger)
+    monkeypatch.setattr(mod, "scan", _empty_scan)
+    monkeypatch.setattr(sys, "argv", ["check_cli_contract.py", "--write-baseline"])
+    saved = os.dup(0)
+    try:
+        with open(ledger, "rb") as fh:
+            os.dup2(fh.fileno(), 0)
+        rc = mod.main()
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+    assert rc == 0, capsys.readouterr().err
+    assert ledger.read_bytes() == before

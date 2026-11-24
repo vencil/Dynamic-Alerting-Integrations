@@ -248,3 +248,26 @@ def test_a_baseline_that_is_a_fifo_is_rc2_one_line(mode, tree, monkeypatch, caps
     err = capsys.readouterr().err
     assert exc.value.code == 2 and str(baseline) in err, err
     assert len(err.strip().splitlines()) == 1 and err.startswith("ERROR: cannot "), err
+    if mode == "--ci":  # a read: the hint must not speak of an unwritable output
+        assert "unreadable" in err and "unwritable" not in err, err
+
+
+def test_an_unchanged_baseline_on_stdin_is_left_alone(tree, monkeypatch, capsys):
+    """#3981 (review): --generate replaces the baseline only when it changes,
+    so a current baseline that is also this process's stdin stays rc 0 (the
+    entry refuses to replace a standard stream)."""
+    rp, tr = tree
+    baseline = tr / "vmalert_coverage_baseline.yaml"
+    monkeypatch.setattr(sys, "argv", ["check_vmalert_coverage.py", "--generate"])
+    assert cov.main() == 0
+    before = baseline.read_bytes()
+    saved = os.dup(0)
+    try:
+        with open(baseline, "rb") as fh:
+            os.dup2(fh.fileno(), 0)
+        rc = cov.main()
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+    assert rc == 0, capsys.readouterr().err
+    assert baseline.read_bytes() == before

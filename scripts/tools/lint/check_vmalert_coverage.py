@@ -211,7 +211,11 @@ def generate() -> None:
     uncovered = current_uncovered()
     body = yaml.safe_dump({"uncovered": uncovered}, allow_unicode=True, sort_keys=True,
                           default_flow_style=False)
-    write_repo_artifact(_BASELINE, _BASELINE_HEADER + body)  # #3981: the artifact entry
+    text = _BASELINE_HEADER + body
+    # #3981 (review): an unchanged baseline is not rewritten — only a replaced
+    # file must pass the entry's checks (it refuses this process's stdin).
+    if not (_BASELINE.is_file() and _BASELINE.read_text(encoding="utf-8") == text):
+        write_repo_artifact(_BASELINE, text)  # the artifact entry
     total = sum(len(v) for v in uncovered.values())
     print(f"check_vmalert_coverage: wrote baseline with {total} uncovered alert(s) "
           f"across {len(uncovered)} pack(s) -> {_BASELINE.relative_to(_REPO)}")

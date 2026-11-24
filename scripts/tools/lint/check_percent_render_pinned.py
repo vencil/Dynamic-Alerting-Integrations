@@ -186,7 +186,11 @@ def generate() -> None:
     tree = current_unpinned()
     body = yaml.safe_dump({"unpinned": tree}, allow_unicode=True, sort_keys=True,
                           default_flow_style=False)
-    write_repo_artifact(_BASELINE, _BASELINE_HEADER + body)  # #3981: the artifact entry
+    text = _BASELINE_HEADER + body
+    # #3981 (review): an unchanged baseline is not rewritten — only a replaced
+    # file must pass the entry's checks (it refuses this process's stdin).
+    if not (_BASELINE.is_file() and _BASELINE.read_text(encoding="utf-8") == text):
+        write_repo_artifact(_BASELINE, text)  # the artifact entry
     n = len(_flatten(tree))
     print(f"check_percent_render_pinned: wrote baseline with {n} unpinned annotation(s) "
           f"-> {_BASELINE.relative_to(_REPO)}")
