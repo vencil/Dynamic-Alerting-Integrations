@@ -53,7 +53,7 @@ A score of ≥7 is Tier 1, 4–6 is Tier 2, ≤3 is Tier 3. Two cases are labell
     return "Tier 3", score, breakdown
 ```
 
-Tools marked `status: archived` in the registry are not scored: they get `tier: "Archived"` and are left out of the tier, token-group, coverage and i18n aggregates (they still count in `total_registered_tools`). The archiving process and the automatic `archive_candidates` suggestions are in [`dev-rules.md`](../internal/dev-rules.md), §T (tool lifecycle).
+Tools marked `status: archived` in the registry are not scored: they get `tier: "Archived"` and are left out of every aggregate except `total_registered_tools`. The archiving process and the automatic `archive_candidates` suggestions are in [`dev-rules.md`](../internal/dev-rules.md), §T (tool lifecycle).
 
 ### Example: no document references it, and it is still Tier 1
 

@@ -58,7 +58,7 @@ updated_at: 2026-11-24
     return "Tier 3", score, breakdown
 ```
 
-registry 標了 `status: archived` 的工具不評分：輸出 `tier: "Archived"`，並從 tier、token 分組、覆蓋率與 i18n 的彙總排除（`total_registered_tools` 仍算進去）。下架流程與 `archive_candidates` 自動建議見 [`dev-rules.md`](../internal/dev-rules.md) 的 §T 工具生命週期。
+registry 標了 `status: archived` 的工具不評分：輸出 `tier: "Archived"`，除了 `total_registered_tools` 以外的所有彙總都排除它。下架流程與 `archive_candidates` 自動建議見 [`dev-rules.md`](../internal/dev-rules.md) 的 §T 工具生命週期。
 
 ### 範例：沒有任何文件引用，照樣是 Tier 1
 

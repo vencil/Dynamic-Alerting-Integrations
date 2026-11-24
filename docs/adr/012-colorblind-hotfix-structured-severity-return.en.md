@@ -14,7 +14,7 @@ lang: en
 
 ✅ **Accepted** (v2.7.0, 2026-04-16)
 
-Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged. Cell colors have moved from the Tailwind palette to design tokens (`--da-color-*`); the structure returned by the severity function is unaffected.
+Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged.
 
 ## Decision
 
@@ -78,7 +78,7 @@ The render side puts the text label on the `<td>` and hides the symbol with `ari
                             {valueText}
 ```
 
-So a cell with value 70 shows `⚠⚠70` on screen, and a screen reader announces "`<tenant> <metric>: 70.00, High`".
+So a cell with value 70 shows `⚠⚠70` on screen, and a screen reader announces "`<tenant> <metric>: 70.00, High`" (「高」 in the Chinese UI).
 
 min, max and P95 are computed over **all** cells on screen together (the selected tenants × every metric of the selected Rule Packs), not per metric; the tool shows sample data generated from Rule Pack defaults plus random variance.
 
