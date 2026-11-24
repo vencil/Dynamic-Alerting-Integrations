@@ -1,4 +1,4 @@
-"""config-diff 的載體表靠這支自我測試維持（ADR-037 決定 3，#1516 P3b）。
+"""config-diff 的載體表靠這支自我測試維持（ADR-037 決定 3）。
 
 `config_diff.RENDERED_CARRIERS` 宣稱每個載體（`_` 開頭檔的頂層鍵）由哪個面向渲染。
 這裡在出貨的範例 conf.d 上，對每個載體各改一次，斷言：
