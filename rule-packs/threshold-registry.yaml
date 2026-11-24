@@ -30,9 +30,9 @@
 # 帶 presence 的 pack 必寫；它們的聯集就是「租戶 exporter 的指標」（scrape gate 與 split
 # 驗證器共用的判定），onboarding 的啟發式工具也從這裡推 pack。ClickHouse 寫 `ClickHouse`：
 # 伺服器內建的 /metrics 以 ClickHouseMetrics_／ClickHouseProfileEvents_／ClickHouseAsyncMetrics_
-# 等命名（src/Server/PrometheusMetricsWriter.cpp）。雙向由 tests/rulepacks/
-# test_exporter_metric_prefixes.py 釘住：pack 的規則讀到的原始指標都落在自家前綴內，宣告的
-# 每個前綴也都有自家規則或 presence 讀到。
+# 等命名（src/Server/PrometheusMetricsWriter.cpp）。雙向釘住：
+# tests/rulepacks/test_exporter_metric_prefixes.py（pack 的規則讀到的原始指標都落在自家
+# 前綴內，宣告的每個前綴也都有自家規則或 presence 讀到）。
 # packs.<pack>.undeclared_notice: false：TenantExporterUndeclared 不點名這個 kind
 # （jvm：很多應用順帶吐 jvm_*，不代表租戶打算跑一支 JVM exporter）；仍然可以宣告，
 # 宣告了 TenantExporterAbsent 就照管。只能寫 false，只能寫在帶 presence 的 pack 上。
