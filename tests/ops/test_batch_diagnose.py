@@ -1113,7 +1113,7 @@ def test_a_forbidden_pod_read_makes_the_batch_an_environment_error(monkeypatch):
     def prom(_url, query):
         if query.startswith("tenant_expected_exporter"):
             return [{"metric": {"pack": "mariadb"}, "value": [0, "1"]}], None
-        if "mysql_up{" in query:   # #3720: `min by(tenant) (mysql_up{…})`
+        if "mysql_up{" in query:   # #3720, #1200: `min by(tenant, da_cluster) (mysql_up{…})`
             return [{"metric": {}, "value": [0, "1"]}], None
         return [], None
     monkeypatch.setattr(diagnose, "query_prometheus", prom)
