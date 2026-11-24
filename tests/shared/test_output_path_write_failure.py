@@ -493,6 +493,17 @@ def _inject_report(tmp: Path) -> str:
     return str(p)
 
 
+def _subprocess_scan_root(tmp: Path) -> str:
+    """A scan root for `lint/check_open_encoding --write-subprocess-baseline`:
+    one file with one subprocess text-mode call and no `encoding=`, so the
+    ledger has a row to write (#3981)."""
+    d = tmp / "open-encoding-src"
+    d.mkdir()
+    (d / "a.py").write_text('import subprocess\nsubprocess.run(["x"], text=True)\n',
+                            encoding="utf-8")
+    return str(d)
+
+
 def _trufflehog_ndjson(tmp: Path) -> str:
     """`--input` for `lint/trufflehog_to_sarif`: one unverified finding.
 
@@ -806,6 +817,14 @@ ROWS: list[Row] = [
       reach="in-repo self-test waveform pack fixture",
       shapes=("parent_is_file", "target_is_file")),
     # ── lint ───────────────────────────────────────────────────────────────
+    # #3981: the subprocess ledger, rewritten through the artifact entry. The
+    # ledger is read first; a missing one bootstraps, so both shapes reach
+    # the write.
+    R("lint/check_open_encoding.py", "--subprocess-baseline", "file", "artifact",
+      lambda c, out: ["--write-subprocess-baseline", "--subprocess-baseline", str(out),
+                      _subprocess_scan_root(c.tmp)],
+      reach="a temp scan root with one flagged subprocess call",
+      out_name="subprocess-encoding-baseline.json"),
     R("lint/trufflehog_to_sarif.py", "--output", "file", "operator",
       lambda c, out: ["--input", _trufflehog_ndjson(c.tmp), "--output", str(out)],
       reach="a one-finding NDJSON transcript; no trufflehog binary is needed, "
@@ -2759,8 +2778,33 @@ NO_ROW: dict[Key, str] = {
         "argv reaches the call. `test_the_unreachable_state_migration_is_"
         "still_unreachable` holds that premise: the day a migration is "
         "registered it goes red, and this entry gives way to a row.",
+    # #3981, ninth batch: three Go codemods that rewrite, in place, the files
+    # named by their positional argument (named at the writer by its metavar,
+    # as argparse names it in its own errors).
+    ("../ops/add_t_parallel.py", "FILE_OR_DIR"):
+        "The positional names the INPUT `*_test.go` files (or directories "
+        "walked for them) that the tool rewrites in place: a row's bad-path "
+        "shapes (a missing parent, a parent that is a file) are refused by "
+        "`classify_path` before any file is read — the pair would measure that "
+        "check, not the write. What speaks for the write: "
+        "tests/ops/test_ops_tool_flags.py "
+        "`test_a_target_that_is_stdin_is_refused_and_the_others_are_left_alone` "
+        "(rc 2, one line naming the file and FILE_OR_DIR, the earlier file "
+        "keeps its bytes) and `test_add_t_parallel_refuses_a_fifo_before_any_write`.",
+    ("../ops/route_metrics_through_field.py", "FILE"):
+        "The positional names the INPUT Go files the tool rewrites in place; "
+        "a row's bad-path shapes are refused by `classify_path(..., \"file\")` "
+        "before any read. What speaks for the write: "
+        "tests/ops/test_ops_tool_flags.py "
+        "`test_a_target_that_is_stdin_is_refused_and_the_others_are_left_alone`.",
+    ("../ops/use_get_metrics.py", "FILE"):
+        "The positional names the INPUT Go files the tool rewrites in place; "
+        "a row's bad-path shapes are refused by `classify_path(..., \"file\")` "
+        "before any read. What speaks for the write: "
+        "tests/ops/test_ops_tool_flags.py "
+        "`test_a_target_that_is_stdin_is_refused_and_the_others_are_left_alone`.",
 }
-_NO_ROW_CEILING = 3
+_NO_ROW_CEILING = 6
 
 
 def test_every_flag_named_at_a_writer_has_a_row():
@@ -2928,8 +2972,14 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "`--generate` rewrites tests/rulepacks/vmalert_coverage_baseline.yaml; it takes "
         "no path. A refused baseline is held by tests/lint/test_check_vmalert_coverage.py "
         "(test_a_baseline_that_is_a_fifo_is_rc2_one_line).",
+    # #3981, tenth batch.
+    "lint/check_includes_sync.py":
+        "`--fix` writes the missing `docs/includes/*.en.md` stubs beside the "
+        "includes the tool names; the flag is a switch, not a path. A write that "
+        "fails is held by tests/lint/test_check_includes_sync.py "
+        "(test_a_stub_that_cannot_be_written_is_rc2_one_line).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 22
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 23
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

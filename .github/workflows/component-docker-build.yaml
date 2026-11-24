@@ -119,7 +119,6 @@ on:
       - "scripts/tools/ops/_grar_routes.py"
       - "scripts/tools/ops/_grar_validate.py"
       - "scripts/tools/ops/_threshold_alerts.py"
-      - "scripts/tools/ops/generate_rule_pack_split.py"
       - "scripts/tools/ops/lint_custom_rules.py"
       # END GENERATED path-trace
 

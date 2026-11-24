@@ -382,7 +382,7 @@ Fail-closed 護欄:
 
 ⚠️ **遷移警語**:把既有規則「改寫」成 match 規則等於**立即收窄**(原本靠 name 命中的使用者若不滿足新條件會馬上失去存取)。建議先**並行新增** match 規則、確認命中面後再撤舊規則。
 
-**Namespace 誠實界線**(單一 trusted-hop MVP):claim key 即命名空間單位——部署**不得**把兩個不同上游來源對映到同一個 claim key(平台無從區分);真正的 issuer namespace 待 JWT 驗簽(D2-A)時由 `iss` 天然提供。
+**Namespace 誠實界線**(單一 trusted-hop MVP):claim key 即命名空間單位——部署**不得**把兩個不同上游來源對映到同一個 claim key(平台無從區分);真正的 issuer namespace 待 JWT 驗簽(ADR-027「考慮過的替代方案」：驗證使用者的 JWT access token)時由 `iss` 天然提供。
 
 ### RBAC 組織範圍(org-scope,身分綁定;LD-6 P4)
 

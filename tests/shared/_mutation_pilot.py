@@ -202,23 +202,6 @@ MUTATIONS: list[Mutation] = [
         old="if not m:\n        return None",
         new="if m is None:\n        m = re.match(r'(?P<type>.*)', subject)",
     ),
-    # ── extract_metrics_from_expr (generate_rule_pack_split) ──────
-    Mutation(
-        target_file="scripts/tools/ops/generate_rule_pack_split.py",
-        test_file="tests/shared/test_property_tools.py tests/ops/test_generate_rule_pack_split.py",
-        label="metrics: drop builtin-fn filter (rate/sum/avg counted as metrics)",
-        fn_name="extract_metrics_from_expr",
-        old="        if m not in builtin_funcs and not m[0].isupper():",
-        new="        if not m[0].isupper():",
-    ),
-    Mutation(
-        target_file="scripts/tools/ops/generate_rule_pack_split.py",
-        test_file="tests/shared/test_property_tools.py tests/ops/test_generate_rule_pack_split.py",
-        label="metrics: drop uppercase-token filter (labels counted as metrics)",
-        fn_name="extract_metrics_from_expr",
-        old="        if m not in builtin_funcs and not m[0].isupper():",
-        new="        if m not in builtin_funcs:",
-    ),
     # ── parse_duration_seconds (_lib_validation) ──────────────────
     Mutation(
         target_file="scripts/tools/_lib_validation.py",

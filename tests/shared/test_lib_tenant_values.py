@@ -897,6 +897,7 @@ def _fake_pack_binary(tmp_path, doc: dict):
 
 
 _PACK_DOC = {"schema": tv.CUSTOM_ALERT_PACK_SCHEMA, "config_hash": None, "groups": [], "shapes": 0, "not_compiled": [],
+             "declarations": {},
              "block_errors": {}, "lifecycle": [], "parse_failed": [], "skipped": [], "unreadable": []}
 
 
@@ -905,6 +906,8 @@ _PACK_DOC = {"schema": tv.CUSTOM_ALERT_PACK_SCHEMA, "config_hash": None, "groups
     ("lifecycle", [{"recipe": "rate", "status": "eol", "tenants": "ab"}]),  # a string, not a list
     ("shapes", "1"),
     ("not_compiled", [{"tenant": "t", "index": 0, "name": "a", "status": "served", "reason": ""}]),
+    ("declarations", ["custom:x:warning:core"]),                          # not a mapping
+    ("declarations", {"custom:x:warning:core": "two\nlines"}),            # would break out of its comment line
 ])
 def test_load_custom_alert_pack_refuses_a_document_not_of_its_shape(tmp_path, field, bad):
     """A field not of its shape is output that is not da-guard's (`broken`),
@@ -915,6 +918,16 @@ def test_load_custom_alert_pack_refuses_a_document_not_of_its_shape(tmp_path, fi
     assert ei.value.broken, ei.value
     # control: the same document with the field of its shape is read.
     assert tv.load_custom_alert_pack(tmp_path, binary=_fake_pack_binary(tmp_path, _PACK_DOC)).shapes == 0
+
+
+def test_a_pack_document_without_declarations_names_the_binary_as_older(tmp_path):
+    """`declarations` (#4097: the comment the serialiser writes above an
+    absence core) is a field every da-guard of this tool's version writes; a
+    document without it is an older binary, said so — not broken output."""
+    doc = {k: v for k, v in _PACK_DOC.items() if k != "declarations"}
+    with pytest.raises(tv.CustomAlertPackError) as ei:
+        tv.load_custom_alert_pack(tmp_path, binary=_fake_pack_binary(tmp_path, doc))
+    assert ei.value.stale and not ei.value.broken, ei.value
 
 
 # ── ADR-037：schema 與 state_filters ────────────────────────────────────────

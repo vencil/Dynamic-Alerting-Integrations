@@ -582,7 +582,7 @@ def test_forecast_ratio_mode_slug_and_records(tmp_path):
     txt = cc._render(cc.build_pack(tmp_path).groups)
     rid = "forecast__avail__lt__h4h__den_cap__for1m"
     assert rid in txt
-    assert "sum by(tenant) (avail)" in txt and "sum by(tenant) (cap) > 0" in txt
+    assert "sum by(tenant, da_cluster) (avail)" in txt and "sum by(tenant, da_cluster) (cap) > 0" in txt
     # W1: ratio-mode forecast clamps the (non-negative) predicted ratio and gates on
     # a current-state sanity floor (anti transient-write-burst FP); the tenant's own
     # threshold is unchanged (compared in the core).
@@ -601,7 +601,7 @@ def test_forecast_raw_mode_no_capacity(tmp_path):
     txt = cc._render(cc.build_pack(tmp_path).groups)
     assert "forecast__queue_depth__gt__h12h__for1m" in txt
     assert "den_" not in txt
-    assert "max by(tenant, version) (queue_depth)" in txt
+    assert "max by(tenant, version, da_cluster) (queue_depth)" in txt
     assert "[86400s], 43200)" in txt
     # W1: raw mode (arbitrary gauge — may exceed 1 or go legitimately negative) gets
     # NEITHER the ratio clamp NOR the [0,1] current-state band (those are ratio-mode only).
@@ -667,7 +667,7 @@ def test_forecast_raw_mode_threshold_not_bounded_by_band(tmp_path):
 # save, and refusing to compile a served entry would silence a live alert.
 
 
-# --- 10b. slo_burn_rate recipe (ADR-031, #1092 Phase 0) ----------------------
+# --- 10b. slo_burn_rate recipe (ADR-031, #1092 stage 0) ----------------------
 _SLO_DECL = ('{recipe: slo_burn_rate, name: co_avail, metric: co_errors_total, '
              'denominator_metric: co_requests_total, objective: "99.9"}')
 
@@ -702,7 +702,7 @@ def test_slo_duplicate_same_shape_is_the_exporters_duplicate(tmp_path):
 
 
 def test_slo_rule_count_ledger(tmp_path):
-    # ADR-031 §2 implementation checklist: the per-shape rule ledger. emit_shape
+    # ADR-031 §2 / Consequences (about 12 rules per shape): the per-shape rule ledger. emit_shape
     # yields 9 recording (1 threshold + 4 SLI ratio windows + 2 bad-event windows
     # + 2 per-severity cores) + 2 alerts = 11; build_pack adds 1 custom_recipe_info
     # → 12 rules total for one slo shape (plus the global silent sentinel).
@@ -766,7 +766,10 @@ def test_slo_core_structure_and_measurement_never_suppressed(tmp_path):
     # fast burn: 1h & 5m ratio windows + bad:5m > min_events(10); maintenance unless tail
     assert f"custom:metric:{rid}:1h" in fast and f"custom:metric:{rid}:5m" in fast
     assert f"(custom:bad:{rid}:5m > 10)" in fast
-    assert fast.count("and on(tenant)") == 2
+    # the three operands pair within ONE cluster (ADR-006): on(tenant) alone
+    # would let one cluster's long window fire with another's short window
+    assert fast.count("and on(tenant, da_cluster)\n") == 2 and "and on(tenant)\n" not in fast
+    assert slow.count("and on(tenant, da_cluster)\n") == 2 and "and on(tenant)\n" not in slow
     assert 'user_state_filter{filter="maintenance"}' in fast
     # slow burn: 6h & 30m + bad:30m > min_events*6 (the ×6 linear window scaling
     # is compiler-side, ADR-031 §1)
@@ -793,7 +796,7 @@ def test_slo_alert_labels_metric_group_and_slo_burn(tmp_path):
     assert {a["labels"]["severity"] for a in alerts} == {"critical", "warning"}
     for a in alerts:
         # Severity Dedup inhibit needs metric_group on BOTH severities; slo_burn
-        # is the storm-fan-out discriminator (ADR-031 §2, OQ-B de-prefixed).
+        # is the storm-fan-out discriminator (ADR-031 §2).
         assert a["labels"]["metric_group"] == "slo_{{ $labels.name }}"
         assert a["labels"]["slo_burn"] == "true"
         assert a["labels"]["component"] == "custom"
@@ -814,6 +817,7 @@ def test_slo_selectors_apply_to_both_sides(tmp_path):
         assert 'co_errors_total{service="checkout"}' in expr        # numerator
         assert 'co_requests_total{service="checkout"}' in expr      # denominator
         assert "> 0)" in expr                                        # div-by-zero guard
+        assert expr.count("sum by(tenant, da_cluster) (rate(") == 2  # both sides per cluster (ADR-006)
 
 
 def test_slo_objective_disable_still_compiles(tmp_path):
@@ -1878,3 +1882,35 @@ def test_the_pack_keeps_a_checkouts_mode(tmp_path, monkeypatch, existing):
         out.chmod(existing)
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
     assert stat.S_IMODE(out.stat().st_mode) == 0o644
+
+
+# ── #4097: an absence core is tenant-wide and the written pack says so ──────
+def test_the_written_pack_declares_its_absence_cores_tenant_wide(tmp_path, monkeypatch):
+    """`absence` is the one recipe that reads a tenant's clusters together
+    (ADR-006 contract 6). The compiler names its cores (`declarations`) and
+    the pack as WRITTEN carries the comment directly above each — where
+    check_cluster_identity.py reads it — and above no other rule; `--check`
+    compares that same text, so a pack without the comment is drift."""
+    _write_tree(tmp_path / "conf.d", {"t.yaml": (
+        "tenants:\n  t1:\n    _custom_alerts:\n"
+        "      - {recipe: absence, name: gone, metric: hb_total, window: 10m, threshold: '0:critical'}\n"
+        "      - {recipe: threshold, name: high, metric: qd, op: '>', window: 5m, threshold: '5:warning'}\n")})
+    out = tmp_path / "pack.yaml"
+    assert _compile_into(tmp_path / "conf.d", out, monkeypatch) == 0
+    lines = out.read_text(encoding="utf-8").split("\n")
+    comments = [i for i, line in enumerate(lines) if "da_cluster: tenant-wide" in line]
+    assert len(comments) == 1, comments
+    at = comments[0]
+    assert lines[at].startswith("  # da_cluster: tenant-wide by-drops-cluster (tenant) — ")
+    assert lines[at + 1] == "  - record: custom:absence__hb_total__absent__w10m__for1m:critical:core"
+    assert "count by(tenant) (count_over_time(hb_total[10m]) > 0)" in "\n".join(lines[at + 1:at + 8])
+    assert _compile_into(tmp_path / "conf.d", out, monkeypatch, extra=["--check"]) == 0
+    out.write_text("\n".join(line for i, line in enumerate(lines) if i != at), encoding="utf-8")
+    assert _compile_into(tmp_path / "conf.d", out, monkeypatch, extra=["--check"]) == 1
+
+
+def test_a_declaration_for_a_rule_the_pack_lacks_is_an_error():
+    groups = [{"name": "g", "rules": [{"record": "a:b", "expr": "vector(1)"}]}]
+    assert "  # why\n  - record: a:b\n" in cc._render(groups, declarations={"a:b": "why"})
+    with pytest.raises(ValueError, match="does not record"):
+        cc._render(groups, declarations={"a:c": "why"})

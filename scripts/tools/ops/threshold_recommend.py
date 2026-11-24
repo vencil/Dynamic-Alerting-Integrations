@@ -50,7 +50,7 @@ import math
 import os
 import re
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime, timezone
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any, Iterator, Optional
@@ -68,7 +68,10 @@ from _lib_python import (  # noqa: E402
 )
 # #3133: a query not answered raises QueryError — never an empty result; a
 # sample is read once, by the lib (#3213).
-from _lib_prometheus import QueryError, finite_row_samples, prometheus_instant  # noqa: E402
+from _lib_prometheus import (  # noqa: E402
+    QueryError, finite_row_samples, prometheus_instant, row_samples)
+from _lib_cluster_identity import (  # noqa: E402  (#1200: one statistic per cluster)
+    cluster_text, in_time_order, markdown_text, repeated_rows, rows_by_cluster)
 # #2116: the tenants, their values and who owns each key come from Go
 # (`da-guard effective`); the #1231 spellings from `da-guard key-spellings`.
 from _lib_parse_tree import KeySpellings  # noqa: E402
@@ -248,6 +251,31 @@ class KeyRecommendation:
     # --schedules-only); `current_value` stays as written. None when the key
     # was not compared.
     served_value: Optional[float] = None
+
+
+@dataclass
+class ClusteredKeyRecommendation(KeyRecommendation):
+    """#1200 (ADR-006): the recommendation of a key whose series has a row in
+    more than one cluster. `clusters` is every cluster's own statistic and
+    recommendation (`_cluster_entry`), and the inherited fields are those of
+    ONE cluster — `conservative_cluster`, the one `_most_conservative` took —
+    never of the clusters' samples put together. A key measured in one
+    cluster stays a plain `KeyRecommendation`, so its --json document has
+    none of these fields."""
+
+    conservative_cluster: str = ""
+    clusters: list[dict[str, Any]] = field(default_factory=list)
+    # The alert's comparison (">" / "<"): a lower-bound key's `p95` is its P5
+    # floor and its delta a miss-rate one, and the reports label them so.
+    direction: str = ">"
+    # A cluster the engine recommended NO value for (idle, within margin)
+    # whose samples changed the outcome all the same: the candidate would
+    # have started firing on them, so an upper-bound value was raised to
+    # cover them, or a lower-bound floor was not recommended at all
+    # (`_fit_unrecommended`). Never a cluster with a recommendation of its
+    # own — those are covered by taking the most conservative value. ""
+    # when none did.
+    held_by_cluster: "str | None" = None   # None: no cluster held it ("" is the unlabelled one)
 
 
 @dataclass
@@ -847,22 +875,31 @@ def build_metric_query(observed_series: str, tenant: str, lookback: str) -> str:
     return f'{observed_series}{{tenant="{safe_tenant}"}}[{lookback}]'
 
 
-def query_prometheus_range_ts(
+def query_prometheus_range_rows(
     prometheus_url: str,
     promql: str,
     *,
     timeout: int = 30,
-) -> list[tuple[float, float]]:
-    """The finite ``(ts, value)`` samples a range-vector PromQL selects.
+) -> "list[tuple[dict[str, Any], list[tuple[float, float]], tuple[float, float]]]":
+    """The series a range-vector PromQL selects, one ``(labels, samples,
+    span)`` per row: its label set, its finite ``(ts, value)`` samples, and
+    the ``(first, last)`` timestamps of ALL its float samples — a row that
+    is NaN throughout still occupies its time range, which is what tells
+    two rows of one cluster at the same time from one after the other.
 
+    Row by row, never one list (#1200): a tenant's observed series has one
+    row per cluster, and samples of two rows put together describe neither.
     The lower-bound engine (#916) buckets samples by UTC day to compute a
     daily-P5, and the upper-bound path counts the UTC hours its samples cover
     (#2941), so both need ``(ts, value)`` pairs.
 
     NaN/Inf are left out (parity with ``compute_percentiles``): a hit-ratio
     recording rule can emit ``NaN`` while idle (0/0), and an unfiltered NaN would
-    sort to an arbitrary index and yield a silently-wrong percentile. A filtered
-    series that ends up too thin then hits the engine's own sample gate.
+    sort to an arbitrary index and yield a silently-wrong percentile. A
+    series left with no finite sample is still a row here (an idle cluster
+    is a cluster); a row with no float sample at all (a native-histogram
+    one) is not a series of the alert's and is left out. A filtered series
+    that ends up too thin then hits the engine's own sample gate.
 
     Raises ``QueryError`` (#3133) when the query was not answered — no
     connection, an HTTP error, an ``error`` status, or a body that is not a
@@ -871,10 +908,13 @@ def query_prometheus_range_ts(
     """
     rows = prometheus_instant(prometheus_url, promql, timeout=timeout,
                               result_type="matrix")
-    pairs: list[tuple[float, float]] = []
+    out = []
     for row in rows:
-        pairs.extend(finite_row_samples(row)[0])
-    return pairs
+        stamps = [ts for ts, _ in row_samples(row)]
+        if stamps:
+            out.append((row.get("metric") if isinstance(row.get("metric"), dict) else {},
+                        finite_row_samples(row)[0], (min(stamps), max(stamps))))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1126,6 +1166,247 @@ def _recommend_key(
     return rec
 
 
+def _measure(
+    key: str,
+    current_value: Any,
+    direction: Any,
+    pairs: "list[tuple[float, float]]",
+    min_samples: int,
+) -> KeyRecommendation:
+    """One series' recommendation — the samples of ONE cluster (#1200) —
+    routed by the alert's comparison direction (#916 Item A)."""
+    if direction == "<":
+        # Lower-bound floor path: timestamped samples → daily-bucket P5
+        # engine (never the upper-bound percentile logic).
+        return recommend_threshold_lower(key, current_value, pairs, min_samples)
+    # Upper-bound path. The timestamps give the hours covered the #2941
+    # floor needs.
+    values = [v for _, v in pairs]
+    pcts = compute_percentiles(values)
+    rec = recommend_threshold(
+        key=key, current_value=current_value, pcts=pcts,
+        sample_count=len(values), min_samples=min_samples,
+        values=values,
+    )
+    hours = len({int(ts // 3600) for ts, _ in pairs})
+    if (hours < MIN_UPPER_COVERAGE_HOURS and rec.confidence != CONFIDENCE_LOW
+            and not rec.force_manual):
+        # #2941: too little history for any recommendation to be
+        # trusted; LOW keeps it out of threshold_govern's report.
+        # #2997: a force_manual key has no recommendation to downgrade,
+        # and its reason is the manual-review text govern shows.
+        rec.confidence = CONFIDENCE_LOW
+        rec.reason = (f"{rec.reason}; data in {hours} distinct hour(s) "
+                      f"< {MIN_UPPER_COVERAGE_HOURS} → LOW")
+    return rec
+
+
+#: #1200: weakest first — a key's confidence is its least-measured cluster's.
+_CONFIDENCE_ORDER = (CONFIDENCE_LOW, CONFIDENCE_MEDIUM, CONFIDENCE_HIGH)
+
+#: What a not-measured outcome says wherever it is counted (#3133, #1200):
+#: true of both causes.
+NOT_MEASURED_CAUSES = "the query failed, or rows the da_cluster label does not tell apart"
+
+#: A cluster's entry in `ClusteredKeyRecommendation.clusters` when its rows
+#: could not be read as one series: nothing was measured there.
+_NOT_MEASURED = "not measured"
+
+
+def _cluster_entry(cluster: str, rec: KeyRecommendation, measured: bool = True) -> dict[str, Any]:
+    """One cluster's own measurement, as `ClusteredKeyRecommendation.clusters`
+    lists it. `measured` is False for a cluster whose rows could not be read
+    as one series (its `reason` says why)."""
+    return {
+        "da_cluster": cluster,
+        "measured": measured,
+        "sample_count": rec.sample_count,
+        "p50": rec.p50, "p95": rec.p95, "p99": rec.p99,
+        "recommended": rec.recommended,
+        "delta_pct": rec.delta_pct,
+        "confidence": rec.confidence,
+        "force_manual": rec.force_manual,
+        "reason": rec.reason,
+    }
+
+
+def _measure_cluster(
+    key: str, current_value: Any, direction: Any,
+    pairs: "list[tuple[float, float]]", min_samples: int,
+) -> KeyRecommendation:
+    """`_measure` for one cluster among several: a cluster with no finite
+    sample is listed as such, and a lower-bound cluster that reports a
+    constant 0 says so (the engine's own words for it are about units,
+    which an idle standby reporting 0 has nothing wrong with). Manual
+    review either way: there is no floor to learn from it."""
+    if not pairs:
+        return KeyRecommendation(key=key, current_value=current_value,
+                                 confidence=CONFIDENCE_LOW, sample_count=0,
+                                 reason="no data points found")
+    rec = _measure(key, current_value, direction, pairs, min_samples)
+    if direction == "<" and rec.force_manual and all(v == 0 for _, v in pairs):
+        why = ("every sample is 0 (an idle cluster?) — no floor can be learned from it; "
+               "manual review")
+        rec.reason = f"lower-bound floor → manual review: {why}"
+        rec.guardrail_reason = why
+    return rec
+
+
+def _new_firing(direction: Any, values: "list[float]", current: float, candidate: float) -> "list[float]":
+    """The samples *candidate* fires on and *current* does not — where a
+    series would start paging if the threshold moved to *candidate*."""
+    if direction == "<":
+        return [v for v in values if current <= v < candidate]
+    return [v for v in values if candidate < v <= current]
+
+
+def _fit_unrecommended(
+    direction: Any, rec: KeyRecommendation, current_value: Any,
+    samples: "dict[str, list[tuple[float, float]]]",
+) -> "str | None":
+    """Hold *rec* — the candidate, one cluster's own recommendation — to the
+    samples of the clusters the engine recommended NO value for (*samples*:
+    an idle standby with a drill in the window, a floor within margin). The
+    engine had no say on those, so nothing vouches for the candidate there:
+    it is adopted as it is only when it starts no firing on them. A cluster
+    WITH a recommendation of its own is not held to this — the engine's own
+    tolerance stands for it, as for a single cluster (a P5 floor has a
+    twentieth of its own samples under it by construction), and taking the
+    most conservative value covers it. Where the candidate would start
+    firing:
+
+    * an upper-bound value is raised to the highest sample at or below the
+      current threshold among those clusters, rounded up in current's
+      precision and capped at current — the engine's own no-new-firing floor
+      (#2964), applied to the cluster the engine had no say on;
+    * a lower-bound floor is not recommended at all (the engine never
+      relaxes on its own, and there is no floor between the two that it
+      vouches for).
+
+    Changes *rec* in place — its own reason is kept (why it is LOW, say) and
+    what was done is appended; returns the cluster that held it
+    ("" is the one with no `da_cluster`), or None when none did."""
+    current = written_threshold_number(current_value)
+    held = {cluster: fired for cluster, pairs in samples.items()
+            if (fired := _new_firing(direction, [v for _, v in pairs], current,
+                                     rec.recommended))}
+    if not held:
+        return None
+    if direction == "<":
+        cluster = next(iter(held))
+        rec.reason = (
+            f"{rec.reason} — not recommended: a floor of "
+            f"{_format_threshold_value(rec.recommended)} would "
+            f"start firing in {safe_label(cluster_text(cluster))} ({len(held[cluster])} of its "
+            f"samples are at or above current and below it)")
+        rec.recommended, rec.delta_pct = None, None
+        return cluster
+    cluster = max(held, key=lambda c: max(held[c]))
+    top = max(held[cluster])
+    places = _decimals(current_value)
+    cap = int(current) if places == 0 and current.is_integer() else current
+    was, rec.recommended = rec.recommended, min(_ceil_to(top, places), cap)
+    rec.delta_pct = round(((rec.recommended - current) / current) * 100, 1)
+    why = (f"held at {_format_threshold_value(rec.recommended)} instead of "
+           f"{_format_threshold_value(was)}: {safe_label(cluster_text(cluster))} has values "
+           f"up to {_format_threshold_value(top)} at or below current — no new firing")
+    if abs(rec.delta_pct) < 5.0:
+        rec.reason = f"within 5% margin, no change needed — {rec.reason} — {why}"
+    else:
+        rec.reason = f"{rec.reason} — {why} (decrease {abs(rec.delta_pct):.1f}%)"
+    return cluster
+
+
+def _across_clusters(
+    key: str, current_value: Any, direction: Any,
+    groups: "dict[str, list[dict[str, Any]]]", min_samples: int,
+) -> KeyRecommendation:
+    """#1200 (ADR-006 contract 3): the ONE recommendation of a key whose
+    series answered more than one row (`groups`: `rows_by_cluster`). A
+    threshold is one value per tenant while its alert fires per cluster, so
+    the value has to be safe in every cluster — and safe, as both engines
+    already treat it, is "starts no firing the current value does not": the
+    upper-bound engine tightens no further than its no-new-firing floor and
+    rounds a relax up; the lower-bound engine takes the lower of its two
+    estimates, rounds down, and never relaxes on its own. In this order:
+
+    0. a cluster that answered rows overlapping in time (`repeated_rows`)
+       was not measured, and neither is the key: `query_error`, which ends
+       the run partial at exit 2 (#3133) — never a recommendation from the
+       rest. Rows of one cluster one after the other are one series, joined;
+    1. a cluster routed to manual review (`force_manual`) routes the key;
+    2. with no cluster recommending a value, the key has none (the first
+       cluster's reason);
+    3. else the candidate is the value that fires least among the clusters
+       that recommend one — the HIGHEST for an upper-bound key, the LOWEST
+       floor for a lower-bound one — which covers every cluster that
+       recommends one. It is then held to the samples of the clusters with
+       NO recommendation of their own (`_fit_unrecommended`): such a cluster
+       (idle, no finite sample, within margin) does not block the key, only
+       its samples can, by showing the candidate would start firing there.
+
+    The result carries that cluster's own percentiles, sample count and
+    delta (one series' numbers), names it in `conservative_cluster` and in
+    the reason, and lists every cluster's own in `clusters`. Its confidence
+    is the weakest among the clusters that have samples. Between equals the
+    first cluster by name."""
+    repeated = repeated_rows(groups, lambda row: row["span"])
+    measured: "list[tuple[str, KeyRecommendation]]" = []
+    samples: "dict[str, list[tuple[float, float]]]" = {}
+    entries = []
+    for cluster, rows in groups.items():
+        if cluster in repeated:
+            entries.append(_cluster_entry(cluster, KeyRecommendation(
+                key=key, current_value=current_value, confidence=CONFIDENCE_NOT_QUERIED,
+                reason=f"{_NOT_MEASURED}: {safe_label(repeated[cluster])}"), measured=False))
+            continue
+        samples[cluster] = [pair for row in in_time_order(rows, lambda row: row["span"])
+                            for pair in row["pairs"]]
+        rec = _measure_cluster(key, current_value, direction, samples[cluster], min_samples)
+        measured.append((cluster, rec))
+        entries.append(_cluster_entry(cluster, rec))
+
+    def result(rec: KeyRecommendation, **more: Any) -> ClusteredKeyRecommendation:
+        return ClusteredKeyRecommendation(
+            **{f.name: getattr(rec, f.name) for f in fields(rec)},
+            clusters=entries, direction="<" if direction == "<" else ">", **more)
+
+    if repeated:
+        why = "; ".join(f"{safe_label(cluster_text(c))}: {safe_label(w)}"
+                        for c, w in repeated.items())
+        return result(KeyRecommendation(key=key, current_value=current_value,
+                                        reason=f"{_NOT_MEASURED}: {why}", query_error=why))
+
+    manual = [m for m in measured if m[1].force_manual]
+    numeric = [m for m in measured if m[1].recommended is not None]
+    held = None
+    if manual:
+        (cluster, rec), why = manual[0], "needs manual review"
+    elif not numeric:
+        (cluster, rec), why = (next((m for m in measured if m[1].sample_count), measured[0]),
+                               "no cluster has a value to recommend")
+    else:
+        if direction == "<":
+            (cluster, rec), why = min(numeric, key=lambda m: m[1].recommended), "lowest floor"
+        else:
+            (cluster, rec), why = max(numeric, key=lambda m: m[1].recommended), "highest value"
+        rec = replace(rec)  # the cluster's own entry keeps its own numbers
+        held = _fit_unrecommended(direction, rec, current_value, {
+            c: samples[c] for c, r in measured if r.recommended is None})
+    note = f"{safe_label(cluster_text(cluster))} of {len(groups)} clusters: {why}"
+    sampled = [(c, r) for c, r in measured if r.sample_count]
+    weakest = min((r.confidence for _, r in sampled), key=_CONFIDENCE_ORDER.index,
+                  default=rec.confidence)
+    if weakest != rec.confidence and not rec.force_manual:
+        thin = next(c for c, r in sampled if r.confidence == weakest)
+        note += f"; confidence {weakest} from {safe_label(cluster_text(thin))}"
+        rec.confidence = weakest
+    if rec.force_manual:
+        rec = replace(rec, guardrail_reason=f"{rec.guardrail_reason or rec.reason} [{note}]")
+    rec.reason = f"{rec.reason} [{note}]"
+    return result(rec, conservative_cluster=cluster, held_by_cluster=held)
+
+
 def _query_key(
     key: str,
     current_value: Any,
@@ -1142,47 +1423,38 @@ def _query_key(
     # whole run — that key degrades to force_manual, the rest continue.
     direction = entry.get("direction")
     try:
-        if direction == "<":
-            # Lower-bound floor path: timestamped samples → daily-bucket P5
-            # engine (never the upper-bound percentile logic).
-            pairs = query_prometheus_range_ts(prometheus_url, promql)
+        # Timestamped and finite-only (#2956: NaN / Inf are not data, and
+        # counted they let 999 NaN + 1 point grade HIGH). One series per
+        # cluster (#1200): each is measured on its own, never added up —
+        # there is no path here that reads several rows as one series.
+        series = []
+        for row in query_prometheus_range_rows(prometheus_url, promql):
+            # (labels, samples[, span]); the span of a row given without one
+            # is its samples'. Anything else — a flat list of samples among
+            # them — is refused, never read as one series.
+            if not (isinstance(row, tuple) and len(row) in (2, 3) and isinstance(row[0], dict)
+                    and isinstance(row[1], list)):
+                raise TypeError("a series must be (labels, samples): "
+                                f"{type(row).__name__} given")
+            stamps = [ts for ts, _ in row[1]]
+            span = row[2] if len(row) == 3 else (min(stamps), max(stamps)) if stamps else None
+            series.append({"metric": row[0], "pairs": row[1], "span": span})
+        groups = rows_by_cluster(series)
+        # Rows of ONE cluster that do not overlap in time are one series in
+        # succession (a label changed inside the window): joined below, and
+        # the answer is the one-series answer it always was.
+        if len(groups) > 1 or repeated_rows(groups, lambda row: row["span"]):
+            rec = _across_clusters(key, current_value, direction, groups, min_samples)
+        else:
+            pairs = [pair for row in in_time_order(series, lambda row: row["span"])
+                     for pair in row["pairs"]]
             if not pairs:
                 return KeyRecommendation(
                     key=key, current_value=current_value,
                     confidence=CONFIDENCE_LOW, sample_count=0,
                     reason="no data points found", promql=promql,
                 )
-            rec = recommend_threshold_lower(
-                key, current_value, pairs, min_samples
-            )
-        else:
-            # Upper-bound path. Timestamped and finite-only (#2956: NaN / Inf
-            # are not data, and counted they let 999 NaN + 1 point grade HIGH).
-            # The timestamps give the hours covered the #2941 floor needs.
-            pairs = query_prometheus_range_ts(prometheus_url, promql)
-            values = [v for _, v in pairs]
-            if not values:
-                return KeyRecommendation(
-                    key=key, current_value=current_value,
-                    confidence=CONFIDENCE_LOW, sample_count=0,
-                    reason="no data points found", promql=promql,
-                )
-            pcts = compute_percentiles(values)
-            rec = recommend_threshold(
-                key=key, current_value=current_value, pcts=pcts,
-                sample_count=len(values), min_samples=min_samples,
-                values=values,
-            )
-            hours = len({int(ts // 3600) for ts, _ in pairs})
-            if (hours < MIN_UPPER_COVERAGE_HOURS and rec.confidence != CONFIDENCE_LOW
-                    and not rec.force_manual):
-                # #2941: too little history for any recommendation to be
-                # trusted; LOW keeps it out of threshold_govern's report.
-                # #2997: a force_manual key has no recommendation to downgrade,
-                # and its reason is the manual-review text govern shows.
-                rec.confidence = CONFIDENCE_LOW
-                rec.reason = (f"{rec.reason}; data in {hours} distinct hour(s) "
-                              f"< {MIN_UPPER_COVERAGE_HOURS} → LOW")
+            rec = _measure(key, current_value, direction, pairs, min_samples)
     except QueryError as exc:
         # #3133: not measured — the key is reported as such and the run ends
         # partial at rc 2 (main), never as a reason in a run that exits 0.
@@ -1297,6 +1569,33 @@ def _source_note(r: KeyRecommendation) -> str:
     return f"{r.source_layer}: {r.source_file}" if r.source_file else r.source_layer
 
 
+def _cluster_lines(r: KeyRecommendation) -> list[str]:
+    """#1200: one line per cluster of a key measured in several — its own
+    statistic, recommended value, delta and confidence, labelled as what
+    they are: P95 for an upper-bound key; for a lower-bound one the P5
+    floor and a miss-rate delta (`+X% miss`, as the patch tags it)."""
+    lower = getattr(r, "direction", ">") == "<"
+    out = []
+    for c in getattr(r, "clusters", ()):
+        name = cluster_text(c["da_cluster"])
+        if not c["measured"]:
+            out.append(f"{name}: {c['reason']}")
+            continue
+        if lower:
+            stat = f"P5 floor {c['p95']:.4f}" if c["p95"] is not None else "P5 floor —"
+            delta = f"{c['delta_pct']:+.1f}% miss" if c["delta_pct"] is not None else "—"
+        else:
+            stat = f"P95 {c['p95']:.1f}" if c["p95"] is not None else "P95 —"
+            delta = f"{c['delta_pct']:+.1f}%" if c["delta_pct"] is not None else "—"
+        rec = f"{c['recommended']}" if c["recommended"] is not None else "—"
+        line = (f"{name}: {stat}, recommend {rec}, delta {delta}, {c['confidence']}, "
+                f"{c['sample_count']} samples")
+        if c["recommended"] is None and c["reason"]:
+            line += f" ({c['reason']})"
+        out.append(line)
+    return out
+
+
 def format_text_report(reports: list[TenantRecommendation]) -> str:
     """Format reports as human-readable text table."""
     if not reports:
@@ -1317,6 +1616,8 @@ def format_text_report(reports: list[TenantRecommendation]) -> str:
                 out.append(f"    └─ from {safe_label(_source_note(r))}")
             if r.reason and ("no change" not in r.reason):
                 out.append(f"    └─ {safe_label(r.reason)}")
+            for line in _cluster_lines(r):  # #1200: each cluster's own
+                out.append(f"    └─ {safe_label(line)}")
         return out
 
     lines: list[str] = []
@@ -1362,6 +1663,8 @@ def json_document(reports: list[TenantRecommendation]) -> dict:
     """The --json document (run() encodes it, #3216)."""
     output: dict[str, Any] = {
         "tool": "threshold-recommend",
+        # #1200: a key measured in several clusters is a
+        # `ClusteredKeyRecommendation`, and carries its two fields here.
         "tenants": [asdict(r) for r in reports],
         "summary": {
             "total_tenants": len(reports),
@@ -1397,6 +1700,12 @@ def format_markdown_report(reports: list[TenantRecommendation]) -> str:
             if r.source_layer != "tenant":
                 # #2116: inherited — reference only, not this tenant's to change.
                 reason = f"inherited from {_source_note(r)} (reference only); {reason}"
+            per_cluster = _cluster_lines(r)  # #1200: each cluster's own
+            if per_cluster:
+                # A cluster's name is not ours: `markdown_text` is the one
+                # escaping for every text that carries one — this reason too.
+                reason = markdown_text(reason) + "<br>per cluster: " + "; ".join(
+                    markdown_text(line) for line in per_cluster)
             lines.append(f"| {r.key} | {current} | {p95} | {rec} | {delta} | {r.confidence} | {reason} |")
         lines.append("")
 
@@ -1878,7 +2187,7 @@ def _main(args: argparse.Namespace) -> "Report | None":
     if failed:
         # #3133: a key whose query was not answered has no recommendation —
         # the report is partial, and so is the exit (rc 2, not 0).
-        print(f"ERROR: Prometheus query failed for {failed} key(s); the "
+        print(f"ERROR: {failed} key(s) not measured ({NOT_MEASURED_CAUSES}); the "
               "report is partial", file=sys.stderr)
         status = EXIT_CALLER_ERROR
     if json_report:

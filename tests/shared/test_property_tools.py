@@ -11,9 +11,6 @@ runs in CI (default fast tier) with `max_examples` clamped low so the
 runtime stays under a second.
 
 Picks:
-  - extract_metrics_from_expr  (scripts/tools/ops/generate_rule_pack_split)
-    Pure regex over PromQL. Strong properties: builtin-fn filter,
-    uppercase-token filter, set-of-str output type.
   - _parse_front_matter         (scripts/tools/dx/generate_doc_map)
     Pure YAML-ish parser. Properties: empty-input contract, no-`---`
     start contract, list/scalar value type, key-extraction soundness.
@@ -55,7 +52,6 @@ for _path in (
         sys.path.insert(0, _path)
 
 
-import generate_rule_pack_split as grps  # noqa: E402
 import generate_doc_map as gdm  # noqa: E402
 import generate_changelog as gc  # noqa: E402
 import _lib_validation as lv  # noqa: E402
@@ -120,80 +116,6 @@ PILOT_SETTINGS_IO = settings(
     suppress_health_check=[HealthCheck.too_slow],
     deadline=None,
 )
-
-
-# ---------------------------------------------------------------------------
-# extract_metrics_from_expr — pure regex over PromQL identifiers
-# ---------------------------------------------------------------------------
-class TestExtractMetricsFromExprProperties:
-    @given(st.text())
-    @PILOT_SETTINGS
-    def test_returns_set_for_any_input(self, expr):
-        # Property: output is always a set, regardless of input.
-        result = grps.extract_metrics_from_expr(expr)
-        assert isinstance(result, set)
-
-    @given(st.text())
-    @PILOT_SETTINGS
-    def test_no_builtin_funcs_in_output(self, expr):
-        # Property: built-in PromQL functions are filtered out.
-        result = grps.extract_metrics_from_expr(expr)
-        builtins = {
-            "rate", "sum", "max", "min", "avg", "count", "topk", "bottomk",
-            "histogram_quantile", "increase", "delta", "irate", "group",
-            "on", "ignoring", "group_left", "group_right", "unless", "by",
-            "or", "and",  # defect i: set/logical operators also filtered
-        }
-        assert builtins.isdisjoint(result), (
-            f"builtin leaked: {builtins & result!r} for input {expr!r}"
-        )
-
-    @given(st.text())
-    @PILOT_SETTINGS
-    def test_no_uppercase_starting_tokens(self, expr):
-        # Property: tokens beginning with an uppercase letter are
-        # treated as labels and excluded from the metrics output.
-        result = grps.extract_metrics_from_expr(expr)
-        for token in result:
-            assert token, f"empty token in output for {expr!r}"
-            assert not token[0].isupper(), (
-                f"uppercase-starting token in output: {token!r}"
-            )
-
-    @given(st.one_of(st.none(), st.integers(), st.lists(st.integers()), st.dictionaries(st.text(), st.text())))
-    @PILOT_SETTINGS
-    def test_non_string_input_returns_empty_set(self, non_str):
-        assert grps.extract_metrics_from_expr(non_str) == set()
-
-    @given(st.text(alphabet=string.ascii_letters + string.digits + "_:"))
-    @PILOT_SETTINGS
-    def test_output_subset_of_input_tokens(self, expr):
-        # Property: every output token appears as a substring of the input.
-        result = grps.extract_metrics_from_expr(expr)
-        for token in result:
-            assert token in expr, (
-                f"output token {token!r} not in input {expr!r}"
-            )
-
-    def test_uppercase_label_tokens_excluded(self):
-        # Mutation-pilot kill-test: dropping the `not m[0].isupper()` filter
-        # would let labels like `Foo` / `Bar` (PromQL convention: uppercase =
-        # custom-named recording rule or label, lowercase = metric name)
-        # leak into the metrics output.
-        #
-        # IMPORTANT: the test expression MUST contain uppercase tokens
-        # immediately followed by `{`, `[`, or whitespace — otherwise the
-        # regex `\b([a-zA-Z_:]...)\b(?=[{\[\s])` won't even capture them
-        # in the first place, and the uppercase filter never fires (which
-        # was the bug in this test's earlier version pre-batch-4).
-        expr = 'Foo{label="x"} + Bar[5m]'
-        result = grps.extract_metrics_from_expr(expr)
-        assert "Foo" not in result, (
-            f"uppercase token `Foo` leaked into metrics: {result!r}"
-        )
-        assert "Bar" not in result, (
-            f"uppercase token `Bar` leaked into metrics: {result!r}"
-        )
 
 
 # ---------------------------------------------------------------------------

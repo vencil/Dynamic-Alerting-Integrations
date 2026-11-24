@@ -519,7 +519,7 @@ class TestPrometheusEnvFallback:
                 pass
             return SimpleNamespace(plans=[], ungoverned=[],
                                    not_applicable=[], force_manual=[], inherited=[],
-                                   not_measured=[])
+                                   not_measured=[], held_by_cluster=[])
 
         monkeypatch.setattr(tg.recommend, "run_analysis", fake_run_analysis)
         monkeypatch.setattr(tg, "run", fake_run)
@@ -615,8 +615,9 @@ class TestNotMeasured:
         assert exc.value.code == tg.EXIT_CALLER_ERROR
         captured = capsys.readouterr()
         err = captured.err.strip().splitlines()
-        assert err[-1].startswith("ERROR: Prometheus query failed for 2 threshold(s); "
-                                  "the report is partial (first: db-a/mysql_connections:")
+        assert err[-1].startswith(
+            "ERROR: 2 threshold(s) not measured (the query failed, or rows the da_cluster "
+            "label does not tell apart); the report is partial (first: db-a/mysql_connections:")
         if json_output:
             assert json.loads(captured.out)["status"] == "partial"
 

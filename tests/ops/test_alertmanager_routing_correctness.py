@@ -194,7 +194,7 @@ class TestLiveRouteTreeRouting:
         }, f"tenant-{tenant}")
 
     def test_watchdog_routes_to_heartbeat(self, live_etc):
-        """分支：routes[0]（ADR-025 D1 / #838 Watchdog liveness）。
+        """分支：routes[0]（ADR-025 §1 / #838 Watchdog liveness）。
 
         永遠 firing 的 Watchdog（無 tenant / component label）必須送達
         watchdog-heartbeat（外部 dead-man's-switch），不能落 default。

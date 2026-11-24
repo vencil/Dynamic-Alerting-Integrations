@@ -1115,7 +1115,7 @@ def _build_custom_alert_routes(tenant_names: list[str] | None = None,
 def _build_watchdog_route() -> tuple[list[dict], list[dict]]:
     """Build the platform-static Watchdog liveness route + heartbeat receiver.
 
-    ADR-025 D1 / #838. ALWAYS emitted (platform-global, tenant-independent) and
+    ADR-025 §1 / #838. ALWAYS emitted (platform-global, tenant-independent) and
     pinned at route index 0 — AHEAD of even the Custom Alerts isolation route —
     by _inject_custom_alert_isolation at ConfigMap assembly, for the same two
     reasons the custom route is injected (durability across the --apply route-

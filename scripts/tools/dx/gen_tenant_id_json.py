@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate tenant-id.json from the tenant-config schema (ADR-035 D2).
+"""Generate tenant-id.json from the tenant-config schema (ADR-035 §2).
 
 The tenant-id rule is written once, as ``definitions.tenantId`` of
 docs/schemas/tenant-config.schema.json. Python reads it there at runtime

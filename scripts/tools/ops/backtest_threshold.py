@@ -9,7 +9,9 @@ report suitable for PR review.
 Each change is replayed against the one series its alert compares, the way
 the alert compares it (`>` / `<`), as metric_observed_map.yaml records it
 (#3017 / #3002); a key the map does not record that way is listed as not
-backtested.
+backtested. That series is recorded once per cluster and the alert fires per
+cluster, so each cluster's row is replayed on its own and a change is as bad
+as its worst cluster (#1200, ADR-006): rows are never added up.
 
 Usage:
   # A PR's conf.d against its base's (both trees read by the exporter,
@@ -63,6 +65,8 @@ from _lib_prometheus import sample_value  # noqa: E402  (#3213 the one sample re
 from _lib_python import YamlFileError  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
+from _lib_cluster_identity import (  # noqa: E402  (#1200: one replay per cluster)
+    cluster_text, in_time_order, markdown_text, repeated_rows, rows_by_cluster)
 import _lib_parse_tree  # noqa: E402  (#3206 the shared conf.d refusal)
 import _lib_input  # noqa: E402  (#3902 the two trees are declared inputs)
 import _lib_parse_cache  # noqa: E402  (#3902 their one judgement)
@@ -994,57 +998,17 @@ def impact(old_breaches, new_breaches, *, old_disabled=False, new_disabled=False
     return {"impact_pct": None if pct is None else float(pct), "impact_kind": kind}
 
 
-def backtest_change(prom_url, change, lookback_seconds):
-    """Backtest a single threshold change against historical data.
-
-    Returns analysis dict with breach counts and risk assessment; `query` is
-    the PromQL asked (#3002 B). A change `not_backtestable` refuses is
-    returned as `not_backtested` without asking Prometheus anything; one
-    whose query fails is `query_error`, its message the error text (#3059).
-    """
-    metric = change["metric"]
-    tenant = change["tenant"]
+def _replay(values, change, direction, query):
+    """One series' replay under the change's old and new threshold: the
+    result's fields after `new_value`, `query` among them — `status`
+    `analyzed` with its counts and risk, or `no_data` (no sample, or only
+    NaN ones). *values* are the samples of ONE series (#1200): the counts
+    are its time steps."""
     old_value = change["old_value"]
     new_value = change["new_value"]
 
-    skip = not_backtestable(change)
-    if skip:
-        return _not_backtested(change, skip)
-    # #3017 / #3002: ONE query — the series the alert compares, per tenant —
-    # and the alert's own direction. It used to try three guessed names
-    # (`<key>`, `tenant:<key>:max`, `<key>{namespace=}`), none of which is
-    # what 31 of 64 alerts compare, and count every breach as `>`.
-    series, direction, _ = alert_comparison(change)
-    query = f'{series}{{tenant="{tenant}"}}'
-
-    # #3059: a query Prometheus did not answer is `query_error`, not
-    # `no_data` — the change was not measured, which `main` turns into rc 2.
-    try:
-        rows = query_range(prom_url, query, lookback_seconds)
-    except QueryError as exc:
-        text = safe_label(str(exc))
-        if len(text) > _QUERY_ERROR_MAX:
-            text = text[:_QUERY_ERROR_MAX] + "..."
-        return {
-            "tenant": tenant,
-            "metric": metric,
-            "old_value": old_value,
-            "new_value": new_value,
-            "status": "query_error",
-            "risk": "UNKNOWN",
-            "query": query,
-            "message": f"Prometheus query failed: {text}",
-        }
-    values = []
-    for row in rows:
-        values.extend(row.get("values", []))
-
     if not values:
         return {
-            "tenant": tenant,
-            "metric": metric,
-            "old_value": old_value,
-            "new_value": new_value,
             "status": "no_data",
             "risk": "UNKNOWN",
             "query": query,
@@ -1058,10 +1022,6 @@ def backtest_change(prom_url, change, lookback_seconds):
     # There is no other query to fall back to: the alert compares this one.
     if all(_is_nan_sample(v) for _, v in values):
         return {
-            "tenant": tenant,
-            "metric": metric,
-            "old_value": old_value,
-            "new_value": new_value,
             "status": "no_data",
             "risk": "UNKNOWN",
             "query": query,
@@ -1090,10 +1050,6 @@ def backtest_change(prom_url, change, lookback_seconds):
     if new_disabled and not old_disabled and change.get("new_refused"):
         old_breaches = count_threshold_breaches(values, old_t, direction)
         return {
-            "tenant": tenant,
-            "metric": metric,
-            "old_value": old_value,
-            "new_value": new_value,
             "status": "analyzed",
             "query": query,
             "risk": "HIGH",
@@ -1108,10 +1064,6 @@ def backtest_change(prom_url, change, lookback_seconds):
     if new_disabled and not old_disabled:
         old_breaches = count_threshold_breaches(values, old_t, direction)
         return {
-            "tenant": tenant,
-            "metric": metric,
-            "old_value": old_value,
-            "new_value": new_value,
             "status": "analyzed",
             "query": query,
             "risk": "MEDIUM",
@@ -1127,10 +1079,6 @@ def backtest_change(prom_url, change, lookback_seconds):
         pct = (new_breaches / total_points * 100) if total_points > 0 else 0
         risk = "HIGH" if pct > 10 else "MEDIUM" if pct > 0 else "LOW"
         return {
-            "tenant": tenant,
-            "metric": metric,
-            "old_value": old_value,
-            "new_value": new_value,
             "status": "analyzed",
             "query": query,
             "risk": risk,
@@ -1165,10 +1113,6 @@ def backtest_change(prom_url, change, lookback_seconds):
         message = f"{abs(new_breaches - old_breaches)} {more} firing points ({impact_pct:+.1f}%)"
 
     return {
-        "tenant": tenant,
-        "metric": metric,
-        "old_value": old_value,
-        "new_value": new_value,
         "status": "analyzed",
         "query": query,
         "risk": risk,
@@ -1177,6 +1121,169 @@ def backtest_change(prom_url, change, lookback_seconds):
         "new_breach_count": new_breaches,
         **impact(old_breaches, new_breaches),
         "message": message,
+    }
+
+
+#: #1200: how bad a cluster's replay is — the cluster that pages most comes
+#: first, since the alert fires per cluster.
+_RISK_RANK = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+
+
+def _worst_cluster(replays):
+    """#1200: the `(cluster, replay)` a change's own numbers are taken from,
+    among its analyzed clusters — the highest risk; between equal risks the
+    one where the largest share of its own time steps changes between firing
+    and not (a share, so a long series does not outrank a short one by
+    length), then the first by name. None when no cluster was analyzed."""
+    analyzed = [(c, r) for c, r in replays if r["status"] == "analyzed"]
+    if not analyzed:
+        return None
+    return max(analyzed, key=lambda cr: (
+        _RISK_RANK[cr[1]["risk"]],
+        abs(cr[1]["new_breach_count"] - cr[1]["old_breach_count"]) / cr[1]["data_points"]))
+
+
+def _row_span(row):
+    """`(first, last)` sample timestamps of a range-query row, None without
+    a sample — what tells rows of one cluster in succession from rows at the
+    same time (`repeated_rows`)."""
+    stamps = [float(ts) for ts, _ in row.get("values", [])]
+    return (min(stamps), max(stamps)) if stamps else None
+
+
+def _joined_values(rows):
+    """The samples of one cluster's rows as ONE series: rows whose time
+    ranges do not overlap, in time order (a label changed inside the window
+    — the series goes on under the new label)."""
+    return [v for row in in_time_order(rows, _row_span) for v in row.get("values", [])]
+
+
+#: What a not-measured outcome says wherever it is counted (#3059, #1200):
+#: true of both causes.
+NOT_MEASURED_CAUSES = "the query failed, or rows the da_cluster label does not tell apart"
+
+
+def _per_cluster(change, groups, direction, query):
+    """#1200: the result of a change whose series answered more than one row
+    (`groups`: `rows_by_cluster`). Every cluster is replayed on its own and
+    listed in `clusters`; the change's own numbers are the worst cluster's
+    (`_worst_cluster`), so they are time steps of one series, and the
+    message names that cluster. With no cluster analyzed the change is
+    `no_data`, as the first cluster reads.
+
+    A cluster that answered rows overlapping in time (`repeated_rows`: an HA
+    pair read without deduplication, say) was queried and could not be measured:
+    its entry is `query_error`, and so is the change — the status of a
+    change not measured, which ends the run at exit 2 (#3059). "Could not
+    measure" is never a pass, and the clusters that were measured are still
+    listed, each with its own replay."""
+    repeated = repeated_rows(groups, _row_span)
+    replays = [
+        (cluster, {"status": "query_error", "risk": "UNKNOWN", "query": query,
+                   "message": safe_label(repeated[cluster])}
+         if cluster in repeated
+         else _replay(_joined_values(rows), change, direction, query))
+        for cluster, rows in groups.items()]
+    result = {
+        "tenant": change["tenant"],
+        "metric": change["metric"],
+        "old_value": change["old_value"],
+        "new_value": change["new_value"],
+    }
+    worst = _worst_cluster(replays)
+    if repeated:
+        result.update({
+            "status": "query_error",
+            "risk": "UNKNOWN",
+            "query": query,
+            "message": "Not measured: " + "; ".join(
+                f"{safe_label(cluster_text(c))}: {r['message']}"
+                for c, r in replays if r["status"] == "query_error"),
+        })
+    elif worst:
+        result.update(worst[1])
+        result["message"] += (f" [{safe_label(cluster_text(worst[0]))}, the worst of "
+                              f"{len(replays)} clusters]")
+        result["worst_cluster"] = worst[0]
+    else:
+        result.update(replays[0][1])
+    result["clusters"] = [
+        {"da_cluster": cluster, **{k: v for k, v in replay.items() if k != "query"}}
+        for cluster, replay in replays]
+    return result
+
+
+def backtest_change(prom_url, change, lookback_seconds):
+    """Backtest a single threshold change against historical data.
+
+    Returns analysis dict with breach counts and risk assessment; `query` is
+    the PromQL asked (#3002 B). A change `not_backtestable` refuses is
+    returned as `not_backtested` without asking Prometheus anything; one
+    whose query fails is `query_error`, its message the error text (#3059).
+
+    #1200 (ADR-006): the series the alert compares is recorded once per
+    cluster and the alert fires per cluster, so each cluster's row is
+    replayed on its own (`_replay`) and never added to another's. With more
+    than one cluster the result carries `clusters` (every cluster's own
+    replay) and its own numbers — `risk`, `data_points`, the breach counts,
+    `impact_*` — are those of ONE cluster, the worst (`_worst_cluster`,
+    named in `worst_cluster` and in the message): time steps of one series.
+    An answer with one row has neither field. A cluster whose rows the
+    `da_cluster` label does not tell apart was not measured: `query_error`
+    (`_per_cluster`).
+    """
+    metric = change["metric"]
+    tenant = change["tenant"]
+    old_value = change["old_value"]
+    new_value = change["new_value"]
+
+    skip = not_backtestable(change)
+    if skip:
+        return _not_backtested(change, skip)
+    # #3017 / #3002: ONE query — the series the alert compares, per tenant —
+    # and the alert's own direction. It used to try three guessed names
+    # (`<key>`, `tenant:<key>:max`, `<key>{namespace=}`), none of which is
+    # what 31 of 64 alerts compare, and count every breach as `>`.
+    series, direction, _ = alert_comparison(change)
+    query = f'{series}{{tenant="{tenant}"}}'
+
+    # #3059: a query Prometheus did not answer is `query_error`, not
+    # `no_data` — the change was not measured, which `main` turns into rc 2.
+    try:
+        rows = query_range(prom_url, query, lookback_seconds)
+    except QueryError as exc:
+        text = safe_label(str(exc))
+        if len(text) > _QUERY_ERROR_MAX:
+            text = text[:_QUERY_ERROR_MAX] + "..."
+        return {
+            "tenant": tenant,
+            "metric": metric,
+            "old_value": old_value,
+            "new_value": new_value,
+            "status": "query_error",
+            "risk": "UNKNOWN",
+            "query": query,
+            "message": f"Prometheus query failed: {text}",
+        }
+    # #1200: one replay per cluster. Rows the label does not tell apart (two
+    # of one cluster, or several without the label) are not one series, and
+    # adding them up is the defect this refuses: not measured, named.
+    # A row with no float sample (a native-histogram row has `histograms` and
+    # no `values`) is no series of the alert's: skipped, as it always was.
+    rows = [row for row in rows if row.get("values")]
+    groups = rows_by_cluster(rows)
+    # Rows of ONE cluster that do not overlap in time are one series in
+    # succession (a label changed inside the window): joined, and the
+    # answer is the one-series answer it always was.
+    if len(groups) > 1 or repeated_rows(groups, _row_span):
+        return _per_cluster(change, groups, direction, query)
+    values = _joined_values(rows)
+    return {
+        "tenant": tenant,
+        "metric": metric,
+        "old_value": old_value,
+        "new_value": new_value,
+        **_replay(values, change, direction, query),
     }
 
 
@@ -1235,6 +1342,15 @@ def generate_report(results, lookback):
     if query_error:
         report["status"] = "partial"
         report["reason"] = "query_error"
+    # #1200: a change not measured because ONE of its clusters could not be
+    # is in no risk count above, yet its other clusters were replayed — and
+    # "0 HIGH" beside a cluster that is HIGH would be false. Their risks are
+    # counted apart, only when there are any.
+    partly = [e["risk"] for r in query_error for e in r.get("clusters", ())
+              if e["status"] == "analyzed"]
+    if partly:
+        report["partly_measured_risk"] = {
+            risk: partly.count(risk) for risk in ("HIGH", "MEDIUM", "LOW")}
     return report
 
 
@@ -1263,6 +1379,17 @@ def _served_by(change, shown):
     return " (served by: " + ", ".join(shown(k) for k in keys) + ")"
 
 
+def _cluster_summary(entry):
+    """#1200: one cluster's replay in a few words — its risk and how many of
+    its own time steps fire under the old and the new threshold."""
+    if entry["status"] == "query_error":
+        return f"not measured ({entry['message']})"
+    if entry["status"] != "analyzed":
+        return f"{entry['risk']} ({entry['message']})"
+    return (f"{entry['risk']} ({entry['old_breach_count']} -> {entry['new_breach_count']} "
+            f"of {entry['data_points']} points fire)")
+
+
 def print_text_report(report):
     """Print human-readable backtest report."""
     print()
@@ -1278,8 +1405,11 @@ def print_text_report(report):
     if report["no_data"] > 0:
         print(f"  No data: {report['no_data']} (no usable data in Prometheus)")
     if report["query_error"] > 0:
-        print(f"  Query error: {report['query_error']} (the Prometheus query failed; "
-              "not measured)")
+        print(f"  Query error: {report['query_error']} (not measured: {NOT_MEASURED_CAUSES})")
+    if report.get("partly_measured_risk"):
+        pm = report["partly_measured_risk"]
+        print(f"  Clusters measured in those: {pm['HIGH']} HIGH, {pm['MEDIUM']} MEDIUM, "
+              f"{pm['LOW']} LOW (not in the Risk line above)")
     skipped = _not_backtested_counts(report["changes"])
     if skipped:
         print(f"  Not backtested: {skipped}")
@@ -1296,6 +1426,9 @@ def print_text_report(report):
         print(f"           {safe_label(change['message'])}")
         if change.get("query"):  # #3002 B: the PromQL this verdict rests on
             print(f"           query: {safe_label(change['query'])}")
+        for entry in change.get("clusters", ()):  # #1200: each cluster's own replay
+            print(f"           {safe_label(cluster_text(entry['da_cluster']))}: "
+                  f"{safe_label(_cluster_summary(entry))}")
 
     print()
 
@@ -1343,7 +1476,11 @@ def generate_markdown(report):
 
     if report["query_error"] > 0:
         lines.append(f"\n> **{report['query_error']} change(s) not measured: "
-                     "the Prometheus query failed.**")
+                     f"{NOT_MEASURED_CAUSES}.**")
+    if report.get("partly_measured_risk"):
+        pm = report["partly_measured_risk"]
+        lines.append(f"\n> **Clusters measured in those: {pm['HIGH']} HIGH, {pm['MEDIUM']} "
+                     f"MEDIUM, {pm['LOW']} LOW** (not counted as analyzed).")
 
     rs = report["risk_summary"]
     if rs["HIGH"] > 0:
@@ -1362,6 +1499,13 @@ def generate_markdown(report):
         # may hold `|` (a PromQL parse error quoting the query) — escaped so
         # it stays one cell.
         message = c["message"].replace("|", "\\|")
+        if c.get("clusters"):
+            # #1200: every cluster's own replay; the row is the worst one's.
+            # A cluster's name (and a label name) is not ours: `markdown_text`
+            # is the one escaping for every text that carries one.
+            message = markdown_text(c["message"]) + "<br>per cluster: " + "; ".join(
+                markdown_text(f"{cluster_text(e['da_cluster'])}: {_cluster_summary(e)}")
+                for e in c["clusters"])
         served_by = _served_by(c, _code_cell)
         lines.append(f"| {c['risk']} | {_markdown_cell(c['tenant'])} | "
                      f"{_code_cell(c['metric'])}{window}{served_by} | "
@@ -1807,14 +1951,27 @@ def _backtest(args):
     # the run cannot say "only these are high risk". Prometheus answered, so
     # this is not `--skip-if-unavailable`'s case either.
     if report["query_error"] > 0:
-        print(f"ERROR: {report['query_error']} change(s) not measured: the Prometheus "
-              "query failed (see each change's message)", file=sys.stderr)
+        print(f"ERROR: {report['query_error']} change(s) not measured: {NOT_MEASURED_CAUSES} "
+              "(see each change's message)", file=sys.stderr)
         if args.json:
             # #3617: a partial answer — the changes measured, and the ones
-            # Prometheus did not answer named (#3216: run() writes it).
-            return Report(report, EXIT_CALLER_ERROR, unanswered=[
-                f"{c['tenant']} {c['metric']}" for c in report["changes"]
-                if c["status"] == "query_error"], of=len(report["changes"]))
+            # not measured named (#3216: run() writes it). #1200: a change
+            # is as many parts as it has clusters, so one whose other
+            # clusters were replayed is an answer in part and is printed;
+            # stdout stays empty only when nothing at all was measured.
+            parts, unanswered = 0, []
+            for c in report["changes"]:
+                name = f"{c['tenant']} {c['metric']}"
+                clusters = c.get("clusters")
+                if not clusters:
+                    parts += 1
+                    if c["status"] == "query_error":
+                        unanswered.append(name)
+                    continue
+                parts += len(clusters)
+                unanswered += [f"{name} ({cluster_text(e['da_cluster'])})"
+                               for e in clusters if e["status"] == "query_error"]
+            return Report(report, EXIT_CALLER_ERROR, unanswered=unanswered, of=parts)
         sys.exit(EXIT_CALLER_ERROR)
     if args.json:
         return Report(report, EXIT_VIOLATION if high_count > 0 else EXIT_OK)

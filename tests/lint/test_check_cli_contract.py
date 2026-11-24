@@ -2090,3 +2090,14 @@ def test_an_unchanged_ledger_on_stdin_is_left_alone(tmp_path, monkeypatch, capsy
         os.close(saved)
     assert rc == 0, capsys.readouterr().err
     assert ledger.read_bytes() == before
+
+
+def test_a_crlf_copy_of_the_ledger_is_rewritten(tmp_path):
+    """#3981 (review): "unchanged" is judged on bytes, so a CRLF copy of the
+    current ledger is rewritten to LF rather than kept."""
+    ledger = tmp_path / "cli-contract-baseline.yaml"
+    mod.write_baseline([], [], ledger)
+    golden = ledger.read_bytes()
+    ledger.write_bytes(golden.replace(b"\n", b"\r\n"))
+    mod.write_baseline([], [], ledger)
+    assert ledger.read_bytes() == golden

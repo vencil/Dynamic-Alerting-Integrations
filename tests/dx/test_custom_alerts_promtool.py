@@ -11,7 +11,10 @@ Coverage: fire / no-version main path / version fallback / maintenance suppress
 / selector filtering / ratio division-by-zero / absence scope-isolation /
 p99 quantile / forecast / eq-match / mode routing / slo burn-rate tiers (one
 golden per fixture file under fixtures/custom_alerts_promtool/ — all 7 recipes
-plus the equals/mode_routing behavioral goldens).
+plus the equals/mode_routing behavioral goldens) / one tenant in two clusters
+(per_cluster.yaml: every recipe judged per `da_cluster`, absence tenant-wide;
+the raw-mode forecast, which the example tree does not declare, is driven by
+test_forecast_raw_mode_is_judged_per_cluster).
 
 Skips cleanly when promtool is absent (e.g. a CI job without it); runs fully in
 the dev container and any promtool-equipped environment.
@@ -68,7 +71,7 @@ def test_promtool_golden(golden, compiled_pack):
 
 def test_goldens_present():
     """Guard against an empty glob silently passing (echo-chamber)."""
-    assert len(_GOLDENS) == 9, f"expected 9 goldens (7 recipes + equals + mode_routing), found {[p.name for p in _GOLDENS]}"
+    assert len(_GOLDENS) == 10, f"expected 10 goldens (7 recipes + equals + mode_routing + per_cluster), found {[p.name for p in _GOLDENS]}"
 
 
 def test_adversarial_selector_value_compiles_to_valid_promql(tmp_path, compiled_pack, da_guard_env):
@@ -140,6 +143,61 @@ def test_one_tenants_two_alerts_of_one_shape_leave_the_shared_rule_working(tmp_p
                 "exp_samples": [{"labels": '{tenant="ta"}', "value": 1},
                                 {"labels": '{tenant="tb"}', "value": 1}],
             }],
+        }],
+    }, sort_keys=False), encoding="utf-8")
+    result = subprocess.run(
+        [_PROMTOOL, "test", "rules", "test.yaml"],
+        cwd=tmp_path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+def test_forecast_raw_mode_is_judged_per_cluster(tmp_path, da_guard_env):
+    """ADR-006 "one tenant in several clusters", for the one recipe mode the
+    example tree does not declare: a raw-mode forecast (no capacity_metric).
+    East sits high and flat (900, under the 1000 threshold, predicted to stay
+    there); west is low and climbing 10/min, predicted over 1000 within the
+    hour. Per cluster, west fires. Merged with `max by(tenant, version)` the
+    tenant reads east's flat 900 until west overtakes it, the prediction is
+    flat, and nothing fires — so the alert below exists only while the base
+    record keeps `da_cluster`."""
+    import yaml
+
+    confd = tmp_path / "conf.d"
+    confd.mkdir()
+    (confd / "_defaults.yaml").write_text("defaults:\n  cpu: 80\n", encoding="utf-8")
+    (confd / "ta.yaml").write_text(
+        "tenants:\n  ta:\n    _custom_alerts:\n"
+        "      - {recipe: forecast, name: backlog_will_overflow, metric: queue_backlog, "
+        "op: '>', horizon: 1h, threshold: '1000:warning'}\n", encoding="utf-8")
+    pack = cc.build_pack(confd)
+    (tmp_path / "pack.yaml").write_text(cc._render(pack.groups), encoding="utf-8")
+    bases = [r["record"] for g in pack.groups for r in g["rules"]
+             if r.get("record", "").startswith("custom:fcbase:")]
+    assert len(bases) == 1, bases
+    rid = bases[0].removeprefix("custom:fcbase:")
+    threshold = ('user_threshold{component="custom", metric="queue_backlog", '
+                 f'recipe_id="{rid}", tenant="ta", severity="warning", name="backlog_will_overflow"}}')
+    (tmp_path / "test.yaml").write_text(yaml.safe_dump({
+        "rule_files": ["pack.yaml"],
+        "evaluation_interval": "1m",
+        "tests": [{
+            "interval": "1m",
+            "input_series": [
+                {"series": 'queue_backlog{tenant="ta", da_cluster="east", pod="q-0"}', "values": "900x120"},
+                {"series": 'queue_backlog{tenant="ta", da_cluster="west", pod="q-0"}', "values": "0+10x120"},
+                {"series": threshold, "values": "1000x120"},
+            ],
+            "promql_expr_test": [
+                # the premise: west's own current value is still under east's
+                {"expr": f"{bases[0]}", "eval_time": "80m",
+                 "exp_samples": [
+                     {"labels": f'{bases[0]}{{tenant="ta", da_cluster="east"}}', "value": 900},
+                     {"labels": f'{bases[0]}{{tenant="ta", da_cluster="west"}}', "value": 800}]},
+                {"expr": 'count by (tenant, da_cluster) (ALERTS{alertstate="firing", component="custom"})',
+                 "eval_time": "80m",
+                 "exp_samples": [{"labels": '{tenant="ta", da_cluster="west"}', "value": 1}]},
+            ],
         }],
     }, sort_keys=False), encoding="utf-8")
     result = subprocess.run(

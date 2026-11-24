@@ -89,7 +89,9 @@ tenants:
 > **3 個要注意的地雷**：
 > 1. 你的 metric **必須帶 `tenant` label**（平台規則用 `on(tenant)` 聯接），否則規則會**靜默不觸發**——多租戶 scrape 通常靠 relabel 注入。
 > 2. `absence` recipe 對**從沒出現過**的 metric 會**立即觸發**（防呆 guard 尚未 ship）；初次導入請先讓該 metric 至少出現一次。
-> 3. `threshold` / `rate` 以 `max`/`sum by(tenant)` 聚合，會**吃掉 `device` / `instance` 等子 label**（alert 只說「最差的」、不說是哪一個）。
+> 3. `threshold` / `rate` 以 `max`/`sum` 聚合成每個租戶一個值（租戶跨多個叢集時是每個叢集一個值），會**吃掉 `device` / `instance` 等子 label**（alert 只說「最差的」、不說是哪一個）。
+
+> **你的租戶跨多個叢集時**：每個叢集各自計算、各自比對閾值，告警帶 `da_cluster` 指出是哪個叢集。`rate`、`ratio`、`slo_burn_rate` 這類加總或算比值的 recipe 因此**不再把各叢集合在一起算**（行為變更：兩個叢集加起來才超過閾值的情況不再告警）。只有 `absence` 例外：任一個叢集有該指標就算存在。閾值仍是整個租戶一組。詳見 [ADR-006「多叢集同租戶」](../adr/006-tenant-mapping-topologies.md)。
 
 ### 設定 Alert 通知路由
 

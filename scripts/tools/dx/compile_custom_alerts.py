@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -195,10 +196,36 @@ def lifecycle_notices(lifecycle) -> List[str]:
     return notices
 
 
-def _render(groups: List[dict], regenerate: str = "make custom-alerts-compile") -> str:
+_RECORD_LINE = re.compile(r"^(?P<indent>\s*)- record: (?P<name>\S+)$")
+
+
+def _with_declarations(body: str, declarations: "dict[str, str]") -> str:
+    """*body* with each declaration as a comment line directly above the rule
+    it names — where check_cluster_identity.py reads a
+    `# da_cluster: tenant-wide …` declaration (a rule has no field for one).
+    A declaration naming a rule the pack does not record is an error: it
+    would otherwise be dropped without a word."""
+    if not declarations:
+        return body
+    out, placed = [], set()
+    for line in body.split("\n"):
+        m = _RECORD_LINE.match(line)
+        if m and m["name"] in declarations:
+            out.append(f"{m['indent']}# {declarations[m['name']]}")
+            placed.add(m["name"])
+        out.append(line)
+    missing = sorted(set(declarations) - placed)
+    if missing:
+        raise ValueError(f"declaration(s) for rule(s) the pack does not record: {missing}")
+    return "\n".join(out)
+
+
+def _render(groups: List[dict], regenerate: str = "make custom-alerts-compile",
+            declarations: "dict[str, str] | None" = None) -> str:
     """The pack as written: header + groups. *regenerate* is the command the
     header tells a reader to run (`_regenerate_command`): the shipped pack's
-    make target by default, another file's own command otherwise (#3679)."""
+    make target by default, another file's own command otherwise (#3679).
+    *declarations* is the pack's `declarations` (`_with_declarations`)."""
     header = (
         "# ============================================================\n"
         "# custom-alerts Rule Pack — Tenant-authored declarative alerts\n"
@@ -213,7 +240,7 @@ def _render(groups: List[dict], regenerate: str = "make custom-alerts-compile") 
         Dumper=_BlockDumper,
         sort_keys=False, default_flow_style=False, allow_unicode=True, width=10_000,
     )
-    return header + body
+    return header + _with_declarations(body, declarations or {})
 
 
 def _committed_rules(out_path: Path) -> dict:
@@ -707,7 +734,7 @@ def main() -> int:
         return EXIT_CALLER_ERROR
 
     regenerate = _regenerate_command(out_path, config_dir, repo)
-    rendered = _render(groups, _header_command(out_path, config_dir, repo))
+    rendered = _render(groups, _header_command(out_path, config_dir, repo), pack.declarations)
     if args.check:
         findings = sync._diff_maps(produced, committed)
         # ⛔ THE FILE IS THE COMPILER'S WHOLE, SO IT IS COMPARED WHOLE (#3679).

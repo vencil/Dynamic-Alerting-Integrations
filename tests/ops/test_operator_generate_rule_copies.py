@@ -149,9 +149,28 @@ def test_the_docs_table_lists_exactly_the_derived_rules(doc):
     ('up{job="tenant-exporters"}==0', True),
     # a label VALUE spelling `up` is not a reference to it
     ('kube_pod_info{pod="up"}', True),
+    # read off the parse tree (#4219): a metric right before a comma, and a
+    # name given as a `__name__` matcher, are reads a text scan missed
+    ('label_replace(mysql_up, "pack", "mysql", "", "")', False),
+    ('{__name__="mysql_up"} == 0', False),
+    # every name a selector pins is judged, as every one is read
+    ('{__name__="kube_pod_info", __name__="mysql_up"}', False),
+    # both alert series are Prometheus' own, in either mode
+    ('ALERTS_FOR_STATE{alertname="X"} > 0', True),
+    # a string argument spelling a metric is not a read of it
+    ('label_replace(mysql_up{job="tenant-exporters"}, "x", "kube_pod_info", "", "")', True),
 ])
 def test_operator_unportable(expr, portable):
-    assert (ms.operator_unportable(expr) == []) is portable, ms.operator_unportable(expr)
+    reasons = ms.operator_unportable(cr.promql_shape([expr])[0])
+    assert (reasons == []) is portable, reasons
+
+
+def test_a_rule_the_parser_refuses_is_named_not_taken_as_portable():
+    """#4219: an expression Prometheus' parser refuses raises its refusal,
+    naming it — it was scanned as text and, reading no metric, kept."""
+    groups = [{"name": "g", "rules": [{"alert": "A", "expr": "sum(rate(mysql_up[5m])"}]}]
+    with pytest.raises(cr.InputRefused, match=r"sum\(rate\(mysql_up"):
+        ms.operator_split(groups)
 
 
 def test_a_rule_on_an_unportable_recording_rule_is_unportable():

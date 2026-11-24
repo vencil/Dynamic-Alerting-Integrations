@@ -12,7 +12,7 @@
    的判定。
 
 deprecate_rule、patch_config 改既有檔時改由 `da-guard write` 寫
-（ADR-036 步驟 10b，#3206）：第 2 列對它們是「edit 拒寫就不寫」（PyYAML 換寫法的那種
+（ADR-036 §7 步驟 10，#3206）：第 2 列對它們是「edit 拒寫就不寫」（PyYAML 換寫法的那種
 讀回不同已不會發生，改釘「沒動到的寫法照原樣」），deprecate_rule 另有一列「多檔中一個
 被拒就都不寫」。
 

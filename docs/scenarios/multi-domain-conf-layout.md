@@ -42,7 +42,6 @@ conf.d/
 1. 找到 Finance 的所有 tenant 需要 `grep` 檔案名
 2. Finance、Infra、Ops 各自維護一份預設值副本 → 無法同步
 3. 無法清楚表達「EU-West 預設值」或「Staging 預設值」的概念
-4. RBAC 無法按域名+區域分配存取權
 
 ## 解決方案：階層式配置設計
 

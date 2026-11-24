@@ -27,7 +27,6 @@ Exit codes:
 import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -87,6 +86,8 @@ except ImportError:
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error, partial_answer)
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
+import _registry_lib  # noqa: E402  (#4270: the exporter kinds' metric prefixes)
+import _lib_metric_sources  # noqa: E402  (#4219: the series Prometheus manufactures)
 
 
 # ─ I18n Fallback ────────────────────────────────────────────────────────
@@ -168,46 +169,16 @@ def _safe_mkdir(path: Path):
 # ─ Metric extraction from PromQL expressions ────────────────────────────
 
 
-def extract_metrics_from_expr(expr: str) -> Set[str]:
-    """Extract metric names from PromQL expression.
-
-    Regex: word followed by { or [ or whitespace. Captures built-in functions
-    (rate, sum, max, etc.) but they are metric-adjacent, so we filter them.
-    """
-    if not expr or not isinstance(expr, str):
-        return set()
-
-    builtin_funcs = {
-        "rate", "sum", "max", "min", "avg", "count", "topk", "bottomk",
-        "histogram_quantile", "increase", "delta", "irate", "group",
-        "on", "ignoring", "group_left", "group_right", "unless", "by",
-        # Set/logical operators (defect i). When written un-parenthesised —
-        # `metric_a or metric_b`, `x and on(...)` — the extractor's
-        # `word(?=[{[\s])` capture treats the trailing-whitespace `or`/`and`
-        # as a metric name. `unless`/`on`/`by`/`group_*`/`ignoring` were
-        # already excused; `or`/`and` complete the binary-set-op set. (PromQL
-        # FUNCTIONS — vector/label_replace/changes/absent/clamp_min/time/
-        # avg_over_time — are always written `fn(`, i.e. followed by `(` not
-        # `{[`/whitespace, so the regex never captures them; verified across
-        # every rule-pack, so they need no listing here.)
-        "or", "and",
-        # Modifier keywords: `x offset 90s` and `x > bool 1` put a keyword after
-        # whitespace too (#3833: OracleDatabaseDown's `offset 90s` read as a
-        # metric named `offset` and failed the real-pack split gate).
-        "offset", "bool",
-    }
-
-    # Match word followed by { or [ or whitespace
-    pattern = r'\b([a-zA-Z_:][a-zA-Z0-9_:]*)\b(?=[{\[\s])'
-    matches = re.findall(pattern, expr)
-
-    # Filter out PromQL functions and labels
-    metrics = set()
-    for m in matches:
-        if m not in builtin_funcs and not m[0].isupper():  # Skip labels like "tenant"
-            metrics.add(m)
-
-    return metrics
+def metrics_read(exprs: List[str]) -> Set[str]:
+    """Every metric the expressions read, off Prometheus' parse tree
+    (``_lib_consumer_read.promql_metric_names``, #4219) — never off the text:
+    a name scan misses ``ALERTS`` and a metric before a comma, and takes a
+    keyword or a label for a metric. An expression the parser refuses raises
+    its ``InputRefused``."""
+    out: Set[str] = set()
+    for names in _lib_consumer_read.promql_metric_names(list(exprs), raise_refused=True):
+        out.update(names)
+    return out
 
 
 def extract_recording_outputs(rules: List[Dict[str, Any]]) -> Set[str]:
@@ -235,7 +206,7 @@ def extract_recording_outputs(rules: List[Dict[str, Any]]) -> Set[str]:
 #     `tenant`) IS tenant-labeled → federated → legal on central. This covers the
 #     DB liveness / topology family every pack's *Down / *ExporterAbsent /
 #     *NoPrimary alert depends on: bare `up`, and the db-exporter raws
-#     (mysql_/mongodb_/pg_/redis_/oracledb_/kafka_/clickhouse_/rabbitmq_ …) —
+#     (the exporter kinds' `metric_prefixes` in the threshold registry) —
 #     INCLUDING each family's own liveness gauge (`mysql_up`, `pg_up`, …), which
 #     is admitted by its family prefix like every other raw of that family, NOT
 #     by its name ending in `_up` (TRK-353; see _is_external_pipeline_input).
@@ -268,14 +239,14 @@ _PLATFORM_CONFIG_METRICS = frozenset({
 })
 _PLATFORM_CONFIG_PREFIXES = ("user_",)
 # Per-tenant exporter families (tenant-labeled → federated → legal on central).
-# Deliberately EXCLUDES kube_/kubelet_ (namespace-labeled → not federated). A new
-# per-tenant exporter that reads raw on central would be added here; a new
-# kube_/kubelet_ on central is a bug caught by KNOWN_CENTRAL_RAW_EXEMPTIONS.
-_FEDERATED_EXPORTER_PREFIXES = (
-    "mysql_", "mongodb_", "pg_", "redis_", "oracledb_",
-    "kafka_", "clickhouse_", "rabbitmq_", "db2_", "elasticsearch_",
-    "jvm_", "nginx_",
-)
+# Deliberately EXCLUDES kube_/kubelet_ (namespace-labeled → not federated): the
+# kubernetes pack has no `presence:`, so it is no exporter kind. A new per-tenant
+# exporter declares its `metric_prefixes` in the registry; a new kube_/kubelet_
+# on central is a bug caught by KNOWN_CENTRAL_RAW_EXEMPTIONS.
+# Read from the registry's `metric_prefixes` of every exporter kind (#4270):
+# a hand copy here wrote ClickHouse as `clickhouse_`, which no ClickHouse
+# metric is named.
+_FEDERATED_EXPORTER_PREFIXES = _registry_lib.tenant_exporter_prefixes()
 
 
 # query-exporter's built-in metrics (#3833): served by every query-exporter a
@@ -330,7 +301,8 @@ def _is_external_pipeline_input(metric: str) -> bool:
     """
     if ":" in metric:
         return False
-    if metric == "up":
+    if metric in _lib_metric_sources.MANUFACTURED:
+        # `up` and the alert series: Prometheus writes them on central itself
         return True
     if metric in _PLATFORM_CONFIG_METRICS:
         return True
@@ -654,15 +626,15 @@ def process_rule_packs(
             for group in edge_groups:
                 edge_outputs.update(extract_recording_outputs(group.get("rules", [])))
 
+            central_exprs = []
             for group in central_groups:
                 rules = group.get("rules", [])
                 # Central bundles produce their own recording outputs
                 # (tenant_version:alert_threshold:* etc.) consumed by their own
                 # alerts — count them as available (defect ii-a).
                 central_outputs.update(extract_recording_outputs(rules))
-                for rule in rules:
-                    expr = rule.get("expr", "")
-                    central_inputs.update(extract_metrics_from_expr(expr))
+                central_exprs += [str(rule.get("expr", "")) for rule in rules]
+            central_inputs.update(metrics_read(central_exprs))
 
             # Check metric references (defect ii): available = edge ∪ central
             # recording outputs; federated external inputs (up/*_up, injected)
@@ -731,6 +703,10 @@ def process_rule_packs(
                 "valid": is_valid,
             })
 
+        except _lib_consumer_read.ConsumerReadError as e:
+            # #4219: the parser's reason too, as the loader's above
+            report["status"] = "error"
+            report["errors"].append(f"{filename}: {_lib_consumer_read.error_text(e)}")
         except Exception as e:
             report["status"] = "error"
             report["errors"].append(f"{filename}: {e}")

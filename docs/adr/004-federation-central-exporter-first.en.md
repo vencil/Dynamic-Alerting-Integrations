@@ -14,7 +14,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (v1.12.0) → **Extended** (v2.3.0)
+✅ **Accepted** (2026-03) → **Extended** (v2.3.0)
 
 v2.3.0: edge evaluation added — the normalisation part of the Rule Packs can be evaluated in edge Prometheus, while threshold-exporter and alert evaluation stay central.
 

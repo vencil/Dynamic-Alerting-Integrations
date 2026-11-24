@@ -9,186 +9,105 @@ tracking_kind: adr
 status: accepted
 domain: integration
 created_at: 2026-08-22
-updated_at: 2026-11-02
+updated_at: 2026-11-24
 ---
 
 # ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業
 
 ## 狀態
 
-✅ **Accepted**（2026-08-22 起草，2026-08-29 由 owner 核可）。
+✅ **Accepted**（2026-08-29，owner 核可）。
 
-📝 **修訂（2026-11-02）**：租戶 metadata 不再 join 進告警，改由告警的 annotation 查詢 `tenant_metadata_info`（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)）；決策 2、決策 3 裡描述它如何進到告警的句子照此更新，決策本身不變。
+2026-11-02 修訂：租戶 metadata 不再 join 進告警，改由告警的 annotation 查詢 `tenant_metadata_info`（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)）。
 
-> 依語言政策（自 ADR-019 起預設 ZH-only；ADR-024 / ADR-025 為保留 `.en.md` sibling 的例外），本 ADR 不另製 `.en.md`。
-
-## TL;DR
-
-- **背景**：同 MariaDB domain 有一個協同產品的任務平面，負責**執行**運維動作——切換 primary、blue-green 換版、邏輯還原、刪 pod。兩邊今天互相零認知（DAI 端 grep `db-runbooks|aqsh` 只命中本檔；對方 repo grep `Dynamic-Alerting|alertmanager` 零命中）。
-- **本 ADR 最主要的產出是「不要建什麼」。** 草稿階段提過一個「機器面即時靜音入口」，外審把它打穿了：傳輸層不通、核心保證做不到、更粗暴的等價機制早就存在。**該提案改列為 reject。**
-- **留下的三條**：
-  1. ⛔ **不建**機器面靜音入口（見「被打穿的提案」整節）。
-  2. **身分對照**是唯一真正缺、而且**擋住其他所有想法**的東西——但只能做成 **advisory**，不可餵給任何自動靜音。
-  3. **`runbook_url` 指向唯讀診斷任務**——零程式碼，是部署約定。
-- **順帶查出兩個 DAI 面的實際缺陷**（見最後一節）：rule pack 指定的補救途徑**機器面走不通、人面走得通，但告警本身沒給走法**（⚠️ 該條初版寫成「沒有人走得到」，2026-08-28 更正）；以及「計畫性作業會打中哪些告警」的資訊分散且不完整。
-- **不動搖**：[ADR-026](026-node-maintenance-liveness-suppression.md)「不建維護抑制子系統」、[ADR-008](008-operator-native-integration-path.md)「不建 controller」。
-
-## 先驗方向：三個假設，全部不成立
-
-[ADR-026](026-node-maintenance-liveness-suppression.md) 留下的那一課是本節存在的理由：
-
-> 多輪對抗式 review 把實作層磨得很細，卻沒先用真實現場數據驗證「這是不是客戶的痛」…… **先驗方向，再投入實作深度。**
-
-### ❌ 假設 1：「計畫性作業會製造 DAI 擋不住的噪音」→ 部分成立，但不是原本想的那樣
-
-[#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875)（completed）已把**單實例存活**降級。但把整個 MariaDB pack 加上 liveness pack 一起列出來之後，圖像不是「已經沒事了」：
-
-| 告警 | severity | `for` | 吃 `_state_maintenance` opt-out | 會被哪類計畫性作業打中 |
-|---|---|---|---|---|
-| `MariaDBDown` | warning | 15s | ✅ | 任何讓 mysqld 停的動作 |
-| `MariaDBRecentRestart` | info | 0s | ❌ | 重啟類（info 不 page） |
-| `MariaDBSemiSyncDegraded` | warning | 2m | ✅ | 動 replica |
-| `MariaDBReplicationLag` | warning | 30s | ✅ | 還原 / 重新同步 |
-| `MariaDBReplicationLagCritical` | critical | 30s | ✅ | 還原 / 重新同步 |
-| `MariaDBClusterDown` | critical | 30s | ❌ 刻意 | 全實例停機類 |
-| `MariaDBNoPrimary` | critical | 2m | ❌ 刻意 | 切換 primary |
-| **`MariaDBSemiSyncReplicasGone`** | **critical** | 1m | ❌ | **殺掉唯一的 semi-sync replica** |
-| **`MariaDBReplicaIOThreadDown`** | **critical** | 1m | ❌ | **`STOP SLAVE` / 重新指向** |
-| **`MariaDBReplicaSQLThreadDown`** | **critical** | 1m | ❌ | 同上 |
-| `TenantExporterAbsent`（`rule-pack-liveness.yaml`） | critical | 3m | ❌ | 該租戶**全部** exporter 缺席逾 3 分鐘 |
-
-所以「殺掉一個 replica pod 不會 page」**只在沒有啟用 semi-sync 時成立**。`MariaDBSemiSyncReplicasGone` 的 expr 是「semi-sync master enabled 且 connected clients == 0」——單一 semi-sync replica 的拓撲下，殺掉它就是 1 分鐘後一個不可 opt-out 的 critical。
-
-### ❌ 假設 2：「replica-thread critical 沒有 opt-out 是漏掉的」→ 撤回
-
-該告警（`MariaDBReplicaIOThreadDown`，`rule-pack-mariadb.yaml:349`）上方有一整塊 **45 行**的 YAML 註解（`:304-348`）在交代設計取捨，其中直接處理 opt-out 的是 `:336-342` 這 7 行，明寫這是刻意的：
-
-> `NO maintenance opt-out (matches ClusterDown/NoPrimary/ReplicasGone): a stopped replication thread = ... async durability erosion ... Planned STOP SLAVE → Alertmanager Silence API (same guidance as MariaDBClusterDown); a tenant's silent-critical sentinel still suppresses notification.`
-
-⚠️ 注意最後那半句——它在草稿階段被引用了卻沒被讀懂，而它正是打穿下一個假設的關鍵。
-
-⚠️ **2026-08-28 更正**：本句初版寫「12 行」。實測連續註解區塊為 `:304-348` 共 45 行（從告警行往上取連續 `#` 行；空行 `:303` 不計入）。更正方向對本節論證有利——註解比初版所稱的更長，「這是刻意的」這個結論只被加強。改成帶行號區間是為了讓後人能重新推導，而不是再信一個裸數字。
-
-### ❌ 假設 3：「即時靜音這條路沒有 client，所以要補一個」→ **不成立**
-
-草稿的整個提案建立在這句上。它錯在只查了一條路。
-
-## 被打穿的提案：機器面即時靜音入口（reject）
-
-草稿提議補一個受限的入口：只准靜音白名單內的 alertname、`MariaDBClusterDown` / `MariaDBNoPrimary` 永不可靜音、強制 max TTL、強制 reason、回傳 silence id 供主動解除。**四項獨立事實各自足以否決它。**
-
-### R1 傳輸層本來就不通
-
-`k8s/03-monitoring/network-policies.yaml` 的 `allow-alertmanager-ingress` 只放行 monitoring namespace 內兩種 pod 到 9093：`app: prometheus` 與 `component: maintenance-scheduler`。協同產品的任務 pod 兩個條件都不符。（[#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) 之後後者隨該 CronJob 移除，只剩 `app: prometheus`；結論不變。）
-
-⚠️ 而且這條 NetworkPolicy 上就掛著**同一種失敗曾經真的發生過**的紀錄（#1203：`maintenance-scheduler` 這一側原本沒開，「every silence call was dropped here … silent-and-self-concealing」）。同樣的形狀會再發生一次，而且一樣不會有人發現。
-
-### R2 核心保證做不到
-
-「`MariaDBClusterDown` / `MariaDBNoPrimary` 永不可靜音」是這個提案唯一的安全論證。但 `k8s/03-monitoring/configmap-alertmanager.yaml` 的 `TenantSilentCritical` inhibit rule 的 target matcher 是 `severity="critical"` + `alert_source=""` + `tenant=~".+"`，**完全不分 alertname**。租戶只要進 silent-critical，這兩條照樣被壓。新入口拒絕靜音它們，只是把呼叫端推向那條更粗的路而已。
-
-### R3 更粗暴的等價機制早就存在，而且是機器面的
-
-`da-tools patch-config <tenant> <key> <value>` 的 `metric_key` 是**位置參數、沒有任何 key 白名單**（`scripts/tools/ops/patch_config.py`：`tenant_config["tenants"][tenant][metric_key] = str(value)`），寫入方式是 `kubectl patch configmap threshold-config -n monitoring --type merge`，**不經 GitOps、不經 PR**，靠 hot-reload 生效。也就是說 `patch-config <tenant> _silent_mode critical` 今天就是一個即時、機器可呼叫、**整租戶**的 critical 靜音。
-
-真正的狀況因此不是「沒有工具」，而是「**只有一把過粗的工具，而且沒有文件說它可以這樣用**」。
-
-### R4 它對「決策 2」有未宣告的硬依賴，而那個依賴會反向放大傷害
-
-Alertmanager silence 必須帶 `tenant` matcher（決策當時的 builder 在 `scripts/tools/ops/maintenance_scheduler.py`，已於 [#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) 移除）。呼叫端結構性知道的是 **namespace + MariaDB CR 名**，不是 DAI 的 tenant id；要換算只能靠決策 2 那張**會漂移**的宣告式對照表。
-
-於是漂移的後果在這裡**不是**良性降級，而是**對錯的租戶開靜音**——把別人家的 critical 藏起來。草稿列的五條護欄沒有任何一條檢查 tenant 是否正確。
-
-> **這是草稿漏掉的第三個「動工前必須先量」的問題，而且它比原本列的兩個更致命**：就算計畫性切換確實會 fire，只要呼叫端拿不到一個**可信且可被 DAI 端驗證**的 tenant id，這個入口就是淨負值。
-
-### 順帶更正草稿的兩處錯誤
-
-- 草稿寫「⛔ 對整個 tenant 開一張 silence ＝ 手刻 curl 的失敗模式本身」。但**產品當時出貨的 `maintenance_scheduler`（已於 [#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) 移除）開的就是租戶級 silence**（matcher `{tenant, alert_source="", maintenance="mute"}`，擋該租戶所有可在維護期間靜音的告警）。這條「護欄」與既有行為直接矛盾，草稿沒處理。
-- 草稿在替代方案表寫「走 `PUT /api/v1/tenants/{id}` 要過 GitOps commit ＋ owner 核可」。**預設模式是 direct commit-on-write（[ADR-009](009-tenant-manager-crud-api.md)），沒有 PR、沒有核可**；要 PR 核可是 PR write-back 模式才有。這個 reject 理由本身是錯的。
+2026-11-24 修訂：改寫為現行行為；告警表改照 `maintenance` 標籤。
 
 ## 決策
 
-### 決策 1：⛔ 不建機器面靜音入口
+同一個 MariaDB 領域裡有一個協同產品的任務平面，負責**執行**運維動作：切換 primary、blue-green 換版、邏輯還原、刪 pod。本平台（DAI）負責告警。兩者今天互不認識。本 ADR 決定兩者之間要建什麼、不建什麼：
 
-理由見上節四條。**不是「以後再說」，是「以現行架構這條路不對」**——R1 與 R2 都不是實作難度問題，是既有設計的直接後果。
+1. **不建「機器呼叫的即時靜音入口」。** 讓任務平面在作業前呼叫一個受限的 API 靜音告警，在現行架構下行不通，理由見「決定的細節」第 1 節。計畫性作業的靜音走既有的兩條路。
+2. **身分對照只做成給人看的指引（advisory）。** DAI 的 tenant id 與任務平面的座標（`kubectl context` + namespace + 實例名）之間沒有橋；要補，只能是給人看的參考，不得餵給任何自動動作。
+3. **`runbook_url` 指向唯讀的診斷任務。** 這是部署約定，不需要寫程式。
 
-**Reopen trigger**：R1 與 R2 任一被獨立的理由改掉時（例如 Alertmanager 前面長出一個帶認證的 API gateway；或 silent-mode inhibit 改成分 alertname）。在那之前，計畫性作業的靜音走既有的兩條路：宣告式走 conf.d `_state_maintenance`（有 `expires` 自動到期），即時走 `patch-config _silent_mode`（粗，但存在且可用）。
+本 ADR 不推翻 [ADR-026](026-node-maintenance-liveness-suppression.md)（不建維護抑制子系統）與 [ADR-008](008-operator-native-integration-path.md)（不建 controller）。
 
-### 決策 2：身分對照——唯一真正缺的東西，但只能做 advisory
+### 範例：一次計畫性作業會打中哪些告警
 
-DAI 的租戶是 conf.d 裡一個刻意不透明的 id（dev-rules #2 要求 tenant-agnostic）。運維執行平面的座標是 `kubectl context + namespace + 實例名`。**兩邊沒有橋，所以任何「從告警走到可執行動作」的想法都卡在第一步**——包含被 reject 的決策 1。
+下表取自 `rule-pack-mariadb.yaml` 與 `rule-pack-liveness.yaml`；「維護期間」是每條告警的 `maintenance` 標籤（`mute` 表示租戶開啟 `_state_maintenance` 時不觸發，`page` 表示照常叫人），全部告警的這一欄見[告警參考](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/ALERT-REFERENCE.md)。
 
-放在 `TenantMetadata` 既有的**非 label 欄位**類別（`types.go` 記著 v2.5.0 的決定：`environment` / `region` / `domain` 等「NOT emitted as Prometheus labels (cardinality concern) — consumed by tenant-api and generate_tenant_metadata.py only」）。
+| 告警 | 嚴重度 | `for` | 維護期間 | 會被哪類作業打中 |
+|---|---|---|---|---|
+| `MariaDBDown` | warning | 15s | mute | 任何讓 mysqld 停的動作 |
+| `MariaDBRecentRestart` | info | 0s | mute | 重啟 |
+| `MariaDBSemiSyncDegraded` | warning | 2m | mute | 動 replica |
+| `MariaDBReplicationLag` | warning | 30s | mute | 還原、重新同步 |
+| `MariaDBReplicationLagCritical` | critical | 30s | mute | 還原、重新同步 |
+| `MariaDBClusterDown` | critical | 30s | page | 全部實例停機 |
+| `MariaDBNoPrimary` | critical | 2m | page | 切換 primary |
+| `MariaDBSemiSyncReplicasGone` | critical | 1m | page | 殺掉唯一的 semi-sync replica |
+| `MariaDBReplicaIOThreadDown` | critical | 1m | page | `STOP SLAVE`、重新指向 |
+| `MariaDBReplicaSQLThreadDown` | critical | 1m | page | 同上 |
+| `TenantExporterAbsent` | critical | 3m | page | 租戶宣告的某一種 exporter 全部缺席超過 3 分鐘 |
 
-⛔ **不得加進 `tenant_metadata_info` 的 label 集**。這不是我的推論，是 `collector.go` 自己寫的：`tenant_metadata_info` 是每個租戶恰好一筆、每條 rule-pack 告警的 metadata annotation 都會查詢的資訊指標，「widening its label set is forbidden」。同一段也記了唯一一次 scoped reversal 是**開一個新 metric**（`tenant_expected_exporter{tenant, pack}`，租戶以頂層的 `_expected_exporters` 宣告），不是加寬既有的——要走那條路就得比照辦理。
+所以「殺掉一個 replica pod 不會叫人」只在沒有啟用 semi-sync 時成立：單一 semi-sync replica 的拓撲下，殺掉它 1 分鐘後就是一條維護期間也照常叫人的 critical。replica 執行緒停掉的兩條 critical 不給維護期間靜音是刻意的：規則旁的註解寫明，停掉的複寫執行緒會侵蝕非同步的持久性，計畫性的 `STOP SLAVE` 要走 Alertmanager silence。
 
-**這份對照必須是 advisory-only。** 外審在這點上是對的而草稿是錯的：草稿說「對不上時應該降級成找不到可執行動作」，但**沒指定誰、用什麼、在哪一側做這個判定**，而在宣告式表 + 不建 controller 的前提下，這個判定做不出來——最惡劣的情形是座標被**重用**（實例改名後舊的 `(ns, name)` 仍然存在、仍然解析得到、只是指向別的東西），任何「查得到就算對」的檢查都會回綠，要區分只能靠 DAI 沒有的身分憑證（如 CR uid）。
+## 決定的細節
 
-**所以定義域限定為：給人看的指引，不是給機器執行的座標。** 對照錯了的後果是「有人照著跑了一個唯讀診斷任務、發現對象不對」，而不是「靜音了錯的租戶」。決策 1 被 reject 之後，這條線是自洽的；決策 1 若哪天 reopen，**必須先解掉座標重用問題**，不能沿用這張表。
+### 1. 不建機器呼叫的即時靜音入口
 
-### 決策 3：`runbook_url` 指向唯讀診斷任務（零程式碼，是約定）
+曾經提議的形狀：只准靜音白名單內的 alertname、`MariaDBClusterDown`／`MariaDBNoPrimary` 永不可靜音、強制最長時效與理由、回傳 silence id 供主動解除。以下四點各自就足以否決它：
 
-`runbook_url` 來自 conf.d `_metadata`，是客戶自填的任意 URL，每一條告警的 `runbook_url` annotation 都帶著它。協同產品的任務目錄有一個現成而且刻意維護的性質：**唯讀診斷任務與破壞性任務是分開的**（`status` / `sanity-check` / `connection-usage` / `pods/list` / `blue-green/validate` 對比 `switch-primary` / `logical-restore` / `pods/delete`）。這正好是一條告警可以安全建議的界線——**告警只該指向唯讀那一半**。
+- **網路不通。** `k8s/03-monitoring/network-policies.yaml` 的 `allow-alertmanager-ingress` 只放行 monitoring namespace 裡 `app: prometheus` 的 pod 連 9093；任務平面的 pod 不在其中。
+- **核心保證做不到。** 「`MariaDBClusterDown`／`MariaDBNoPrimary` 永不可靜音」是這個提案唯一的安全論證。但 `configmap-alertmanager.yaml` 的 `TenantSilentCritical` inhibit 規則，target matcher 是 `severity="critical"`、`alert_source=""`、`tenant=~".+"`，完全不分 alertname：租戶只要進入 silent-critical，這兩條照樣被壓。新入口拒絕靜音它們，只是把呼叫端推向那條更粗的路。
+- **更粗的等價機制早就存在。** `da-tools patch-config <tenant> _silent_mode critical` 以 `kubectl patch` 直接改 ConfigMap、不經 GitOps，hot-reload 後生效，就是一個即時、機器可呼叫、整個租戶的 critical 靜音。缺的不是工具，是「這把工具可以這樣用」的文件。
+- **它依賴一張會漂移的身分對照，而漂移的後果是靜音錯的租戶。** 以租戶為單位的靜音要 DAI 的 tenant id；呼叫端結構上只知道 namespace 與 MariaDB CR 名，換算只能靠決定 2 那張宣告式對照表。表一漂移，就是把別人家的 critical 藏起來，而上述任何護欄都不檢查 tenant 對不對。
 
-不需要 DAI 改任何程式碼：欄位已在、值是自由字串。**Trade-off**：零成本也零強制，沒有機制擋住有人指到破壞性任務。加 lint 驗一個自由字串欄位的語意是過度設計（DAI 也看不到對方的任務目錄，驗不了）。維持約定。
+計畫性作業的靜音因此走既有的兩條路：宣告式用租戶設定的 `_state_maintenance`（可帶 `expires` 自動到期），只擋標 `mute` 的告警；即時用 `patch-config <tenant> _silent_mode critical`（粗，但存在）。
 
-## 順帶查出的兩個 DAI 面缺陷
+**重新評估的觸發條件**：前兩點任一被獨立的理由改掉時，例如 Alertmanager 前面多了一個帶認證的 API gateway，或 silent-mode 的 inhibit 改成分 alertname。即使如此，重開前也必須先解掉下一節的座標重用問題。
 
-這兩個與協同無關，是查證過程的副產品，各自值得獨立處理：
+### 2. 身分對照只做成 advisory
 
-1. **rule pack 指定的補救途徑：機器面走不通、人面走得通，而指引沒給走法。**
+DAI 的租戶是 conf.d 裡刻意不透明的 id（平台程式碼不寫死租戶 id）。任務平面的座標是 `kubectl context` + namespace + 實例名。兩邊沒有橋，任何「從告警走到可執行動作」的想法都卡在第一步。
 
-   ⚠️ **本條於 2026-08-28 更正。** 初版寫成「指引指向一條**沒有人**走得到的路」——那是錯的，理由見下方 ⛔ 段。初版同時把載體與告警對錯了，一併更正。
+- **放在 `_metadata` 不輸出成 label 的欄位類別**：`types.go` 記著 `environment`／`region`／`domain` 這類欄位不輸出成 Prometheus label（基數考量），只給 tenant-api 與 `generate_tenant_metadata.py` 讀。
+- **不得加進 `tenant_metadata_info` 的 label。** 這個資訊指標每個租戶恰好一筆、每條 rule pack 告警的 metadata annotation 都查詢它；`collector.go` 寫明加寬它的 label 集是禁止的。要新增，比照 `tenant_expected_exporter` 開一個新 metric。
+- **只能是 advisory。** 宣告式的表加上不建 controller，做不出「對不上就降級」的判定：最壞的情形是座標被重用（實例改名後舊的 namespace + 名稱仍存在、仍查得到、只是指向別的東西），任何「查得到就算對」的檢查都會回綠，要區分只能靠 DAI 沒有的身分憑證（例如 CR 的 uid）。所以這份對照是給人看的指引，不是給機器執行的座標：對照錯了的後果是「有人跑了一個唯讀診斷任務、發現對象不對」，而不是「靜音了錯的租戶」。
 
-   **實際載體與告警**（`grep -n "Alertmanager Silence API" rule-packs/` 的全部命中）：
+### 3. `runbook_url` 指向唯讀診斷任務
 
-   | 告警 | 承載這段指引的欄位 | 值班人看得到 |
-   |---|---|:---:|
-   | `MariaDBClusterDown`（`rule-pack-mariadb.yaml:197`） | `description` / `description_zh`（`:207-208`） | ✅ |
-   | `MongoDBClusterDown`（`rule-pack-mongodb.yaml:136`） | `description` / `description_zh`（`:146-147`） | ✅ |
-   | `MariaDBReplicaIOThreadDown`（`:349`） | 其上方 YAML 註解（`:340`，塊範圍 `304-348`） | ❌ |
-   | `MariaDBReplicaSQLThreadDown`（`:367`） | 兩種載體皆無此文字（其 description 指向 `Last_SQL_Error`） | — |
+`runbook_url` 來自租戶的 `_metadata`，是自由填寫的 URL，告警的 annotation 經 `tenant_metadata_info` 帶出它。任務平面的任務目錄刻意把唯讀診斷（`status`、`sanity-check`、`connection-usage`、`pods/list`、`blue-green/validate`）與破壞性任務（`switch-primary`、`logical-restore`、`pods/delete`）分開，這正好是告警可以安全建議的界線：告警只指向唯讀那一半。
 
-   ⇒ 初版把三者一律稱為「註解」。實際上走註解的只有 `MariaDBReplicaIOThreadDown`；兩個 `*ClusterDown` 走的是 **`description`**——值班人**會**看到的那一種。兩者不可互換。`SQLThreadDown` 沒有這段文字，`MongoDBClusterDown` 則是初版盤點漏掉的。
+不需要改程式：欄位已在、值是自由字串。代價是零強制，沒有機制擋住有人指到破壞性任務；DAI 看不到對方的任務目錄，加 lint 也驗不了，所以維持約定。
 
-   **機器面確實走不通**（決策當時；scheduler 與其 NetworkPolicy 已於 [#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) 移除）：(a) `allow-alertmanager-ingress` 只放行 `app: prometheus` 與 `component: maintenance-scheduler` 兩種 pod 到 9093；(b) `maintenance_scheduler.py` 的 CLI 只有 `--config-dir` / `--alertmanager` / `--pushgateway` / `--dry-run` / `--json-output`，`extend_silence()` 是內部函式、唯一呼叫點在同檔排程迴圈，**沒有 ad-hoc 入口**；(c) 要建那個入口的 [#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870) §4 已 closed as `not_planned`。**⛔ 但這三點就是 R1 的內容**，不是一個獨立於 R1 的缺陷。
+## 後果與已知限制
 
-   ⛔ **人面走得通，初版把 (a)(b)(c) 誤讀成「沒有人走得到」。** (a) 約束的是 **pod 網路 ingress**；(b)(c) 談的是**機器呼叫端**。拿著 kubectl 的值班人用本 repo 已記載的三條路都到得了，其中第一條完全不受 (a) 約束——pod 內 loopback 不經過 pod 網路：
+- **兩個產品仍然互不認識**：這是刻意的，本 ADR 只建了一條約定（`runbook_url`）與一份可選的對照。
+- **告警點名了 Silence API，卻沒給走法。** `MariaDBClusterDown` 與 `MongoDBClusterDown` 的 description 要計畫性停機的人走 Alertmanager silence，但沒說怎麼到。拿著 kubectl 的值班人其實到得了（`kubectl exec` 進 Alertmanager 用 `amtool`，或 `port-forward`），只是這些走法分散在 troubleshooting 與 CLI 參考裡，沒有一條從告警本身連得過去。這正是決定 3 的 `runbook_url` 的用途，目前沒有 rule pack 用它承載這件事。
+- **「一種計畫性作業會打中哪些告警」沒有單一出處。** 哪些告警在維護期間可擋，已有[告警參考](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/ALERT-REFERENCE.md)的「維護期間」欄；但「切換 primary 會打中哪些」仍要自己對照，上面那張表就是這樣拼出來的。
+- **沒有量到的事**：計畫性切換期間 `Slave_IO_Running=No` 會不會持續超過 `for: 1m`、切換瞬間 master server id 會不會歸零而讓規則自己的條件壓下告警，要真的 MariaDB 叢集才量得到；兩個產品是否部署在同一叢集或同一 service mesh 也未知。前者決定下方第一項延後工作值不值得做，後者若是不同叢集，還要多一層對外暴露與認證。
 
-   - `docs/troubleshooting.md:112-113` — `kubectl exec -n monitoring deploy/alertmanager -- amtool ... --alertmanager.url=http://localhost:9093`
-   - `docs/cli-reference.md:1338` — `amtool silence query --alertmanager.url=http://<am>:9093`
-   - `CLAUDE.md:122` — `port-forward` + `localhost:9093`
+## 考慮過的替代方案
 
-   **更正後仍然成立的缺陷（窄，但是真的）**：`description` 點名了一個 API，卻沒有給到達它的路；那三條路分散在三份不同文件，**沒有一條從告警本身連得過去**。⇒ 這正是決策 3 那個欄位（`runbook_url`）的用途，而目前沒有任何 rule pack 用它承載這件事。
-2. **「計畫性作業會打中哪些告警、哪些可 opt-out」沒有單一出處。** 上面那張表是逐檔 grep 兩個 rule pack 拼出來的。維運者要自己拼，而拼漏一條（例如 `MariaDBSemiSyncReplicasGone`）的後果就是維護窗開了照樣被 page。
-
-## 考慮過但 reject 的替代方案
-
-| 替代方案 | 為什麼 reject |
+| 方案 | 為什麼不採用 |
 |---|---|
-| **機器面即時靜音入口** | 本 ADR 決策 1，四條理由見上 |
-| **讓任務平面直接寫 conf.d（走 `PUT /api/v1/tenants/{id}`）** | 技術上安全（已有 `X-DA-Base-Hash` 樂觀併發控制），預設模式也沒有核可延遲。但它把一次性運維事件寫進設定 SSOT，且同樣受 R4 的身分問題所限 |
-| **DAI 主動偵測運維作業正在跑（polling K8s / watch CR）** | 違反 [ADR-008](008-operator-native-integration-path.md)。且偵測不到就靜默失效，是 fail-open |
-| **把 namespace / 實例名加進 `tenant_metadata_info` label** | `collector.go` 明文「widening its label set is forbidden」 |
-| **重開 #870 的維護抑制子系統** | ADR-026 的現場數據結論沒有被推翻 |
+| 機器呼叫的即時靜音入口 | 決定 1 |
+| 讓任務平面經 `PUT /api/v1/tenants/{id}` 寫 conf.d | 技術上安全（有 `X-DA-Base-Hash` 樂觀併發控制，預設模式是直接寫入、沒有核可延遲，[ADR-009](009-tenant-manager-crud-api.md)），但把一次性的運維事件寫進設定的唯一來源，而且同樣受身分對照問題所限 |
+| DAI 主動偵測運維作業（輪詢 K8s 或 watch CR） | 違反 [ADR-008](008-operator-native-integration-path.md)；偵測不到就靜默失效，是 fail-open |
+| 把 namespace／實例名加進 `tenant_metadata_info` 的 label | `collector.go` 明文禁止加寬它的 label 集 |
+| 重開維護抑制子系統（[#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870)） | [ADR-026](026-node-maintenance-liveness-suppression.md) 的現場資料結論沒有被推翻 |
 
-## Future work（各自帶 trigger）
+## 延後的工作
 
-- **`MariaDBSemiSyncReplicasGone` 的 opt-out 語意**：它是唯一一條「單一 replica 級事件 → 不可 opt-out 的 critical」。是否該比照 `MariaDBDown` 給 opt-out，需要 semi-sync 拓撲的現場數據。trigger = 第一個啟用 semi-sync 的客戶回報維護窗誤 page。
-- **MongoDB 對應面**：協同產品的 MongoDB 任務面比 MariaDB 大得多。trigger = 決策 2 / 3 在 MariaDB 上實際被用起來之後。
-- **反向流（DAI 告警觸發運維任務）**：⛔ 本 ADR **刻意不碰**——單向是宣告事實，反向是授權執行破壞性動作，信任模型完全不同。trigger = 無，需要獨立 ADR。
+- **`MariaDBSemiSyncReplicasGone` 要不要在維護期間可擋**：它是唯一一條「單一 replica 級事件 → 維護期間照常叫人的 critical」。觸發條件：第一個啟用 semi-sync 的客戶回報維護窗被叫醒。
+- **MongoDB 的對應面**：任務平面的 MongoDB 任務比 MariaDB 多得多。觸發條件：決定 2、3 在 MariaDB 上實際用起來之後。
+- **反向流（DAI 告警觸發運維任務）**：刻意不碰。單向是宣告事實，反向是授權執行破壞性動作，信任模型完全不同，需要獨立的 ADR。
 
-## 本 ADR 沒有量到的事
+## 相關
 
-- **計畫性切換到底會不會 fire。** `switch-primary` 期間 `Slave_IO_Running=No` 是否持續 ≥ `for: 1m`；切換瞬間 `mysql_slave_status_master_server_id` 會不會歸零而讓 expr 自己的 gate 把告警壓下去。需要真的 MariaDB 叢集，本文件**量不到**。這兩題不影響決策 1（已 reject）與決策 3，但決定「Future work 第一項」值不值得做。
-- **兩個產品是否部署在同一叢集 / 同一 service mesh。** 若不同叢集，R1 之外還要多一層對外暴露與認證的問題。
-
-## 關聯
-
-- [ADR-003](003-sentinel-alert-pattern.md) — sentinel + inhibit；R2 的機制出處
-- [ADR-008](008-operator-native-integration-path.md) — 不建 controller / operator
-- [ADR-009](009-tenant-manager-crud-api.md) — direct commit-on-write 預設模式
-- [ADR-023](023-write-plane-single-writer-invariant.md) — 寫入平面單一寫者
-- [ADR-026](026-node-maintenance-liveness-suppression.md) — 不建維護抑制子系統；本 ADR 不推翻它
-- [#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870) — 維護抑制層（closed / not_planned）
-- [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) — HA-aware 語意分級（completed）
+- [ADR-003](003-sentinel-alert-pattern.md) —— sentinel 與 inhibit（決定 1 第二點的機制）
+- [ADR-008](008-operator-native-integration-path.md) —— 不建 controller
+- [ADR-009](009-tenant-manager-crud-api.md) —— tenant-api 的寫入模式
+- [ADR-023](023-write-plane-single-writer-invariant.md) —— 寫入平面單一寫者
+- [ADR-026](026-node-maintenance-liveness-suppression.md) —— 不建維護抑制子系統

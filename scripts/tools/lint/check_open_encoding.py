@@ -192,6 +192,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_output import exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#3981)
 from _lint_helpers import PythonSourceError, parse_python_file  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -699,8 +700,12 @@ def write_subprocess_baseline(counts: dict[str, int], rows: dict[str, int] | Non
         "ticket": SUBPROCESS_TICKET,
         "files": dict(sorted(new.items())),
     }
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8", newline="\n")
+    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    # #3981: through the artifact entry, naming the flag the path came from;
+    # an unchanged ledger is not rewritten (only a replaced file must pass the
+    # entry's checks). is_file() is False for a FIFO.
+    if not (path.is_file() and path.read_bytes() == text.encode("utf-8")):  # bytes: a CRLF copy is rewritten
+        write_repo_artifact(path, text, flag="--subprocess-baseline")
     return refused
 
 
@@ -730,6 +735,7 @@ _LINE_ENDING_FIX = (
 )
 
 
+@exit_on_output_write_error
 def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(

@@ -89,7 +89,7 @@ _RFC3339 = re.compile(
 # value), so a comment, a re-indent or another quoting of the same string is
 # no change; the report names keys, never values.
 #
-# Decision 3, stage 2 (#2962): where a key is written decides whether a
+# Decision 3 (#2962): where a key is written decides whether a
 # reader reads it at all (`defaults` outside a defaults carrier, `tenants:` in
 # a nested `_` file, ...). parse-tree's `rendered_by` answers that per key,
 # so a carrier no render reads where it is written is "not read here" (exit
@@ -164,7 +164,7 @@ OTHER_SERVICE_FILES = {
 
 # Row statuses, and which of them raise the exit code to 1.
 SETTING_RENDERED = "rendered"            # a view that covers it shows changes
-# #2962 (ADR-037 decision 3, stage 2): a fully covered carrier, read by its
+# #2962 (ADR-037 decision 3): a fully covered carrier, read by its
 # render right where it is written, whose renders show no difference — the
 # change has no effect on them. A note; the exit code is not raised.
 SETTING_NO_EFFECT = "no_effect"

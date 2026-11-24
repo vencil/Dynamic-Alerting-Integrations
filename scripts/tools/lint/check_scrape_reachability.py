@@ -167,6 +167,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_validation import i18n_text  # noqa: E402
 import _lib_metric_sources  # noqa: E402  (the family table, #1595 D1b)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: prometheus.yml / manifests as their consumers read them)
+import _lib_cluster_identity  # noqa: E402  (the one reading of a Prometheus' cluster identity, #4097)
 # The repo's one content-based rule-tree scanner. Same directory, zero
 # import cost — see collect_rule_trees for why this file no longer globs.
 from _rule_tree import _rule_containers  # noqa: E402
@@ -179,12 +180,12 @@ K8S_MANIFESTS_DIR = PROJECT_ROOT / "k8s"
 SCRAPE_ANNOTATION = "prometheus.io/scrape"
 
 # ── series Prometheus manufactures itself (no exporter, no /metrics line) ──
-# `up` is synthesised per target by the scrape loop; `ALERTS` is synthesised by
+# `up` is synthesised per target by the scrape loop; `ALERTS` / `ALERTS_FOR_STATE` by
 # the rule engine. Neither has a scrape face to resolve, so neither is a leaf.
 # NOTE this set is deliberately tiny: "the value is computed elsewhere" is NOT
 # a reason to sit here — see the VALUE-ORIGIN note in the module docstring
 # (#1285 removed a user_*/da_* prefix exclusion that made exactly that mistake).
-INJECTED_EXACT = {"up", "ALERTS"}
+INJECTED_EXACT = _lib_metric_sources.MANUFACTURED
 
 # The platform scrape label (#1425). The threshold-exporter, Vector and
 # tenant-api charts put it on their scrape Services (helm/*/templates/
@@ -274,13 +275,10 @@ KNOWN_UNKNOWN_SOURCE: dict[str, str] = {}
 # `tenant_federation_requests_total` (`by tenant, status`) would federate.
 PLANE_OF_UNPINNED_SOURCE: dict[str, str] = {}
 
-# ── PromQL extraction ───────────────────────────────────────────────────────
-# The patched superset of the split tool's extractor lives with the family
-# table (scripts/tools/_lib_metric_sources.py, #1595 D1b) — operator-generate
-# reads rules with it too. Re-exported here: the plane contract and this
-# gate's tests import it from this module.
-extract_metrics = _lib_metric_sources.extract_metrics
-_EXTRA_KEYWORDS = _lib_metric_sources.EXTRA_KEYWORDS
+# ── which metrics a rule reads ──────────────────────────────────────────────
+# Read off Prometheus' parse tree (_lib_consumer_read.promql_metric_names,
+# #4219) — operator-generate reads rules the same way. A rule the parser
+# refuses raises, naming its expression.
 
 
 # ── scrape-face parsing ─────────────────────────────────────────────────────
@@ -463,10 +461,11 @@ def load_repo_jobs() -> list[dict]:
     return parse_scrape_jobs(load_repo_prometheus_text())
 
 
-#: ADR-006: the label that says which cluster a Prometheus is in. The rule
-#: side's reading of it is check_cluster_identity.CLUSTER_LABEL — one
-#: spelling, pinned equal by tests/lint/test_check_scrape_reachability.py.
-CLUSTER_LABEL = "da_cluster"
+#: ADR-006: the label that says which cluster a Prometheus is in — the
+#: tools' one spelling and one judgement (`_lib_cluster_identity`, #4097). The rule
+#: side's reading of it is check_cluster_identity.CLUSTER_LABEL, pinned equal
+#: by tests/lint/test_check_scrape_reachability.py.
+CLUSTER_LABEL = _lib_cluster_identity.CLUSTER_IDENTITY_LABEL
 
 
 def cluster_identity(prom_yaml_text: str) -> list[str]:
@@ -486,8 +485,7 @@ def cluster_identity(prom_yaml_text: str) -> list[str]:
     label those jobs' series; one value per Prometheus cannot say that.
     """
     prom = _lib_consumer_read.prometheus_config(prom_yaml_text)
-    value = ((prom.get("global") or {}).get("external_labels") or {}).get(CLUSTER_LABEL)
-    if isinstance(value, str) and value.strip():
+    if _lib_cluster_identity.cluster_identity(_lib_cluster_identity.config_external_labels(prom)):
         return []
     return [f"CLUSTER-IDENTITY: `global.external_labels.{CLUSTER_LABEL}` is not set — add it with "
             "this cluster's id (a single cluster sets one fixed value too). The rule packs "
@@ -840,6 +838,7 @@ def collect_rule_trees() -> tuple[dict[str, set], set[str]]:
     """
     consumed: dict[str, set] = defaultdict(set)
     outputs: set[str] = set()
+    reads: list[tuple[str, str]] = []
     for where, doc, _prov in _rule_containers():
         # ⛔ isinstance at BOTH levels. `_is_rule_groups` accepts a `groups`
         # list when only SOME element is a mapping with `rules`, so a mixed list
@@ -849,9 +848,13 @@ def collect_rule_trees() -> tuple[dict[str, set], set[str]]:
                  for r in (g.get("rules") or []) if isinstance(r, dict)]
         outputs.update(extract_recording_outputs(rules))
         for r in rules:
-            rid = f"{where}::{r.get('alert') or r.get('record')}"
-            for m in extract_metrics(r.get("expr", "") or ""):
-                consumed[m].add(rid)
+            if isinstance(r.get("expr"), str) and r["expr"]:
+                reads.append((f"{where}::{r.get('alert') or r.get('record')}", r["expr"]))
+    # One da-read run for every rule (#4219); a refused expression raises.
+    for (rid, _expr), names in zip(reads, _lib_consumer_read.promql_metric_names(
+            [e for _, e in reads], raise_refused=True)):
+        for m in names:
+            consumed[m].add(rid)
     return consumed, outputs
 
 
@@ -942,8 +945,9 @@ def classify(metric: str, jobs: list[dict], services: list[dict]) -> tuple[str, 
     # shortcut used to sit here (and its twin in the split tool), classifying
     # every platform gauge whose name happens to end in `_up` as tenant-exporter
     # liveness — the one metric it was load-bearing for was the misclassified
-    # one (TRK-353 / #1250). New exporter family → register its prefix in the
-    # _FEDERATED_EXPORTER_PREFIXES SSOT; a name suffix is not evidence.
+    # one (TRK-353 / #1250). New exporter family → declare its prefix in the
+    # threshold registry's `metric_prefixes` (#4270); a name suffix is not
+    # evidence.
     if is_federated_exporter_metric(metric):
         if _tenant_exporter_face_exists(jobs):
             return REACHABLE_IF_EXPORTED, (
@@ -1052,8 +1056,8 @@ def main(argv: list[str] | None = None) -> int:
         # No da-read / da-crdecode, or Prometheus (or kubectl) refuses the
         # config or a manifest: no verdict, and no falling back to reading
         # it ourselves.
-        print(f"ERROR: cannot read the Prometheus config or the k8s/ manifests "
-              f"the way their consumers do: {exc}", file=sys.stderr)
+        print(f"ERROR: cannot read the Prometheus config, the k8s/ manifests or "
+              f"a rule's expression the way their consumers do: {exc}", file=sys.stderr)
         for line in exc.stderr_lines:
             print(f"  {line}", file=sys.stderr)
         return EXIT_CALLER_ERROR

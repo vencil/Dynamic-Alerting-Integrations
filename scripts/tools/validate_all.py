@@ -132,7 +132,7 @@ TOOLS = [
     ("cli_contract", "lint/check_cli_contract.py", ["--ci"], "documented da-tools invocations ↔ argparse contract + baseline ledger (#1379)"),
     ("bilingual_content", "lint/check_bilingual_content.py", ["--ci"], "Bilingual content CJK ratio check"),
     ("frontmatter_versions", "lint/check_frontmatter_versions.py", ["--ci"], "Frontmatter version global scan"),
-    ("path_metadata", "lint/check_path_metadata_consistency.py", ["--ci"], "conf.d path vs _metadata consistency (warning-only)"),
+    ("path_metadata", "lint/check_path_metadata_consistency.py", ["--ci"], "conf.d path vs _metadata consistency (a contradicting path fails)"),
     ("commit_scope", "lint/check_commit_scope_doc.py", ["--ci"], "Commit scope drift (commit-convention.md vs .commitlintrc.yaml)"),
     ("hardcode_tenant", "lint/check_hardcode_tenant.py", ["--ci"], "Hardcoded tenant literals in PromQL (Rule #2)"),
     ("changelog_no_tbd", "lint/check_changelog_no_tbd.py", ["--ci"], "TBD/TODO placeholders in CHANGELOG (Self-review Gap A.c)"),

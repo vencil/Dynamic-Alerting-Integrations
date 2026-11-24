@@ -595,6 +595,11 @@ def test_a_gauge_outside_the_rated_argument_is_fine(tree):
     assert tree(["rate(x_waits_total[5m]) / x_sessions > 1"]) == []
 
 
+def test_a_call_spelled_inside_a_label_value_is_not_a_call(tree):
+    # #4219: read off the parse tree, a `rate(` inside a string is text.
+    assert tree(['rate(x_waits_total{db="rate(x_sessions)"}[5m]) > 1']) == []
+
+
 def test_query_without_timeout_or_with_a_late_one(tree):
     q = yaml.safe_load(yaml.safe_dump(QUERIES))
     del q["queries"]["x_main"]["timeout"]
