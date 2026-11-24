@@ -704,7 +704,7 @@ def write_subprocess_baseline(counts: dict[str, int], rows: dict[str, int] | Non
     # #3981: through the artifact entry, naming the flag the path came from;
     # an unchanged ledger is not rewritten (only a replaced file must pass the
     # entry's checks). is_file() is False for a FIFO.
-    if not (path.is_file() and path.read_text(encoding="utf-8") == text):
+    if not (path.is_file() and path.read_bytes() == text.encode("utf-8")):  # bytes: a CRLF copy is rewritten
         write_repo_artifact(path, text, flag="--subprocess-baseline")
     return refused
 
