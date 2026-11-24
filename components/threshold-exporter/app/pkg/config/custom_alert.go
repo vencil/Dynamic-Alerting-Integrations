@@ -659,7 +659,7 @@ func recipeShape(spec CustomAlertSpec) (customAlertShape, error) {
 		// semantics — no window (a stray authored `window` is ignored, like
 		// forecast). `objective` replaces `threshold`; objective/slo_period are
 		// validated here (ADR-029: tenant input is validated before it reaches
-		// the rules) but never enter the slug.
+		// the served thresholds or the rules) but never enter the slug.
 		if err := validateSloObjective(spec.Objective); err != nil {
 			return sh, err
 		}

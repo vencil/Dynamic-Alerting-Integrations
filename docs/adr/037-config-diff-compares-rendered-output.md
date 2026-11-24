@@ -26,7 +26,7 @@ updated_at: 2026-11-24
 - 2026-10-14：決定 3 改由 `da-guard parse-tree` 逐鍵說出讀取位置，啟用「完整涵蓋、渲染沒有差異只附註」。
 - 2026-10-17：決定 3 的延後載體表更新：`_` 檔頂層的 `_custom_alerts` 沒有讀取端。
 - 2026-10-22：平台 CI 的另一份影響範圍報告退役，「這個變更影響誰」只由 config-diff 回答。
-- 2026-11-24 修訂：改寫為現行行為。決策不變。
+- 2026-11-24 修訂：改寫為現行行為。決策不變。更正兩處行為描述：`domain_policies` 寫在 `_domain_policy.yaml` 以外的檔時結束碼是 2（產生器拒收整棵樹）；symlink 迴圈在兩側都算。
 
 ## 決策
 
@@ -227,7 +227,7 @@ served-values 每個租戶有一個與 `values` 同層的欄位 `state_filters`�
 - **報告與 JSON 結構和舊版不同**：解析舊版 config-diff JSON 的客戶腳本要改讀新結構（見決定 4）。
 - **一律需要 da-guard**，路由面另外需要 da-read 與 da-crdecode（路由產生器以它們按 Alertmanager 與 kubectl 的讀法讀回輸出）：da-tools 映像內建三者；在 repo 裡直接跑要先 `make da-guard-build`、`make da-read-build`、`make da-crdecode-build`。
 - **v2.9.0 映像的 config-diff 仍是舊行為**：只比對每個租戶檔自己寫的值、不接受 `--at`；`da-tools init` 產生的 CI 會先探測映像支不支援 `--at` 才傳 <!-- image-caveat: v2.9.0 -->。
-- **變慢**：1000 個租戶的樹（`scripts/tools/dx/generate_tenant_fixture.py -n 1000` 產生，再加上 `_routing_defaults`），改一個 `group_wait` 的整次比較約 19 秒（4 核機器，2026-11-24 量測）。
+- **變慢**：1000 個租戶的樹（`scripts/tools/dx/generate_tenant_fixture.py -n 1000` 產生，再在 `_defaults.yaml` 末尾加上 `_routing_defaults: {receiver: {type: webhook, url: "http://example.invalid/hook"}, group_wait: "30s"}`），改一個 `group_wait` 的整次比較約 19 秒（4 核機器，2026-11-24 量測）。
 - **既有報告的內容保留**：租戶閾值的 tighter／looser 分類、設定變更、custom alert 的比較，都改從 served-values 的值算出（`tests/ops/test_config_diff_served.py`）。
 - **exporter 不送出的鍵**（例如 `_namespaces`）：served-values 把它列在 `unserved` 之下，變更仍會列出，但沒有一份渲染結果能說出它對告警行為的效果。
 - **matcher 完全相同的兄弟節點**：只能依出現順序對應。順序改變時，可能報成一刪一增。

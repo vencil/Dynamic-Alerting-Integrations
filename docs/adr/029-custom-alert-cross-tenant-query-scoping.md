@@ -27,7 +27,7 @@ updated_at: 2026-11-24
 
 - **編譯期**指租戶宣告的自訂告警（`_custom_alerts`）被轉成 Prometheus 規則的那一步；**評估期**指 Prometheus 之後依規則查詢資料的那一步。
 - 平台維持一個共用的 Prometheus 與**向量化規則**：同一種告警形狀（shape，即 recipe 加上參數的組合）不論幾個租戶宣告，都只產生一組規則，規則跨所有租戶評估，再以 `tenant` 標籤配對各租戶自己的閾值（見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §4）。
-- 租戶填的每個值，在寫進規則**之前**就驗證：只能選平台寫好的 recipe，字串欄位限字元集或列舉，數值限格式與值域，selector 不能釘住平台保留的標籤。產生出來的標籤與 annotation 只能含平台自己寫的模板片段。
+- 租戶填的每個值，在寫進規則**之前**就驗證：只能選平台寫好的 recipe，名稱類欄位（metric、告警名、標籤名）限字元集，列舉欄位限列舉，數值限格式與值域；selector 的值拒絕模板字元、其餘經跳脫後寫入，不能釘住平台保留的標籤。產生出來的標籤與 annotation 只能含平台自己寫的模板片段。
 - 把隔離移到評估期（換成每個租戶各自查詢範圍的 ruler）**目前不做**，四個條件任一成立時重新評估，見下方「重新評估的條件」。
 
 ### 範例：一個合法宣告與它產生的規則
@@ -92,7 +92,7 @@ tenants:
 - **一份判斷，三個入口。** 驗證邏輯是 threshold-exporter 的 Go 程式（`components/threshold-exporter/app/pkg/config/custom_alert.go`），欄位的列舉、字元集與保留標籤集中在 recipe 契約檔 `components/threshold-exporter/app/pkg/config/recipe_contract.json`。tenant-api 寫入前呼叫它（`ValidateTenantCustomAlerts`，`PUT .../custom-alerts`、整份租戶設定寫入與批次寫入都經過）；exporter 載入設定時用它決定哪些宣告送出閾值序列，被拒的宣告不送、記一筆 ERROR log 並計入 `da_custom_alert_parse_errors`；編譯器（`da-guard compile-custom-alerts`，由 `compile_custom_alerts.py` 執行）只為 exporter 實際送出或已關閉的宣告產生規則。所以不經 tenant-api、直接改 conf.d 的宣告也走同一份判斷。
 - **只放行平台寫的模板。** 編譯器在輸出前檢查每條規則的標籤與 annotation：除了 `{{ $value | printf "%.Nf" }}`、`{{ $labels.X }}`，以及讀取該告警所屬租戶 metadata 的固定模板之外，出現任何模板動作或反引號都直接失敗。
 - **契約檔缺欄位時拒絕啟動。** recipe 契約檔若少了保留標籤或禁用模板字元的清單、或清單為空，解析失敗、程式無法啟動，不會退化成「什麼都接受」。
-- **`promtool check rules` 是最後一道防線，不是主防線。** CI 對產生的 `rule-packs/rule-pack-custom-alerts.yaml` 跑 `promtool check rules`；主防線是上面的同步驗證，若只靠非同步的 CI，寫入、編譯、重新載入之間會有暴露窗。
+- **`promtool check rules` 是最後一道防線，不是主防線。** CI 對產生的 `rule-packs/rule-pack-custom-alerts.yaml` 跑 `promtool check rules`；主防線是上面的同步驗證，若只靠非同步的 CI，寫入、編譯、重新載入之間會有暴露窗。例外：`selectors_re` 的正規表示式語法目前沒有同步驗證，寫壞的 regex 會通過三個入口、產生無法載入的規則，只有這道 promtool 檢查擋得下；跳脫保證它不會跳出字串、讀到別的租戶，但規則檔解析失敗時 Prometheus 會拒絕整次重新載入、沿用舊規則，之後的規則變更都上不去。
 
 **平台功能的代價。** 這道限制沒有擋掉平台目前需要的任何東西，但不是「零」：平台自己的 annotation 現在就用了一個查詢函式，以固定模板讀取該告警所屬租戶的 metadata（`runbook_url`、`owner`、`tier`），它被允許是因為放行清單逐字比對這個模板。平台要在自訂告警的模板裡加入新的查詢，就得改放行清單與它的測試，經過程式審查。這是刻意接受的取捨。Prometheus 沒有關閉模板查詢函式的伺服器開關，「絕不讓未驗證的租戶輸入抵達能呼叫查詢的模板」是唯一做得到的形式。
 

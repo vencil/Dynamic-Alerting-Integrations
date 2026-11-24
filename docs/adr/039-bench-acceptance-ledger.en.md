@@ -53,7 +53,7 @@ IncrementalLoad_1000_NoChange-4      6.912m ± 1%    7.403m ± 1%   +7.10% (p=0.
 MergeParsedPlatform_1000_Cached-4    8.000k ± 0%    8.520k ± 0%   +6.50% (p=0.002 n=6)     ← allocs/op
 ```
 
-Output (the values `scripts/tools/dx/bench_verdict.py verdict` writes for the workflow, first three lines omitted):
+Output (the values `scripts/tools/dx/bench_verdict.py verdict` writes for the workflow, omitting the first five lines: `inconclusive`, `inconclusive_reason`, `benchstat_txt`):
 
 ```text
 regression_basis=timing-not-replicated
@@ -66,7 +66,7 @@ MergeParsedPlatform_1000_Cached-4    8.000k ± 0%    8.520k ± 0%   +6.50% (p=0.
 __ACCEOF__
 ```
 
-With the same entry, a measured `allocs/op` of +9.20% exceeds the bound. A deterministic regression then remains, so the gate runs no second pass, and the `sec/op` row counts as a regression too:
+With the same entry, a measured `allocs/op` of +9.20% exceeds the bound. A deterministic regression then remains, so the gate runs no second pass, and the `sec/op` row counts as a regression too (the same five lines omitted):
 
 ```text
 regression_basis=deterministic
@@ -118,7 +118,7 @@ Some regressions are deliberate: an extra decode for correctness, one more field
 - **For a push of several commits, attribution still measures only the last commit.** The ledger takes in entries added anywhere in the push, but regressions in the commits in between are not measured.
 - **Sub-benchmarks (`BenchmarkX/case`, created by `b.Run`) cannot be declared.** Names must have the form `BenchmarkX`; none of the current threshold-exporter benchmarks has sub-benchmarks, and the naming rule must be extended when one appears.
 - **The merge-base and the parent commit can differ.** The Δ measured on the PR and the Δ measured after merging are not always the same; the post-merge gate is the one that opens issues, so the bound should cover both.
-- **Drift that stays below the per-commit threshold has no nightly automatic detection today.** The nightly paired ns/op only writes a run summary; it files no issues and does not read the ledger. The release-time Tier 2 comparison (`bench-gate-release.yaml`, against the previous platform release, α=0.05, |Δ| ≥ 10%) reports such regressions without blocking the release. The cumulative budget that takes over is in the next section.
+- **Drift that stays below the per-commit threshold has no nightly automatic detection today.** The nightly paired ns/op only writes a run summary; it files no issues and does not read the ledger. The release-time comparison (`bench-gate-release.yaml`, against the previous platform release, α=0.05, |Δ| ≥ 10%) reports such regressions without blocking the release. The cumulative budget that takes over is in the next section.
 
 ## Not yet decided
 
@@ -126,8 +126,8 @@ Some regressions are deliberate: an extra decode for correctness, one more field
 |---|---|
 | **A cumulative budget for the deterministic metrics**: add `B/op` and `allocs/op` to the nightly main-versus-reference ratio, to catch drift that stays below 5% per commit but adds up. This is the only planned nightly trend detector: the absolute-ns/op monitor was retired and paired ns/op is informational | The nightly run already records them: on nights where the paired measurement succeeds, the output (`bench-paired/v3`) has a `deterministic` field with the `B/op` and `allocs/op` medians and ratio for each benchmark that has data on both sides, recorded and not judged; a night recorded as inconclusive has no such field (`scripts/tools/dx/pair_bench_ratio.py`). After at least four weeks of it, measure their real night-to-night noise, then choose a budget. The design must first solve a known problem: if the expected value is the product of the bounds, every accepted bound becomes headroom that later regressions can spend, and improvements are counted as headroom too |
 | **Blocking merges on PRs for undeclared deterministic regressions** | The owner decides once the ledger has been live for four weeks and every deterministic regression flagged in that period could be resolved with the ledger |
-| **What the ledger does when the reference version changes** (ADR-032 §1) | Decided together with the cumulative budget. The nightly run currently files no issues and does not read the ledger, so changing the reference closes nothing; if the cumulative budget files issues, ADR-032's invariant (changing the reference must not close an open performance issue) must hold in its design |
-| **Whether bimodal, unstable benchmarks get a class of their own** | This means `BenchmarkIncrementalLoad_1000_OneFileChanged`: measured repeatedly on GitHub runners, its sec/op ratio has a bimodal distribution (measurements in [#1497](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1497)). Decided when either bench gate flags it with `timing-replicated`: only sec/op was flagged, and a second independent interleaved pass flagged the same benchmark (the PR gate's verdict summary says `sec/op only, confirmed`; the post-merge attribution issue says `sec/op only, confirmed by a second independent interleaved pass`). That verdict by itself means `B/op` and `allocs/op` were not flagged. The numbers from those two passes then decide: a class of its own, or its sec/op goes into the acceptance ledger. The replication pass is not guaranteed to stop this spread: when both passes happen to land on the same side, the gate can still flag a regression that does not exist. No further dedicated measurement is done for it |
+| **What the ledger does when the reference version changes** (ADR-032, section 「待決與已決的設計題」, question 1) | Decided together with the cumulative budget. The nightly run currently files no issues and does not read the ledger, so changing the reference closes nothing; if the cumulative budget files issues, ADR-032's invariant (changing the reference must not close an open performance issue) must hold in its design |
+| **Whether bimodal, unstable benchmarks get a class of their own** | This means `BenchmarkIncrementalLoad_1000_OneFileChanged`: measured repeatedly on GitHub runners, its sec/op ratio spreads by more than 11 percentage points from run to run (measurements in [#1497](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1497)). Decided when either bench gate flags it with `timing-replicated`: only sec/op was flagged, and a second independent interleaved pass flagged the same benchmark (the PR gate's verdict summary says `sec/op only, confirmed`; the post-merge attribution issue says `sec/op only, confirmed by a second independent interleaved pass`). That verdict by itself means `B/op` and `allocs/op` were not flagged. The numbers from those two passes then decide: a class of its own, or its sec/op goes into the acceptance ledger. The replication pass is not guaranteed to stop this spread: when both passes happen to land on the same side, the gate can still flag a regression that does not exist. No further dedicated measurement is done for it |
 
 ## Alternatives considered
 
