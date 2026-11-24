@@ -102,6 +102,22 @@ class TestIndexFromSyntheticPacks:
             """)
         assert ta.build_index([pack]) == {"k": ("A",)}
 
+    def test_a_label_value_spelling_a_key_or_a_recording_is_not_a_read(self, tmp_path):
+        """#4219: what a rule reads comes from its parse tree. The text scan
+        took the key and the recording name inside these strings as reads."""
+        pack = self._write(tmp_path / "rule-pack-x.yaml", """\
+            groups:
+              - name: g
+                rules:
+                  - record: x:load_high:core
+                    expr: tenant:x_load:max > on(tenant) tenant:alert_threshold:x_load
+                  - alert: XLabelled
+                    expr: >-
+                      label_replace(tenant:x:max, "k",
+                      "tenant:alert_threshold:x_other x:load_high:core", "", "") > 1
+            """)
+        assert ta.build_index([pack]) == {}
+
 
 class TestLocatingThePacks:
 

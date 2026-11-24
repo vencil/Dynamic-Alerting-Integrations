@@ -179,12 +179,12 @@ K8S_MANIFESTS_DIR = PROJECT_ROOT / "k8s"
 SCRAPE_ANNOTATION = "prometheus.io/scrape"
 
 # ── series Prometheus manufactures itself (no exporter, no /metrics line) ──
-# `up` is synthesised per target by the scrape loop; `ALERTS` is synthesised by
+# `up` is synthesised per target by the scrape loop; `ALERTS` / `ALERTS_FOR_STATE` by
 # the rule engine. Neither has a scrape face to resolve, so neither is a leaf.
 # NOTE this set is deliberately tiny: "the value is computed elsewhere" is NOT
 # a reason to sit here — see the VALUE-ORIGIN note in the module docstring
 # (#1285 removed a user_*/da_* prefix exclusion that made exactly that mistake).
-INJECTED_EXACT = {"up", "ALERTS"}
+INJECTED_EXACT = _lib_metric_sources.MANUFACTURED
 
 # The platform scrape label (#1425). The threshold-exporter, Vector and
 # tenant-api charts put it on their scrape Services (helm/*/templates/
@@ -274,13 +274,10 @@ KNOWN_UNKNOWN_SOURCE: dict[str, str] = {}
 # `tenant_federation_requests_total` (`by tenant, status`) would federate.
 PLANE_OF_UNPINNED_SOURCE: dict[str, str] = {}
 
-# ── PromQL extraction ───────────────────────────────────────────────────────
-# The patched superset of the split tool's extractor lives with the family
-# table (scripts/tools/_lib_metric_sources.py, #1595 D1b) — operator-generate
-# reads rules with it too. Re-exported here: the plane contract and this
-# gate's tests import it from this module.
-extract_metrics = _lib_metric_sources.extract_metrics
-_EXTRA_KEYWORDS = _lib_metric_sources.EXTRA_KEYWORDS
+# ── which metrics a rule reads ──────────────────────────────────────────────
+# Read off Prometheus' parse tree (_lib_consumer_read.promql_metric_names,
+# #4219) — operator-generate reads rules the same way. A rule the parser
+# refuses raises, naming its expression.
 
 
 # ── scrape-face parsing ─────────────────────────────────────────────────────
@@ -840,6 +837,7 @@ def collect_rule_trees() -> tuple[dict[str, set], set[str]]:
     """
     consumed: dict[str, set] = defaultdict(set)
     outputs: set[str] = set()
+    reads: list[tuple[str, str]] = []
     for where, doc, _prov in _rule_containers():
         # ⛔ isinstance at BOTH levels. `_is_rule_groups` accepts a `groups`
         # list when only SOME element is a mapping with `rules`, so a mixed list
@@ -849,9 +847,13 @@ def collect_rule_trees() -> tuple[dict[str, set], set[str]]:
                  for r in (g.get("rules") or []) if isinstance(r, dict)]
         outputs.update(extract_recording_outputs(rules))
         for r in rules:
-            rid = f"{where}::{r.get('alert') or r.get('record')}"
-            for m in extract_metrics(r.get("expr", "") or ""):
-                consumed[m].add(rid)
+            if isinstance(r.get("expr"), str) and r["expr"]:
+                reads.append((f"{where}::{r.get('alert') or r.get('record')}", r["expr"]))
+    # One da-read run for every rule (#4219); a refused expression raises.
+    for (rid, _expr), names in zip(reads, _lib_consumer_read.promql_metric_names(
+            [e for _, e in reads], raise_refused=True)):
+        for m in names:
+            consumed[m].add(rid)
     return consumed, outputs
 
 
@@ -1053,8 +1055,8 @@ def main(argv: list[str] | None = None) -> int:
         # No da-read / da-crdecode, or Prometheus (or kubectl) refuses the
         # config or a manifest: no verdict, and no falling back to reading
         # it ourselves.
-        print(f"ERROR: cannot read the Prometheus config or the k8s/ manifests "
-              f"the way their consumers do: {exc}", file=sys.stderr)
+        print(f"ERROR: cannot read the Prometheus config, the k8s/ manifests or "
+              f"a rule's expression the way their consumers do: {exc}", file=sys.stderr)
         for line in exc.stderr_lines:
             print(f"  {line}", file=sys.stderr)
         return EXIT_CALLER_ERROR

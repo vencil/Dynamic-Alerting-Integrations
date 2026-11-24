@@ -124,7 +124,6 @@ on:
       - "scripts/tools/ops/_registry_lib.py"
       - "scripts/tools/ops/_rule_packs_generated.py"
       - "scripts/tools/ops/_threshold_alerts.py"
-      - "scripts/tools/ops/generate_rule_pack_split.py"
       - "scripts/tools/ops/lint_custom_rules.py"
       - "scripts/tools/ops/scaffold_tenant.py"
       # END GENERATED path-trace

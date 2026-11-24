@@ -224,8 +224,10 @@ def served_names(path: Path, doc: dict) -> set[str]:
             for line in text.splitlines() if line and not line.startswith("#")}
 
 
-def pack_rules(rule_pack: Path) -> tuple[set[str], set[str], list[str]]:
-    """(raw tenant metrics read, recording rule names, every expr) of *rule_pack*."""
+def pack_rules(rule_pack: Path) -> tuple[set[str], set[str], list[str], list[dict]]:
+    """(raw tenant metrics read, recording rule names, every expr, the parse
+    tree of each expr) of *rule_pack*. What a rule reads comes from its parse
+    tree (``_lib_consumer_read.promql_shape_each``, #4219), never its text."""
     found = _lib_consumer_read.rule_files_in([rule_pack], keep_refusals=True)
     records: set[str] = set()
     exprs: list[str] = []
@@ -239,13 +241,11 @@ def pack_rules(rule_pack: Path) -> tuple[set[str], set[str], list[str]]:
                         records.add(rule["record"])
                     if isinstance(rule.get("expr"), str):
                         exprs.append(rule["expr"])
-    raw: set[str] = set()
-    for expr in exprs:
-        raw |= _lib_metric_sources.extract_metrics(expr)
-    raw = {m for m in raw
+    trees = _lib_consumer_read.promql_shape_each(exprs, raise_refused=True)
+    raw = {m for tree in trees for m in _lib_consumer_read.shape_metric_names(tree)
            if ":" not in m and m not in records
            and _lib_metric_sources.resolve_family(m) is None}
-    return raw, records, exprs
+    return raw, records, exprs, trees
 
 
 # A PromQL string: "..." or '...' with Go escapes, or `...` raw. Three disjoint
@@ -402,32 +402,16 @@ def query_label_findings(texts: list[str], queries: set[str], where: str) -> lis
     return out
 
 
-_RATE_CALL = re.compile(r"\b(" + "|".join(_RATE_FUNCS) + r")\s*\(")
-
-
-def rate_arguments(expr: str) -> list[tuple[str, str]]:
-    """(function, whole argument text) of every rate-like call in *expr*, the
-    argument found by matching parentheses: rate(x[5m]), rate((x)[5m:]) and
-    rate((sum(x))[5m:]) all yield the expression that is rated. Strings are
-    skipped so a parenthesis inside a label value does not count."""
-    out = []
-    for m in _RATE_CALL.finditer(expr):
-        depth, i, quote = 1, m.end(), None
-        while i < len(expr) and depth:
-            c = expr[i]
-            if quote:
-                if c == "\\" and quote != "`":
-                    i += 1
-                elif c == quote:
-                    quote = None
-            elif c in "\"'`":
-                quote = c
-            elif c == "(":
-                depth += 1
-            elif c == ")":
-                depth -= 1
-            i += 1
-        out.append((m.group(1), expr[m.end():i - 1]))
+def rated_metrics(tree: dict) -> list[tuple[str, str]]:
+    """(function, metric) for every metric read under a rate-like call
+    (``_RATE_FUNCS``) of a parse tree: rate(x[5m]), rate((x)[5m:]) and
+    rate((sum(x))[5m:]) all rate x. Read off the tree, so a parenthesis or a
+    name inside a label value is not a call or a metric (#4219)."""
+    out: list[tuple[str, str]] = []
+    for node in _lib_consumer_read.shape_nodes(tree):
+        if node["kind"] == "call" and node["name"] in _RATE_FUNCS:
+            for arg in node["args"]:
+                out += [(node["name"], m) for m in _lib_consumer_read.shape_metric_names(arg)]
     return out
 
 
@@ -485,7 +469,7 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
                            "out behind it; give the liveness query a database entry "
                            "of its own (same DSN)")
     served = served_names(queries, doc)
-    raw, _records, exprs = pack_rules(rule_pack)
+    raw, _records, exprs, trees = pack_rules(rule_pack)
     for m in sorted(raw - served):
         out.append(f"{rule_pack.name} reads {m}, which {rel} does not serve")
     names = set(doc.get("queries") or {})
@@ -493,9 +477,9 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
     out += query_label_findings(_presence_selectors(pack), names,
                                 "the presence check (_lib_exporter_presence)")
     gauges = {n for n, s in metrics.items() if (s or {}).get("type") == "gauge"}
-    for expr in exprs:
-        for func, arg in rate_arguments(expr):
-            for metric in sorted(_lib_metric_sources.extract_metrics(arg) & gauges):
+    for tree in trees:
+        for func, metric in rated_metrics(tree):
+            if metric in gauges:
                 out.append(f"{rule_pack.name} applies {func}() to gauge {metric}")
     return sorted(set(out))
 
@@ -573,7 +557,7 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
             out.append(f"{name} is served as {got}, the file declares {want}")
     # What the pack itself reads, query-exporter's built-ins included: for those,
     # a series per `query` label value the pack (or its presence check) names.
-    raw, _records, exprs = pack_rules(_rule_pack)
+    raw, _records, exprs, _trees = pack_rules(_rule_pack)
     for m in sorted(raw - served):
         out.append(f"{_rule_pack.name} reads {m}, which the exporter does not serve")
     # Every (built-in, query) pair a selector selects, regex selectors expanded

@@ -3026,8 +3026,8 @@ from check_scrape_reachability import (  # noqa: E402
     TENANT_API_CHART,
     THRESHOLD_EXPORTER_CHART,
     VECTOR_CHART,
-    extract_metrics,
 )
+import _lib_consumer_read  # noqa: E402
 
 EDGE_LOCAL = "edge-local"
 PLATFORM_LOCAL = "platform-local-on-central"
@@ -3124,7 +3124,7 @@ def _alert_plane(alert: str, expr: str) -> tuple[str, list[str]]:
     """
     verdicts: set[str] = set()
     why: list[str] = []
-    for metric in sorted(extract_metrics(expr)):
+    for metric in sorted(_lib_consumer_read.promql_metric_names([expr], raise_refused=True)[0]):
         if metric.startswith("vector_"):
             verdicts.add(EDGE_LOCAL)
             why.append(f"{metric}: vector_ family -> {VECTOR_CHART} (edge)")
@@ -3224,7 +3224,7 @@ class TestPlatformAlertPlaneContract:
         # trivially checkable only in one direction.
         assert derived, (
             "no platform alert derived as edge-local — the scan reached no "
-            "platform ConfigMap, or extract_metrics stopped returning vector_ "
+            "platform ConfigMap, or promql_metric_names stopped returning vector_ "
             "metrics; every plane assertion here is vacuous")
         assert derived == _EXPECTED_EDGE_LOCAL_ALERTS, (
             "the set of platform alerts that can ONLY be evaluated on an edge "
@@ -3249,7 +3249,8 @@ class TestPlatformAlertPlaneContract:
                 assert alert in by_name, (
                     f"{alert} is declared in {table_name} but no longer exists in "
                     "the platform tree — drop the entry")
-                metrics = extract_metrics(by_name[alert])
+                metrics = _lib_consumer_read.promql_metric_names(
+                    [by_name[alert]], raise_refused=True)[0]
                 assert any(m.startswith(_CLUSTER_LOCAL_PREFIXES) for m in metrics), (
                     f"{alert} no longer reads a cluster-local metric family, so its "
                     f"plane is derivable now — remove it from {table_name} "
