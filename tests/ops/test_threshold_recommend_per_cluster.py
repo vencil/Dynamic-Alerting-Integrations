@@ -98,7 +98,7 @@ class TestUpperBound:
         assert isinstance(rec, tr.ClusteredKeyRecommendation)
         assert (rec.recommended, rec.delta_pct, rec.conservative_cluster) == (90, 80.0, "west")
         assert (rec.p50, rec.p95, rec.p99, rec.sample_count) == (40.0, 90.0, 90.0, 1000)
-        assert (rec.confidence, rec.held_by_cluster, rec.direction) == ("HIGH", "", ">")
+        assert (rec.confidence, rec.held_by_cluster, rec.direction) == ("HIGH", None, ">")
         assert rec.reason == ('relaxed to P99 (increase 80.0%) '
                               '[da_cluster="west" of 2 clusters: highest value]')
         assert rec.clusters == [
@@ -159,7 +159,7 @@ class TestAClusterWithNoRecommendationOfItsOwn:
         report, rec = _analyze([_row("dr", _IDLE), _row("prod", _WEST)],
                                {"connections": 50}, _UPPER_MAP)
         assert (rec.recommended, rec.delta_pct, rec.conservative_cluster) == (90, 80.0, "prod")
-        assert (rec.held_by_cluster, rec.confidence) == ("", "HIGH")
+        assert (rec.held_by_cluster, rec.confidence) == (None, "HIGH")
         dr = rec.clusters[0]
         assert (dr["da_cluster"], dr["recommended"], dr["sample_count"]) == ("dr", None, 1000)
         assert dr["reason"] == "P95 is non-positive (max in window 0) — no recommendation"
@@ -170,7 +170,7 @@ class TestAClusterWithNoRecommendationOfItsOwn:
         沒有任何樣本落在 (50, 100] → 採用 50。"""
         report, rec = _analyze([_row("dr", _IDLE), _row("prod", _flat([20] * 1000))],
                                {"connections": 100}, _UPPER_MAP)
-        assert (rec.recommended, rec.delta_pct, rec.held_by_cluster) == (50, -50.0, "")
+        assert (rec.recommended, rec.delta_pct, rec.held_by_cluster) == (50, -50.0, None)
         assert rec.reason.endswith('[da_cluster="prod" of 2 clusters: highest value]')
         assert report.recommended_changes == 1
 
@@ -214,7 +214,7 @@ class TestAClusterWithNoRecommendationOfItsOwn:
         drill = _flat([0] * 970 + [150] * 30)
         _, rec = _analyze([_row("dr", drill), _row("prod", _flat([20] * 1000))],
                           {"connections": 100}, _UPPER_MAP)
-        assert (rec.recommended, rec.held_by_cluster) == (50, "")
+        assert (rec.recommended, rec.held_by_cluster) == (50, None)
 
     def test_a_cluster_with_only_nan_is_listed_and_does_not_block(self):
         """閒置叢集的比率序列常是 0/0 = NaN：列在 clusters 裡（與 backtest 一致），
@@ -263,7 +263,7 @@ class TestAClusterWithNoRecommendationOfItsOwn:
                       for c, p in clusters.items()}
             rec = tr._across_clusters("k", current, ">", groups, 100)
             own = {e["da_cluster"]: e["recommended"] for e in rec.clusters}
-            if rec.held_by_cluster:
+            if rec.held_by_cluster is not None:
                 held += 1
                 assert own[rec.held_by_cluster] is None
             if rec.recommended is None:
@@ -293,7 +293,7 @@ class TestLowerBound:
         report, rec = _analyze([_row("east", _floor(0.97)), _row("west", _floor(0.98))],
                                {"hit_ratio": "0.95"}, _LOWER_MAP)
         assert rec.recommended == pytest.approx(0.97, abs=1e-9)
-        assert (rec.delta_pct, rec.conservative_cluster, rec.held_by_cluster) == (-40.0, "east", "")
+        assert (rec.delta_pct, rec.conservative_cluster, rec.held_by_cluster) == (-40.0, "east", None)
         assert rec.direction == "<"
         assert [c["recommended"] for c in rec.clusters] == [
             pytest.approx(0.97, abs=1e-9), pytest.approx(0.98, abs=1e-9)]
@@ -312,7 +312,7 @@ class TestLowerBound:
         report, rec = _analyze([_row("dr", _nan(1500)), _row("east", east)],
                                {"hit_ratio": "0.9"}, _LOWER_MAP)
         assert (rec.recommended, rec.delta_pct, rec.confidence) == (0.9502, -50.2, "HIGH")
-        assert (rec.conservative_cluster, rec.held_by_cluster) == ("east", "")
+        assert (rec.conservative_cluster, rec.held_by_cluster) == ("east", None)
         assert rec.reason == (alone.reason + ' [da_cluster="east" of 2 clusters: lowest floor]')
         assert report.recommended_changes == 1
         assert len(tg.build_governance_plan([report], 20.0)) == 1
@@ -327,14 +327,14 @@ class TestLowerBound:
         report, rec = _analyze([_row("east", east), _row("west", west)],
                                {"hit_ratio": "0.9"}, _LOWER_MAP)
         assert (rec.recommended, rec.delta_pct) == (0.9502, -50.2)
-        assert (rec.conservative_cluster, rec.held_by_cluster) == ("east", "")
+        assert (rec.conservative_cluster, rec.held_by_cluster) == ("east", None)
         assert [c["recommended"] for c in rec.clusters] == own
         assert report.recommended_changes == 1
 
     def test_two_identical_continuous_clusters_recommend_what_one_does(self):
         _, rec = _analyze([_row("east", _continuous(3)), _row("west", _continuous(3))],
                           {"hit_ratio": "0.9"}, _LOWER_MAP)
-        assert (rec.recommended, rec.held_by_cluster) == (0.9502, "")
+        assert (rec.recommended, rec.held_by_cluster) == (0.9502, None)
 
     def test_a_cluster_that_would_relax_routes_the_key_to_manual_review(self):
         """west 的 P5 低於現值（放寬 floor 一律人工）：整個 key 人工審查。"""
@@ -367,7 +367,7 @@ class TestLowerBound:
         report, rec = _analyze([_row("dr", _nan()), _row("prod", _floor(0.97))],
                                {"hit_ratio": "0.90"}, _LOWER_MAP)
         assert rec.recommended == pytest.approx(0.97, abs=1e-9)
-        assert (rec.held_by_cluster, rec.clusters[0]["reason"]) == ("", "no data points found")
+        assert (rec.held_by_cluster, rec.clusters[0]["reason"]) == (None, "no data points found")
         assert report.recommended_changes == 1
 
     def test_a_standby_reporting_zero_is_manual_review_and_says_so(self):
@@ -571,7 +571,7 @@ class TestReports:
     def test_json_carries_clusters(self):
         key = tr.json_document([self._report()])["tenants"][0]["keys"][0]
         assert key["conservative_cluster"] == "west" and key["recommended"] == 90
-        assert (key["held_by_cluster"], key["direction"]) == ("", ">")
+        assert (key["held_by_cluster"], key["direction"]) == (None, ">")
         assert [c["da_cluster"] for c in key["clusters"]] == ["east", "west"]
 
     def test_export_patch_writes_the_conservative_value(self):
@@ -614,6 +614,16 @@ class TestGovernanceSeesAHeldKey:
 
     def test_export_patch_names_it_as_a_comment(self):
         assert f"# [t-x] (skipped) hit_ratio: {self._WHY}" in tr.format_export_patch([self._held()])
+
+    def test_an_unlabelled_cluster_that_holds_is_listed_too(self):
+        """The group with no `da_cluster` is named "" — "no cluster held it" must
+        be a value no cluster can have, or this key vanishes from the run."""
+        report = _analyze([_row(None, _floor(0.905)), _row("prod", _floor(0.97))],
+                          {"hit_ratio": "0.90"}, _LOWER_MAP)[0]
+        rec = report.keys[0]
+        assert (rec.recommended, rec.held_by_cluster) == (None, "")
+        held = tg.collect_cluster_held([report], 20.0)
+        assert [(k.key, k.cluster) for k in held] == [("hit_ratio", "")]
 
     def test_govern_lists_it_with_its_reason(self):
         report = self._held()

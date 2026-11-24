@@ -273,7 +273,9 @@ class TestReports:
             except CallerError as exc:   # #3617：run() 的結束方式
                 exit_on_crash(exc)
             raise SystemExit(emit_result(result))
-        return ei.value.code, capsys.readouterr().out, md.read_text(encoding="utf-8")
+        captured = capsys.readouterr()   # one read: it empties both streams
+        self.err = captured.err
+        return ei.value.code, captured.out, md.read_text(encoding="utf-8")
 
     _TWO = [_row("east", _EAST_QUIET), _row("west", _WEST_15)]
 
@@ -360,7 +362,8 @@ class TestReports:
         rows = [_row("west", _WEST_15), _row("east", _EAST_QUIET, replica="a"),
                 _row("east", _EAST_QUIET, replica="b")]
         rc, out, _ = self._cli(monkeypatch, capsys, cli_argv, tmp_path, rows, "--json")
-        err = capsys.readouterr().err
+        err = self.err
+        assert "not measured" in err   # the stream is really read
         doc = json.loads(out)
         assert rc == 2 and (doc["status"], doc["reason"], doc["query_error"]) == (
             "partial", "query_error", 1)

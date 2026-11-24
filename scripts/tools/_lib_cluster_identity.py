@@ -15,6 +15,7 @@ without becoming a tool that can use HTTP.
 """
 from __future__ import annotations
 
+import re
 import unicodedata
 from typing import Any
 
@@ -237,7 +238,12 @@ def repeated_rows(groups: "dict[str, list[dict[str, Any]]]", span: Any) -> "dict
 
 #: The characters `markdown_text` escapes: the ones that start markup inside
 #: a line of GitHub-flavoured Markdown (a table cell among them).
-_MARKDOWN_ACTIVE = "\\`*_[]<>|~&#"
+_MARKDOWN_ACTIVE = "\\`*_[]<>|~&#@"
+
+
+# What GitHub links with no markup: `www.` at a word start, and `scheme://`.
+_WWW = re.compile(r"(?i)(?<![0-9A-Za-z])(www)\.")
+_SCHEME = re.compile(r":(?=//)")
 
 
 def markdown_text(text: str) -> str:
@@ -246,7 +252,10 @@ def markdown_text(text: str) -> str:
     this repo) into a Markdown report: a control character, a line break
     among them, becomes ``?``, and every character that starts markup (a
     table's ``|``, a code span's backtick, an HTML tag's ``<``, emphasis, a
-    link, an entity) is backslash-escaped, so it renders as itself."""
+    link, an entity) is backslash-escaped, so it renders as itself. GitHub
+    also links bare addresses (`www.…`, `https://…`, `a@b.c`) with no markup
+    at all: the `@`, the `:` of `://` and the dot after a leading `www` are
+    escaped for that."""
     out = []
     for ch in text:
         if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp"):
@@ -255,7 +264,7 @@ def markdown_text(text: str) -> str:
             out.append("\\" + ch)
         else:
             out.append(ch)
-    return "".join(out)
+    return _SCHEME.sub(r"\\:", _WWW.sub(r"\1\\.", "".join(out)))
 
 
 def cluster_text(cluster: str) -> str:

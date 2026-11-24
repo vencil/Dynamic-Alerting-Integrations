@@ -275,7 +275,7 @@ class ClusteredKeyRecommendation(KeyRecommendation):
     # (`_fit_unrecommended`). Never a cluster with a recommendation of its
     # own — those are covered by taking the most conservative value. ""
     # when none did.
-    held_by_cluster: str = ""
+    held_by_cluster: "str | None" = None   # None: no cluster held it ("" is the unlabelled one)
 
 
 @dataclass
@@ -1263,7 +1263,7 @@ def _new_firing(direction: Any, values: "list[float]", current: float, candidate
 def _fit_unrecommended(
     direction: Any, rec: KeyRecommendation, current_value: Any,
     samples: "dict[str, list[tuple[float, float]]]",
-) -> str:
+) -> "str | None":
     """Hold *rec* — the candidate, one cluster's own recommendation — to the
     samples of the clusters the engine recommended NO value for (*samples*:
     an idle standby with a drill in the window, a floor within margin). The
@@ -1284,13 +1284,14 @@ def _fit_unrecommended(
       vouches for).
 
     Changes *rec* in place — its own reason is kept (why it is LOW, say) and
-    what was done is appended; returns the cluster that held it, or ""."""
+    what was done is appended; returns the cluster that held it
+    ("" is the one with no `da_cluster`), or None when none did."""
     current = written_threshold_number(current_value)
     held = {cluster: fired for cluster, pairs in samples.items()
             if (fired := _new_firing(direction, [v for _, v in pairs], current,
                                      rec.recommended))}
     if not held:
-        return ""
+        return None
     if direction == "<":
         cluster = next(iter(held))
         rec.reason = (
@@ -1378,7 +1379,7 @@ def _across_clusters(
 
     manual = [m for m in measured if m[1].force_manual]
     numeric = [m for m in measured if m[1].recommended is not None]
-    held = ""
+    held = None
     if manual:
         (cluster, rec), why = manual[0], "needs manual review"
     elif not numeric:

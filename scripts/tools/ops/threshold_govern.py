@@ -390,7 +390,7 @@ def collect_cluster_held(
     in the plan with the held value, and is not repeated here."""
     out = [ClusterHeldKey(report.tenant, r.key, r.held_by_cluster, r.reason)
            for report in reports for r in report.keys
-           if getattr(r, "held_by_cluster", "") and not is_governance_actionable(r, min_delta_pct)]
+           if getattr(r, "held_by_cluster", None) is not None and not is_governance_actionable(r, min_delta_pct)]
     out.sort(key=lambda u: (u.tenant, u.key))
     return out
 

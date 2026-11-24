@@ -3446,7 +3446,7 @@ da-tools threshold-recommend --generate-observed-map
 >
 > mode 權威由 drift-guard 把關：手編 map 對非 allowlist key 冒充 `percentile-lower` / `not-applicable` 是 CI 硬錯。**下界 delta 為 miss-rate**，export-patch / 治理表格以 `+X% miss` 標示，避免誤讀方向。此外估計量發散閘（pooled-P5 的 miss-rate ≥ 1.5× daily-median-P5）會擋下「週期低谷坐在現值之上」的假自動收緊（否則每週對低谷誤鳴）——交人工。
 >
-> **多個叢集：逐叢集計算，建議值要在每個叢集都不多響**（[#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200)，[ADR-006](adr/006-tenant-mapping-topologies.md)）：門檻一個租戶只有一個值，告警逐叢集觸發。查詢回了不只一列時，百分位數與建議值每個叢集各算一次（不同列的樣本不倒在一起），整個 key 依序為：
+> **多個叢集：逐叢集計算，取最保守的值；引擎沒給建議值的叢集不得因此多響**（[#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200)，[ADR-006](adr/006-tenant-mapping-topologies.md)）：門檻一個租戶只有一個值，告警逐叢集觸發。查詢回了不只一列時，百分位數與建議值每個叢集各算一次（不同列的樣本不倒在一起），整個 key 依序為：
 > 1. **有叢集沒量成 → 整個 key 沒量成**：同一個 `da_cluster`（或都沒有 label）回了兩列以上、而且**時間重疊**（常見原因是沒去重的 HA pair），工具不相加。該 key 的 `query_error` 寫明叢集與這些列不同的 label（`da_cluster="east": 2 series at the same time that differ only in replica — …; query a deduplicated endpoint (one series per cluster)`），reason 以 `not measured:` 開頭；與查詢沒被回答同一類——報告是 partial、結束碼 `2`，`threshold-govern` 列在 not measured。請改查會去重的端點。同一個叢集的列**時間不重疊**時（label 在回看期間換過一次）是同一條序列的前後段，依時間接起來照常計算；只有這一個叢集時輸出與只回一列相同。
 > 2. **有叢集被判 `force_manual` → 整個 key 人工審查**（取名稱排序第一個這樣的叢集的原因）。下界 key 樣本不足（不滿 5 個完整 UTC 日等）屬於這一類。下界序列恆為 `0` 的叢集（閒置的備援）也是人工審查，原因寫 `every sample is 0 (an idle cluster?) — no floor can be learned from it`，不再是 `check units`。
 > 3. **沒有任何叢集有建議值 → 不給建議值**（原因取第一個有樣本的叢集）。

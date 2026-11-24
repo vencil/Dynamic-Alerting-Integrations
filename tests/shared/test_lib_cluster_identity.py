@@ -441,3 +441,16 @@ def test_markdown_text(text, expected):
 def test_cluster_text():
     assert lib.cluster_text("west") == 'da_cluster="west"'
     assert lib.cluster_text("") == "no da_cluster"
+
+
+@pytest.mark.parametrize("text, escaped", [
+    ("edge www.example.test west", "edge www\\.example.test west"),
+    ("WWW.x.test", "WWW\\.x.test"),
+    ("see https://x.test/a", "see https\\://x.test/a"),
+    ("a@b.test", "a\\@b.test"),
+    ("awww.x plain-east.1 x: 1", "awww.x plain-east.1 x: 1"),
+])
+def test_markdown_text_leaves_no_bare_address_to_autolink(text, escaped):
+    """GitHub links `www.…`, `scheme://…` and `a@b` with no markup at all; a
+    cluster name is a label value set outside this repo."""
+    assert lib.markdown_text(text) == escaped
