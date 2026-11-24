@@ -2008,3 +2008,36 @@ def test_a_tool_that_sets_the_crash_code_does_not_leave_it_set(tmp_path, monkeyp
     assert "sets-crash" in captured and not blind, (captured, blind)  # the tool ran
     assert ec.get_crash_exit_code() == ec.EXIT_CALLER_ERROR
     assert ec.get_caller_error_code() == ec.EXIT_CALLER_ERROR  # #3124
+
+
+def test_write_baseline_refuses_a_ledger_that_is_no_regular_file(tmp_path):
+    """#3981: the ledger is rewritten through the artifact entry. A FIFO there
+    blocked the bare write forever; now it is refused before it is opened
+    (OutputWriteError — `main` turns it into rc 2 and one line), and the
+    FIFO is left as it was."""
+    import signal
+    import stat as stat_
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    fifo = tmp_path / "cli-contract-baseline.yaml"
+    os.mkfifo(fifo)
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(OSError) as exc:
+            mod.write_baseline([], [], fifo)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert type(exc.value).__name__ == "OutputWriteError", exc.value
+    assert str(fifo) in str(exc.value)
+    assert stat_.S_ISFIFO(os.stat(fifo).st_mode)
+
+
+def test_main_is_wrapped_so_a_refused_ledger_is_rc2_one_line():
+    """#3981: `main` carries exit_on_output_write_error — the decorator's
+    wrapper, not the bare function, is what `_lib_exitcodes.run` calls."""
+    assert mod.main.__wrapped__.__name__ == "main"

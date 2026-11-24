@@ -70,6 +70,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo subdir layout
 import _lib_engine  # noqa: E402
 import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
+from _lib_output import exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#3981)
 from _lint_helpers import parse_command_map  # noqa: E402
 # Imported, not copied: a second transcription of these pins is a second
 # thing that can drift.
@@ -1922,7 +1923,7 @@ def write_baseline(findings: list[Finding], existing: list[BaselineEntry],
                      f'ticket: {q(tickets.get(key, "#TODO"))}}}')
     if not counts:
         lines[-1] = "entries: []"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    write_repo_artifact(path, "\n".join(lines) + "\n")  # #3981: the artifact entry
     return len(counts)
 
 
@@ -2265,6 +2266,7 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
     ]
 
 
+@exit_on_output_write_error
 def main() -> "int | Report":
     ap = argparse.ArgumentParser(
         description="documented da-tools invocations vs the live argparse contract (#1379)")

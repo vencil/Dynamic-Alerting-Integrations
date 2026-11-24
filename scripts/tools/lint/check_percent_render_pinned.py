@@ -40,6 +40,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 import _lib_consumer_read  # noqa: E402  (rule packs as Prometheus reads them)
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    OutputWriteError, exit_on_output_write_error, is_special_file, write_repo_artifact)
 from _lib_validation import i18n_text  # noqa: E402
 
 try:
@@ -166,6 +168,8 @@ def current_unpinned() -> dict[str, dict[str, list[str]]]:
 
 
 def load_baseline() -> dict[str, dict[str, list[str]]]:
+    if is_special_file(_BASELINE):  # a FIFO would block the read (#3981)
+        raise OutputWriteError(_BASELINE, OSError(None, "not a regular file"), action="read")
     if not _BASELINE.exists():
         return {}
     data = _load_yaml(_BASELINE).get("unpinned") or {}
@@ -182,7 +186,7 @@ def generate() -> None:
     tree = current_unpinned()
     body = yaml.safe_dump({"unpinned": tree}, allow_unicode=True, sort_keys=True,
                           default_flow_style=False)
-    _BASELINE.write_text(_BASELINE_HEADER + body, encoding="utf-8", newline="\n")
+    write_repo_artifact(_BASELINE, _BASELINE_HEADER + body)  # #3981: the artifact entry
     n = len(_flatten(tree))
     print(f"check_percent_render_pinned: wrote baseline with {n} unpinned annotation(s) "
           f"-> {_BASELINE.relative_to(_REPO)}")
@@ -212,6 +216,7 @@ def check() -> int:
     return 1
 
 
+@exit_on_output_write_error
 def main() -> int:
     ap = argparse.ArgumentParser(description=i18n_text(
         "以百分比渲染的 annotation（humanizePercentage、}}% 或 printf 的 %%）必須有一個 "
@@ -244,6 +249,8 @@ def main() -> int:
     except _lib_consumer_read.ConsumerReadError as e:
         print(f"check_percent_render_pinned: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
         return 2
+    except OutputWriteError:
+        raise  # #3981: the baseline itself — exit_on_output_write_error names it
     except (OSError, ValueError, yaml.YAMLError) as e:
         print(f"check_percent_render_pinned: could not read the inputs: {e}", file=sys.stderr)
         return 2

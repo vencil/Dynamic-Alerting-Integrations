@@ -175,3 +175,31 @@ def test_fixture_mixing_pack_and_local_rules_pins_nothing(tree):
         "rule_files: [../../rule-packs/rule-pack-x.yaml, local.rules.yaml]")
     (tr / "x_test.yaml").write_text(fixture, encoding="utf-8")
     assert prp.check() == 1
+
+
+@pytest.mark.parametrize("mode", ["--ci", "--generate"])
+def test_a_baseline_that_is_a_fifo_is_rc2_one_line(mode, tree, monkeypatch, capsys):
+    """#3981: the baseline is read (--ci) or rewritten (--generate); a FIFO
+    there blocked both forever. Refused before the read, and the write goes
+    through the artifact entry: rc 2, one standard line naming the file."""
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    rp, tr = tree
+    baseline = tr / "percent_render_baseline.yaml"
+    os.mkfifo(baseline)
+    monkeypatch.setattr(sys, "argv", ["check_percent_render_pinned.py", mode])
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            prp.main()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2 and str(baseline) in err, err
+    assert len(err.strip().splitlines()) == 1 and err.startswith("ERROR: cannot "), err

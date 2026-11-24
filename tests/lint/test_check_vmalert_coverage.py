@@ -220,3 +220,31 @@ def test_repo_rule_packs_pass(monkeypatch):
     """smoke：repo 真實的 rule-packs/ → rc 0。"""
     monkeypatch.setattr(sys, "argv", ["check_vmalert_coverage.py", "--ci"])
     assert cov.main() == 0
+
+
+@pytest.mark.parametrize("mode", ["--ci", "--generate"])
+def test_a_baseline_that_is_a_fifo_is_rc2_one_line(mode, tree, monkeypatch, capsys):
+    """#3981: the baseline is read (--ci) or rewritten (--generate); a FIFO
+    there blocked both forever. Refused before the read, and the write goes
+    through the artifact entry: rc 2, one standard line naming the file."""
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    rp, tr = tree
+    baseline = tr / "vmalert_coverage_baseline.yaml"
+    os.mkfifo(baseline)
+    monkeypatch.setattr(sys, "argv", ["check_vmalert_coverage.py", mode])
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            cov.main()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2 and str(baseline) in err, err
+    assert len(err.strip().splitlines()) == 1 and err.startswith("ERROR: cannot "), err
