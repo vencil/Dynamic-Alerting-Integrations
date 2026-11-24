@@ -318,10 +318,11 @@ func TestCompileCustomAlertPack_MaintenanceLabelMatchesTheRule(t *testing.T) {
 // selectorItems refuses. The keys are read off the compiled rules, not
 // listed by hand, so a new recipe that aggregates by a new label turns this
 // red until the contract reserves it. group_by values are excluded: the
-// tenant chose them, and pinning one is a plain filter. So is the cluster
-// label (clusterLabel): every recipe keeps it so that two clusters stay
-// apart, and a selector pinning it selects one cluster's series whole — the
-// aggregation and the pairing still see every series of that cluster.
+// tenant chose them, and pinning one is a plain filter. The cluster label
+// (clusterLabel) is reserved for a different reason than `le`: pinning it does
+// not break the shape, but series carry it only where clusters meet, so the
+// same recipe would work on a central Prometheus and never fire — silently —
+// where each cluster evaluates its own rules.
 func TestCompiledAggregationKeysOnTenantMetricsAreReserved(t *testing.T) {
 	specs := []string{
 		`- {recipe: threshold, name: a, metric: m_thr, op: ">", window: 5m, threshold: "1"}`,
@@ -402,7 +403,7 @@ func TestCompiledAggregationKeysOnTenantMetricsAreReserved(t *testing.T) {
 		t.Fatalf("found %d records and %d aggregation keys; the walk read nothing", records, len(keys))
 	}
 	for l, rec := range keys {
-		if !reserved[l] && !tenantChosen[l] && l != clusterLabel {
+		if !reserved[l] && !tenantChosen[l] {
 			t.Errorf("%s aggregates a tenant metric by %q, which is not in recipe_contract.json reserved_labels: a tenant selector could pin it", rec, l)
 		}
 	}
@@ -531,23 +532,5 @@ func TestAbsenceCoreIsDeclaredTenantWide(t *testing.T) {
 	}
 	if !strings.HasPrefix(absenceTenantWide, "da_cluster: tenant-wide by-drops-cluster (tenant) — ") {
 		t.Errorf("the declaration is not the form check_cluster_identity.py reads: %q", absenceTenantWide)
-	}
-}
-
-// A group_by that names the cluster label does not write it twice (the enum
-// does not hold it today).
-func TestGbSuffixWritesTheClusterOnce(t *testing.T) {
-	for in, want := range map[string]string{
-		"":                                 ", da_cluster",
-		"persistentvolumeclaim":            ", da_cluster, persistentvolumeclaim",
-		"da_cluster,persistentvolumeclaim": ", da_cluster, persistentvolumeclaim",
-	} {
-		var gb []string
-		if in != "" {
-			gb = strings.Split(in, ",")
-		}
-		if got := gbSuffix(gb); got != want {
-			t.Errorf("gbSuffix(%v) = %q, want %q", gb, got, want)
-		}
 	}
 }

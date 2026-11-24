@@ -304,8 +304,7 @@ const clusterLabel = "da_cluster"
 // gbSuffix is ", da_cluster, l1, l2": the cluster identity and the bounded
 // group_by dimensions, appended inside a by() label list so the metric-side
 // aggregation is per cluster and keeps each dimension (per-PVC disk fill: fire
-// if ANY PVC crosses; ADR-024 §Addendum). A group_by that names the cluster
-// label itself is not written twice. The threshold record and the
+// if ANY PVC crosses; ADR-024 §Addendum). The threshold record and the
 // on()/group_left join keys are unchanged: the thresholds are one per tenant,
 // and the cluster and the extra dimensions ride the many side of the join to
 // the alert label.
@@ -313,9 +312,6 @@ func gbSuffix(gb []string) string {
 	var b strings.Builder
 	b.WriteString(", " + clusterLabel)
 	for _, g := range gb {
-		if g == clusterLabel {
-			continue
-		}
 		b.WriteString(", " + g)
 	}
 	return b.String()
