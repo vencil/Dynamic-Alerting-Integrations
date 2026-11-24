@@ -137,6 +137,7 @@ def test_a_file_with_nothing_to_change_is_left_alone_even_as_stdin(tool, tmp_pat
     assert target.read_bytes() == _NOTHING_TO_DO
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
 @pytest.mark.parametrize("before,after", [(0o640, 0o644), (0o750, 0o755)])
 @pytest.mark.parametrize("tool", CODEMODS)
 def test_a_rewritten_file_gets_the_mode_a_checkout_would_give(tool, before, after, tmp_path):
@@ -157,6 +158,8 @@ def _as_another_user(tool: str, setup) -> tuple[subprocess.CompletedProcess, Pat
     read and write anything, so under root the tool runs as uid 65534 on
     root-owned files (``privileged`` True); otherwise *setup* takes the
     permission bits away from the running user."""
+    if not hasattr(os, "geteuid"):
+        pytest.skip("needs POSIX uids and file modes")
     prefix: list[str] = []
     if os.geteuid() == 0:
         if shutil.which("setpriv") is None:

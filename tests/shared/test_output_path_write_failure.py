@@ -2972,8 +2972,14 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "`--generate` rewrites tests/rulepacks/vmalert_coverage_baseline.yaml; it takes "
         "no path. A refused baseline is held by tests/lint/test_check_vmalert_coverage.py "
         "(test_a_baseline_that_is_a_fifo_is_rc2_one_line).",
+    # #3981, tenth batch.
+    "lint/check_includes_sync.py":
+        "`--fix` writes the missing `docs/includes/*.en.md` stubs beside the "
+        "includes the tool names; the flag is a switch, not a path. A write that "
+        "fails is held by tests/lint/test_check_includes_sync.py "
+        "(test_a_stub_that_cannot_be_written_is_rc2_one_line).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 22
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 23
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
