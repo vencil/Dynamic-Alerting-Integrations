@@ -70,6 +70,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo subdir layout
 import _lib_engine  # noqa: E402
 import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
+from _lib_output import exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#3981)
 from _lint_helpers import parse_command_map  # noqa: E402
 # Imported, not copied: a second transcription of these pins is a second
 # thing that can drift.
@@ -1922,7 +1923,12 @@ def write_baseline(findings: list[Finding], existing: list[BaselineEntry],
                      f'ticket: {q(tickets.get(key, "#TODO"))}}}')
     if not counts:
         lines[-1] = "entries: []"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    text = "\n".join(lines) + "\n"
+    # #3981 (review): an unchanged ledger is not rewritten — only a file that
+    # is replaced must pass the entry's checks (it refuses this process's
+    # stdin, harmless to leave alone). is_file() is False for a FIFO.
+    if not (path.is_file() and path.read_text(encoding="utf-8") == text):
+        write_repo_artifact(path, text)  # the artifact entry
     return len(counts)
 
 
@@ -2265,6 +2271,7 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
     ]
 
 
+@exit_on_output_write_error
 def main() -> "int | Report":
     ap = argparse.ArgumentParser(
         description="documented da-tools invocations vs the live argparse contract (#1379)")
@@ -2282,7 +2289,8 @@ def main() -> "int | Report":
 
     result = scan()
     findings, stats = result.findings, result.stats
-    entries, ledger_errors = load_baseline()
+    # The module global, read at call time (a test points it elsewhere).
+    entries, ledger_errors = load_baseline(BASELINE_PATH)
     if args.write_baseline:
         if result.fatal:
             # A ledger regenerated on a machine where a parser did not load
@@ -2292,7 +2300,7 @@ def main() -> "int | Report":
             print("refusing to write the baseline: the scan did not complete",
                   file=sys.stderr)
             return EXIT_CALLER_ERROR
-        n = write_baseline(findings, entries)
+        n = write_baseline(findings, entries, BASELINE_PATH)
         print(f"wrote {n} entries to {_rel(BASELINE_PATH, REPO_ROOT)} "
               f"(fill every `#TODO` ticket; the check rejects placeholders)")
         return EXIT_OK

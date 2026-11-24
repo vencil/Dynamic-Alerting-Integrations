@@ -21,6 +21,18 @@ anything after it. Every point is a JSON line in DA_FI_LOG with the
 first frame outside the standard library (its site), so the gate can check
 that the k-th point of an injected run is the k-th of the baseline.
 
+A ``subprocess.Popen`` point also records ``blind``: True when nothing the
+child is handed can name the input — no argv element (a relative one
+resolved against the child's cwd), the cwd itself, and no environment value
+(the hook's own ``DA_FI_*`` aside) is the input or a path under it, or
+contains the input's path as text — and the child is not Python (a Python
+child runs this hook and looks for itself). A blind child cannot tell the
+input is gone, so removing it just before that child starts is the same
+fault as removing it at the next point; the gate uses that to skip repeats
+(#4224). ``blind`` is a conclusion from what the child is HANDED: a child
+that learns the path some other way (stdin, a file it is pointed at) is
+outside it, and the gate cross-checks the conclusion instead of trusting it.
+
 Nothing is decided here: the gate test reads the log and judges the run.
 """
 import fcntl
@@ -119,6 +131,35 @@ if _INPUT and _LOG and _COUNT:
             os.remove(_INPUT)
         return True
 
+    def _names_input(value, cwd):
+        """True when *value* is, or textually contains, the input's path."""
+        try:
+            v = os.fsdecode(value)
+        except (TypeError, ValueError):
+            v = str(value)
+        if any(name in v for name in _NAMES):
+            return True
+        return _where(v if os.path.isabs(v) else os.path.join(cwd, v)) is not None
+
+    def _blind(popen_args):
+        """The child cannot name the input (see the module docstring)."""
+        if not popen_args or len(popen_args) < 4:
+            return False
+        executable, argv, cwd, env = popen_args[:4]
+        argv = [executable] if argv is None else (
+            [argv] if isinstance(argv, (str, bytes, os.PathLike)) else list(argv))
+        cwd = os.fsdecode(cwd) if cwd is not None else os.getcwd()
+        if _where(cwd) is not None:
+            return False
+        program = os.path.basename(os.fsdecode(executable if executable is not None
+                                                else argv[0])).lower()
+        if program.startswith("python"):
+            return False
+        environ = os.environ if env is None else env
+        values = [v for key, v in environ.items()
+                  if not os.fsdecode(key).startswith("DA_FI_")]
+        return not any(_names_input(item, cwd) for item in [*argv, *values])
+
     def _point(event, path):
         if getattr(_local, "busy", False):
             return
@@ -135,11 +176,15 @@ if _INPUT and _LOG and _COUNT:
                 shown = os.fsdecode(path)
                 if not _judged[0]:
                     return
+            blind =_blind(getattr(_local, "popen", None)) if event == "subprocess.Popen" else None
             k = _next()
             fired = bool(_K) and k == _K and _fault(shown, where)
             site, stack = _site(sys._getframe(2))
-            _write({"ev": event, "where": where, "path": shown, "k": k, "fired": fired,
-                    "pid": os.getpid(), "site": site, "stack": stack})
+            rec = {"ev": event, "where": where, "path": shown, "k": k, "fired": fired,
+                   "pid": os.getpid(), "site": site, "stack": stack}
+            if blind is not None:
+                rec["blind"] = blind
+            _write(rec)
         finally:
             _local.busy = False
 
@@ -152,6 +197,7 @@ if _INPUT and _LOG and _COUNT:
                         "ppid": os.getppid(),
                         "fired": _MODE == "judged-victim" and first and _remove_victim()})
         elif event == "subprocess.Popen":
+            _local.popen = args
             _point(event, args[0])
         elif event in ("os.listdir", "os.scandir"):
             _point(event, args[0] if args and args[0] is not None else ".")
