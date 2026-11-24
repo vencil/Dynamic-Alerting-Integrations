@@ -133,7 +133,7 @@ bench 閘門有兩道，用的是同一套判定：
 | **確定性指標的累積預算**：夜跑在 main 對參考版本的比值上加入 `B/op`、`allocs/op`，抓逐 commit 都低於 5%、但累積起來很大的漂移。這是唯一規劃中的逐夜趨勢偵測器：絕對 ns/op 監測器已退役，配對 ns/op 只供參考 | 夜跑已開始記錄：配對量測成功的夜，輸出（`bench-paired/v3`）帶 `deterministic` 欄位，對兩側都有資料的 benchmark 記下 `B/op`、`allocs/op` 的中位數與比值，只記錄、不判定；記為無法評估的夜沒有這個欄位（`scripts/tools/dx/pair_bench_ratio.py`）。累積至少四週、量出它們真實的夜間噪音後再決定預算。設計時必須先解決一個已知問題：若預期值用「上限的連乘」，接受過的上限會變成之後的退化可以花用的額度，改善也會被當成額度 |
 | **PR 上對「沒宣告的確定性退化」改為擋 merge** | 帳本上線滿四週，且這段期間每一次被標的確定性退化都能用帳本解掉時，由 owner 決定 |
 | **換參考版本時帳本怎麼處理**（ADR-032「待決與已決的設計題」第 1 題） | 與累積預算一起決定。目前夜跑不開票、不讀帳本，所以換參考版本不會關到任何票；累積預算若要開票，ADR-032 的不變量（換參考版本不得關閉尚未結案的效能票）要在它的設計裡成立 |
-| **雙峰、量不穩的 benchmark 要不要獨立一類** | 這裡指的是 `BenchmarkIncrementalLoad_1000_OneFileChanged`：在 GitHub runner 上重複量測，sec/op 比值逐次散佈 11 個百分點以上（量測紀錄在 [#1497](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1497)）。等任一道 bench 閘門以 `timing-replicated` 標出它時再決定：只有 sec/op 被標，第二次獨立的交錯量測也標到同一支（PR 上的判定摘要寫 `sec/op only, confirmed`，合併後的歸因票寫 `sec/op only, confirmed by a second independent interleaved pass`）。這個判定本身就表示 `B/op`、`allocs/op` 沒有被標。到時以那次兩輪的數字決定：讓它獨立一類，或把它的 sec/op 寫進接受帳本。複驗不保證擋得住這種散佈：兩輪剛好落在同一側時，閘門仍可能標出不存在的退化。不再為它另做專門量測 |
+| **雙峰、量不穩的 benchmark 要不要獨立一類** | 這裡指的是 `BenchmarkIncrementalLoad_1000_OneFileChanged`：在 GitHub runner 上重複量測，同一天內的 sec/op 比值分成高低兩群，相差約 26 個百分點（+30.38% 對 +3.98%，量測紀錄在 [#1497](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1497)）。等任一道 bench 閘門以 `timing-replicated` 標出它時再決定：只有 sec/op 被標，第二次獨立的交錯量測也標到同一支（PR 上的判定摘要寫 `sec/op only, confirmed`，合併後的歸因票寫 `sec/op only, confirmed by a second independent interleaved pass`）。這個判定本身就表示 `B/op`、`allocs/op` 沒有被標。到時以那次兩輪的數字決定：讓它獨立一類，或把它的 sec/op 寫進接受帳本。複驗不保證擋得住這種散佈：兩輪剛好落在同一側時，閘門仍可能標出不存在的退化。不再為它另做專門量測 |
 
 ## 考慮過的替代方案
 

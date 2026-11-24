@@ -20,7 +20,7 @@ lang: en
 - 2026-10-14: decision 3 started taking where each key is read from `da-guard parse-tree`, which turns on "fully covered, no difference in the renders: a note only".
 - 2026-10-17: the table of deferred carriers in decision 3 was updated: `_custom_alerts` at the top of a `_` file has no reader.
 - 2026-10-22: the platform CI's other impact report was retired; "who does this change affect" is answered by config-diff alone.
-- Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged. Two behavior statements corrected: `domain_policies` written outside `_domain_policy.yaml` exits 2 (the generator refuses the whole tree); a symlink loop counts on either side.
+- Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged. Two behavior statements corrected: `domain_policies` written outside `_domain_policy.yaml` / `.yml` exits 2 (the generator refuses the whole tree); a symlink loop counts on either side.
 
 ## Decision
 
