@@ -661,7 +661,7 @@ resources:
 # wiring SIEM credentials into `additionalSinks` entries that reference
 # them as `${VAR}`.
 #
-# ⛔ Vector (0.61.0) expands `${VAR}` ONLY because the chart sets
+# ⛔ Vector (0.62.0) expands `${VAR}` ONLY because the chart sets
 # VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true on the vector
 # container (rationale: templates/daemonset.yaml). What that means for
 # what you put here and in additionalSinks:

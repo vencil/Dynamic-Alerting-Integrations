@@ -41,7 +41,7 @@ version: 0.14.2
 # release component (the tag adds a `-distroless-libc` variant suffix) and the
 # CLI pinned in ci.yml / .devcontainer/install-vector.sh. Bound by
 # tests/shared/test_vector_pin_parity.py.
-appVersion: "0.61.0"
+appVersion: "0.62.0"
 annotations:
   # Pod Security Standards level this chart's pods need (#1018). The single
   # place the exception is declared: tests/pss judges the rendered pods at
