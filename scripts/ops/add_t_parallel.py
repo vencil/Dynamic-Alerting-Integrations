@@ -23,6 +23,10 @@ from pathlib import Path
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    OutputWriteError, check_repo_artifact, exit_on_output_write_error, is_special_file,
+    write_repo_artifact)
+
 # Match `func TestXxx(t *testing.T) {` at start of line.
 TEST_FUNC_RE = re.compile(r"^func (Test\w+)\(t \*testing\.T\) \{$")
 
@@ -106,8 +110,11 @@ def find_function_body(lines: list[str], start_idx: int) -> tuple[int, int]:
     return start_idx + 1, len(lines)
 
 
-def process_file(path: Path) -> int:
-    """Returns count of injections."""
+def process_file(path: Path) -> tuple[str, int]:
+    """``(new text, count of injections)``; nothing is written here (#3981)."""
+    if is_special_file(path):  # a FIFO would block the read
+        raise OutputWriteError(path, OSError(None, "not a regular file"),
+                               flag="FILE_OR_DIR", action="read")
     text = path.read_text(encoding="utf-8")
     lines = text.split("\n")
     out: list[str] = []
@@ -136,16 +143,15 @@ def process_file(path: Path) -> int:
         out.append("\tt.Parallel()")
         injected += 1
         i += 1
-    if injected:
-        # Preserve trailing newline (avoids the sed-i truncation problem
-        # explicitly: we always end with the same EOF state).
-        new_text = "\n".join(out)
-        if text.endswith("\n") and not new_text.endswith("\n"):
-            new_text += "\n"
-        path.write_text(new_text, encoding="utf-8", newline="\n")
-    return injected
+    # Preserve trailing newline (avoids the sed-i truncation problem
+    # explicitly: we always end with the same EOF state).
+    new_text = "\n".join(out)
+    if text.endswith("\n") and not new_text.endswith("\n"):
+        new_text += "\n"
+    return new_text, injected
 
 
+@exit_on_output_write_error
 def main() -> int:
     import argparse
 
@@ -157,15 +163,23 @@ def main() -> int:
     # missing one is a named refusal (rc 2) with nothing written.
     _lib_paths.raise_path_problems(
         [_lib_paths.classify_path(p, "any", lang="en") for p in args.paths])
-    total = 0
+    # #3981: every file is read and every target judged before the first
+    # write, so a refused one leaves the others as they were.
+    pending: list[tuple[Path, str, int]] = []
     for arg in args.paths:
         p = Path(arg)
         targets = sorted(p.rglob("*_test.go")) if p.is_dir() else [p]
         for f in targets:
-            n = process_file(f)
+            new_text, n = process_file(f)
             if n:
-                print(f"{f}: +{n} t.Parallel()")
-                total += n
+                pending.append((f, new_text, n))
+    for f, _text, _n in pending:
+        check_repo_artifact(f, flag="FILE_OR_DIR")
+    total = 0
+    for f, new_text, n in pending:
+        write_repo_artifact(f, new_text, flag="FILE_OR_DIR")
+        print(f"{f}: +{n} t.Parallel()")
+        total += n
     print(f"Total: {total} injections")
     return 0
 

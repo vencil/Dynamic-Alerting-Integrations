@@ -31,6 +31,9 @@ from pathlib import Path
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    check_repo_artifact, exit_on_output_write_error, write_repo_artifact)
+
 HELPERS = (
     "IncParseFailure",
     "ObserveScanDuration",
@@ -48,7 +51,9 @@ HELPERS = (
 )
 
 
-def process_file(path: Path) -> int:
+def process_file(path: Path) -> tuple[str, int]:
+    """``(new text, call sites routed)``; nothing is written here (#3981). A FIFO
+    never reaches it: `classify_path(..., "file")` refuses one first."""
     text = path.read_text(encoding="utf-8")
     n = 0
     for h in HELPERS:
@@ -69,10 +74,10 @@ def process_file(path: Path) -> int:
         if count:
             text = new_text
             n += count
-    path.write_text(text, encoding="utf-8", newline="\n")
-    return n
+    return text, n
 
 
+@exit_on_output_write_error
 def main() -> int:
     import argparse
 
@@ -84,12 +89,20 @@ def main() -> int:
     # missing one is a named refusal (rc 2) with nothing written.
     _lib_paths.raise_path_problems(
         [_lib_paths.classify_path(p, "file", lang="en") for p in args.paths])
-    total = 0
+    # #3981: every file is read and every target judged before the first
+    # write; a file with no call site to route is left as it was.
+    pending: list[tuple[str, str, int]] = []
     for arg in args.paths:
-        n = process_file(Path(arg))
+        text, n = process_file(Path(arg))
         if n:
-            print(f"{arg}: +{n} routed")
-            total += n
+            pending.append((arg, text, n))
+    for arg, _text, _n in pending:
+        check_repo_artifact(arg, flag="FILE")
+    total = 0
+    for arg, text, n in pending:
+        write_repo_artifact(arg, text, flag="FILE")
+        print(f"{arg}: +{n} routed")
+        total += n
     print(f"Total: {total} call sites routed")
     return 0
 
