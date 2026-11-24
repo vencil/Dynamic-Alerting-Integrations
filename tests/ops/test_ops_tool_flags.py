@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from _platform_fs import symlink_or_skip
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS = REPO_ROOT / "scripts" / "ops"
@@ -150,40 +151,113 @@ def test_a_rewritten_file_gets_the_mode_a_checkout_would_give(tool, before, afte
     assert target.stat().st_mode & 0o777 == after
 
 
-@pytest.mark.parametrize("tool", CODEMODS)
-def test_a_write_that_fails_is_rc2_one_line_naming_the_positional(tool):
-    """The target can be read but neither replaced nor written in place:
-    rc 2, one line naming the file and the positional, where a bare write
-    was `unexpected internal error (PermissionError)`. Root can write
-    anything, so under root the tool runs as uid 65534 on a root-owned file
-    in a root-owned directory; otherwise the file and directory are read-only."""
-    metavar, before = _CHANGES[tool]
+def _as_another_user(tool: str, setup) -> tuple[subprocess.CompletedProcess, Path]:
+    """Run *tool* on ``a_test.go`` in a fresh directory that *setup(dir,
+    target, privileged)* has shaped, as a user the shape denies. Root can
+    read and write anything, so under root the tool runs as uid 65534 on
+    root-owned files (``privileged`` True); otherwise *setup* takes the
+    permission bits away from the running user."""
     prefix: list[str] = []
     if os.geteuid() == 0:
         if shutil.which("setpriv") is None:
             pytest.skip("root, and no setpriv to drop to another uid")
         prefix = ["setpriv", "--reuid=65534", "--regid=65534", "--clear-groups"]
     d = Path(tempfile.mkdtemp(dir="/var/tmp"))  # tmp_path is 0700: 65534 could not reach it
+    target = d / "a_test.go"
+    target.write_text(_CHANGES[tool][1], encoding="utf-8")
     try:
-        target = d / "a_test.go"
-        target.write_text(before, encoding="utf-8")
-        if prefix:
+        setup(d, target, bool(prefix))
+        proc = subprocess.run([*prefix, sys.executable, str(OPS / tool), str(target)],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=120, env=_ENV)
+        target.chmod(0o644)
+        return proc, target
+    finally:
+        d.chmod(0o755)
+        _AS_ANOTHER_USER_DIRS.append(d)
+
+
+_AS_ANOTHER_USER_DIRS: list[Path] = []
+
+
+@pytest.fixture(autouse=True)
+def _remove_the_other_users_dirs():
+    yield
+    while _AS_ANOTHER_USER_DIRS:
+        shutil.rmtree(_AS_ANOTHER_USER_DIRS.pop(), ignore_errors=True)
+
+
+@pytest.mark.parametrize("tool", CODEMODS)
+def test_a_write_that_fails_is_rc2_one_line_naming_the_positional(tool):
+    """The target can be read but neither replaced nor written in place:
+    rc 2, one line naming the file and the positional, where a bare write
+    was `unexpected internal error (PermissionError)`."""
+    def setup(d: Path, target: Path, privileged: bool) -> None:
+        if privileged:  # root-owned 0644 file in a root-owned 0755 directory
             d.chmod(0o755)
         else:
             target.chmod(0o444)
             d.chmod(0o555)
-        proc = subprocess.run([*prefix, sys.executable, str(OPS / tool), str(target)],
-                              capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=120, env=_ENV)
-        assert proc.returncode == 2, proc.stderr
-        assert CRASH not in proc.stderr
-        assert proc.stderr.strip().splitlines()[-1] == (
-            f"ERROR: cannot write {target}: Permission denied (errno 13)"
-            f" — check the value given to {metavar}"), proc.stderr
-        assert target.read_text(encoding="utf-8") == before
-    finally:
+    proc, target = _as_another_user(tool, setup)
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.strip().splitlines() == [
+        f"ERROR: cannot write {target}: Permission denied (errno 13)"
+        f" — check the value given to {_CHANGES[tool][0]}"], proc.stderr
+    assert target.read_text(encoding="utf-8") == _CHANGES[tool][1]
+
+
+@pytest.mark.parametrize("tool", CODEMODS)
+def test_a_file_that_cannot_be_read_is_rc2_one_line_naming_the_positional(tool):
+    """rc 2, one line naming the file. add_t_parallel's read used to raise
+    into the crash handler (`unexpected internal error (PermissionError)`)."""
+    def setup(d: Path, target: Path, privileged: bool) -> None:
+        target.chmod(0o600 if privileged else 0o000)
         d.chmod(0o755)
-        shutil.rmtree(d)
+    proc, target = _as_another_user(tool, setup)
+    assert proc.returncode == 2, proc.stderr
+    # The two that take FILE judge readability up front (`classify_path(...,
+    # "file")`); add_t_parallel takes a directory too and meets it at the read.
+    expected = (f"ERROR: cannot read {target}: Permission denied (errno 13)"
+                " — check the value given to FILE_OR_DIR" if tool == "add_t_parallel.py"
+                else f"ERROR: {target}: Permission denied")
+    assert proc.stderr.strip().splitlines() == [expected], proc.stderr
+
+
+def test_add_t_parallel_names_a_dangling_link_met_in_a_walk(tmp_path):
+    """A `*_test.go` symlink to nothing, found under a directory argument
+    (an argv one is refused by `classify_path` first): rc 2, one line naming
+    it, and the file before it is left alone."""
+    _metavar, before = _CHANGES["add_t_parallel.py"]
+    good = tmp_path / "a_test.go"
+    good.write_text(before, encoding="utf-8")
+    dangling = tmp_path / "z_test.go"
+    symlink_or_skip(tmp_path / "nowhere", dangling)
+    proc = _run("add_t_parallel.py", str(tmp_path))
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.strip().splitlines() == [
+        f"ERROR: cannot read {dangling}: No such file or directory (errno 2)"
+        " — check the value given to FILE_OR_DIR"], proc.stderr
+    assert good.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize("names", ["same file twice", "hard link"])
+@pytest.mark.parametrize("tool", CODEMODS)
+def test_two_names_of_one_file_are_one_target(tool, names, tmp_path):
+    """Every file is read before the first write, so the second name of a
+    file still reads the old text: it counted, and wrote, the rewrite twice."""
+    target = tmp_path / "a_test.go"
+    target.write_text(_CHANGES[tool][1], encoding="utf-8")
+    if names == "hard link":
+        other = tmp_path / "b_test.go"
+        os.link(target, other)
+        argv = ["a_test.go", "b_test.go"]
+    else:
+        argv = ["a_test.go", "./a_test.go"]
+    proc = _run(tool, *argv, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    lines = proc.stdout.splitlines()
+    assert len(lines) == 2 and lines[0].startswith("a_test.go: +1 "), proc.stdout
+    assert lines[1].startswith("Total: 1"), proc.stdout
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs on this platform")

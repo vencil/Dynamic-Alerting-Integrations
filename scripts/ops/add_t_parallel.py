@@ -115,7 +115,10 @@ def process_file(path: Path) -> tuple[str, int]:
     if is_special_file(path):  # a FIFO would block the read
         raise OutputWriteError(path, OSError(None, "not a regular file"),
                                flag="FILE_OR_DIR", action="read")
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:  # unreadable, or a dangling link met in a walk
+        raise OutputWriteError(path, exc, flag="FILE_OR_DIR", action="read") from exc
     lines = text.split("\n")
     out: list[str] = []
     i = 0
@@ -166,12 +169,17 @@ def main() -> int:
     # #3981: every file is read and every target judged before the first
     # write, so a refused one leaves the others as they were.
     pending: list[tuple[Path, str, int]] = []
+    # Two names of one file (`a.go ./a.go`, a hard link) are one target: the
+    # second read still sees the old text, and would count and write it again.
+    seen: set[tuple[int, int]] = set()
     for arg in args.paths:
         p = Path(arg)
         targets = sorted(p.rglob("*_test.go")) if p.is_dir() else [p]
         for f in targets:
             new_text, n = process_file(f)
-            if n:
+            st = os.stat(f)
+            if n and (st.st_dev, st.st_ino) not in seen:
+                seen.add((st.st_dev, st.st_ino))
                 pending.append((f, new_text, n))
     for f, _text, _n in pending:
         check_repo_artifact(f, flag="FILE_OR_DIR")

@@ -52,8 +52,9 @@ HELPERS = (
 
 
 def process_file(path: Path) -> tuple[str, int]:
-    """``(new text, call sites routed)``; nothing is written here (#3981). A FIFO
-    never reaches it: `classify_path(..., "file")` refuses one first."""
+    """``(new text, call sites routed)``; nothing is written here (#3981). A FIFO or
+    an unreadable file never reaches it: `classify_path(..., "file")` refuses
+    it first."""
     text = path.read_text(encoding="utf-8")
     n = 0
     for h in HELPERS:
@@ -92,9 +93,14 @@ def main() -> int:
     # #3981: every file is read and every target judged before the first
     # write; a file with no call site to route is left as it was.
     pending: list[tuple[str, str, int]] = []
+    # Two names of one file (`a.go ./a.go`, a hard link) are one target: the
+    # second read still sees the old text, and would count and write it again.
+    seen: set[tuple[int, int]] = set()
     for arg in args.paths:
         text, n = process_file(Path(arg))
-        if n:
+        st = os.stat(arg)
+        if n and (st.st_dev, st.st_ino) not in seen:
+            seen.add((st.st_dev, st.st_ino))
             pending.append((arg, text, n))
     for arg, _text, _n in pending:
         check_repo_artifact(arg, flag="FILE")
