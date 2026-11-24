@@ -463,6 +463,47 @@ def _tenant_file(tmp_path, rule):
     return str(f)
 
 
+def test_owner_or_expiry_in_the_groups_labels_is_an_error(tmp_path):
+    """Prometheus writes the group's labels on the alert too (review)."""
+    d = tmp_path / "custom" / "db-a"
+    d.mkdir(parents=True)
+    f = d / "r.yaml"
+    f.write_text(yaml.safe_dump({"groups": [{
+        "name": "g", "labels": {"owner": "team-x", "expiry": "2026-01-01"},
+        "rules": [{"alert": "A", "expr": 'x{tenant="db-a"} > 0', "labels": {"tenant": "db-a"},
+                   "annotations": {"owner": "o", "expiry": "2099-01-01"}}]}]}), encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy(),
+                                             tenant="db-a")
+    said = [r.message for r in results if r.severity == "ERROR"]
+    assert sum("is a label: move it to annotations" in m for m in said) == 2, said
+
+
+def test_an_unquoted_expiry_date_is_a_date(tmp_path):
+    """`expiry: 2026-06-30` unquoted: Prometheus' loader reads a string (review:
+    a test writing through yaml.safe_dump always quotes it)."""
+    d = tmp_path / "custom" / "db-a"
+    d.mkdir(parents=True)
+    f = d / "r.yaml"
+    f.write_text("groups:\n- name: g\n  rules:\n  - alert: A\n    expr: x{tenant=\"db-a\"} > 0\n"
+                 "    labels: {tenant: db-a}\n    annotations: {owner: o, expiry: 2026-06-30}\n",
+                 encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy(),
+                                             tenant="db-a")
+    assert not [r.message for r in results if r.severity == "ERROR"]
+
+
+def test_the_rule_packs_the_rule_pack_dir_selects_are_not_governed(tmp_path):
+    """--rule-pack-dir selects the shipped rule packs (rule-pack-*.yaml): none
+    is a Tier 3 rule, so none needs an owner or expiry (#4275 review)."""
+    f = tmp_path / "rule-pack-x.yaml"
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [
+        {"alert": "A", "expr": 'x{tenant="db-a"} > 0', "labels": {"tenant": "db-a"}}]}]}),
+        encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy(),
+                                             flag="--rule-pack-dir", selected=True)
+    assert not any("annotation (governance" in r.message for r in results)
+
+
 def test_governance_is_judged_on_a_tenants_rule_file_only(tmp_path):
     """A rule pack or a file no tenant directory holds is not Tier 3."""
     rule = {"alert": "A", "expr": 'x{tenant="db-a"} > 0', "labels": {"tenant": "db-a"}}
@@ -493,6 +534,7 @@ def _pin_lint(tmp_path, expr, records=()):
     'kube_pod_container_status_restarts_total{tenant="db-a"} > 5',
     'absent(kube_deployment_status_replicas_available{tenant="db-a"})',
     'kube_pod_info{tenant="db-a", namespace="db-a"} > 0',
+    '{__name__="kube_pod_info", tenant="db-a"} > 0',  # the name as a matcher (review)
 ])
 def test_a_tenant_pin_on_series_without_tenant_is_an_error(tmp_path, expr):
     """kube-state-metrics' series carry no tenant (its job writes none):
@@ -500,6 +542,7 @@ def test_a_tenant_pin_on_series_without_tenant_is_an_error(tmp_path, expr):
     found = [m for m in _pin_lint(tmp_path, expr) if "carry no tenant" in m]
     assert len(found) == 1, _pin_lint(tmp_path, expr)
     assert 'namespace="db-a" with tenant=""' in found[0]
+    assert "it is no tenant's to read" in found[0]  # not every such metric has a namespace
 
 
 @pytest.mark.parametrize("expr", [

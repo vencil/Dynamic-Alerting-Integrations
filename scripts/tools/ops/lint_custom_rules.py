@@ -479,7 +479,9 @@ def _pins_a_label_its_series_lack(node, label, tenant, own_records):
     selects nothing. Only for the tenant label, which that table models; not
     for a name with a colon (a recording rule's, by Prometheus' naming rule:
     an exporter's metric has none) nor for a record of the same file."""
-    metric = node.get("name")
+    metric = node.get("name") or next(
+        (m["value"] for m in node["matchers"] if m["name"] == "__name__" and m["type"] == "="),
+        None)
     if (label != _lib_metric_sources.TENANT_LABEL or not metric or ":" in metric
             or metric in own_records):
         return False
@@ -545,11 +547,13 @@ def isolation_problems(rules, tenant, label, filepath, shapes_of=None, flow_of=N
                         f"{'/'.join(aliases) or 'an alias'}=\"{tenant}\" with {label}=\"\")"))
                 elif _pins_a_label_its_series_lack(node, label, tenant, own_records):
                     results.append(LintResult(filepath, name, None, "ERROR",
-                        f"selector {spelled} pins {label}=\"{tenant}\", but the series of "
-                        f"{node['name']} carry no {label} (the job that scrapes them writes none): "
-                        f"it selects nothing, so the rule never fires (under absent(), always "
-                        f"does); match {'/'.join(aliases) or 'an alias'}=\"{tenant}\" with "
-                        f"{label}=\"\""))
+                        f"selector {spelled} pins {label}=\"{tenant}\", but the metric's series "
+                        f"carry no {label} (the job that scrapes them writes none): it selects "
+                        f"nothing, so the rule never fires (under absent(), always does). If its "
+                        f"series name the tenant's {'/'.join(aliases) or 'alias'} (kube-state-"
+                        f"metrics' namespaced objects), match {'/'.join(aliases) or 'an alias'}="
+                        f"\"{tenant}\" with {label}=\"\"; if not (Prometheus' or "
+                        f"Alertmanager's own series, a node's), it is no tenant's to read"))
                 continue
             written = []
             if kind == "call" and node["name"] in ("label_replace", "label_join") and len(node["args"]) > 1:
@@ -836,11 +840,14 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, r
                                {**(group.get("labels") or {}), **(labels or {})}))
 
             # Governance (#4275): a tenant's Tier 3 alert names its owner and
-            # expiry, as annotations. Not a rule pack's, nor a file no tenant
-            # directory holds: governance is the Tier 3 contract.
+            # expiry, as annotations. Not a rule pack's (--rule-pack-dir
+            # selects the shipped packs: none is Tier 3), nor a file no tenant
+            # directory holds. The group's labels count: Prometheus writes
+            # them on the alert too.
             if not is_recording and tenant is not None:
                 results.extend(governance_problems(
-                    labels, rule.get("annotations"), filepath, rule_name))
+                    {**(group.get("labels") or {}), **(labels or {})},
+                    rule.get("annotations"), filepath, rule_name))
 
     # #4136: a tenant's rule file reads and writes only that tenant
     if tenant is not None:

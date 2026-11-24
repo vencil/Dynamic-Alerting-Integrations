@@ -279,7 +279,9 @@ lint 工具的內建政策**就是**下面這份檔（`.github/custom-rule-polic
 >   讀 pack 的 record 也要寫，例如 `tenant:mysql_up:max{tenant="db-a"}`。
 >   反過來，series 本身不帶 `tenant` 的指標（kube-state-metrics、Prometheus 與 Alertmanager 自己的指標：
 >   抓取它們的 job 不寫 tenant）寫成 `tenant="<租戶>"` 也是 ERROR：它選不到任何 series，規則永遠不響
->   （包在 `absent()` 裡則永遠在響），要改寫成 `namespace="<租戶>", tenant=""`。哪些指標屬於這類，依
+>   （包在 `absent()` 裡則永遠在響）。series 帶該租戶 namespace 的（kube-state-metrics 的 namespaced 物件）改寫成
+>   `namespace="<租戶>", tenant=""`；不帶的（Prometheus、Alertmanager 自己的指標、以節點為單位的 `kube_node_*`）不是任何
+>   租戶的資料，租戶規則讀不到。⚠️ lint 不知道哪些指標帶 namespace，所以寫成 namespace 形式卻選不到東西的情況它看不出來。哪些指標屬於這類，依
 >   `_lib_metric_sources.tenant_presence()` 判定（cadvisor 與 kubelet volume stats 在抓取時已補上 tenant，不在此列）；
 >   名稱帶冒號的（recording rule，Prometheus 的命名規則）與同一檔定義的 record 不判（[#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)）。
 > - alert、recording rule 與 group 的 `labels:` 把 `tenant`（或 `namespace`）寫成該租戶以外的值。alert 可以寫該租戶，
@@ -332,7 +334,8 @@ docker run --rm \
 兩個 annotation，缺一個、值是空的，或寫在 labels 裡都是 ERROR。放 annotation 而不是 label，是因為 label 是告警身分的一部分：
 續期改 expiry、或換 owner，都會讓正在響的告警先 resolve 再重發，`for:` 重新計時。`expiry` 要寫成存在的日期 `YYYY-MM-DD`。
 ⚠️ lint **不拿 expiry 跟今天比**：否則同一個 commit 今天綠、明天紅，而跑這支 lint 的 CI 只在規則檔有改動時才跑——到期那天
-沒有東西會紅，下一個不相干的改動才會。到期之後怎麼處理，交給規則旁邊的「即將到期」告警。rule pack 與不在租戶目錄下的檔不做這項檢查。
+沒有東西會紅，下一個不相干的改動才會。⚠️ 目前沒有任何機制在到期時自動處理（Tier 3 的到期下架見 §5，尚未實作）。group 的 `labels:` 也算（Prometheus 會把它寫到告警上）。
+rule pack（含 `--rule-pack-dir` 選到的）與不在租戶目錄下的檔不做這項檢查。Tier 3 告警的 `owner` 指這條規則的負責人；平台 rule pack 的同名 annotation 填的是租戶的 owner（取自租戶 metadata），兩者都是「該找誰」。
 
 > **一站式驗證**：`make validate-config` 或 `validate_config.py --rule-packs rule-packs/` 會自動將 deny-list linting 納入整體驗證報告，與 YAML syntax、schema、route 檢查一併執行。直接跑 `validate_config.py` 需要 da-guard（`make validate-config` 會自己建），見 [validate-config 的前置需求](cli-reference.md#validate-config)。
 >

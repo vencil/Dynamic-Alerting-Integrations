@@ -263,8 +263,11 @@ The lint tool's built-in policy **is** the file below (`.github/custom-rule-poli
 >   different values). A pack's record needs it too, such as `tenant:mysql_up:max{tenant="db-a"}`.
 >   Conversely, `tenant="<tenant>"` on a metric whose series carry no `tenant` at all (kube-state-metrics',
 >   Prometheus' and Alertmanager's own: the jobs that scrape them write none) is an ERROR too: it selects
->   nothing, so the rule never fires (inside `absent()`, it always does); write
->   `namespace="<tenant>", tenant=""`. Which metrics are such is `_lib_metric_sources.tenant_presence()`'s answer
+>   nothing, so the rule never fires (inside `absent()`, it always does). Where its series name the tenant's
+>   namespace (kube-state-metrics' namespaced objects), write `namespace="<tenant>", tenant=""`; where they do
+>   not (Prometheus' and Alertmanager's own, a node's `kube_node_*`), they are no tenant's to read. ⚠️ The lint
+>   does not know which metrics carry a namespace, so a namespace form that selects nothing is not caught.
+>   Which metrics are such is `_lib_metric_sources.tenant_presence()`'s answer
 >   (cadvisor and kubelet volume stats get a tenant at scrape time and are not among them); a name with a colon
 >   (a recording rule's, by Prometheus' naming rule) and a record of the same file are not judged
 >   ([#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)).
@@ -329,8 +332,10 @@ because a label is part of the alert's identity: renewing the expiry or handing 
 firing alert of it and fire it again, its `for:` restarted. `expiry` is a real calendar date written `YYYY-MM-DD`.
 ⚠️ The lint does **not** compare the expiry with today: the same commit would be green one day and red the next, and
 the CI that runs this lint runs only when a rule file changes — nothing goes red on the day a rule expires, the next
-unrelated change does. What happens at the date is the job of an "expiring" alert beside the rule. Rule packs and
-files outside a tenant directory are not checked for this.
+unrelated change does. ⚠️ Nothing acts at the date today (§5's expiry-based retirement is not implemented). A group's
+`labels:` count too (Prometheus writes them on the alert). Rule packs (those `--rule-pack-dir` selects included) and
+files outside a tenant directory are not checked for this. On a Tier 3 alert `owner` is the rule's owner; the
+platform packs' annotation of that name carries the tenant's owner (from its metadata): both say whom to ask.
 
 ### 4.3 Why Limit "Weight" Instead of "Count"
 
