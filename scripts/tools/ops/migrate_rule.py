@@ -246,6 +246,8 @@ SEMANTIC_BREAK_FUNCS = frozenset({
     'predict_linear', 'label_replace', 'label_join'
 })
 
+#: 衍生出的閾值 key 與 record 名稱用得上的指標名（Prometheus 的 legacy 命名）。
+_LEGACY_METRIC_NAME = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
 #: 比較運算子：告警運算式的根節點是 `LHS <op> 數字` 才切得出門檻。
 _COMPARISONS = frozenset({"==", "!=", ">", "<", ">=", "<="})
 #: 維度提示不收的 label：scrape 身分與 Kubernetes 位置，不是業務維度。
@@ -274,7 +276,11 @@ def _plain_number(text):
         value = float(text)
     except ValueError:
         return False
-    return math.isfinite(value) and "_" not in text
+    digits = text.lstrip("+-")
+    # Prometheus reads an integer with a leading 0 as octal (`012` is 10);
+    # float() reads it as decimal — a different threshold.
+    octal = len(digits) > 1 and digits[0] == "0" and digits.isdigit()
+    return math.isfinite(value) and "_" not in text and not octal
 
 
 def parse_expr(expr_str, tree=None):
@@ -298,12 +304,18 @@ def parse_expr(expr_str, tree=None):
     if not _plain_number(val):
         return None
     metrics = _lib_consumer_read.shape_metric_names(lhs)
+    # The derived key and record names are built from the first metric: it must
+    # be one a bare selector can spell (`{__name__="legacy metric"}` is not), and
+    # there must be one — a shared `unknown_metric` key would merge unrelated
+    # rules' thresholds and recordings.
+    if not metrics or not _LEGACY_METRIC_NAME.fullmatch(metrics[0]):
+        return None
     return {
         "lhs": _node_text(expr_str, lhs),
         "op": tree["op"],
         "val": val,
         "is_complex": not (lhs["kind"] == "selector" and not lhs["range"]),
-        "base_key": metrics[0] if metrics else "unknown_metric",
+        "base_key": metrics[0],
         "all_metrics": metrics,
         "expr": expr_str,
         "lhs_tree": lhs,
@@ -650,7 +662,8 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
     unnamed = [_node_text(expr, n) for n in _selectors(parsed["lhs_tree"])
                if _selector_metric(n) is None]
     if unnamed:
-        result.triage_action = "review"
+        if result.triage_action != "use_golden":
+            result.triage_action = "review"
         result.notes.append(
             f"selector 沒有固定的指標名（{', '.join(unnamed)}），無法注入 tenant label："
             "recording rule 會讀到所有租戶，請改寫成具名的 selector")
@@ -1188,7 +1201,15 @@ def render_recording_rules(results, prefix="custom_"):
         else:
             buf.write(f"      # {r.alert_name} | {r.agg_mode} — {r.agg_reason}\n")
         buf.write(f"      - record: {rr['record']}\n")
-        buf.write(f"        expr: {rr['expr']}\n")
+        expr_text = rr['expr']
+        if "\n" in expr_text or "#" in expr_text or ": " in expr_text:
+            # A multi-line LHS (#4215: it migrates now), a `#` comment or a
+            # `: ` is no YAML plain scalar — write a literal block.
+            buf.write("        expr: |\n")
+            for line in expr_text.strip().split('\n'):
+                buf.write(f"          {line}\n")
+        else:
+            buf.write(f"        expr: {expr_text}\n")
         buf.write("\n")
     return buf.getvalue()
 

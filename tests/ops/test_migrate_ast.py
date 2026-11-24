@@ -766,3 +766,47 @@ def test_a_selector_with_no_fixed_name_is_flagged_for_review():
     result = migrate_rule.process_rule(rule, prefix="custom_", dictionary={})
     assert result.triage_action == "review"
     assert any('{job="a"}' in n for n in result.notes)
+
+
+# --- #4298 review ------------------------------------------------------------
+
+def test_a_multi_line_recording_rule_renders_as_loadable_yaml():
+    """A multi-line LHS (it migrates now) is written as a literal block: a plain
+    scalar put its later lines at column 0 and the file did not load."""
+    rule = {"alert": "A", "expr": "sum by (job) (\n  rate(x_total[5m])\n) > 3",
+            "labels": {"severity": "warning"}}
+    result = migrate_rule.process_rule(rule, prefix="custom_", dictionary={})
+    doc = yaml.safe_load(migrate_rule.render_recording_rules([result]))
+    exprs = [r["expr"] for r in doc["groups"][0]["rules"]]
+    assert any("rate(x_total{tenant=~\".+\"}[5m])" in e and "\n" in e for e in exprs)
+
+
+@pytest.mark.parametrize("threshold", ["012", "-012", "00"])
+def test_an_octal_looking_threshold_is_unparseable(threshold):
+    """Prometheus reads `012` as octal (10); float() would write 12."""
+    assert migrate_rule.parse_expr(f"x > {threshold}") is None
+
+
+@pytest.mark.parametrize("expr", [
+    '{__name__="legacy metric"} > 1',   # no bare selector spells it
+    '{service="api"} > 1',              # no name at all: no shared unknown key
+])
+def test_a_rule_whose_key_cannot_be_derived_is_unparseable(expr):
+    assert migrate_rule.parse_expr(expr) is None
+
+
+def test_an_unnamed_selector_note_keeps_the_golden_verdict():
+    dictionary = {"mysql_connections": {"golden_rule": "MariaDBHighConnections", "rule_pack": "mariadb"}}
+    rule = {"alert": "A", "expr": '(mysql_connections or {job="a"}) > 100',
+            "labels": {"severity": "warning"}}
+    result = migrate_rule.process_rule(rule, prefix="custom_", dictionary=dictionary)
+    assert result.triage_action == "use_golden"
+    assert any('{job="a"}' in n for n in result.notes)
+
+
+def test_a_tree_too_deep_to_walk_is_refused_and_named_not_a_crash():
+    deep = "(" * 1200 + "x" + ")" * 1200
+    trees = _lib_consumer_read.promql_shape_each([deep, "y > 2"])
+    assert isinstance(trees[0], _lib_consumer_read.InputRefused)
+    assert "too deeply" in str(trees[0])
+    assert trees[1]["kind"] == "binary"

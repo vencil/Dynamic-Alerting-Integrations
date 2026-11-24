@@ -646,6 +646,12 @@ class TestAlertCore:
         expr = 'metric > 50 unless on(tenant) other_metric'
         assert self._core(expr) == expr
 
+    def test_a_mixed_unless_is_kept(self):
+        """#4298 review: a right side that reads another metric beside
+        user_state_filter is another exclusion — not stripped."""
+        expr = 'cpu > 80 unless on(tenant) (other_metric or user_state_filter{flag="maintenance"} == 1)'
+        assert self._core(expr) == expr
+
     def test_unwrap_parens(self):
         """剝掉外層括號（含巢狀）。"""
         assert self._core("((cpu > 80))") == "cpu > 80"
