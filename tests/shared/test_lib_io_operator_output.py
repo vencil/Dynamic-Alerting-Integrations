@@ -503,3 +503,57 @@ def test_a_write_the_body_makes_through_the_handle_is_the_outputs():
             fh.write("x" * 100_000)
             raise AssertionError("not reached: the write above fails")
     assert caught.value.flag == "-o"
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/full"), reason="no /dev/full")
+def test_a_write_through_the_handles_buffer_is_the_outputs():
+    """#4230 review: the failure is kept at the buffer, so a caller writing
+    bytes through ``fh.buffer`` is covered as the text writes are."""
+    with pytest.raises(_lib_io.OutputWriteError):
+        with _lib_io.open_operator_output("/dev/full", flag="-o") as fh:
+            fh.buffer.write(b"x" * 100_000)
+            raise AssertionError("not reached: the write above fails")
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/full"), reason="no /dev/full")
+@pytest.mark.parametrize("where", ["stdout", "file"])
+def test_a_swallowed_write_failure_does_not_claim_a_later_error(tmp_path, where, monkeypatch):
+    """#4230 review: only the OSError the handle raised is the output's — not
+    any later one, after the body caught that one."""
+    missing = tmp_path / "missing" / "input.yaml"
+    if where == "stdout":
+        monkeypatch.setattr(sys, "stdout", open("/dev/full", "w", encoding="utf-8"))
+        monkeypatch.setattr(_lib_exitcodes, "_stdout_owner", None, raising=False)
+        monkeypatch.setattr(_lib_exitcodes, "discard_failed_stdout", lambda: None)
+    target = "-" if where == "stdout" else "/dev/full"
+    with pytest.raises(FileNotFoundError) as caught:
+        with _lib_io.open_operator_output(target, flag="-o") as fh:
+            try:
+                fh.write("x" * 100_000)
+                fh.flush()
+            except OSError:
+                pass
+            open(missing, encoding="utf-8")
+    assert not isinstance(caught.value, _lib_io.OutputWriteError)
+
+
+def test_the_file_handle_is_what_io_open_would_give(tmp_path):
+    p = tmp_path / "f.txt"
+    with _lib_io.open_operator_output(str(p), flag="-o") as fh:
+        assert fh.mode == "w" and fh.encoding == "utf-8"
+        assert fh.line_buffering is False
+        assert fh.buffer.raw.name == fh.fileno()
+
+
+@pytest.mark.skipif(not hasattr(os, "openpty"), reason="no pty")
+def test_a_terminal_output_is_line_buffered():
+    """As io.open: a line written to a terminal shows when it ends."""
+    master, slave = os.openpty()
+    try:
+        with _lib_io.open_operator_output(os.ttyname(slave), flag="-o") as fh:
+            assert fh.line_buffering is True
+            fh.write("line\n")
+            assert os.read(master, 100).replace(b"\r", b"") == b"line\n"
+    finally:
+        os.close(master)
+        os.close(slave)

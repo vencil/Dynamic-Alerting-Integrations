@@ -182,16 +182,17 @@ class _StdoutSink(io.TextIOBase):
     def writable(self) -> bool:
         return True
 
-    #: #4055: whether a write or flush through this sink failed — the one
-    #: case in which what stdout still buffers is dropped.
-    failed = False
+    #: #4055: the OSError a write or flush through this sink raised, or None
+    #: — the one case in which what stdout still buffers is dropped. #4230:
+    #: the exception itself, so that only IT is reported as the output's.
+    failed: Optional[OSError] = None
     _closing = False
 
     def write(self, s: str) -> int:  # type: ignore[override]
         try:
             return sys.stdout.write(s)
-        except OSError:
-            self.failed = True
+        except OSError as exc:
+            self.failed = exc
             raise
 
     def flush(self) -> None:
@@ -199,8 +200,8 @@ class _StdoutSink(io.TextIOBase):
             return
         try:
             sys.stdout.flush()
-        except OSError:
-            self.failed = True
+        except OSError as exc:
+            self.failed = exc
             raise
 
     def close(self) -> None:
@@ -211,27 +212,49 @@ class _StdoutSink(io.TextIOBase):
         super().close()
 
 
-class _OperatorFile(io.TextIOWrapper):
-    """The text handle over an operator output file that remembers whether a
-    write or flush through it failed (#4230) — the same bookkeeping as
-    :attr:`_StdoutSink.failed`, so that only the handle's own failure is
-    reported as the output path's."""
+class _OperatorBuffer(io.BufferedWriter):
+    """The buffer under an operator output file's text handle: it keeps the
+    OSError a write or flush through it raised (#4230) — the same
+    bookkeeping as :attr:`_StdoutSink.failed`, so that only the output's own
+    failure is reported as the output path's. At this layer it sees the text
+    handle's writes and flushes and a caller's ``fh.buffer`` ones alike; a
+    write straight to ``fh.fileno()`` is not seen."""
 
-    failed = False
+    failed: Optional[OSError] = None
 
-    def write(self, s: str) -> int:  # type: ignore[override]
+    def write(self, b) -> int:  # type: ignore[override]
         try:
-            return super().write(s)
-        except OSError:
-            self.failed = True
+            return super().write(b)
+        except OSError as exc:
+            self.failed = exc
             raise
 
     def flush(self) -> None:
         try:
             super().flush()
-        except OSError:
-            self.failed = True
+        except OSError as exc:
+            self.failed = exc
             raise
+
+
+def _operator_text(fd: int) -> io.TextIOWrapper:
+    """``io.open(fd, "w", encoding="utf-8", newline="\\n")`` over an
+    :class:`_OperatorBuffer`: the same buffer size (``st_blksize``), line
+    buffering on a terminal, and ``mode``."""
+    raw = io.FileIO(fd, "w", closefd=True)
+    try:
+        size = io.DEFAULT_BUFFER_SIZE
+        with contextlib.suppress(OSError, AttributeError):
+            blksize = os.fstat(fd).st_blksize
+            if blksize > 1:
+                size = blksize
+        fh = io.TextIOWrapper(_OperatorBuffer(raw, size), encoding="utf-8",
+                              newline="\n", line_buffering=raw.isatty())
+        fh.mode = "w"  # type: ignore[misc]
+        return fh
+    except BaseException:
+        raw.close()
+        raise
 
 
 _O_OPERATOR = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
@@ -303,9 +326,11 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
       A write into a regular file that raises leaves it empty, not a prefix
       (a process killed mid-write can still leave one).
     """
-    # #4230: None until the handle is open — an OSError before that is the
-    # open's. After it, only the handle's own failure is the output's.
-    handle_failed: Optional[bool] = None
+    # #4230: False until the handle is open — an OSError before that is the
+    # open's. After it, only the OSError the handle itself raised is the
+    # output's (``own``); any other one is the body's and propagates as it is.
+    opened = False
+    own: Optional[OSError] = None
     try:
         try:
             pre = os.stat(path) if path != STDOUT_PATH else None
@@ -314,12 +339,12 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
         if path == STDOUT_PATH or _is_our_stdout(pre):
             claim_stdout(flag or path)
             sink = _StdoutSink()
-            handle_failed = False
+            opened = True
             try:
                 yield sink
                 sink.flush()
             except OSError:
-                handle_failed = sink.failed
+                own = sink.failed
                 # #4055: stdout itself failed and the caller reports it in its
                 # own line; drop what stdout still buffers, so the last flush
                 # at exit does not fail again and print a second one. Another
@@ -331,16 +356,15 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
                 sink.close()
             return
         fd, regular = _kernel_open_operator_output(path, mode, append, nofollow)
-        fh = _OperatorFile(io.BufferedWriter(io.FileIO(fd, "w", closefd=True)),
-                           encoding="utf-8", newline="\n")
-        handle_failed = False
+        fh = _operator_text(fd)
+        opened = True
         try:
             yield fh
             fh.flush()
         except BaseException:
             # Read before the cleanup below: its own flush failing must not
             # turn the body's error into the output's.
-            handle_failed = fh.failed
+            own = fh.buffer.failed
             if regular and not append:
                 with contextlib.suppress(OSError, ValueError):
                     fh.flush()
@@ -353,7 +377,7 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
     except OutputWriteError:
         raise
     except OSError as exc:
-        if handle_failed is False:
+        if opened and exc is not own:
             raise  # the body's own OSError, not the output path's (#4230)
         raise OutputWriteError(path, exc, flag=flag) from exc
 
