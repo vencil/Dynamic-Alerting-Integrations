@@ -107,7 +107,7 @@ Run with --apply to move them. (1 files will be moved)
 
 ## 後果與已知限制
 
-- **`_metadata` 是 domain／region／environment 的唯一來源，目錄路徑不提供預設值。** 這三個值是 tenant-api 判定 RBAC 範圍的輸入，只有不受範圍限制的管理員能改（[ADR-027](027-tenant-api-caller-identity.md) §7）；若由路徑推斷，任何能移動檔案的人都能改變一個租戶的授權範圍。而且推斷出來的值幾乎沒有讀者：tenant-api 只讀根目錄的租戶檔，標準部署又是扁平的（見下一條），線上 exporter 看不到目錄。所以分層之後 `_metadata` 仍要手填；`migrate-conf-d` 依 `_metadata` 決定檔案放哪個目錄，方向一致。`check_path_metadata_consistency.py --ci` 在目錄第一段與 `domain` 矛盾、或某一段是已知環境名而與 `environment` 矛盾時擋下（結束碼 1），讓目錄結構不會誤導讀者。
+- **`_metadata` 是 domain／region／environment 的唯一來源，目錄路徑不提供預設值。** 其中 domain 與 environment 是 tenant-api 判定 RBAC 範圍的輸入，只有不受範圍限制的管理員能改（[ADR-027](027-tenant-api-caller-identity.md) §7）；若由路徑推斷，任何能移動檔案的人都能改變一個租戶的授權範圍。而且推斷出來的值幾乎沒有讀者：tenant-api 只讀根目錄的租戶檔，標準部署又是扁平的（見下一條），線上 exporter 看不到目錄。所以分層之後 `_metadata` 仍要手填；`migrate-conf-d` 依 `_metadata` 決定檔案放哪個目錄，方向一致。`check_path_metadata_consistency.py --ci` 在目錄第一段與 `domain` 矛盾、或某一段是已知環境名而與 `environment` 矛盾時擋下（結束碼 1），讓目錄結構不會誤導讀者。
 - **分層在標準部署下不成立。** 客戶部署用的 `configmap-assemble` 是扁平組裝：只有 conf.d 頂層的檔會進 ConfigMap，子目錄裡的租戶與子目錄的 `_defaults.yaml` 都到不了線上的 exporter，組裝只印 WARN（[GitOps 部署](../integration/gitops-deployment.md) §3）。CI 的工具與路由產生器讀整棵樹，線上 exporter 讀平的一層，兩邊對同一個租戶會得到不同的結果，子目錄租戶在線上甚至不存在。處理方式追蹤在 [#4266](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4266)。
 - **metric 不帶路徑。** 目錄深度不影響 metric label，`tenant` 仍是唯一的租戶鍵；搬目錄不會改變任何 series。
 - **子目錄 `_defaults.yaml` 裡的路由鍵不被讀。** 子目錄 `_defaults.yaml` 的 `defaults:` 區塊裡寫 `_routing*`，沒有任何元件消費；路由生成器會點名它（`routing_in_unread_location`），`--validate` 時擋下。

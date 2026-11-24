@@ -89,14 +89,11 @@ If the same tenant ID appears in both `<root>/<id>.yaml` (flat) and `<root>/<dir
 
 **Long-term fix (tracked in [issue #127](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/127), queued for a v2.8.x hardening PR)**: propagate the hierarchical scan's duplicate error to a **hard error** so `Load()` fail-fasts. `config_mixed_mode_test.go::TestMixedMode_DuplicateAcrossModes_DetectedButNotPropagated` locks the current WARN-only behavior — the hardening PR will need to update this test to assert "Load must error", which is the explicit signal that PR must touch.
 
-❌ **`_metadata.{domain,region,environment}` is NOT auto-inferred from path**
+❌ **`_metadata.{domain,region,environment}` is NOT inferred from the path**
 
-Flat tenants at root have no path-derived metadata. Effects:
+`_metadata` is the one source of these values ([ADR-016](../adr/016-conf-d-directory-hierarchy-mixed-mode.en.md)); flat and hierarchical tenants alike fill them in by hand, and the directory path supplies no defaults. `migrate_conf_d.py` goes the other way: it plans target directories from the `_metadata` already written. Once hierarchical, `check_path_metadata_consistency.py --ci` refuses a directory path that contradicts `_metadata`.
 
-- alert labels `domain` / `region` / `env` are blank → dashboard groupings may miss these tenants
-- The only inference path is `migrate_conf_d.py` (which reads existing `_metadata` blocks in tenant YAMLs to plan target paths)
-
-**Current mitigation**: during mixed mode, customers must explicitly maintain `_metadata` blocks in flat tenant YAMLs (this is not a new requirement — it's been the contract since v2.7.0; cutover just makes the omission more painful).
+**What to do**: during cutover, keep every tenant's `_metadata` explicit.
 
 ---
 

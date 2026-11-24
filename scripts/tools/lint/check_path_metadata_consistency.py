@@ -233,8 +233,8 @@ def _format_mismatch(m: Mismatch, repo_root: Path) -> str:
         f"WARN path/metadata mismatch: {display}\n"
         f"  tenant={m.tenant}  field={m.field}"
         f"  path={m.path_value}  metadata={m.metadata_value}\n"
-        f"  (non-fatal -- directory placement vs _metadata disagree; "
-        f"resolve or accept as override)"
+        f"  (_metadata is the one source; move the file or fix _metadata — "
+        f"fails under --ci)"
     )
 
 
@@ -246,9 +246,10 @@ def main() -> int:
 def _main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Warn when conf.d/ directory path disagrees with tenant "
-            "_metadata.{domain,region,environment}. Exits 0 on any finding; "
-            "2 when da-guard parse-tree cannot read the tree."
+            "Report a conf.d/ directory path that contradicts tenant "
+            "_metadata.domain or _metadata.environment (region is not compared). "
+            "Exits 1 on any finding with --ci, 0 without; 2 when da-guard "
+            "parse-tree cannot read the tree."
         )
     )
     parser.add_argument(

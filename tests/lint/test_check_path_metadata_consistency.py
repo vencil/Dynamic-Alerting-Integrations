@@ -466,7 +466,7 @@ class TestExtensionSpellingAxis:
                 "--config-dir", str(config_dir), "--ci",
             )
 
-            # Warning-only on a tree it reads; a tree da-guard validation
+            # Findings on a tree it reads are exit 1 under --ci; a tree da-guard validation
             # names a path on is the shared conf.d refusal (#3206): rc 2.
             assert_refused(code, err, ["db-broken" + ext])
             # Name the REASON, not just the filename. The sibling tool has a

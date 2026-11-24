@@ -89,14 +89,11 @@ verified-at-version: v2.8.0
 
 **長期 fix（已開 [issue #127](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/127) 追蹤，排在 v2.8.x 強化 PR）**：把 hierarchical scan 的 duplicate error **propagate 為 hard error**，讓 `Load()` fail-fast。`config_mixed_mode_test.go::TestMixedMode_DuplicateAcrossModes_DetectedButNotPropagated` 鎖死目前 WARN-only 行為——強化 PR land 時需把 test 改寫為「Load 必須回 error」，這是該 PR 必須觸碰的訊號。
 
-❌ **`_metadata.{domain,region,environment}` 沒有從路徑自動推斷**
+❌ **`_metadata.{domain,region,environment}` 不從路徑推斷**
 
-扁平 tenant 在根目錄沒有 path-derived metadata。產生效果：
+`_metadata` 是這三個值的唯一來源（[ADR-016](../adr/016-conf-d-directory-hierarchy-mixed-mode.md)），平面與分層的租戶都一樣要手填；目錄路徑不提供預設值。`migrate_conf_d.py` 是反方向：依已寫的 `_metadata` 決定目標目錄。分層之後，`check_path_metadata_consistency.py --ci` 會擋下與 `_metadata` 矛盾的目錄路徑。
 
-- alerts 標籤上 `domain` / `region` / `env` 是空的 → dashboard 群組可能漏掉這些 tenants
-- 唯一推斷路徑是 `migrate_conf_d.py`（讀 tenant YAML 內已寫的 `_metadata` block 推斷目標目錄）
-
-**目前 mitigation**：mixed mode 期間，扁平 tenants 的 `_metadata` block 要由 customer 顯式維護（不是新規範——這是 v2.7.0 起的契約，只是 cutover 期間特別容易疏忽）。
+**做法**：cutover 期間，每個租戶的 `_metadata` 都要顯式維護。
 
 ---
 
