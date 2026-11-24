@@ -6,7 +6,13 @@ CLI orchestrator tests at the bottom of the file.
 """
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -273,3 +279,130 @@ class TestMainCLI:
         result = cis.main()
         assert result == 0
 
+
+
+# ---------------------------------------------------------------------------
+# #3981: reads refuse a non-regular include; --fix writes through the entry
+# ---------------------------------------------------------------------------
+def _includes(tmp_path):
+    inc = tmp_path / "docs" / "includes"
+    inc.mkdir(parents=True)
+    return inc
+
+
+@pytest.mark.parametrize("where", ["en, --check", "zh, --fix"])
+def test_a_fifo_named_like_an_include_is_rc2_one_line(where, tmp_path, monkeypatch,
+                                                      capsys, cli_argv):
+    """A FIFO named like an include blocked the read forever — under --fix
+    after the stub before it had been written. Now: rc 2, one line naming
+    it, and (under --fix) no stub is written."""
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    inc = _includes(tmp_path)
+    (inc / "a.md").write_text("# 規則包\n", encoding="utf-8")
+    if where.startswith("en"):
+        fifo = inc / "a.en.md"
+        argv = ["--check"]
+    else:
+        fifo = inc / "b.md"
+        argv = ["--fix"]
+    os.mkfifo(fifo)
+    monkeypatch.setattr(cis, "INCLUDES_DIR", inc)
+    cli_argv("check_includes_sync", *argv)
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            cis.main()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot read {fifo}: not a regular file"
+        " — internal path, this is a bug or an unreadable workspace"], err
+    if argv == ["--fix"]:
+        assert not (inc / "a.en.md").exists()
+
+
+def test_fix_writes_the_stub_with_the_checkout_mode(tmp_path, monkeypatch, cli_argv):
+    inc = _includes(tmp_path)
+    (inc / "a.md").write_text("# 規則包\n", encoding="utf-8")
+    monkeypatch.setattr(cis, "INCLUDES_DIR", inc)
+    cli_argv("check_includes_sync", "--fix")
+    assert cis.main() == 0
+    stub = inc / "a.en.md"
+    assert stub.read_text(encoding="utf-8") == "# Rule Pack\n"
+    if os.name != "nt":
+        assert stub.stat().st_mode & 0o777 == 0o644
+
+
+def test_a_stub_that_cannot_be_written_is_rc2_one_line(tmp_path):
+    """The includes directory takes no new file: rc 2, one line naming the
+    stub, where a bare write ended in the crash handler (`unexpected internal
+    error (PermissionError)`). Root can write anything, so under root the
+    tool runs as uid 65534 on a root-owned 0755 directory; otherwise the
+    directory is made read-only."""
+    if not hasattr(os, "geteuid"):
+        pytest.skip("needs POSIX uids and file modes")
+    prefix: list[str] = []
+    if os.geteuid() == 0:
+        if shutil.which("setpriv") is None:
+            pytest.skip("root, and no setpriv to drop to another uid")
+        prefix = ["setpriv", "--reuid=65534", "--regid=65534", "--clear-groups"]
+    d = Path(tempfile.mkdtemp(dir="/var/tmp"))  # tmp_path is 0700: 65534 could not reach it
+    try:
+        inc = d / "includes"
+        inc.mkdir()
+        (inc / "a.md").write_text("# 規則包\n", encoding="utf-8")
+        d.chmod(0o755)
+        inc.chmod(0o755 if prefix else 0o555)
+        driver = (
+            "import sys; from pathlib import Path\n"
+            f"sys.path[:0] = [{str(Path(cis.__file__).parent)!r}, {str(Path(cis.__file__).parent.parent)!r}]\n"
+            "import check_includes_sync as m, _lib_exitcodes\n"
+            f"m.INCLUDES_DIR = Path({str(inc)!r})\n"
+            "sys.argv = ['check_includes_sync.py', '--fix']\n"
+            "_lib_exitcodes.run(m.main)\n")
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("PYTHONUNBUFFERED", "DA_TEST_CRASH_EXIT_CODE")}
+        proc = subprocess.run([*prefix, sys.executable, "-c", driver], capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=120,
+                              env=env, cwd=str(d))
+        stub = inc / "a.en.md"
+        assert proc.returncode == 2, proc.stderr
+        assert proc.stderr.strip().splitlines() == [
+            f"ERROR: cannot write {stub}: Permission denied (errno 13)"
+            " — internal output path, this is a bug or an unwritable workspace"], proc.stderr
+        assert not stub.exists()
+    finally:
+        for p in (d, d / "includes"):
+            if p.exists():
+                p.chmod(0o755)
+        shutil.rmtree(d)
+
+
+def test_fix_names_an_include_it_cannot_read(tmp_path, monkeypatch, capsys, cli_argv):
+    """A zh include that is a symlink to nothing: the stub's source cannot be
+    read. rc 2, one line naming it, and the stub before it is not written —
+    where the read ended in the crash handler (`unexpected internal error`)."""
+    from _platform_fs import symlink_or_skip
+    inc = _includes(tmp_path)
+    (inc / "a.md").write_text("# 規則包\n", encoding="utf-8")
+    dangling = inc / "b.md"
+    symlink_or_skip(inc / "nowhere.md", dangling)
+    monkeypatch.setattr(cis, "INCLUDES_DIR", inc)
+    cli_argv("check_includes_sync", "--fix")
+    with pytest.raises(SystemExit) as exc:
+        cis.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot read {dangling}: No such file or directory (errno 2)"
+        " — internal path, this is a bug or an unreadable workspace"], err
+    assert not (inc / "a.en.md").exists()

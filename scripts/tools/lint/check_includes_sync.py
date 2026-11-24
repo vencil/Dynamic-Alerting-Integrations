@@ -15,7 +15,6 @@ Usage:
 import argparse
 import os
 import re
-import stat
 import sys
 from pathlib import Path
 
@@ -27,6 +26,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    OutputWriteError, exit_on_output_write_error, is_special_file, write_repo_artifact)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -61,6 +62,18 @@ def count_list_items(content: str) -> int:
 
 # ── Comparison ───────────────────────────────────────────────────────
 
+def _read(path: Path) -> str:
+    """The include's text; a FIFO (or other non-regular file) named like an
+    include would block the read, and an unreadable one would end in the
+    crash handler: both are one line at rc 2 (#3981)."""
+    if is_special_file(path):
+        raise OutputWriteError(path, OSError(None, "not a regular file"), action="read")
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise OutputWriteError(path, exc, action="read") from exc
+
+
 def compare_pair(zh_path: Path, en_path: Path) -> list:
     """Compare a zh/en include pair. Returns list of issue strings."""
     issues = []
@@ -69,8 +82,8 @@ def compare_pair(zh_path: Path, en_path: Path) -> list:
         issues.append(f"English version missing: {en_path.name}")
         return issues
 
-    zh = zh_path.read_text(encoding="utf-8")
-    en = en_path.read_text(encoding="utf-8")
+    zh = _read(zh_path)
+    en = _read(en_path)
 
     # Code blocks
     zh_cb = count_code_blocks(zh)
@@ -116,24 +129,24 @@ _ZH_EN_HEADERS = {
 }
 
 
-def _create_en_stub(zh_path: Path, en_path: Path) -> None:
-    """Create an English stub from a Chinese include snippet.
-
-    Copies the zh file and replaces known Chinese headers/keywords
-    with English equivalents.
-    """
-    content = zh_path.read_text(encoding="utf-8")
-
+def _en_stub_text(zh_path: Path) -> str:
+    """An English stub from a Chinese include snippet: the zh text with
+    known Chinese headers/keywords replaced by English equivalents."""
+    content = _read(zh_path)
     for zh_str, en_str in _ZH_EN_HEADERS.items():
         content = content.replace(zh_str, en_str)
+    return content
 
-    en_path.write_text(content, encoding="utf-8", newline="\n")
-    os.chmod(en_path,
-             stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+
+def _create_en_stub(zh_path: Path, en_path: Path) -> None:
+    """Create *en_path* from *zh_path*, through the artifact entry (#3981):
+    atomic, with the mode a checkout gives (0644)."""
+    write_repo_artifact(en_path, _en_stub_text(zh_path))
 
 
 # ── Main ─────────────────────────────────────────────────────────────
 
+@exit_on_output_write_error
 def main() -> int:
     """CLI entry point: Check that Chinese and English include snippets stay in sync."""
     try_utf8_stdout()
@@ -172,6 +185,11 @@ def main() -> int:
     total_issues = 0
     missing_en = 0
     fixed = 0
+    # #3981: every stub is computed before the first is written, so an
+    # include that cannot be read leaves the others unwritten. (No target is
+    # judged ahead: a stub is made only where `en_path.exists()` is False, a
+    # path `check_repo_artifact` has nothing to refuse in.)
+    stubs: list[tuple[Path, str]] = []
 
     for zh_path in zh_files:
         en_name = zh_path.stem + ".en.md"
@@ -183,8 +201,7 @@ def main() -> int:
         if not en_path.exists():
             missing_en += 1
             if args.fix:
-                _create_en_stub(zh_path, en_path)
-                print(f"  🔧 Created {en_name} from {zh_path.name}")
+                stubs.append((en_path, _en_stub_text(zh_path)))
                 fixed += 1
                 continue
 
@@ -195,6 +212,10 @@ def main() -> int:
                 print(f"   {issue}")
         elif args.verbose:
             print(f"✅ {zh_path.name} ↔ {en_name}: in sync")
+
+    for en_path, text in stubs:
+        write_repo_artifact(en_path, text)
+        print(f"  🔧 Created {en_path.name}")
 
     # Summary
     print(f"\n{'─' * 40}")
