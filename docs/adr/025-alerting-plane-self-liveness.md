@@ -98,7 +98,7 @@ Alertmanager 沒有「免於抑制」的設定。`severity: none` 只讓 `Watchd
 
 **外部逾時要比重送間隔長。** 外部逾時必須比 `repeat_interval` 長，吸收網路延遲，也吸收極端負載下的規則評估落後：資源被擠壓時 Prometheus 雖然還活著，規則評估迴圈會落後，心跳因而延遲。`repeat_interval: 3m` 時建議外部逾時 5 分鐘，並在外部設首次心跳的寬限期，避免平台重啟時誤報。
 
-**心跳 URL 是設定，不是硬性依賴。** URL 內嵌 token，屬於機密，不寫進 ConfigMap；receiver 以 `url_file` 讀掛載的 Secret，送出時才讀檔，輪換 URL 不必重載 Alertmanager。出貨的 Secret 是佔位值：此時心跳送不出去，`AlertmanagerWebhookNotificationsFailing` 會觸發，提示 operator 去設定。路由產生器也會檢查 `watchdog-heartbeat` receiver 有沒有接上任何通知設定：沒接時印出警告；以 operator 自己的 base 設定組裝、又帶 `--strict` 時，改為錯誤並以結束碼 1 結束。
+**心跳 URL 是設定，不是硬性依賴。** URL 內嵌 token，屬於機密，不寫進 ConfigMap；receiver 以 `url_file` 讀掛載的 Secret，送出時才讀檔，輪換 URL 不必重載 Alertmanager。出貨的 Secret 是佔位值：此時心跳送不出去，`AlertmanagerWebhookNotificationsFailing` 會觸發，提示 operator 去設定。路由產生器也會檢查 `watchdog-heartbeat` receiver 有沒有接上任何通知設定：沒接時印出警告；以 operator 自己的 base 設定組裝、又帶 `--strict` 時，改為錯誤並以結束碼 1 結束。要同時送到兩個外部監測（冗餘），在 `watchdog-heartbeat` 這個 receiver 裡加多個 `webhook_configs`，不要拆成多條路由：路由產生器每次都移除所有 `Watchdog` 路由、只放回一條，而手寫設定裡第二條路由會被第一條的 `continue: false` 擋住。
 
 ### 2. 斷網環境：由叢集外部輪詢健康端點
 
@@ -168,7 +168,7 @@ Alertmanager 沒有「免於抑制」的設定。`severity: none` 只讓 `Watchd
 |---|---|---|
 | runtime canary 的常駐部署 | 一個常駐的假租戶加一條必觸發的 dead-man's switch（`CustomAlertPipelineCanaryDown`），抓 `Watchdog` 看不到的 exporter／編譯管線靜默死亡。設計與 CI 範例已完成，見 [Runtime Canary 設計](../design/runtime-canary.md) | 重大的規則編譯重構或多租戶路由大改之前先部署當安全網；或第一次正式環境發生「告警評估悄悄失敗」之後部署防再犯 |
 | 平台自建的端到端合成探測 | 平台主動發一條合成告警，走完 Prometheus → Alertmanager → 外部。客戶多半用上面的對接面就夠，未必要做 | 心跳與 canary 上線後，仍發生「規則評估悄悄失敗」 |
-| 後端的時間外插語意 | `predict_linear` 在客戶後端上的時間外插是否正確；需要真實時間軸，密集的測試資料驗不出 | 仍開，見 [backend-compat-baseline.md](../internal/backend-compat-baseline.md) |
+| 後端的時間外插語意 | `predict_linear` 在客戶後端上的時間外插是否正確；需要真實時間軸，密集的測試資料驗不出 | 沒有明確的觸發條件，仍開；見 [backend-compat-baseline.md](../internal/backend-compat-baseline.md) |
 
 取捨的軸：本平台要取代或整合已經在用成熟監控產品的客戶。心跳、高可用、合成探測這些能力業界本來就有，該做到哪，門檻是被取代的既有產品設下的標準。所以每一項先做評估階段就要拿得出來的設計與可跑的範例（便宜），常駐元件（昂貴）等觸發條件；客戶已經有的能力走對接，不重造。
 
