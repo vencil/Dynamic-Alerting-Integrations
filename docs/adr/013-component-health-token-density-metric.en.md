@@ -53,7 +53,7 @@ A score of ≥7 is Tier 1, 4–6 is Tier 2, ≤3 is Tier 3. Two cases are labell
     return "Tier 3", score, breakdown
 ```
 
-Tools marked `status: archived` in the registry are not scored: they get `tier: "Archived"` and are left out of every aggregate. The archiving process and the automatic `archive_candidates` suggestions are in [`dev-rules.md`](../internal/dev-rules.md), §T (tool lifecycle).
+Tools marked `status: archived` in the registry are not scored: they get `tier: "Archived"` and are left out of the tier, token-group, coverage and i18n aggregates (they still count in `total_registered_tools`). The archiving process and the automatic `archive_candidates` suggestions are in [`dev-rules.md`](../internal/dev-rules.md), §T (tool lifecycle).
 
 ### Example: no document references it, and it is still Tier 1
 
@@ -131,7 +131,7 @@ So "80 tokens with 20 palette classes left" lands in B, not A.
 - **Writer is only 0 or 2.** It relies on matching the key name and source strings, with no middle value; a name that happens to contain heatmap, setup and the like also gets 2.
 - **It advises; it blocks nothing.** The scanner only reads, exits 0 on success, and is not wired into pre-commit or CI. Its output file `docs/internal/component-health-snapshot.json` is listed in `.gitignore` and is regenerated locally.
 - **The portal's component-health page is not live data.** `tools/portal/src/interactive/tools/component-health.jsx` embeds a hard-coded snapshot (the page states a snapshot date of 2026-04-17) that does not follow the scanner.
-- **Tests hold only part of this.** `tests/dx/test_scan_component_health.py` holds the exclusion of archived tools, the `archive_candidates` criteria, and the field list of a normal tool's output (including `token_group` and `token_density_per_100_loc`). The Tier score thresholds and the per-signal scoring rules have no direct unit test.
+- **Tests hold only part of this.** `tests/dx/test_scan_component_health.py` holds the exclusion of archived tools, the `archive_candidates` criteria, and the field list of a normal tool's output (including `token_group` and `token_density_per_100_loc`). The Tier score thresholds, the per-signal scoring rules and the `token_group` grouping rule have no direct unit test.
 
 ## Alternatives Considered
 
@@ -139,7 +139,7 @@ So "80 tokens with 20 palette classes left" lands in B, not A.
 |---|---|
 | Keep the single `appears_in` signal | Systematically underrates standalone portal tools |
 | 10 or more signals | High maintenance cost; calibration needs regression data |
-| Machine-learning classifier | Too few tools (45 in the registry today) and no labelled training set |
+| Machine-learning classifier | Only a few dozen tools, and no labelled training set |
 | Token ratio as the main axis for grouping | Small tools (3 tokens, 0 palette) would be misclassified as mature |
 | Sorting by `palette_count` descending | Large tools always come first; does not reflect completeness |
 | A separate composite `migration_score` | One more metric to maintain; the token ratio is enough |

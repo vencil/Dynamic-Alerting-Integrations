@@ -58,7 +58,7 @@ updated_at: 2026-11-24
     return "Tier 3", score, breakdown
 ```
 
-registry 標了 `status: archived` 的工具不評分：輸出 `tier: "Archived"`，並從所有彙總數字排除。下架流程與 `archive_candidates` 自動建議見 [`dev-rules.md`](../internal/dev-rules.md) 的 §T 工具生命週期。
+registry 標了 `status: archived` 的工具不評分：輸出 `tier: "Archived"`，並從 tier、token 分組、覆蓋率與 i18n 的彙總排除（`total_registered_tools` 仍算進去）。下架流程與 `archive_candidates` 自動建議見 [`dev-rules.md`](../internal/dev-rules.md) 的 §T 工具生命週期。
 
 ### 範例：沒有任何文件引用，照樣是 Tier 1
 
@@ -136,7 +136,7 @@ registry 中 `threshold-heatmap` 的 `appears_in` 是空的；用舊的單一訊
 - **Writer 只有 0 與 2。** 判斷靠 key 名稱與原始碼字串比對，沒有中間值；名稱碰巧含 heatmap、setup 之類的字也會拿到 2。
 - **只給建議，不擋任何東西。** 掃描器純讀取、正常結束碼是 0，沒有接進 pre-commit 或 CI。輸出檔 `docs/internal/component-health-snapshot.json` 列在 `.gitignore`，要在本機重跑產生。
 - **portal 的 component-health 頁面不是即時資料。** `tools/portal/src/interactive/tools/component-health.jsx` 內嵌的是一份寫死的快照（頁面標示快照日期 2026-04-17），不會隨掃描器更新。
-- **測試只守住一部分。** `tests/dx/test_scan_component_health.py` 守住 archived 工具的排除、`archive_candidates` 的判準，以及一般工具輸出的欄位清單（含 `token_group`、`token_density_per_100_loc`）。Tier 的分數門檻與各訊號的計分規則沒有直接的單元測試。
+- **測試只守住一部分。** `tests/dx/test_scan_component_health.py` 守住 archived 工具的排除、`archive_candidates` 的判準，以及一般工具輸出的欄位清單（含 `token_group`、`token_density_per_100_loc`）。Tier 的分數門檻、各訊號的計分規則與 `token_group` 的分組規則都沒有直接的單元測試。
 
 ## 考慮過的替代方案
 
@@ -144,7 +144,7 @@ registry 中 `threshold-heatmap` 的 `appears_in` 是空的；用舊的單一訊
 |---|---|
 | 保留 `appears_in` 單一訊號 | 系統性低估獨立運作的 portal 工具 |
 | 10 個以上的訊號 | 維護成本高；要校準需要 regression 資料 |
-| 機器學習分類器 | 工具數太少（registry 目前 45 個），也沒有標註好的訓練資料 |
+| 機器學習分類器 | 工具數只有數十個，也沒有標註好的訓練資料 |
 | 以 token 比例作為分組主軸 | 小工具（3 個 token、0 個 palette）會被錯歸為成熟 |
 | 按 `palette_count` 由多到少排序 | 大工具永遠排在前面，不反映完成度 |
 | 另做一個綜合的 `migration_score` | 多一個要維護的指標；token 比例已經夠用 |

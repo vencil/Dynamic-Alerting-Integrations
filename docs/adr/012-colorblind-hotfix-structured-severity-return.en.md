@@ -14,9 +14,7 @@ lang: en
 
 ✅ **Accepted** (v2.7.0, 2026-04-16)
 
-Revised: cell colors moved from the Tailwind palette to design tokens (`--da-color-*`); the structure returned by the severity function is unaffected.
-
-Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged.
+Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged. Cell colors have moved from the Tailwind palette to design tokens (`--da-color-*`); the structure returned by the severity function is unaffected.
 
 ## Decision
 
@@ -109,7 +107,7 @@ Requirements at design time:
 
 ### Acceptance and its tests
 
-- `colorblind-safe severity symbols are rendered (ADR-012)` in `tests/e2e/threshold-heatmap.spec.ts`: after the tool loads, at least one severity symbol (✓ / ⚠ / ❌) must be on screen. It checks only that symbols exist, not the mapping from value to tier.
+- `colorblind-safe severity symbols are rendered (ADR-012)` in `tests/e2e/threshold-heatmap.spec.ts`: after the tool loads, at least one severity symbol (✓ / ⚠ / ❌) must be on screen. It checks only that symbols exist, not the mapping from value to tier; the legend itself contains ✓, so it passes even if no cell renders a symbol.
 - The same spec's smoke check runs axe-core's WCAG 2 A / AA rules: zero Critical violations, at most one non-Critical violation tolerated.
 - These e2e tests run on every PR in `Smoke Tests (Chromium)`.
 - The tier boundaries of `getCellSeverity` have no unit test.

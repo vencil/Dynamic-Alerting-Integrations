@@ -19,9 +19,7 @@ updated_at: 2026-11-24
 
 ✅ **Accepted**（v2.7.0, 2026-04-16）
 
-修訂：格子的顏色已從 Tailwind 調色盤改為 design token（`--da-color-*`），判定函式回傳的結構不受影響。
-
-2026-11-24 修訂：改寫為現行行為。決策不變。
+2026-11-24 修訂：改寫為現行行為。決策不變。格子的顏色已從 Tailwind 調色盤改為 design token（`--da-color-*`），判定函式回傳的結構不受影響。
 
 ## 決策
 
@@ -85,7 +83,7 @@ render 端把文字標籤放在 `<td>` 上，符號用 `aria-hidden="true"` 藏�
                             {valueText}
 ```
 
-所以數值 70 的格子，畫面上是 `⚠⚠70`，螢幕閱讀器唸的是「`<租戶> <指標>: 70.00, High`」。
+所以數值 70 的格子，畫面上是 `⚠⚠70`，螢幕閱讀器唸的是「`<租戶> <指標>: 70.00, High`」（中文介面唸「高」）。
 
 min、max、P95 是對畫面上**所有**格子（所選租戶 × 所選 Rule Pack 的全部指標）一起算的，不是逐指標各算一次；這個工具顯示的是依 Rule Pack 預設值加隨機變動產生的範例資料。
 
@@ -114,7 +112,7 @@ v2.6.0 的 threshold-heatmap 只用格子底色表達嚴重度（綠／黃／橙
 
 ### 驗收與它的測試
 
-- `tests/e2e/threshold-heatmap.spec.ts` 的 `colorblind-safe severity symbols are rendered (ADR-012)`：載入工具後，畫面上至少要有一個嚴重度符號（✓／⚠／❌）。它只檢查符號存在，不檢查數值與等級的對應。
+- `tests/e2e/threshold-heatmap.spec.ts` 的 `colorblind-safe severity symbols are rendered (ADR-012)`：載入工具後，畫面上至少要有一個嚴重度符號（✓／⚠／❌）。它只檢查符號存在，不檢查數值與等級的對應；圖例本身就有 ✓，所以格子完全沒畫符號時它仍會通過。
 - 同一支 spec 的 smoke 檢查跑 axe-core 的 WCAG 2 A／AA 規則：Critical 違規必須為零，非 Critical 最多容許一項。
 - 這些 e2e 在每支 PR 的 `Smoke Tests (Chromium)` 中執行。
 - `getCellSeverity` 的分級邊界沒有單元測試。
