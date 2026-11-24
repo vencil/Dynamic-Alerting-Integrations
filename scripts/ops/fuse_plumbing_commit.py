@@ -33,7 +33,9 @@ Usage
 Exit codes
 ----------
   0 — commit landed (either via normal path or plumbing fallback); when the
-      SHA or the branch cannot be read afterwards in time, still 0, said
+      SHA or the branch cannot be read afterwards in time, still 0, said;
+      when `git commit` ends non-zero but HEAD moved (it failed after the
+      commit landed, #4231), still 0, said
   2 — no commit: the normal path's `git commit` failed (a hook failed — a
       finding or a hook that could not run, which git and pre-commit both end
       at 1 and the tool cannot tell apart — or nothing to commit; read
@@ -103,11 +105,22 @@ class CommandTimedOut(RuntimeError):
     killed. A RuntimeError, so the run ends at 2 with one named line."""
 
 
-#: #4231: where a streamed command's stdout and stderr go — both to this
-#: process's fd 2, so they show as they are written and this tool's own
-#: stdout keeps only its `committed:` line.
-_STREAMED = {"stdout": 2, "stderr": 2}
 _CAPTURED = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+
+
+def _streamed() -> dict:
+    """#4231: where a streamed command's stdout and stderr go — both to this
+    process's fd 2, so they show as they are written and this tool's own
+    stdout keeps only its `committed:` line. An fd 2 that takes no write
+    (``2>&-``: _lib_exitcodes fills it with a read-only null device) is the
+    null device instead: git would fail its own writes there and end at 128
+    after the commit landed."""
+    try:
+        os.write(2, b"")
+        dest = 2
+    except OSError:
+        dest = subprocess.DEVNULL
+    return {"stdout": dest, "stderr": dest}
 
 
 def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = True,
@@ -124,7 +137,7 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = Tru
     if env:
         merged_env.update(env)
     limit = STEP_TIMEOUT_S if timeout is None else timeout
-    streams = _STREAMED if stream else _CAPTURED
+    streams = _streamed() if stream else _CAPTURED
     try:
         if group and os.name == "posix":
             result = _run_group(cmd, merged_env, limit, streams)
@@ -365,6 +378,14 @@ def require_pre_commit_hook() -> None:
         "every commit would fail without running a check; reinstall pre-commit")
 
 
+def _head_or_none() -> str | None:
+    """HEAD's SHA, or None when it cannot be read (no commit yet, a timeout)."""
+    try:
+        return _run(["git", "rev-parse", "--verify", "-q", "HEAD"], check=False) or None
+    except CommandTimedOut:
+        return None
+
+
 def normal_commit(
     repo_root: pathlib.Path,
     message: str,
@@ -382,6 +403,7 @@ def normal_commit(
     cmd = ["git", "commit", "-m", message]
     if amend:
         cmd = ["git", "commit", "--amend", "-m", message]
+    before = _head_or_none()
     try:
         _run(cmd, timeout=COMMIT_TIMEOUT_S, group=True, stream=True)
     except CommandTimedOut as exc:
@@ -389,6 +411,15 @@ def normal_commit(
             f"{exc}: whether the commit landed is unknown (a hook may still be "
             "running); check with `git log -1` before committing again") from exc
     except CommandFailed as exc:
+        after = _head_or_none()
+        if after is not None and after != before:
+            # #4231: git failed after the ref moved — a write to a stderr the
+            # reader left, say. The commit landed: 0, and say so, not "no
+            # commit" (exit 2), which a retry would turn into a second one.
+            print(f"warn: `git commit` ended {exc.returncode}, but HEAD moved to "
+                  f"{after}: the commit landed; check it with `git log -1`",
+                  file=sys.stderr)
+            return after
         raise RuntimeError(
             f"`git commit` failed (rc {exc.returncode}): a hook failed — "
             "a finding, or a check that could not run — or there was nothing to "

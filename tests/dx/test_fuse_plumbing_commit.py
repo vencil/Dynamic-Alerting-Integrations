@@ -603,3 +603,46 @@ def test_the_hooks_output_shows_while_the_hook_still_runs(tmp_path: Path) -> Non
     out, err = proc.communicate(timeout=60)
     assert early, (seen + err).decode("utf-8", "replace")
     assert proc.returncode == 0, (seen + err).decode("utf-8", "replace")
+
+
+def test_a_closed_stderr_still_commits_and_says_so(tmp_path: Path) -> None:
+    """#4231 review: with `2>&-` fd 2 is a read-only null device; git handed
+    that fd fails its own writes and ends 128 after the commit landed — and
+    a hook that checks its own stderr write fails the commit outright."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    _hook(repo, "#!/bin/sh\necho 'hook: ran' >&2 || exit 5\nexit 0\n")
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    proc = subprocess.run(  # subprocess-timeout: ignore
+        ["sh", "-c", f'exec "{sys.executable}" "{_SCRIPT}" --auto -m "test: x" f.txt 2>&-'],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=repo)
+    assert proc.returncode == 0, proc.stdout
+    assert proc.stdout.startswith("committed: "), proc.stdout
+    assert _head(repo) != before
+
+
+def test_a_git_failure_after_the_ref_moved_is_a_landed_commit(tmp_path: Path, monkeypatch, capsys) -> None:
+    """#4231 review: git can end non-zero after the commit landed (a write to
+    a stderr whose reader left). HEAD moved: 0 with a warning, never "no
+    commit", which a retry would turn into a second commit."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    _hook(repo, "#!/bin/sh\nexit 0\n")
+    mod = _load_module()
+    real = mod._run
+
+    def commit_then_fail(cmd, **kw):
+        out = real(cmd, **kw)
+        if cmd[:2] == ["git", "commit"]:
+            raise mod.CommandFailed(128, "cmd failed (128): git commit")
+        return out
+
+    monkeypatch.setattr(mod, "_run", commit_then_fail)
+    monkeypatch.chdir(repo)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    assert mod.main(["--auto", "-m", "test: x", "f.txt"]) == 0
+    captured = capsys.readouterr()
+    after = _head(repo)
+    assert after != before
+    assert "the commit landed" in captured.err and after in captured.err, captured.err
+    assert captured.out.startswith(f"committed: {after}"), captured.out
