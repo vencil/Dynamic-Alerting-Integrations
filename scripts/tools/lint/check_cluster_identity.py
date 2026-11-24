@@ -100,10 +100,10 @@ Not judged (say so rather than look covered)
     `group_left (da_cluster)`: only `on (..., da_cluster)` against a flat side
     is reported.
   * rules compiled from a tenant's own recipes at deploy time are not in
-    this tree: only the pack compiled from this repo's own conf.d is. The
+    this tree: only the pack compiled from this repo's own sample tenants is. The
     compiler writes every recipe per cluster and declares its absence cores
     tenant-wide in the pack it writes (next section); what holds that for
-    the recipes this repo's conf.d does not use is the compiler's own tests
+    the recipes those sample tenants do not use is the compiler's own tests
     (custom_alert_compile_test.go, tests/dx/test_custom_alerts_promtool.py),
     not this check.
 

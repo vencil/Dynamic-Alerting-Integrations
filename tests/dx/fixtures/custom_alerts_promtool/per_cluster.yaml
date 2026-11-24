@@ -11,8 +11,10 @@
 #
 # Each case is built so the tenant-wide reading gives a DIFFERENT answer (a
 # different value, an alert with no cluster, or the opposite verdict), so a
-# recipe that loses the label fails here by name. `absence` is the exception
-# on purpose: it stays tenant-wide (present in any cluster counts).
+# recipe that loses the label fails here by name. Three cases are the
+# exception on purpose: the two `absence` cases (it stays tenant-wide: present
+# in any cluster counts) and "maintenance mutes both" (maintenance is one per
+# tenant; that case fails when the mute is paired per cluster instead).
 rule_files:
   - rule-pack-custom-alerts.yaml
 
@@ -554,3 +556,103 @@ tests:
               runbook_url: "http://rb/shop"
               owner: team-shop
               tier: gold
+
+  # ── the tenant's thresholds, maintenance state and metadata ALSO carry
+  #    `da_cluster` (ADR-006 contract 3: they do when they are federated from
+  #    each cluster, same content). They are still one per tenant: the
+  #    threshold record collapses them, so nothing matches many-to-many and
+  #    each cluster is judged once. east 500 (below), west 1500 → west only. ──
+  - interval: 15s
+    input_series:
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '500x48'
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '1500x48'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m__for1m", tenant="shop-a", severity="warning", name="queue_depth_high", da_cluster="east"}'
+        values: '1000x48'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m__for1m", tenant="shop-a", severity="warning", name="queue_depth_high", da_cluster="west"}'
+        values: '1000x48'
+      - series: 'user_state_filter{tenant="shop-a", filter="maintenance", da_cluster="east"}'
+        values: '0x48'
+      - series: 'user_state_filter{tenant="shop-a", filter="maintenance", da_cluster="west"}'
+        values: '0x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold", da_cluster="east"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold", da_cluster="west"}'
+        values: '1x48'
+    promql_expr_test:
+      - expr: 'sum by (da_cluster) (ALERTS{alertname="Custom_threshold__order_queue_depth__gt__w5m__for1m", alertstate="firing"})'
+        eval_time: 11m
+        exp_samples:
+          - labels: '{da_cluster="west"}'
+            value: 1
+
+  # ── one cluster's series carry `da_cluster`, the other's do not (a central
+  #    Prometheus that also scrapes its own cluster directly). The unlabelled
+  #    series are a group of their own: labelled east 500 (below), unlabelled
+  #    1500 → one alert, with no `da_cluster`. ──
+  - interval: 15s
+    input_series:
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '500x48'
+      - series: 'order_queue_depth{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '1500x48'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m__for1m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+        values: '1000x48'
+    promql_expr_test:
+      - expr: 'sum by (da_cluster) (ALERTS{alertname="Custom_threshold__order_queue_depth__gt__w5m__for1m", alertstate="firing"})'
+        eval_time: 11m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: 'custom:metric:threshold__order_queue_depth__gt__w5m__for1m'
+        eval_time: 11m
+        exp_samples:
+          - labels: 'custom:metric:threshold__order_queue_depth__gt__w5m__for1m{tenant="shop-a", version="default", da_cluster="east"}'
+            value: 500
+          - labels: 'custom:metric:threshold__order_queue_depth__gt__w5m__for1m{tenant="shop-a", version="default"}'
+            value: 1500
+
+  # ── slo_burn_rate, the bad-event floor is met in a DIFFERENT cluster → silent.
+  #    east: 1 error in every 2 requests, but only 1 error a minute — both
+  #          ratio gates of both tiers hold, the floor does not (5 bad events
+  #          in 5m against 10; 30 in 30m against 60).
+  #    west: 60 errors a minute out of 60000 requests — the floor holds, no
+  #          ratio gate does (0.001).
+  #    Paired on(tenant) alone, east's ratios + west's bad events would fire
+  #    for a burn no cluster has. ──
+  - interval: 1m
+    input_series:
+      - series: 'checkout_requests_errors_total{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '0+1x500'
+      - series: 'checkout_requests_total{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '0+2x500'
+      - series: 'checkout_requests_errors_total{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '0+60x500'
+      - series: 'checkout_requests_total{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '0+60000x500'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="critical", name="checkout_availability"}'
+        values: '0.0144x500'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="warning", name="checkout_availability"}'
+        values: '0.006x500'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
+        exp_alerts: []
+    promql_expr_test:
+      # the premise: east passes the ratio gates, west passes the floor
+      - expr: 'count by (da_cluster) (custom:metric:slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m:5m > 0.0144)'
+        eval_time: 7h
+        exp_samples:
+          - labels: '{da_cluster="east"}'
+            value: 1
+      - expr: 'count by (da_cluster) (custom:metric:slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m:1h > 0.0144)'
+        eval_time: 7h
+        exp_samples:
+          - labels: '{da_cluster="east"}'
+            value: 1
+      - expr: 'count by (da_cluster) (custom:bad:slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m:5m > 10)'
+        eval_time: 7h
+        exp_samples:
+          - labels: '{da_cluster="west"}'
+            value: 1
