@@ -211,6 +211,29 @@ class _StdoutSink(io.TextIOBase):
         super().close()
 
 
+class _OperatorFile(io.TextIOWrapper):
+    """The text handle over an operator output file that remembers whether a
+    write or flush through it failed (#4230) — the same bookkeeping as
+    :attr:`_StdoutSink.failed`, so that only the handle's own failure is
+    reported as the output path's."""
+
+    failed = False
+
+    def write(self, s: str) -> int:  # type: ignore[override]
+        try:
+            return super().write(s)
+        except OSError:
+            self.failed = True
+            raise
+
+    def flush(self) -> None:
+        try:
+            super().flush()
+        except OSError:
+            self.failed = True
+            raise
+
+
 _O_OPERATOR = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
                | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
 
@@ -273,10 +296,16 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
       not reach through a symlink — created now or already there (V15).
       *nofollow*: a symlink at *path* is refused (O_NOFOLLOW), never written
       through (#1560: a file that holds credential values).
-    * any ``OSError`` ⇒ :class:`OutputWriteError` naming *path* and *flag*.
+    * an ``OSError`` of opening *path*, or of a write or flush through the
+      yielded handle ⇒ :class:`OutputWriteError` naming *path* and *flag*.
+      Any other ``OSError`` the ``with`` body raises (reading another file,
+      say) propagates as it is: it is not the output path's fault (#4230).
       A write into a regular file that raises leaves it empty, not a prefix
       (a process killed mid-write can still leave one).
     """
+    # #4230: None until the handle is open — an OSError before that is the
+    # open's. After it, only the handle's own failure is the output's.
+    handle_failed: Optional[bool] = None
     try:
         try:
             pre = os.stat(path) if path != STDOUT_PATH else None
@@ -285,10 +314,12 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
         if path == STDOUT_PATH or _is_our_stdout(pre):
             claim_stdout(flag or path)
             sink = _StdoutSink()
+            handle_failed = False
             try:
                 yield sink
                 sink.flush()
             except OSError:
+                handle_failed = sink.failed
                 # #4055: stdout itself failed and the caller reports it in its
                 # own line; drop what stdout still buffers, so the last flush
                 # at exit does not fail again and print a second one. Another
@@ -300,11 +331,16 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
                 sink.close()
             return
         fd, regular = _kernel_open_operator_output(path, mode, append, nofollow)
-        fh = io.open(fd, "w", encoding="utf-8", newline="\n", closefd=True)
+        fh = _OperatorFile(io.BufferedWriter(io.FileIO(fd, "w", closefd=True)),
+                           encoding="utf-8", newline="\n")
+        handle_failed = False
         try:
             yield fh
             fh.flush()
         except BaseException:
+            # Read before the cleanup below: its own flush failing must not
+            # turn the body's error into the output's.
+            handle_failed = fh.failed
             if regular and not append:
                 with contextlib.suppress(OSError, ValueError):
                     fh.flush()
@@ -317,6 +353,8 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
     except OutputWriteError:
         raise
     except OSError as exc:
+        if handle_failed is False:
+            raise  # the body's own OSError, not the output path's (#4230)
         raise OutputWriteError(path, exc, flag=flag) from exc
 
 
