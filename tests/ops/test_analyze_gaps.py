@@ -98,6 +98,21 @@ class TestMatchByPrefix:
         pack, _ = ag.match_by_prefix("MySQL_Connections")
         assert pack == "mariadb"
 
+    @pytest.mark.parametrize("metric,pack", [
+        ("ClickHouseProfileEvents_Query", "clickhouse"),
+        ("jvm_memory_used_bytes", "jvm"),
+        ("nginx_connections_active", "nginx"),
+        # the heuristic ignores case, so an older exporter's lowercase
+        # `clickhouse_*` still hints at ClickHouse
+        ("clickhouse_query_total", "clickhouse"),
+        ("custom_unknown_metric", None),
+    ])
+    def test_the_pack_comes_from_the_registry_namespaces(self, metric, pack):
+        """#4270: the hand map had `clickhouse_` (ClickHouse's own /metrics
+        names are CamelCase) and no jvm or nginx; the registry's
+        metric_prefixes have all."""
+        assert ag.match_by_prefix(metric)[0] == pack
+
 
 # ============================================================
 # tokenize
