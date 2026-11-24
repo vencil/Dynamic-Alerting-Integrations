@@ -130,6 +130,7 @@ The tool automatically handles:
 - **Three-piece output**: `.migration/conf.d/<tenant>.yaml` (thresholds under `tenants.<tenant>`) + `.migration/platform-recording-rules.yaml` + `.migration/platform-alert-rules.yaml` + `migration-report.txt`, plus `.migration/conf.d/_defaults.yaml`, whose `defaults:` block must be merged into the conf.d root `_defaults.yaml` (merge, do not overwrite the whole file) before the exporter emits these thresholds. The v2.9.0 image has neither `--tenant` nor `.migration/conf.d/`: it writes only `tenant-config.yaml` (thresholds flat at the top level, to indent under `tenants.<tenant>` yourself) and no defaults fragment <!-- image-caveat: v2.9.0 -->
 - **Auto-Suppression**: warning + critical pairs for the same metric are auto-matched; both alerts carry the same `metric_group` label, and Alertmanager inhibit suppresses the warning notification (a tenant can set `_severity_dedup: "disable"` to opt out)
 - **Aggregation-mode heuristic**: 6 heuristic rules guess `sum` / `max` automatically and emit an ASCII warning box asking the user to confirm
+- **Per-cluster aggregation**: the generated recording rule is `<sum|max> by(tenant, da_cluster) (…)`. On a Prometheus holding several clusters' data, migrated rules are evaluated per cluster (`sum` / `max` no longer merge one tenant's clusters) and alerts carry `da_cluster`; on a single Prometheus whose series have no `da_cluster`, the result is what it was. The v2.9.0 image still generates `by(tenant)` <!-- image-caveat: v2.9.0 -->
 
 AST engine depth (why `promql-parser` beats regex) + the full heuristic rule set + Auto-Suppression pairing logic: [`migration-engine.en.md`](migration-engine.en.md). CLI flag matrix: [`cli-reference.md#migrate`](cli-reference.md#migrate). Three-piece-set deployment locations (ConfigMap merge vs independent mount): [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
 
@@ -214,7 +215,7 @@ Migrated three-piece set:
 # 1. Recording Rule (platform)
 - record: tenant:mysql_connection_usage:percent
   expr: |
-    max by(tenant) (
+    max by(tenant, da_cluster) (
       100 * mysql_global_status_threads_connected
       / (mysql_global_variables_max_connections > 0)
     )
@@ -245,9 +246,9 @@ tenants:
 | Scenario | Source Metric | Recording Rule | Tenant Config Example | Notes |
 |----------|---------------|----------------|----------------------|-------|
 | **Multi-tier severity** | `mysql_global_status_threads_connected` ÷ `mysql_global_variables_max_connections` | `tenant:mysql_connection_usage:percent` | `mysql_connection_usage_percent: "85"` + `mysql_connection_usage_percent_critical: "95"` | Alert Rule handles `_critical` downgrade logic automatically |
-| **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_replication_lag: "30"` or `"disable"` | Max captures the "weakest link" (slowest slave) |
-| **Rate metric** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`: `sum by(tenant) (rate(...))` | No tenant key (see ⚠️ below) | Sum reflects cluster-wide load |
-| **Ratio** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:percent`: divided per instance, then `max by(tenant) (100 * ... / (max_connections > 0))` | `mysql_connection_usage_percent: "80"` (% of max_connections) | Ratio computed in the Recording Rule (multiplied by 100, unit is %); dividing per instance and taking the fullest one, because a `sum` before dividing is diluted by idle replicas' headroom (#3778) |
+| **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant, da_cluster) (...)` | `mysql_replication_lag: "30"` or `"disable"` | Max captures the "weakest link" (slowest slave) |
+| **Rate metric** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`: `sum by(tenant, da_cluster) (rate(...))` | No tenant key (see ⚠️ below) | Sum reflects cluster-wide load |
+| **Ratio** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:percent`: divided per instance, then `max by(tenant, da_cluster) (100 * ... / (max_connections > 0))` | `mysql_connection_usage_percent: "80"` (% of max_connections) | Ratio computed in the Recording Rule (multiplied by 100, unit is %); dividing per instance and taking the fullest one, because a `sum` before dividing is diluted by idle replicas' headroom (#3778) |
 
 > ⚠️ For the rate row, the platform MariaDB Rule Pack currently has only the recording rule and no tenant-settable threshold key: `MariaDBHighSlowQueries` judges the slow-query rate against a fixed `> 1`. To let tenants tune this kind of threshold, the platform must first declare the key and add a threshold-normalization recording rule; see "Add a metric to an existing Rule Pack" in the [Domain Expert Quick Start](getting-started/for-domain-experts.en.md). A key written into a tenant file without that declaration is not emitted, and validate-config's `routes` row reports `unread … (no_row)`.
 
@@ -292,7 +293,7 @@ The preloaded Rule Packs already cover mainstream DBs / middleware (MariaDB / Po
 
 **Normalization naming**: `tenant:<component>_<metric>:<aggregation_function>`
 
-**Aggregation mode** — Ask: "If one node breaches and others are fine, is that a problem?" Yes → `max by(tenant)` (weakest link); No → `sum by(tenant)` (cluster total).
+**Aggregation mode** — Ask: "If one node breaches and others are fine, is that a problem?" Yes → `max by(tenant, da_cluster)` (weakest link); No → `sum by(tenant, da_cluster)` (cluster total). The grouping always carries `da_cluster`: a tenant that runs in several clusters is computed per cluster ([ADR-006](adr/006-tenant-mapping-topologies.en.md)); the threshold normalization rule stays `max by(tenant)`.
 
 **Build steps**: Recording Rule → Threshold Normalization Rule → Alert Rule (with `group_left` + `unless maintenance`) → standalone ConfigMap → add source in projected volume → add default in `_defaults.yaml` → produce tenant config via `da-tools scaffold`.
 

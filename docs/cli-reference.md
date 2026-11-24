@@ -496,10 +496,10 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
      alert_name: MySQLTooManyConnections
      golden_match: null
      golden_rule: null
-     old_query: max by(tenant) (mysql_global_status_threads_connected)
+     old_query: max by(tenant, da_cluster) (mysql_global_status_threads_connected)
      new_query: tenant:custom_mysql_global_status_threads_connected:max
    ```
-   每一項產生一組比對：新查詢 `new_query` 是 migrate 產生的 recording rule；舊查詢 `old_query` 是原規則的左半邊以同一種方式依租戶聚合，rate 類規則保留 `rate()`（例如 `sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))` 對 `tenant:custom_mysql_global_status_slow_queries:sum`）。兩邊量綱相同，recording rule 有載入並正常評估時數值會一致。原始 series 沒有 `tenant` label 時，舊查詢會多出一個沒有租戶的組，報告裡列為新側缺值。字典判定改用黃金標準的項（有 `golden_rule`）migrate 不產出 recording rule，沒有這兩欄，validate 跳過並在 stderr 列出。
+   每一項產生一組比對：新查詢 `new_query` 是 migrate 產生的 recording rule；舊查詢 `old_query` 是原規則的左半邊以同一種方式逐（租戶、叢集）聚合，rate 類規則保留 `rate()`（例如 `sum by(tenant, da_cluster) (rate(mysql_global_status_slow_queries[5m]))` 對 `tenant:custom_mysql_global_status_slow_queries:sum`）。兩邊量綱相同，recording rule 有載入並正常評估時數值會一致。兩邊以（租戶、`da_cluster`）配對：收了多個叢集資料的 Prometheus 對同一個租戶回好幾列，各叢集各比一次，報告的 `Tenant` 欄寫成 `<租戶> (da_cluster=<叢集>)`；只在一邊出現的叢集列為 `mismatch` 並點名叢集（例如一邊還是舊版 migrate 產的 `by(tenant)` 規則）。序列沒有 `da_cluster` 時，比對與報告與先前相同。v2.9.0 映像的 migrate 產生 `by(tenant)`，validate 只以租戶配對（同一個租戶有兩列時後一列蓋掉前一列） <!-- image-caveat: v2.9.0 -->原始 series 沒有 `tenant` label 時，舊查詢會多出一個沒有租戶的組，報告裡列為新側缺值。字典判定改用黃金標準的項（有 `golden_rule`）migrate 不產出 recording rule，沒有這兩欄，validate 跳過並在 stderr 列出。
    舊版 migrate 產的檔沒有 `old_query`／`new_query`，validate 會在 stderr 警告並退回「原始指標 對 `tenant:<key>:max`」：rate 類與 `:sum` 的組在這種檔上比不出來，請用新版 migrate 重產。⚠️ v2.9.0 映像的 migrate 與 validate 都還是舊行為。 <!-- image-caveat: v2.9.0 -->
    不能用的項目會讓整次執行以結束碼 2 停下，stderr 一行點名每個項目的 key 與原因，不比對任何一組（[#4210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4210)；先前是靜默略過，剩下的組照常比對）。不能用的形狀：值不是 mapping（例如留空成 null）、key 不是字串、`old_query`／`new_query` 有寫但不是非空字串、退回舊格式比對時 `original_metric` 不是非空字串、`old_query` 與 `new_query` 只寫了一個、兩者都沒有且也沒有 `original_metric` 或 `golden_rule`。migrate 正常產出的檔不會碰到；`original_metric` 只在退回舊格式比對時才檢查。
 
@@ -2328,7 +2328,7 @@ da-tools migrate <input_file> [options]
 
 - `migration_output/.migration/conf.d/<tenant>.yaml` — 提取出的 threshold，寫在 `tenants.<tenant>` 底下（[#3671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3671)：租戶檔頂層 `tenants` 以外的 key 沒有讀取端讀，先前的 `tenant-config.yaml` 平鋪在頂層）。目錄刻意以 `.` 開頭：`-o` 落在服務中的 conf.d 裡（指向它，或在它裡面用預設 `-o`）時，每個讀取端都會略過點開頭的目錄，草稿租戶不會被服務。規則檔與 mapping 同理寫在 `.migration/`（[#3997](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3997)），不論服務的根在 `-o` 的哪一層都不會被讀成設定檔；報告與 CSV 不是 YAML，留在 `-o` 根，沒有讀取端讀。要驗這兩個檔，把 `.migration/conf.d/` 本身當 `--config-dir`
 - `migration_output/.migration/platform-recording-rules.yaml` — Recording rules
-- `migration_output/.migration/platform-alert-rules.yaml` — Alert rules。告警改讀依租戶聚合的 recording rule，`$labels` 只剩 `tenant`：原 annotation／label 引用的 label 若在原式子裡以 `=` 釘成單一值（例如 `queue="order-processing"`），直接代入該值；其他（例如 `instance`）改讀 `$labels.tenant`，annotation 附上「（原為 instance，已依租戶聚合）」，該告警上方與報告會列出改寫了哪些 label（v2.9.0 映像沒有改寫，這些引用會渲染成空字串） <!-- image-caveat: v2.9.0 -->
+- `migration_output/.migration/platform-alert-rules.yaml` — Alert rules。告警改讀逐（租戶、叢集）聚合的 recording rule（`<sum|max> by(tenant, da_cluster) (…)`），`$labels` 只剩 `tenant` 與 `da_cluster`。在收了多個叢集資料的 Prometheus 上，遷移後的規則逐叢集評估（`sum`／`max` 不再把同一個租戶的幾個叢集合在一起），告警帶 `da_cluster`；序列沒有 `da_cluster` 的單一 Prometheus 上結果不變（v2.9.0 映像產生的仍是 `by(tenant)`） <!-- image-caveat: v2.9.0 -->。`{{ $labels.da_cluster }}` 照留；原 annotation／label 引用的 label 若在原式子裡以 `=` 釘成單一值（例如 `queue="order-processing"`），直接代入該值；其他（例如 `instance`）改讀 `$labels.tenant`，annotation 附上「（原為 instance，已依租戶聚合）」，該告警上方與報告會列出改寫了哪些 label（v2.9.0 映像沒有改寫，這些引用會渲染成空字串） <!-- image-caveat: v2.9.0 -->
 - `migration_output/migration-report.txt` — 詳細遷移報告
 - `migration_output/triage-report.csv` — 需人工審閱的規則清單
 - `migration_output/.migration/prefix-mapping.yaml` — Metric 前綴對應表

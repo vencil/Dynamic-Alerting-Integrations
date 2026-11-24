@@ -55,8 +55,8 @@ flowchart LR
 完整遷移路徑整合 AST 引擎、Shadow Monitoring 與 Triage 模式：
 
 1. **Triage**：`migrate_rule.py --triage` 產出 CSV 清單，分類每條規則的遷移策略（direct / prefix / skip）
-2. **遷移執行**：AST 引擎注入 tenant label。`custom_` 前綴只加在閾值 key 與 recording rule 名稱上，不改來源指標名：來源 series 是客戶既有 exporter 發的，改名後 recording rule 會是空集合（issue 1818）。告警改讀 `by(tenant)` 的 recording rule 後 `$labels` 只剩 `tenant`，所以原 annotation 引用的其他 label 會改寫：原式子以 `=` 釘成單一值的代入該值，其餘改讀 `$labels.tenant` 並在報告列出
-3. **Shadow Monitoring**：`validate_migration.py` 驗證遷移前後的數值一致性（預設容差 `--tolerance 0.001`）
+2. **遷移執行**：AST 引擎注入 tenant label。`custom_` 前綴只加在閾值 key 與 recording rule 名稱上，不改來源指標名：來源 series 是客戶既有 exporter 發的，改名後 recording rule 會是空集合（issue 1818）。產生的 recording rule 是 `<sum|max> by(tenant, da_cluster) (…)`：在收了多個叢集資料的 Prometheus 上逐叢集評估（`sum`／`max` 不再把同一個租戶的幾個叢集合在一起），告警帶 `da_cluster`；序列沒有 `da_cluster` 的單一 Prometheus 上結果與 `by(tenant)` 相同（[ADR-006](adr/006-tenant-mapping-topologies.md)；v2.9.0 映像產生的仍是 `by(tenant)` <!-- image-caveat: v2.9.0 -->）。原式子自己寫的 `by(...)`／`on(...)` 點名 `tenant`、`instance`、`pod`、`namespace`、`node` 時也補上 `da_cluster`。告警改讀這些 recording rule 後 `$labels` 只剩 `tenant` 與 `da_cluster`，所以原 annotation 引用的其他 label 會改寫（`{{ $labels.da_cluster }}` 照留）：原式子以 `=` 釘成單一值的代入該值，其餘改讀 `$labels.tenant` 並在報告列出
+3. **Shadow Monitoring**：`validate_migration.py` 驗證遷移前後的數值一致性（預設容差 `--tolerance 0.001`），新舊兩邊以（租戶、`da_cluster`）配對，只在一邊出現的叢集列為 `mismatch`
 4. **上線**：透過 `scaffold_tenant.py` 產出完整的租戶配置包
 
 > **為什麼需要容差？** 遷移前後的 PromQL 查詢結果不可能完全一致，因為存在三個天然誤差來源：(1) **時間窗口偏移**——新舊規則在不同 evaluation cycle 被評估，對 `rate()` / `irate()` 等時間敏感函數會產生取樣偏差；(2) **聚合路徑改變**——從嵌入式 PromQL 改為 recording rule 引用，多一層 evaluation cycle 的時序延遲；(3) **浮點精度**——不同 expression 路徑的浮點運算可能在末位小數產生差異。預設容差 0.001（0.1%）「嚴格到能偵測語義錯誤（漏 label filter、聚合方式錯誤），又寬鬆到容納浮點抖動」。可透過 `--tolerance` 參數調整。

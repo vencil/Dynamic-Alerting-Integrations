@@ -74,6 +74,53 @@ _OUTPUT_FLAG = "-o/--output-dir"
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_prompt import prompt_line  # noqa: E402  (#3822: an unreadable stdin is rc 2, named)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
+# ADR-006: the one spelling of the cluster label (shipped flat in da-tools).
+from _lib_cluster_identity import CLUSTER_IDENTITY_LABEL  # noqa: E402
+
+#: 產生的 metric 側 recording rule 的分組（ADR-006「多叢集同租戶」契約 4，
+#: #1200）：逐（租戶、叢集）。`da_cluster` 是 Prometheus 的 external label，
+#: 只在各叢集資料相遇的地方才在序列上；單一 Prometheus 的序列沒有它，分組
+#: 等同逐租戶，結果與 `by(tenant)` 相同。閾值側與維護狀態仍是租戶一份
+#: （契約 3），以 `on(tenant) group_left`／`unless on(tenant)` 套到每個叢集。
+METRIC_GROUPING = f"by(tenant, {CLUSTER_IDENTITY_LABEL})"
+
+#: 與 check_cluster_identity.IDENTITY_LABELS 同一組（由測試釘住；da-tools
+#: 映像不帶 lint）：`by(...)`／`on(...)` 點名其中任一個，就是「逐這個東西」，
+#: 而它在每個叢集各有一份。
+_IDENTITY_LABELS = frozenset({"tenant", "instance", "pod", "namespace", "node"})
+_STRING_OR_GROUPING = re.compile(
+    r'''"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`'''
+    r'''|\b(?P<kw>by|on)(?P<gap>\s*)\((?P<labels>[^()]*)\)''')
+
+
+def keep_cluster_in_groupings(expr_str):
+    """原式子自己寫的 `by(...)`／`on(...)` 點名身分 label 卻沒有叢集 label
+    時，補上它（ADR-006 契約 4）。
+
+    原規則是在單一叢集寫的：`a / on(instance) b`、`sum by(instance) (x)` 在
+    收了多個叢集的 Prometheus 上會把兩個叢集位址相同的實例配在一起
+    （many-to-many，整條規則求值失敗）或加在一起。序列沒有叢集 label 時，
+    多列一個空 label 不改變分組，結果與原式相同。沒點名身分 label 的
+    （`by(le)`、`on()`）、`without(...)`、`ignoring(...)` 不動；字串常值裡的
+    文字不動。改寫後 parse 不過就回傳原式。
+    """
+    def fix(m):
+        if m.group("kw") is None:
+            return m.group(0)  # a string literal
+        labels = [x.strip() for x in m.group("labels").split(",") if x.strip()]
+        if CLUSTER_IDENTITY_LABEL in labels or not _IDENTITY_LABELS & set(labels):
+            return m.group(0)
+        return (f"{m.group('kw')}{m.group('gap')}"
+                f"({', '.join(labels + [CLUSTER_IDENTITY_LABEL])})")
+
+    result = _STRING_OR_GROUPING.sub(fix, expr_str)
+    if result != expr_str and HAS_AST:
+        try:
+            promql_parser.parse(result)
+        except Exception:
+            return expr_str
+    return result
+
 
 # ---------------------------------------------------------------------------
 # AST Engine: promql-parser (optional — graceful degradation)
@@ -506,8 +553,10 @@ def _build_unparseable_result(alert_name, expr, severity, rule, dictionary):
         f"請將以下傳統 Prometheus Alert 轉換為本專案的動態多租戶架構：\n"
         f"要求：\n"
         f"1. 提取閾值並提供 threshold-config.yaml 範例。\n"
-        f"2. 提供包含 sum/max by(tenant) 的 Recording Rule。\n"
-        f"3. 提供套用 group_left 與 unless maintenance 邏輯的 Alert Rule。\n"
+        f"2. 提供包含 sum/max {METRIC_GROUPING} 的 Recording Rule"
+        f"（逐租戶、逐叢集；閾值側維持 max by(tenant)）。\n"
+        f"3. 提供套用 on(tenant) group_left 與 unless on(tenant) maintenance "
+        f"邏輯的 Alert Rule。\n"
         f"4. 如有維度標籤 (如 queue, db, index)，請用 \"metric{{label=\\\"value\\\"}}\" "
         f"語法提供範例。\n\n"
         f"原始規則：\n{yaml.dump([rule], sort_keys=False)}"
@@ -555,7 +604,7 @@ def _build_recording_rules(parsed, prefixed_key, severity, agg_mode, use_ast):
     # 來源指標是客戶既有的 exporter 發的，沒有任何東西會產生
     # `custom_<指標>` 這個名字的 series，改名後 recording rule 恆為空
     # （issue 1818）。
-    recording_lhs = parsed['lhs']
+    recording_lhs = keep_cluster_in_groupings(parsed['lhs'])
     if use_ast and HAS_AST:
         all_metrics = parsed.get('all_metrics', [])
         if all_metrics:
@@ -565,7 +614,7 @@ def _build_recording_rules(parsed, prefixed_key, severity, agg_mode, use_ast):
     rules = [
         {
             "record": record_name,
-            "expr": f"{agg_mode} by(tenant) ({recording_lhs})",
+            "expr": f"{agg_mode} {METRIC_GROUPING} ({recording_lhs})",
         },
         {
             "record": threshold_name,
@@ -577,8 +626,9 @@ def _build_recording_rules(parsed, prefixed_key, severity, agg_mode, use_ast):
     return rules, record_name, threshold_name
 
 
-# recording rule 一律 `by(tenant)`，告警的 $labels 只剩 tenant。
-_SURVIVING_LABELS = frozenset({"tenant"})
+# recording rule 一律 `by(tenant, da_cluster)`（METRIC_GROUPING），告警的
+# $labels 只剩 tenant 與 da_cluster。
+_SURVIVING_LABELS = frozenset({"tenant", CLUSTER_IDENTITY_LABEL})
 _LABEL_REF = re.compile(r'\$labels\.([a-zA-Z_][a-zA-Z0-9_]*)')
 _SIMPLE_LABEL_ACTION = re.compile(
     r'\{\{-?\s*\$labels\.([a-zA-Z_][a-zA-Z0-9_]*)\s*-?\}\}')
@@ -614,8 +664,13 @@ def rewrite_dropped_label_refs(templates, lhs, keep=(), explain=True):
     """改寫 annotation／label 模板裡、聚合後不存在的 `$labels.X`。
 
     舊告警的 $labels 是原查詢 series 的 label；遷移後查詢是
-    `<agg> by(tenant) (...)`，只剩 tenant，其他引用照抄會渲染成空字串
-    （issue 1818）。owner 裁決保留 by(tenant)：
+    `<agg> by(tenant, da_cluster) (...)`，只剩 tenant 與 da_cluster，其他引用
+    照抄會渲染成空字串（issue 1818）。現行規則：粒度是「租戶 × 叢集」，
+    實例層級的 label（instance、pod…）不帶回聚合。這與 issue 1818 的 owner
+    裁決一致——那項裁決講的是不把實例層級的 label 帶回聚合、並改寫引用它們
+    的模板；`da_cluster` 不是實例層級的 label，而是同一個租戶在各叢集各算
+    一次（ADR-006，owner 2026-11-24 裁決，#1200），所以 `$labels.da_cluster`
+    照留，其餘照舊：
     - 被等值 matcher 定死的 label 代入字面值，渲染結果與舊告警相同；
     - 其他改讀 `$labels.tenant` 並附原 label 名，呼叫端負責警告。
     `keep` 是不改寫的名字（規則自己的 static label 本來就不在 $labels 裡，
@@ -805,7 +860,7 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
             f"annotation／label 引用了依租戶聚合後不存在的 label（{', '.join(dropped)}），"
             f"已改讀 $labels.tenant；通知裡看不到原本是哪一個 {dropped[0]}")
     result.record_name = record_name
-    result.recording_lhs_original = parsed['lhs']
+    result.recording_lhs_original = keep_cluster_in_groupings(parsed['lhs'])
 
     return result
 
@@ -1032,12 +1087,14 @@ def write_prefix_mapping(results, output_dir, prefix):
                 "golden_rule": r.dict_match.get("golden_rule") if r.dict_match else None,
             }
             # validate --mapping 的比對組。新值是 recording rule 本身；舊值是原規則的
-            # LHS 以同一種方式依租戶聚合——rate 類要保留 rate()，聚合要用同一個
-            # agg，否則兩邊量綱或 record 名對不上（issue 1818）。改用黃金標準的
+            # LHS 以同一種方式逐（租戶、叢集）聚合——rate 類要保留 rate()，聚合要用
+            # 同一個 agg 與同一個分組，否則兩邊量綱、列數或 record 名對不上
+            # （issue 1818、#1200）。改用黃金標準的
             # 規則不產出 recording rule，沒有新值可比，不寫。
             if (r.triage_action != "use_golden" and r.record_name
                     and r.recording_lhs_original and r.agg_mode):
-                entry["old_query"] = f"{r.agg_mode} by(tenant) ({r.recording_lhs_original})"
+                entry["old_query"] = (
+                    f"{r.agg_mode} {METRIC_GROUPING} ({r.recording_lhs_original})")
                 entry["new_query"] = r.record_name
             mapping[key] = entry
 
