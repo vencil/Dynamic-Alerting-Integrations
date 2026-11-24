@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`.
+"""Refuse (with --ci) a conf.d/ hierarchical path that contradicts `_metadata`.
 
-Implements the design contract from `docs/schemas/tenant-config.schema.json`
-(`definitions.metadata.$comment`, ADR-016):
-
-    When files are in hierarchical conf.d/ (domain/region/env/), the
-    directory path infers default values for domain, region, and
-    environment. Explicit _metadata fields override path-inferred values.
-    CI may warn when path and field disagree.
-
-This tool is **warning-only** (exits 0 on any finding). Its job is to
-surface drift between filesystem placement and declared metadata without
-blocking merges — the schema already permits override. It reads the tree
+ADR-016: `_metadata.{domain,region,environment}` is the one source of these
+values — the directory path supplies none (path inference was withdrawn),
+and they feed tenant-api's RBAC scope. A tree that files a tenant under
+`finance/…/prod/` while its `_metadata` says another domain or environment
+misleads every reader of the layout, so the contradiction is an error under
+`--ci` (exit 1). Without `--ci` the findings are reported and the exit code
+is 0. A field `_metadata` does not set is not judged. It reads the tree
 through `da-guard parse-tree` (ADR-036 step 4, #2906): no usable da-guard
 is a caller error, exit 2 — nothing was checked.
 
@@ -25,7 +21,8 @@ Rules:
      values if present.
   3. Walk the file's parent-directory segments. If a segment exactly matches
      a known environment name AND the tenant declares `_metadata.environment`
-     with a different value, warn. Same for domain (first segment).
+     with a different value, that is a finding. Same for domain (first
+     segment).
   4. If the field is absent, or the path has no matching segment, skip.
 
 Usage:
@@ -46,7 +43,7 @@ from typing import Iterable, NamedTuple
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
 # ADR-036 step 4 (#2906): the tenant files, and what each holds, are
 # `da-guard parse-tree`'s — the exporter's walk, yaml.v3's reading (tenant
@@ -267,7 +264,7 @@ def _main() -> int:
         action="store_true",
         help=(
             "CI-friendly output (one line per mismatch, no multi-line "
-            "explanations); still exits 0."
+            "explanations); exits 1 when there is any mismatch."
         ),
     )
     args = parser.parse_args()
@@ -306,7 +303,7 @@ def _main() -> int:
         for m in mismatches:
             display = _display_path(m.file, repo_root).as_posix()
             print(
-                f"{display}:0: warning: path/metadata mismatch "
+                f"{display}:0: error: path/metadata mismatch "
                 f"tenant={m.tenant} field={m.field} "
                 f"path={m.path_value} metadata={m.metadata_value}"
             )
@@ -321,7 +318,7 @@ def _main() -> int:
         print(f"\n{tail}", file=sys.stderr)
     else:
         print(tail)
-    return EXIT_OK
+    return EXIT_VIOLATION if (mismatches and args.ci) else EXIT_OK
 
 
 if __name__ == "__main__":

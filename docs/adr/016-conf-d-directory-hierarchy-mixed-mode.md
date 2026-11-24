@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-11-22
+updated_at: 2026-11-24
 ---
 # ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略
 
@@ -23,7 +23,9 @@ updated_at: 2026-11-22
 
 2026-10-16 修訂：路由面只剩路由生成器一個讀者，da-guard 不再有自己的路由層。
 
-2026-11-22 修訂：改寫為現行行為；標明「由目錄路徑推斷 `_metadata` 預設值」尚未實作（見「後果與已知限制」）。
+2026-11-22 修訂：改寫為現行行為。
+
+2026-11-24 修訂（owner 裁決）：撤回「由目錄路徑推斷 `_metadata` 預設值」，`_metadata` 是唯一來源，目錄路徑與它矛盾時 CI 擋下；補上分層在標準部署下不成立的限制。
 
 ## 決策
 
@@ -101,11 +103,12 @@ Run with --apply to move them. (1 files will be moved)
 2. **影響範圍看不出來**：改一份 defaults 會影響多少租戶，從目錄結構看不出來，PR 審查與 CI 都難判斷。
 3. **metadata 重複**：每個租戶都要手填 `_metadata.domain/region/environment`，與目錄結構表達的是同一件事。
 
-分層布局解決前兩點：目錄就是範圍，一份 `_defaults.yaml` 只影響它底下的租戶。第三點見「後果與已知限制」。
+分層布局解決前兩點：目錄就是範圍，一份 `_defaults.yaml` 只影響它底下的租戶。第三點不由分層解決，見「後果與已知限制」的第一條。
 
 ## 後果與已知限制
 
-- **由目錄路徑推斷 `_metadata` 預設值，尚未實作。** 原決策是：租戶缺 `_metadata.domain` 等欄位時，由所在目錄補上（第 1 層是 domain、第 2 層 region、第 3 層 environment），明確寫出的 `_metadata` 優先。現行行為是 threshold-exporter 的 effective metadata 只讀 `_metadata`，目錄路徑不參與；`check_path_metadata_consistency.py` 只在目錄的第一段與 `domain`、或某一段是已知環境名而與 `environment` 不一致時警告，不擋 commit。所以分層之後，`_metadata` 仍要手填。
+- **`_metadata` 是 domain／region／environment 的唯一來源，目錄路徑不提供預設值。** 這三個值是 tenant-api 判定 RBAC 範圍的輸入，只有不受範圍限制的管理員能改（[ADR-027](027-tenant-api-caller-identity.md) §7）；若由路徑推斷，任何能移動檔案的人都能改變一個租戶的授權範圍。而且推斷出來的值幾乎沒有讀者：tenant-api 只讀根目錄的租戶檔，標準部署又是扁平的（見下一條），線上 exporter 看不到目錄。所以分層之後 `_metadata` 仍要手填；`migrate-conf-d` 依 `_metadata` 決定檔案放哪個目錄，方向一致。`check_path_metadata_consistency.py --ci` 在目錄第一段與 `domain` 矛盾、或某一段是已知環境名而與 `environment` 矛盾時擋下（結束碼 1），讓目錄結構不會誤導讀者。
+- **分層在標準部署下不成立。** 客戶部署用的 `configmap-assemble` 是扁平組裝：只有 conf.d 頂層的檔會進 ConfigMap，子目錄裡的租戶與子目錄的 `_defaults.yaml` 都到不了線上的 exporter，組裝只印 WARN（[GitOps 部署](../integration/gitops-deployment.md) §3）。CI 的工具與路由產生器讀整棵樹，線上 exporter 讀平的一層，兩邊對同一個租戶會得到不同的結果，子目錄租戶在線上甚至不存在。處理方式追蹤在 [#4266](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4266)。
 - **metric 不帶路徑。** 目錄深度不影響 metric label，`tenant` 仍是唯一的租戶鍵；搬目錄不會改變任何 series。
 - **子目錄 `_defaults.yaml` 裡的路由鍵不被讀。** 子目錄 `_defaults.yaml` 的 `defaults:` 區塊裡寫 `_routing*`，沒有任何元件消費；路由生成器會點名它（`routing_in_unread_location`），`--validate` 時擋下。
 
@@ -113,7 +116,7 @@ Run with --apply to move them. (1 files will be moved)
 
 | 讀者 | 分層 `conf.d/` |
 |:--|:--|
-| threshold-exporter（吐出的 metric 與 `/effective`） | ✅ 遞迴，完整繼承 |
+| threshold-exporter（吐出的 metric 與 `/effective`） | ✅ 遞迴，完整繼承（它讀到的樹；標準部署送到線上的是平的一層，見上） |
 | `validate_config.py` | ✅ 遞迴 |
 | 路由生成器（`generate_alertmanager_routes.py`） | ✅ 讀整棵樹的租戶與路由層 |
 | da-guard | 不判路由：樹上有路由內容時列為未判定（結束碼 4），交給路由生成器（[ADR-036](036-single-parser-effective-config.md) §9） |

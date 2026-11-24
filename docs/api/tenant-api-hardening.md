@@ -257,7 +257,7 @@ views 也不屬於任何組織，所以 handler 另外要求那條 `"*"` 規則*
 
 ### 3.4 為什麼 `_metadata` 路徑推斷不在範圍內
 
-ADR-016 原本決定「租戶缺 `_metadata.{domain,region,environment}` 時由所在目錄補上」，這從未實作，ADR-016 列為已知限制；threshold-exporter 與 tenant-api 都只讀 `_metadata`。（`migrate_conf_d.py` 做的是反方向：依 `_metadata` 決定檔案搬到哪個目錄。）本次硬化不擴 RBAC core 行為。
+ADR-016 原本決定「租戶缺 `_metadata.{domain,region,environment}` 時由所在目錄補上」，這項決策已撤回，`_metadata` 是唯一來源；threshold-exporter 與 tenant-api 都只讀 `_metadata`。（`migrate_conf_d.py` 做的是反方向：依 `_metadata` 決定檔案搬到哪個目錄。）本次硬化不擴 RBAC core 行為。
 
 ### 3.5 沒有 RBAC 規則時的行為（沒有 open mode）
 

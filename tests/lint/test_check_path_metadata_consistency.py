@@ -235,7 +235,7 @@ class TestCLI:
         assert exit_code == 0
         assert "0 mismatch(es)" in stdout
 
-    def test_warning_still_exits_zero(self, tmp_path, monkeypatch, capsys):
+    def test_report_mode_exits_zero(self, tmp_path, monkeypatch, capsys):
         (tmp_path / ".git").mkdir()
         config_dir = tmp_path / "conf.d"
         _write(
@@ -263,10 +263,27 @@ class TestCLI:
             monkeypatch, capsys, tmp_path,
             "--config-dir", str(config_dir), "--ci",
         )
-        assert exit_code == 0
-        assert ":0: warning: path/metadata mismatch" in stdout
+        # ADR-016: _metadata is the one source; a path contradicting it
+        # fails CI.
+        assert exit_code == 1
+        assert ":0: error: path/metadata mismatch" in stdout
         assert "tenant=t" in stdout
         assert "field=environment" in stdout
+
+    def test_ci_mode_clean_tree_exits_zero(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        (tmp_path / ".git").mkdir()
+        config_dir = tmp_path / "conf.d"
+        _write(
+            config_dir / "db" / "prod" / "t.yaml",
+            _tenant_yaml("t", domain="db", environment="prod"),
+        )
+        exit_code, _, _ = _run_cli(
+            monkeypatch, capsys, tmp_path,
+            "--config-dir", str(config_dir), "--ci",
+        )
+        assert exit_code == 0
 
     def test_missing_config_dir_is_soft(
         self, tmp_path, monkeypatch, capsys
@@ -678,14 +695,14 @@ class TestDisplayPath:
     @staticmethod
     def _both_modes(monkeypatch, capsys, root: Path, conf: Path
                     ) -> tuple[list[str], str]:
-        """(`--ci` warning lines, human-mode stdout)."""
+        """(`--ci` error lines, human-mode stdout)."""
         _, ci_out, err = _run_cli(monkeypatch, capsys, root,
                                   "--config-dir", str(conf), "--ci")
         assert "1 mismatch(es)" in err, (ci_out, err)
         _, human, err = _run_cli(monkeypatch, capsys, root,
                                  "--config-dir", str(conf))
         assert "1 mismatch(es)" in err, (human, err)
-        return [ln for ln in ci_out.splitlines() if ":0: warning:" in ln], human
+        return [ln for ln in ci_out.splitlines() if ":0: error:" in ln], human
 
     def test_configmap_mount_shows_the_link_not_the_payload(
         self, tmp_path, monkeypatch, capsys,
@@ -698,7 +715,7 @@ class TestDisplayPath:
 
         ci, human = self._both_modes(monkeypatch, capsys, tmp_path, conf)
         assert ci == [
-            "conf.d/staging/acme.yaml:0: warning: path/metadata mismatch "
+            "conf.d/staging/acme.yaml:0: error: path/metadata mismatch "
             "tenant=acme field=environment path=staging metadata=prod"], ci
         assert "WARN path/metadata mismatch: conf.d/staging/acme.yaml\n" in (
             human), human
@@ -718,7 +735,7 @@ class TestDisplayPath:
 
         ci, human = self._both_modes(monkeypatch, capsys, tmp_path, conf)
         assert len(ci) == 1 and ci[0].startswith(
-            "conf.d/prod/acme.yaml:0: warning:"), ci
+            "conf.d/prod/acme.yaml:0: error:"), ci
         assert "WARN path/metadata mismatch: conf.d/prod/acme.yaml\n" in (
             human), human
         assert "staging/acme.yaml" not in "\n".join(ci) + human
@@ -734,7 +751,7 @@ class TestDisplayPath:
 
         ci, human = self._both_modes(monkeypatch, capsys, tmp_path, conf)
         assert len(ci) == 1 and ci[0].startswith(
-            "conf.d/staging/acme.yaml:0: warning:"), ci
+            "conf.d/staging/acme.yaml:0: error:"), ci
         assert "WARN path/metadata mismatch: conf.d/staging/acme.yaml\n" in (
             human), human
 
@@ -749,7 +766,7 @@ class TestDisplayPath:
         _write(real / "conf.d" / "staging" / "acme.yaml", self.BAD)
         link = tmp_path / "link"
         _symlink_or_skip(link, "real")
-        want = "conf.d/staging/acme.yaml:0: warning:"
+        want = "conf.d/staging/acme.yaml:0: error:"
         human_want = "WARN path/metadata mismatch: conf.d/staging/acme.yaml\n"
 
         # (a) repo root handed back through the link, config dir likewise.
