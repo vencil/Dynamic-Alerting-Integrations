@@ -50,6 +50,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    OutputWriteError, exit_on_output_write_error, is_special_file, write_repo_artifact)
 
 try:
     import yaml
@@ -193,6 +195,8 @@ def current_uncovered() -> dict[str, list[str]]:
 
 
 def load_baseline() -> dict[str, list[str]]:
+    if is_special_file(_BASELINE):  # a FIFO would block the read (#3981)
+        raise OutputWriteError(_BASELINE, OSError(None, "not a regular file"), action="read")
     if not _BASELINE.exists():
         return {}
     data = _load_yaml(_BASELINE)
@@ -207,7 +211,11 @@ def generate() -> None:
     uncovered = current_uncovered()
     body = yaml.safe_dump({"uncovered": uncovered}, allow_unicode=True, sort_keys=True,
                           default_flow_style=False)
-    _BASELINE.write_text(_BASELINE_HEADER + body, encoding="utf-8", newline="\n")
+    text = _BASELINE_HEADER + body
+    # #3981 (review): an unchanged baseline is not rewritten — only a replaced
+    # file must pass the entry's checks (it refuses this process's stdin).
+    if not (_BASELINE.is_file() and _BASELINE.read_text(encoding="utf-8") == text):
+        write_repo_artifact(_BASELINE, text)  # the artifact entry
     total = sum(len(v) for v in uncovered.values())
     print(f"check_vmalert_coverage: wrote baseline with {total} uncovered alert(s) "
           f"across {len(uncovered)} pack(s) -> {_BASELINE.relative_to(_REPO)}")
@@ -242,6 +250,7 @@ def check() -> int:
     return 1
 
 
+@exit_on_output_write_error
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--generate", action="store_true", help="rewrite the baseline from the tree")
@@ -266,6 +275,8 @@ def main() -> int:
     except _lib_consumer_read.ConsumerReadError as e:
         print(f"check_vmalert_coverage: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
         return 2
+    except OutputWriteError:
+        raise  # #3981: the baseline itself — exit_on_output_write_error names it
     except (OSError, ValueError, yaml.YAMLError) as e:
         # A test fixture or the baseline could not be read (not UTF-8, not YAML,
         # unreadable): nothing was checked — the contract's 2, not a finding (#3577).

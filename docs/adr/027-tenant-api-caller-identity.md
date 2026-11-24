@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-07-03
-updated_at: 2026-11-13
+updated_at: 2026-11-22
 ---
 
 # ADR-027: tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分
@@ -25,6 +25,8 @@ updated_at: 2026-11-13
 2026-11-07 修訂：§7 的離線檢查也列出標記讀不到、卻被有範圍限制的規則套到的租戶，沒有限制規則套到的壞檔不再影響結束碼；環境與 domain 標記改由不受任何範圍限制的平台管理員變更，只限部分環境或 domain 的管理員不再能改；標記讀不到的租戶檔也只由這種管理員經 API 覆寫；標記與寫入範圍改在寫入鎖內、對寫入實際落地的那棵樹判定，兩種寫入模式相同。
 
 2026-11-13 修訂：§9 的每個子句有固定編號，§實作位置 改由原始碼中的 `adr-check:` 標記產生，沒有檢查的子句自動列出；§5 與 §9 第 4 項的「simulate 回原 body」改為如實的「`code` 與 `error` 文字不變」，因 tenant-api 的錯誤回應另帶 `request_id`。
+
+2026-11-22 修訂：§9 第 8a 項也涵蓋寫成連結、以及在 `ADR-NNN` 後換行的引用。
 
 引用檢查（§9 第 8 項）已上線：repo 內以草稿編號引用本 ADR 的地方已改寫，舊編號對照表刪除。
 
@@ -193,7 +195,7 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
    - **7b** 它與 server 租戶清單的判定逐條規則一致。
    - **7c** CI 對 repo 內的範例設定執行它。
 8. 引用檢查（本 ADR 與 [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667)）：
-   - **8a** repo 內寫成 `ADR-NNN §小節` 的引用（同一行緊接著列出的其他小節也算）都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）。
+   - **8a** repo 內寫成 `ADR-NNN §小節` 的引用（同一行緊接著列出的其他小節也算）都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）。寫成連結（`[ADR-020](../adr/020-tenant-federation.md) §Gateway`，或把小節寫成連結文字），或 `ADR-NNN` 在行尾、下一行去掉註解符號後以 `§小節` 開頭的，也是同一種引用，下一行接著列出的小節同樣要對應得到。
    - **8b** `ADR-027` 後接 2026-07 草稿的小節編號（`D2-B`、`LD-6 P4b`、`MED-8` 之類，完整清單在檢查本身）一律失敗。
 9. oauth2-proxy 設定檢查（§10）：
    - **9a** CI 以 chart 釘住的 oauth2-proxy image（同一個 digest）對 chart 產生的設定檔執行設定檢查（`--config-test`）。
@@ -307,7 +309,7 @@ upstreamConfig:
 - **7a**：`components/tenant-api/cmd/server/scope_check_test.go`（`TestConfigCheckScope_Fixture`）
 - **7b**：`components/tenant-api/internal/handler/scope_gap_planes_test.go`（`TestScopeGapsMatchEveryPlane`）
 - **7c**：`.github/workflows/ci.yml`（`Scope check on the try-local sample config (ADR-027 §7)`）
-- **8a**：`tests/lint/test_check_adr_section_refs.py`（`test_existing_sections_pass`、`test_missing_sections_fail`、`test_the_repository_is_clean`）
+- **8a**：`tests/lint/test_check_adr_section_refs.py`（`test_a_broken_reference_is_reported_on_the_line_with_the_adr`、`test_a_section_not_continuing_the_reference_is_not_its_section`、`test_existing_sections_pass`、`test_link_and_line_break_references_are_checked`、`test_missing_sections_fail`、`test_the_repository_is_clean`）
 - **8b**：`tests/lint/test_check_adr_section_refs.py`（`test_draft_code_needs_adr_027_before_it`、`test_withdrawn_draft_codes_fail`）
 - **9a**：`.github/workflows/ci.yml`（`Run --config-test in the chart's oauth2-proxy image (by digest)`）；`tests/oauth2-proxy/image_config_test.sh`
 - **9b**：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`）；`tests/oauth2-proxy/routing_test.go`（`TestADRSection10Routing`）；`tests/oauth2-proxy/version_test.go`（`TestLibraryVersionIsTheChartImage`）

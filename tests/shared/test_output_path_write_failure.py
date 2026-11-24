@@ -2914,8 +2914,22 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "source that fails are held by tests/dx/test_generate_crd_schemas.py "
         "(test_a_refused_target_is_rc2_one_line_and_nothing_is_written, "
         "test_a_later_failing_source_leaves_the_earlier_one_unwritten).",
+    # #3981, seventh batch: three lints that rewrite their own baseline.
+    "lint/check_cli_contract.py":
+        "`--write-baseline` rewrites docs/internal/cli-contract-baseline.yaml; it "
+        "takes no path. A refused ledger is held by tests/lint/test_check_cli_contract.py "
+        "(test_write_baseline_refuses_a_ledger_that_is_no_regular_file).",
+    "lint/check_percent_render_pinned.py":
+        "`--generate` rewrites tests/rulepacks/percent_render_baseline.yaml; it takes "
+        "no path. A refused baseline is held by "
+        "tests/lint/test_check_percent_render_pinned.py "
+        "(test_a_baseline_that_is_a_fifo_is_rc2_one_line).",
+    "lint/check_vmalert_coverage.py":
+        "`--generate` rewrites tests/rulepacks/vmalert_coverage_baseline.yaml; it takes "
+        "no path. A refused baseline is held by tests/lint/test_check_vmalert_coverage.py "
+        "(test_a_baseline_that_is_a_fifo_is_rc2_one_line).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 19
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 22
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

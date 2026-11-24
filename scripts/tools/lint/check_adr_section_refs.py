@@ -22,12 +22,31 @@ What is checked, in every git-tracked text file:
        text has no word boundary after it — or holds it (three characters or
        more: ``§fail-open`` for "gateway fail-open").
    ``ADR-NNN`` naming no ADR file is a finding too.
+
+   Two more shapes are the same reference and are checked the same way:
+     - a link: ``[ADR-020](../adr/020-tenant-federation.md) §Gateway`` —
+       the link target between ``ADR-NNN`` and ``§`` is skipped — or the
+       section as the link text: ``ADR-NNN [§section](../adr/NNN-….md)``;
+     - a line break: ``ADR-NNN`` (or its link) ends a line and the next line,
+       its comment prefix (``#``, ``//``, ``--``, ``*``, ``;``, ``>``)
+       removed, opens with ``§<section>`` — a code comment or a paragraph
+       wrapped there; sections chained after it on that next line are
+       checked too. The finding is reported on the line with ``ADR-NNN``.
+       (A markdown heading right after such a line, ``## §X``, reads as a
+       continuation too; the repository has none.)
 2. ``ADR-027`` followed by a section code of the withdrawn 2026-07 draft
    (``D2-B``, ``LD-6 P4b``, ``MED-8``, …) is a finding whatever follows: those
    codes name sections the rewritten ADR does not have.
 
 Not checked: a section cited without its ADR (``§7`` alone, ``see §3
 below``) — inside an ADR that is its own; elsewhere it cannot be resolved.
+Nor a break inside a reference (``ADR-024 §`` with the section on the next
+line, or a chain ``§3、`` continued there), a link whose text does not end
+with ``ADR-NNN`` (``[ADR-024 X](…) §3``), or a link target holding a space,
+a title or a ``)``; none of these is written in the repository today. A YAML
+double-quoted string continued by a backslash at the end of the line is not
+joined either: it occurs only in the generated ConfigMap copies of
+the rule packs, whose source files are checked.
 
 Scope: ``git ls-files`` text files, minus ``SKIP_PATHS`` (each with its
 reason). Heading text is read outside fenced code blocks.
@@ -69,8 +88,15 @@ SKIP_SUFFIXES = (".golden", ".png", ".jpg", ".svg", ".ico", ".gz", ".woff", ".wo
 # A section token: a number, a code (letters then a digit: D3, S6b-2), or a
 # name running to the next space or punctuation.
 _TOKEN = r"(?:\d+(?:\.\d+)*|[A-Za-z]{1,4}\d[\w-]*|[^\s,;:()（）、。，；：/\\\[\]{}\"'`*|<>]+)"
-# ADR-NNN, an optional 's or space, then the first §section.
-_REF = re.compile(r"ADR-(\d{3})(?:'s)?\s?§\s?(" + _TOKEN + r")")
+# ADR-NNN, then an optional 's, or the target of a markdown link whose text
+# it is (``[ADR-020](../adr/020-….md)``), an optional space, then the first
+# §section, which may open a link's text (``[§section](…)``).
+_LINK_TARGET = r"(?:'s|\]\([^)\s]*\))?"
+_REF = re.compile(r"ADR-(\d{3})" + _LINK_TARGET + r"\s?\[?§\s?(" + _TOKEN + r")")
+# A line that ends with ADR-NNN (or its link), and the comment prefix of the
+# line after it: the reference may continue there (see the module docstring).
+_REF_AT_EOL = re.compile(r"ADR-(\d{3})" + _LINK_TARGET + r"\s*$")
+_COMMENT_PREFIX = re.compile(r"^\s*(?:#+|//+|--+|\*+|;+|>+)?\s*")
 # Further sections chained after a reference: "、§3", ", §3", " / §3", " and §3".
 _CHAIN = re.compile(r"\s*(?:[、,，/]|\band\b|與|和|及)\s*§\s?(" + _TOKEN + r")")
 
@@ -178,22 +204,43 @@ def section_exists(headings: list[Heading], token: str) -> bool:
     return False
 
 
+def _sections_after(m: re.Match[str], text: str) -> list[str]:
+    """The section a _REF match names, and those chained after it."""
+    tokens = [m.group(2)]
+    pos = m.end()
+    while True:
+        c = _CHAIN.match(text, pos)
+        if not c:
+            break
+        tokens.append(c.group(1))
+        pos = c.end()
+    return tokens
+
+
+def _references(line: str, next_line: str | None) -> list[tuple[str, list[str]]]:
+    """Every (ADR, sections) one line cites, a reference broken onto the next
+    line included."""
+    refs = [(m.group(1), _sections_after(m, line)) for m in _REF.finditer(line)]
+    eol = _REF_AT_EOL.search(line)
+    if eol and next_line is not None:
+        rest = next_line[_COMMENT_PREFIX.match(next_line).end():]
+        joined = f"ADR-{eol.group(1)} {rest}"
+        m = _REF.match(joined)  # matches only when § (or [§) opens rest
+        if m:
+            refs.append((eol.group(1), _sections_after(m, joined)))
+    return refs
+
+
 def scan_text(path: str, text: str, adrs: dict[str, list[Heading]]) -> list[Finding]:
     """Every finding in one file's text."""
     out: list[Finding] = []
-    for lineno, line in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    for lineno, line in enumerate(lines, 1):
         for m in _OLD_027.finditer(line):
             out.append(Finding(path, lineno, "027", m.group(1),
                                "a section code of the withdrawn draft; cite the section that holds it now"))
-        for m in _REF.finditer(line):
-            adr, tokens = m.group(1), [m.group(2)]
-            pos = m.end()
-            while True:
-                c = _CHAIN.match(line, pos)
-                if not c:
-                    break
-                tokens.append(c.group(1))
-                pos = c.end()
+        next_line = lines[lineno] if lineno < len(lines) else None
+        for adr, tokens in _references(line, next_line):
             headings = adrs.get(adr)
             for tok in tokens:
                 if headings is None:
