@@ -6,16 +6,11 @@
  *     - the tool loads without 404 / JS error
  *     - the first visible contract (role cards, Start-Here badge) renders
  *     - TRK-104-style absolute hrefs don't leak
- *     - 0 Critical axe violations (with a budget of 2 non-Critical for the
- *       known amber Start-Here badge borderline contrast — see wizard.md §A11y)
+ *     - 0 Critical and 0 non-Critical axe violations
  *   It does NOT cover:
  *     - full multi-step traversal (role → scenario → config generation)
- *     - the 19 state-specific color waivers from ADR-016 (DEC-A)
- *     - token-layer contrast issues on wizard (Day 5 retrospective runtime
- *       axe showed wizard itself has 0 violations — ADR-016 Option A
- *       validated in this spec's axe coverage)
- *   For broader Phase .a0 a11y picture across all migrated tools, see
- *   `_axe-audit-day1to3.spec.ts` and `_axe-audit-day4.spec.ts`.
+ *     - token-pair contrast in the dark theme (axe runs in the default theme
+ *       only; see ADR-014 "known limitations")
  *
  * Validates:
  *   - jsx-loader.html?component=wizard loads without 404
@@ -39,9 +34,6 @@ test.describe('Getting Started Wizard @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /Wizard|Getting Started|Role|Dynamic Alerting/i,
-      // Wizard has a known amber "START HERE" badge with borderline contrast
-      // that is tracked separately (see wizard.md critique §Accessibility).
-      // Allow up to 2 non-Critical violations while migration is in-flight.
       allowedNonCriticalViolations: 0,
     });
   });

@@ -10,84 +10,102 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./015-data-theme-single-track-dark-mode.md)
 
-> This decision is the prerequisite upon which every subsequent v2.7.0 token migration depends,
-> warranting an independent ADR.
-
 ## Status
 
-✅ **Accepted** (v2.7.0, 2026-04-16) — implemented in `deployment-wizard.jsx`
-migration (commit `8634ea2`), all 83 `dark:` variants removed. Subsequent
-rbac / cicd / threshold-heatmap migrations follow the same rule.
+✅ **Accepted** (v2.7.0, 2026-04-16)
 
-## Background
+Revised 2026-05-13: the JSX source moved to `tools/portal/src/`, and the path scanned by the acceptance check moved with it.
 
-Before v2.6.x, portal JSX had two concurrent dark mode mechanisms:
-
-1. **Tailwind `dark:` variant** (class-based): `<div class="bg-white dark:bg-slate-900">`
-2. **design-tokens.css `[data-theme="dark"]` attribute**: tokens automatically swap colors
-   `:root { --da-color-bg: #fff } [data-theme="dark"] { --da-color-bg: #0b1220 }`
-
-The two mechanisms **lacked integration**: toggling the class did not toggle the attribute, and vice versa. During the `deployment-wizard.jsx` critique we confirmed this causes:
-
-- Partially migrated components: token-based nodes clash with `dark:` nodes (white background tooltip paired with dark text)
-- Systemic maintenance burden: every new color must be synchronized in both Tailwind classes and tokens
-- Root causes of dark mode toggle bugs are nearly impossible to bisect
-
-## Decision Drivers
-
-1. `[data-theme]` is the SSOT (Single Source of Truth) for design-tokens.css; if we want tokens to have
-   substantive value, we cannot have a second parallel system
-2. ADR-014 (Option A arbitrary-value rewrite) ingests all colors into tokens, making `dark:` a vestigial remnant
-3. The only justification for maintaining dual tracks is "familiarity with existing tailwind patterns" — this is
-   outweighed by system consistency
+Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged.
 
 ## Decision
 
-**Choose Option C**: Migrate comprehensively to `[data-theme="dark"]` attribute-based dark mode,
-**remove all Tailwind `dark:` variants**.
+The portal's JSX tools have exactly one dark mode mechanism: the `data-theme` attribute on `<html>`. All light/dark color switching is done by the tokens (CSS variables) in `docs/assets/design-tokens.css`. **JSX does not use Tailwind's `dark:` variant** (for example `dark:bg-slate-900`).
 
-Implementation requirements:
-1. Any new JSX must not use the `dark:` prefix (pre-commit lint to be added later)
-2. During token migration, delete `dark:xxx` directly (color swapping is handled by tokens)
-3. Remove `darkMode` configuration from `tailwind.config` (if enabled)
-4. `jsx-loader` theme switch: `document.documentElement.setAttribute('data-theme', 'dark')`
-   (do not toggle class `dark`)
+The rules:
+
+1. JSX does not use the `dark:` prefix.
+2. Colors are written as Tailwind arbitrary values that reference a token (a class with a raw CSS value in square brackets, such as `bg-[color:var(--da-color-surface)]`). When migrating an old component, its `dark:xxx` classes are deleted outright, not rewritten into something else.
+3. Switching the theme means changing `<html data-theme="…">`; components never check whether the current theme is light or dark.
+
+### Example: one class, recolored by `data-theme`
+
+The component writes its background once, referencing `--da-color-surface`:
+
+```jsx {.quote src="tools/portal/src/interactive/tools/master-onboarding.jsx"}
+<div className="border border-[color:var(--da-color-surface-border)] rounded-lg p-5 bg-[color:var(--da-color-surface)]">
+```
+
+That token has a light and a dark value in `design-tokens.css`; the dark value sits under `[data-theme="dark"]`:
+
+```css {.quote src="docs/assets/design-tokens.css"}
+:root {
+// ...
+  --da-color-surface:         #ffffff;
+// ...
+[data-theme="dark"] {
+// ...
+  --da-color-surface:         #1e293b;
+```
+
+Result: with `<html data-theme="light">` the card's background is `#ffffff`; with `<html data-theme="dark">` it is `#1e293b`. The JSX does not change at all, and no second class is needed.
+
+The theme is set by `docs/assets/jsx-loader.html`: the user cycles between Light / Dark / System, the choice is stored in `localStorage` under `__da_theme_pref`, and when nothing is stored the OS `prefers-color-scheme` setting is followed.
+
+## Background
+
+Before this decision, portal JSX had two dark mode mechanisms at once:
+
+1. **Tailwind's `dark:` variant**: driven by whether `<html>` carries the class `dark`, e.g. `<div class="bg-white dark:bg-slate-900">`.
+2. **`[data-theme="dark"]` in `design-tokens.css`**: driven by an attribute on `<html>`; tokens switch values automatically.
+
+There was no bridge between them: toggling the class did not toggle the attribute, and vice versa. The problems this caused:
+
+- In a half-migrated component, token-based nodes and `dark:` nodes did not match, e.g. a white tooltip with dark text.
+- Every new color had to be written twice, once as a Tailwind class and once as a token.
+- When dark mode switching broke, it was hard to tell which mechanism was at fault.
+
+Why a single track:
+
+1. `design-tokens.css` is the one place colors are defined (Single Source of Truth); a second, parallel switching mechanism would make the tokens pointless.
+2. [ADR-014](014-wizard-arbitrary-value-token-migration.en.md) decided to rewrite colors as token-referencing arbitrary values; once colors live in tokens, `dark:` is only leftover.
+3. The only benefit of keeping two tracks is "everyone knows the Tailwind idiom", which is worth less than overall consistency.
+
+## Consequences and Known Limitations
+
+### Positive
+
+- On screens that use tokens, dark mode depends on `data-theme` alone, and the whole screen stays consistent.
+- A new component writes each color once; there is no second copy for dark.
+
+### Known limitations
+
+- **Colors without a token do not switch.** Tailwind's built-in palette classes (such as `bg-red-500 text-white`) bypass the tokens and keep the same color in the dark theme. Many such classes remain in the JSX under `tools/portal/src/`, e.g. status colors and step-completed colors. This decision only solves "two mechanisms side by side on screens that have tokens", not "colors that never entered the tokens"; the latter is tracked separately. The `design-token-usage` lint catches hex color codes, px values in styles, and the error/warning tokens used as foreground color, but not these palette classes.
+- **The loader still keeps the class `dark`.** The decision originally required the loader to set only `data-theme` and to drop Tailwind's `darkMode` setting; the current `jsx-loader.html` does not: it sets `tailwind.config = { darkMode: 'class' }` and, when switching to dark, adds both the class `dark` and `data-theme="dark"`, because the loader's own chrome (back link, theme button, loading spinner) is styled with `html.dark` selectors.
+
+  ```html {.quote src="docs/assets/jsx-loader.html"}
+      document.documentElement.classList.toggle('dark', isDark);
+      document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+  ```
+
+  This has no effect on the JSX tools, since the JSX contains no `dark:` variants. It does mean that if someone writes `dark:` into JSX again, it will take effect on screen and the problem will not show.
+- **Nothing enforces "no `dark:`".** A pre-commit lint was planned when the decision was made and has not been implemented; review is the only guard. To check the current state, run from the repo root:
+
+  ```bash
+  grep -rnE '\bdark:[a-z]' tools/portal/src --include='*.jsx'
+  ```
+
+  It should print nothing. Comments that mention `dark:` (e.g. noting that a component removed its `dark:` classes) do not count as violations; the pattern above only matches `dark:` immediately followed by a class name.
 
 ## Considered Alternatives
 
-| Option | Description | Decision |
+| Option | Description | Outcome |
 |---|---|---|
-| A | Tailwind config `darkMode: ['class', '[data-theme="dark"]']`: enable both systems simultaneously | ❌ Parallel complexity does not decrease |
-| B | `jsx-loader` simultaneously toggles `<html class="dark">` and `data-theme="dark"` | ❌ Patch-like; does not solve dual-source problem between tokens and classes |
-| **C** | Migrate entirely to `[data-theme]`, remove `dark:` | ✅ Chosen; cleanest solution |
-
-## Consequences
-
-### Positive
-- **Post-migration dark mode behavior is predictable across every tool**: switch `data-theme` in one place,
-  entire UI remains consistent
-- New developers will not accidentally use `dark:`
-- Subsequent rbac / cicd / threshold-heatmap migrations save approximately 30–40% per-component rewrite time
-  (no need to dual-write colors)
-
-### Negative / Risks
-- **Existing tools not yet migrated will have dark mode gaps**: for example, config-lint still retains
-  some `dark:`, so theme switching presents partial UI → listed as a v2.7.0 closure acceptance criterion
-- **Subsequent discovery**: a runtime axe scan of threshold-heatmap revealed
-  `bg-red-500 text-white` hard-coded palette **without tokens, hence without dark mode color swap**,
-  which this ADR cannot help with (tracked separately). That is: this ADR solved the **dual-track problem for screens with tokens**,
-  but did not solve "palette remnants that never enter the dark pipeline in the first place"
-- Must add `grep 'dark:' docs/**/*.jsx` verification at v2.7.0 closure, otherwise `dark:` remnants
-  will be overlooked in subsequent code reviews
-
-## Scope of Effect
-
-- From v2.7.0 onward, new JSX must not use `dark:` variant
-- Existing tools must remove `dark:` during their respective token-migration PR
-- Before v2.7.0 closure, must pass `grep -r 'dark:' docs/getting-started docs/interactive/tools` returning empty (paths reflect the then-current layout; JSX source moved to `tools/portal/src/` in TRK-242 — re-verify against that path instead; comment-only mentions of removed `dark:` variants do not count as violations)
+| Both active at once | Tailwind config `darkMode: ['class', '[data-theme="dark"]']`, so `dark:` also follows the attribute | Rejected: both mechanisms still coexist; complexity does not drop |
+| Loader keeps both in sync | The loader sets `<html class="dark">` and `data-theme="dark"` together when switching | Rejected: a patch; tokens and classes remain two sources |
+| **`[data-theme]` only** | Remove every `dark:` from JSX; tokens do the switching | **Chosen**: a single source |
 
 ## References
 
-- Commit `8634ea2` (deployment-wizard migration, first landing)
-- [ADR-014: Wizard Token Arbitrary-Value Migration Strategy](014-wizard-arbitrary-value-token-migration.en.md) — together they form the v2.7.0 standard migration toolkit
-- Palette remnants causing dark mode gap (tracked separately)
+- [ADR-014: Wizard Token Arbitrary-Value Migration Strategy](014-wizard-arbitrary-value-token-migration.en.md) — how colors are rewritten as tokens; used together with this ADR
+- Implementation: `docs/assets/design-tokens.css` (light and dark token values), `docs/assets/jsx-loader.html` (theme switching), `tools/portal/src/` (JSX source)

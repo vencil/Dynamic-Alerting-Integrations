@@ -10,112 +10,97 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./018-profile-as-directory-default.md)
 
-> Profile Builder component of the v2.8.0 customer-migration pipeline.
-> Paired with [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md) (Directory Hierarchy) + [ADR-017](017-defaults-yaml-inheritance-dual-hash.en.md) (Inheritance Semantics).
-
 ## Status
 
-🟢 **Accepted** (v2.8.0, 2026-04-27) — The Profile Builder's PromRule→threshold translator and emission ship with v2.8.0.
+🟢 **Accepted** (v2.8.0, 2026-04-27). Paired with [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md) (directory hierarchy) and [ADR-017](017-defaults-yaml-inheritance-dual-hash.en.md) (inheritance semantics of `_defaults.yaml`).
 
-### Revision (2026-11-22): the Profile Builder is retired
+Revised 2026-11-22: the Profile Builder that first implemented this rule (a Go library that clustered similar alert rules and wrote a `_defaults.yaml` and tenant override files for each cluster) was deleted from the code; it was never wired to any CLI ([#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228)). The rule itself still holds.
 
-The Profile Builder (translator and emission) and the batch PR tool that was meant to call it were deleted from the code on 2026-11-22, with no transition period ([#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228)). Why it was retired: it was never wired to a CLI and had no caller; and when a tenant deviated from the median in two clusters, the emission wrote a file for that tenant in each of the two directories, so da-guard refused the whole tree as a duplicate tenant.
-
-The decision and its discussion are in [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211).
-
-Bulk import of customer rules is planned to move to `da-tools migrate` (migrate-rule), producing `_custom_alerts` recipes; that part has not shipped yet, and its progress is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226).
-
-This ADR's default-vs-override boundary still holds: it applies to conf.d trees arranged by hand or produced by other tools, and da-guard's redundant-override check judges by it. The sections below that describe the Profile Builder, and the files listed under "Implementation locations", record the design before retirement; those files no longer exist.
-
-## Context
-
-The Profile Builder clusters a customer's PromRule corpus into "structurally similar" groups. Each cluster is expected to land in the conf.d/ tree — the question is **how**:
-
-1. **One full tenant.yaml per tenant** — N structurally similar rules become N files; even with `_defaults.yaml` inheritance, every tenant repeats every key. Classic GitOps anti-pattern.
-2. **Pour everything into `_defaults.yaml`, no tenant.yaml** — loses per-tenant fine-tuning.
-3. **Cluster-wide values in `_defaults.yaml`, only divergent tenants get a `<id>.yaml` override** — ADR-017's deepMerge already supports sparse override; the question is "what value goes in default?" and "which tenants count as 'truly different'?". Without an explicit rule each operator interprets it differently.
-
-The Profile Builder ships both a translator (extracts threshold scalars from PromRule expressions) and emission (writes the cluster's decisions into a conf.d tree). The translator's heuristics are internal-package territory (see the `internal/profile/translate.go` package header); but "what shape does emission produce" is a cross-component decision affecting the batch PR pipeline's directory placement, the redundant-override guard's semantics, and release packaging — ADR territory.
+Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged.
 
 ## Decision
 
-### Profile-as-Directory-Default
+**A threshold shared by a group of tenants goes in the `_defaults.yaml` of the directory above them; a tenant file holds only the keys whose value differs from what the tenant inherits.**
 
-**Cluster-wide thresholds live in `_defaults.yaml`; only tenants whose value genuinely differs get a `<id>.yaml` override file.**
+1. **Shared values go under `defaults:` in `_defaults.yaml`.** The value is inherited down the directory chain to every tenant (inheritance semantics: ADR-017).
+2. **Same as inherited means not written.** When a tenant's value equals the value it inherits, the tenant file does not carry that key; only a genuinely different value is written. Every line in a tenant file is then a deliberate deviation, and a reviewer does not have to guess whether it pins the value on purpose or is a stale line someone forgot to delete.
+3. **Every tenant still has its own tenant file.** A tenant is declared by its tenant file: no file, no tenant. A tenant with nothing to override is written as an empty mapping (`db-c` below).
+4. **The default is the group's median, not its mean.** One outlying tenant does not drag the default off. This is guidance for whoever arranges `conf.d/`; no tool computes it for you and no check enforces it.
 
-Concrete rules (implemented by `emit_translated.go`; the translator package header carries metric_key / median / cluster-aggregation heuristic details):
+### Example
 
-- The `_defaults.yaml` `defaults: {<metric_key>: <threshold>}` carries the cluster **median** (not mean — single-outlier resilience).
-- Member threshold == cluster default → **no tenant file** (rely on ADR-017 inheritance).
-- Member threshold != cluster default → write `<id>.yaml` carrying ONLY the override for this `metric_key`.
-
-Example input (3 PromRules, thresholds 80 / 80 / 95):
+Three tenants have thresholds 80, 95 and 80; the median, 80, goes in `_defaults.yaml`. `db-b` writes only the value where it differs and `db-c` overrides nothing; `db-a` carries a line equal to the default, which this rule says to delete:
 
 ```yaml
-# _defaults.yaml (cluster median = 80)
+# conf.d/_defaults.yaml
 defaults:
-  mysql_connection_usage_percent: 80
+  mysql_connections: 80
 
-# tenant-c.yaml (only c diverges from default)
+# conf.d/db-a.yaml
 tenants:
-  tenant-c:
-    mysql_connection_usage_percent: "95"
+  db-a:
+    mysql_connections: "80"
+
+# conf.d/db-b.yaml
+tenants:
+  db-b:
+    mysql_connections: "95"
+
+# conf.d/db-c.yaml
+tenants:
+  db-c: {}
 ```
 
-tenant-a and tenant-b have no files (runtime deepMerge picks up the 80 from `_defaults.yaml`).
+`da-guard served-values --config-dir conf.d` gives `mysql_connections` 80 for `db-a`, 95 for `db-b` and 80 for `db-c`: `db-c` inherits 80 from `_defaults.yaml`, and `db-a` gets 80 whether its line is deleted or not. Thresholds in a tenant file are written as strings per the schema; the exporter reads them as numbers.
 
-### Why this principle warrants an ADR
+### What enforces the rule
 
-- **Cross-component**: Profile Builder emission shape, the batch PR pipeline's directory placement, release packaging, and the redundant-override guard ALL must agree on this default-vs-override boundary. A divergent interpretation anywhere creates GitOps smell (duplicate overrides; values silently shadowed by defaults).
-- **Customer-visible**: the conf.d/ shape customers see is directly determined by this principle.
-- **Long-term stable**: translator heuristics may evolve as customer corpora reveal new shapes, but the default-vs-override boundary should not shift for years.
+da-guard's `redundant_override` check: when a key in a tenant file has the same value the tenant would get with the key deleted, it reports a warning. The comparison is against this tenant's own inheritance: every `_defaults.yaml` along its directory chain, and the `_profile` the tenant binds (where the profile sets a value, the profile's value is what counts).
 
-Translator-internal algorithms (the metric_key 5-step ladder, majority vote, median outlier resistance, operator handling, status fallback) are implementation details and live in `components/threshold-exporter/app/internal/profile/translate.go`'s package header. This ADR does NOT duplicate them — single source of truth, no drift.
+⚠️ It compares the values as YAML reads them, so the types must match. In the example above the root writes the number `80` and `db-a` the string `"80"`, and da-guard reports no finding; that is the usual way to write them, so a redundant threshold override is usually not caught. Only with the root line written as `mysql_connections: "80"` (the exporter still reads it as 80) does `da-guard --config-dir conf.d` name `db-a` (exit code 0; summary and scanned-file list omitted):
 
-## Known cross-component non-goals
+```text
+### Warnings (informational)
 
-| Non-goal | Why | Plan |
-|---|---|---|
-| Profile Builder auto-inferring directory placement (which cluster lands at L1 / L2 / L3) | This is the batch PR pipeline's job; needs cross-domain/region corpus view | batch PR pipeline |
-| Emitting dimensional / regex labels (`{queue=~"q.*"}`) | Needs expression rewrite + label expansion, cross-component | batch PR pipeline dimensional support |
-| Auto-rewriting customer PromRule expressions to `> on(tenant) user_threshold{}` form | Rule rewrite is a separate toolkit, decoupled from conf.d emission | batch PR pipeline / customer manual |
-| Two-tier severity translation (`metric_key_critical` derived from one cluster) | Clusters are semantically single-tier; two-tier needs re-clustering at PromRule-pair level | later fuzzier matcher / customer manual |
+| Tenant | Field | Kind | Message |
+|--------|-------|------|---------|
+| db-a | mysql_connections | redundant_override | tenant "db-a" overrides "mysql_connections" with the same value as the new defaults; remove the override and rely on inheritance |
+```
 
-## Interactions
+- A warning does not affect the exit code (0); with `--warn-as-error` the exit code is 1. Held by `TestRun_RedundantOverride_SurfacesAsWarning` and `TestRun_RedundantOverride_WithWarnAsError_ExitsOne` in `cmd/da-guard/main_test.go`.
+- Tenants in different subdirectories are each compared against their own chain: `TestRun_RedundantOverride_HonorsCascadingDefaults`.
+- A tenant bound to a `_profile` is compared against the profile's value: `TestGuard_RedundantOverrideFollowsTheProfile` in `cmd/da-guard/profile_guard_test.go`.
 
-### With ADR-017 (deepMerge)
+## Context
 
-This ADR's emission relies on ADR-017's:
+When a group of structurally similar tenants lands in `conf.d/`, there are three ways to write it:
 
-- **null-as-delete**: tenants who want to explicitly set 0 can still do so (emission uses explicit numbers, never null). ⚠️ **Corrected by #1339**: `null` is no longer a way to opt out of an inherited THRESHOLD (it is indistinguishable from a half-typed line, and the schema rejects it) — use `"disable"`. The opt-out meaning of `null` survives only for the four `_routing` fields.
-- **map deep-merge**: each tenant file lists ONLY keys that differ from `_defaults.yaml`; runtime ResolveAt fills the rest from defaults.
-- **scalar override**: tenant string values (e.g. `"95"`) override the default numeric; runtime uses strconv to convert back to float at ResolveAt time.
+1. **One complete tenant file per tenant**: N tenants repeat the same keys N times. Changing a shared value means editing N files, and nothing shows which values differ on purpose.
+2. **Everything in `_defaults.yaml`, no thresholds in tenant files**: per-tenant tuning is lost.
+3. **Shared values in `_defaults.yaml`, overrides only for tenants that differ**: ADR-017's merge rules already support this sparse override (a tenant file lists only some keys; the rest are filled in from above). What was missing is the rule: which value becomes the default, and which tenants count as "genuinely different". Without an explicit rule, every person handling the tree interprets it their own way.
 
-### With ADR-016 (Directory Hierarchy)
+This ADR picks option 3 and supplies the rule. It is a cross-component convention: tools that produce `conf.d/`, people reviewing PRs, and da-guard's redundant-override check all draw the same boundary; it also determines the shape of `conf.d/` that customers see.
 
-Emission's `<RootPrefix>/<ProposalDir>/` maps to ADR-016's directory levels. **The caller** (by design the batch PR pipeline; there is no caller today) decides whether `ProposalDirs[i]` lands at L1 / L2 / L3. **The Profile Builder does NOT infer directory placement**; that's the batch PR pipeline's job.
+## Consequences and known limitations
 
-### With the Dangling Defaults Guard
+- **A redundant override is a warning, not a merge block.** It is harmless at runtime; it only makes the tenant file longer and the intent less clear. To block on it, add `--warn-as-error` in CI.
+- **The comparison is type-sensitive.** With the tenant writing a string and the default a number (the usual form), equal values are not reported; see "What enforces the rule".
+- **Only single values are compared.** A mapping is flattened and each leaf compared; lists are not compared, and identical contents are not reported (`TestCheckRedundantOverrides_SkipsStructuredValues` in `internal/guard/guard_test.go`).
+- **Keys a subdirectory `_defaults.yaml` cannot set are not judged.** The exporter does not apply `_`-prefixed keys (for example `_silent_mode`) from a subdirectory `_defaults.yaml` (ADR-017 decision 4), so the tenant's own line is the value in effect; such an override is not redundant and da-guard does not report it (`TestGuard_RedundantOverrideSkipsRefusedSubtreeKey` in `cmd/da-guard/subtree_reserved_test.go`).
+- **A tenant can only override a declared threshold.** When a tenant file sets a threshold key that no `_defaults.yaml` declares, `/metrics` does not serve it, and da-guard reports no finding for it. What counts as declared (root directory, built-in layer, `optional_overrides:`) is in ADR-017 decisions 3, 4 and 11.
+- **To switch off an inherited threshold, write `"disable"`, not `null`.** `null` in a tenant file is the same as not writing the key at that level; the tenant still gets the value from above (ADR-017 decision 4).
+- **A shared value placed in a subdirectory does not reach production under the standard deployment.** The flat assembly customers deploy with carries only the top-level files of conf.d, so a subdirectory `_defaults.yaml` never reaches the live exporter (ADR-016, "Consequences and known limits"). Until that is resolved, a shared value must be in the root `_defaults.yaml` to take effect in production.
+- **No tool generates this shape from a rule set.** Customer rules are imported per tenant with `da-tools migrate`; bulk import has not shipped and is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226).
 
-Emission produces native ADR-017 deepMerge shapes, so the guard applies naturally:
+## Alternatives considered
 
-- Schema validation: metric_key required-fields check.
-- Cardinality guard: predicted-metric-count includes emission's metric_key entries.
-- Redundant-override warn: tenant override matching `_defaults` median → guard suggests removal (this check is effectively the post-merge enforcement of Profile-as-Directory-Default).
+- **A complete tenant file per tenant**: option 1 under "Context". Repetitive, and deliberate deviations are buried among repeated values.
+- **Only `_defaults.yaml`**: option 2 under "Context". No per-tenant tuning.
+- **Mean as the default**: a single outlier drags the default off, forcing tenants that agree with the majority to write overrides too.
 
-Once emission ships, customer PRs automatically run the guard's GH Actions wrapper for validation. The loop closes.
+## Related
 
-## Implementation locations
-
-| File | Role |
-|---|---|
-| `internal/profile/translate.go` | Translator + heuristic details (metric_key ladder / cluster aggregation / median / operator handling) — full inline doc in package header |
-| `internal/profile/emit.go` | `EmissionInput.Translate` flag + dispatch into `emitTranslatedProposal`; conf.d-shape template implementation |
-| `internal/profile/translate_test.go` | Table tests covering translator + cluster aggregation (`-race -count=2` stable) |
-
-(These files lived under `components/threshold-exporter/app/` and were deleted when the Profile Builder was retired; see "Revision" above.)
-
-## Changelog
-
-- v2.8.0: this ADR ships with the PromRule→threshold translator + emit dispatch.
-- v2.8.0 review: after a "do we need this ADR?" check from the user, the original translator heuristic details moved into `translate.go`'s package header. This ADR was then slimmed to the single cross-component design principle, eliminating double-writing drift risk.
+- [ADR-016: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy](016-conf-d-directory-hierarchy-mixed-mode.en.md)
+- [ADR-017: Multi-Level `_defaults.yaml` Inheritance and Dual-Hash Hot Reload](017-defaults-yaml-inheritance-dual-hash.en.md)
+- [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211) — discussion of retiring the Profile Builder
+- Implementation: `components/threshold-exporter/app/internal/guard/redundant.go` (the `redundant_override` check)

@@ -15,10 +15,10 @@ dependencies: [
 // (mirrors operator-setup-wizard PR-portal-4 + cicd-setup-wizard PR-10).
 // Step components remain inline; future PR can extract them.
 //
-// Design token migration notes (v2.7.0 Phase .a0, DEC-F/G/I):
-//   * DEC-F (C): removed all Tailwind `dark:` variants; rely on `[data-theme="dark"]`
-//     attribute + design-tokens.css to swap `--da-color-*` automatically.
-//   * DEC-G (B): Portal-wide slate->gray unification is implicit here.
+// Design token notes:
+//   * ADR-015: no Tailwind `dark:` variants; the `[data-theme="dark"]`
+//     attribute + design-tokens.css swap `--da-color-*` automatically.
+//   * Portal-wide slate->gray unification is implicit here.
 //   * TRK-104: hardcoded portal paths replaced with proper jsx-loader URLs.
 import React, { useState, useMemo } from 'react';
 // TRK-230e: ESM imports.

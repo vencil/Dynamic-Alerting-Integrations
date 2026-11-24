@@ -26,14 +26,10 @@ import {
   RECOMMENDATIONS,
 } from "./wizard/fixtures.js";
 
-// Style tokens (v2.7.0 Phase .a0 DEC-A Option A migration):
-// - Core gray/blue/focus palette migrated to Tailwind arbitrary values
-//   (bg-[color:var(--da-color-*)] / text-[color:...] / border-[color:...])
-//   so theme switching via [data-theme="dark"] works automatically.
-// - State-specific colors (green = completed/success, amber = priority,
-//   indigo/purple = path comparison) remain as Tailwind utilities pending
-//   introduction of domain-specific semantic tokens in a future audit.
-// - See design-critique notes in docs/internal/design-reviews/v2.7.0/wizard.md.
+// Style tokens (ADR-014 Option A): every color is a Tailwind arbitrary value
+// pointing at a --da-color-* token (bg-[color:var(--da-color-*)] /
+// text-[color:...] / border-[color:...]), so theme switching via
+// [data-theme="dark"] works automatically; no Tailwind palette classes remain.
 
 // i18n helper — picks zh or en based on jsx-loader's detected language.
 //

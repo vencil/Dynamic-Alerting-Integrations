@@ -122,8 +122,8 @@ func main() {
 		"How often to check for RBAC config changes")
 
 	// LOCAL-DEV-ONLY auth bypass (ADR-022). Default off. When on, a dev
-	// identity is injected for requests lacking an oauth2-proxy header so the
-	// stack works without oauth2-proxy (try-local compose). RBAC still applies
+	// identity is injected for requests oauth2-proxy sent without an identity
+	// (try-local / contract tests run oauth2-proxy with login skipped). RBAC still applies
 	// to the injected group. Guarded by a runtime poison pill (panics in k8s)
 	// + /metrics tripwire + #448 SAST (forbids the env var in manifests).
 	devBypassAuth := flag.Bool("dev-bypass-auth", envBool("TA_DEV_BYPASS_AUTH"),

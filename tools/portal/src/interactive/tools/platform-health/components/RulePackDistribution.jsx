@@ -4,7 +4,7 @@ purpose: |
   Horizontal bar chart of how many tenants use each rule pack.
   Extracted from platform-health.jsx (da-portal ROI refactor Wave 5b).
 
-  Design-token migration (ADR-014 / DEC-A): Tailwind palette classes →
+  Design-token migration (ADR-014 Option A): Tailwind palette classes →
   `--da-color-*` arbitrary values (threshold-heatmap pattern). Bar track
   → tag-bg (neutral), bar fill → accent (blue), labels → muted.
 
