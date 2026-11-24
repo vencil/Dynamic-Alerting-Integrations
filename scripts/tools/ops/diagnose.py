@@ -207,6 +207,13 @@ PROMETHEUS_FAILURE = "Prometheus query failed"
 EXPECTED_CLUSTER_LABEL = "expected_cluster"
 MARIADB_PRESENCE_METRIC = "mysql_up"
 EXPORTER_DOWN = f"Exporter reports DOWN ({MARIADB_PRESENCE_METRIC}!=1)"
+# The exporter issues that name clusters (see issue_clusters).
+EXPORTER_DOWN_IN = "Exporter reports DOWN in "
+EXPORTER_ABSENT_IN = "Exporter absent in "
+# The job matcher of the health query — the whole matcher the alert's presence
+# selectors carry (_lib_exporter_presence.JOB_SELECTOR; held equal by the same
+# test file).
+EXPORTER_JOB_MATCHER = f'job="{TENANT_EXPORTER_JOB}"'
 # What the Pod check can see: kubectl's current context, one cluster.
 POD_CHECK_SCOPE = "current kubectl context only"
 POD_NOT_FOUND_ELSEWHERE = (
@@ -287,11 +294,22 @@ def exporter_issues(states: dict[str, bool], declared: set[str]) -> list[str]:
         issues.append(EXPORTER_DOWN)
     down = sorted(c for c, up in states.items() if c and not up)
     if down:
-        issues.append(f"Exporter reports DOWN in {', '.join(down)} "
+        issues.append(f"{EXPORTER_DOWN_IN}{', '.join(down)} "
                       f"({MARIADB_PRESENCE_METRIC}!=1)")
     if "" not in states:
-        issues.extend(f"Exporter absent in {c}" for c in named if c not in states)
+        issues.extend(f"{EXPORTER_ABSENT_IN}{c}" for c in named if c not in states)
     return issues
+
+
+def issue_clusters(issue: str) -> list[str]:
+    """The clusters an exporter issue of exporter_issues names; [] for any
+    other issue. batch-diagnose's suggestion for such an issue has to point
+    at those clusters, not at kubectl's current context."""
+    if issue.startswith(EXPORTER_ABSENT_IN):
+        return [issue[len(EXPORTER_ABSENT_IN):]]
+    if issue.startswith(EXPORTER_DOWN_IN):
+        return issue[len(EXPORTER_DOWN_IN):].rsplit(" (", 1)[0].split(", ")
+    return []
 
 
 def exporter_clusters(states: dict[str, bool], declared: set[str]) -> list[dict] | None:
@@ -718,7 +736,7 @@ def _check(tenant: str, prom_url: str, *, base: Path | None, chain: dict | None)
             # row, as before.
             up_results, up_err = query_prometheus(
                 prom_url, f'min by(tenant, {CLUSTER_IDENTITY_LABEL}) '
-                          f'({MARIADB_PRESENCE_METRIC}{{job="{TENANT_EXPORTER_JOB}",tenant="{tenant}"}})')
+                          f'({MARIADB_PRESENCE_METRIC}{{{EXPORTER_JOB_MATCHER},tenant="{tenant}"}})')
             if up_err:
                 exporter_found = [f"{PROMETHEUS_FAILURE} ({prom_url})"]
             else:
@@ -731,10 +749,13 @@ def _check(tenant: str, prom_url: str, *, base: Path | None, chain: dict | None)
             per_cluster = exporter_clusters(states, declared)
 
         # The Pod check asks kubectl's current context — one cluster. For a
-        # tenant in several (declared per cluster, or answering from more
-        # than one) the document says so, and "no Pod here" is not a finding
-        # about the tenant: the other clusters were never asked.
-        several = bool(declared - {""}) or len(states or {}) > 1
+        # tenant demonstrably in several (two or more clusters declared, or
+        # rows carrying two or more `da_cluster` values) the document says
+        # so, and "no Pod here" is not a finding about the tenant: the other
+        # clusters were never asked. ⛔ Not for one declared cluster, one
+        # labelled row or the unlabelled row: nothing there says the tenant
+        # is anywhere else, and a missing Pod stays the issue it was.
+        several = len(declared - {""}) > 1 or len(set(states or {}) - {""}) > 1
         if several:
             pod_check = {"scope": POD_CHECK_SCOPE, "phase": pod_status}
         if not pod_status:

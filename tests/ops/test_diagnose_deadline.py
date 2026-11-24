@@ -33,7 +33,7 @@ def _prom_mariadb_up(_url, query):
     the only thing that can stall is kubectl."""
     if query.startswith("tenant_expected_exporter"):
         return _MARIADB
-    if "mysql_up{" in query:   # #3720: `min by(tenant) (mysql_up{…})`
+    if "mysql_up{" in query:   # #3720, #1200: `min by(tenant, da_cluster) (mysql_up{…})`
         return [{"metric": {}, "value": [0, "1"]}], None
     return [], None
 

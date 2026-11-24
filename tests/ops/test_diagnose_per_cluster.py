@@ -194,7 +194,7 @@ def test_pod_not_found_is_not_a_tenant_wide_failure_across_clusters():
 @pytest.mark.parametrize("declared,up", [
     (_declared("east", "west"), _up(east="1", west="1")),
     (_declared(), _up(east="1", west="1")),          # 沒宣告，但序列來自兩個叢集
-    (_declared("east"), _up(none="1")),              # 有宣告，序列不帶叢集
+    (_declared("east", "west"), _up(none="1")),      # 宣告了兩個叢集，序列不帶叢集
 ])
 def test_the_pod_check_states_its_scope_across_clusters(declared, up):
     doc, _ = _run(declared, up)
@@ -207,10 +207,26 @@ def test_a_pod_that_is_there_and_not_running_is_still_an_issue_across_clusters()
     assert doc["pod_check"]["phase"] == "Pending", doc
 
 
-def test_pod_not_found_in_one_cluster_is_the_issue_it_was():
-    doc, _ = _run(_declared(), _up(none="1"), pod=None)
-    assert doc == {"status": "error", "tenant": "t1", "issues": ["Pod not found"],
-                   "recent_logs": []}, doc
+@pytest.mark.parametrize("declared,up", [
+    (_declared(), _up(none="1")),            # 單一 Prometheus
+    (_declared("east"), _up(none="1")),      # 只宣告一個叢集，序列不帶叢集
+    (_declared("east"), _up(east="1")),      # 只宣告一個叢集，序列就是它的
+    (_declared(), _up(east="1")),            # 沒宣告，只有一個叢集的序列
+    (_declared("east"), _up(none="1", east="1")),   # 不帶叢集的那條不是第二個叢集
+])
+def test_pod_not_found_is_the_issue_it_was_unless_the_tenant_is_in_two_clusters(declared, up):
+    """放寬只在租戶確實跨叢集時：兩個以上不同的宣告叢集，或帶 da_cluster 的序列來自
+    兩個以上的叢集。只宣告一個叢集的租戶，Pod 不見仍是 `Pod not found`、rc 1
+    （第一版把「有任何逐叢集宣告」都算跨叢集，這類租戶因此被報成 healthy）。"""
+    doc, _ = _run(declared, up, pod=None)
+    assert (doc["status"], doc["issues"]) == ("error", ["Pod not found"]), doc
+    assert diagnose.exit_code(doc) == 1
+    assert "pod_check" not in doc, doc
+
+
+def test_pod_not_found_is_softened_for_rows_from_two_clusters_without_a_declaration():
+    doc, _ = _run(_declared(), _up(east="1", west="1"), pod=None)
+    assert doc["status"] == "healthy" and doc["pod_check"]["phase"] is None, doc
 
 
 def test_a_failed_health_query_keeps_the_scope_note_for_a_declared_tenant():
@@ -271,7 +287,15 @@ def test_the_names_are_the_alerts_own():
         diagnose.MARIADB_PRESENCE_METRIC,)
     assert diagnose.CLUSTER_IDENTITY_LABEL is _lib_cluster_identity.CLUSTER_IDENTITY_LABEL
     assert _lib_exporter_presence.CLUSTER_LABEL == diagnose.CLUSTER_IDENTITY_LABEL
-    assert diagnose.TENANT_EXPORTER_JOB in _lib_exporter_presence.JOB_SELECTOR
+
+
+def test_the_job_matcher_is_the_alerts_whole_matcher():
+    """整個 matcher 相等，不是子字串：告警的選擇器改成 `job=~"tenant-exporters-v2"`
+    時，`"tenant-exporters" in …` 照樣成立。diagnose 的查詢用的就是這個 matcher。"""
+    assert diagnose.EXPORTER_JOB_MATCHER == _lib_exporter_presence.JOB_SELECTOR
+    _, asked = _run(_declared(), _up(none="1"))
+    assert asked[1] == (f'min by(tenant, da_cluster) '
+                        f'(mysql_up{{{_lib_exporter_presence.JOB_SELECTOR},tenant="t1"}})'), asked
 
 
 def test_batch_diagnose_counts_an_absent_cluster_as_an_issue():
@@ -282,5 +306,40 @@ def test_batch_diagnose_counts_an_absent_cluster_as_an_issue():
     assert (report["issue_count"], report["healthy_count"]) == (1, 1), report
     assert report["tenants"]["t1"]["exporter_clusters"][0]["state"] == "absent"
     assert report["tenants"]["t2"]["pod_check"]["scope"] == "current kubectl context only"
-    assert len(report["recommendations"]) == 1 and "Check exporter" in report["recommendations"][0]
     assert batch_diagnose.batch_exit_code([absent, healthy]) == 1
+
+
+def test_batch_suggestion_for_a_named_cluster_points_at_that_clusters_context():
+    """`kubectl logs` 不帶 context 查的是目前的叢集——可能正是健康的那個。"""
+    absent, _ = _run(_declared("east", "west"), _up(west="1"))
+    down, _ = _run(_declared("east", "west"), _up(east="1", west="0"))
+    down["tenant"] = "t2"
+    plain, _ = _run(_declared(), _up(none="0"))
+    plain["tenant"] = "t3"
+    recs = batch_diagnose.generate_report([absent, down, plain], PROM)["recommendations"]
+    assert recs == [
+        "t1: Check exporter in cluster east — run against that cluster's kubectl context: "
+        "kubectl --context <east> logs -n t1 deploy/mariadb -c exporter --tail=20",
+        "t2: Check exporter in cluster west — run against that cluster's kubectl context: "
+        "kubectl --context <west> logs -n t2 deploy/mariadb -c exporter --tail=20",
+        "t3: Check exporter — kubectl logs -n t3 deploy/mariadb -c exporter --tail=20"], recs
+
+
+def test_batch_text_report_shows_the_softened_pod_check(capsys):
+    """放寬後的租戶在文字報告裡不能只是一行 `+ t1`：要看得到 Pod 檢查只看了目前的
+    kubectl context、而且那裡沒有 Pod。沒放寬的租戶不多這一行。"""
+    softened, _ = _run(_declared("east", "west"), _up(east="1", west="1"), pod=None)
+    with_issue, _ = _run(_declared("east", "west"), _up(west="1"), pod=None)
+    with_issue["tenant"] = "t2"
+    found, _ = _run(_declared("east", "west"), _up(east="1", west="1"))
+    found["tenant"] = "t3"
+    batch_diagnose.print_text_report(
+        batch_diagnose.generate_report([softened, with_issue, found], PROM))
+    lines = capsys.readouterr().out.splitlines()
+    note = ("      note: Pod check covered only the current kubectl context "
+            "and found no Pod there (not counted as an issue)")
+    following = {name: lines[i + 1] for i, line in enumerate(lines)
+                 for name in ("t1", "t2", "t3")
+                 if line.startswith((f"    + {name}", f"    - {name}"))}
+    assert following["t1"] == following["t2"] == note, lines
+    assert lines.count(note) == 2, lines
