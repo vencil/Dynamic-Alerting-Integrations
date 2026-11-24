@@ -294,10 +294,6 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/lint/fix_file_hygiene.py": {
         "fix_file open(w) [artifact]": 1,
     },
-    "scripts/tools/lint/validate_docs_versions.py": {
-        "_auto_fix .write_text [artifact]": 1,
-        "_auto_fix os.chmod [artifact]": 1,
-    },
     "scripts/tools/ops/_gsvc_child.py": {
         "_parent_dir os.mkdir [work_dir]": 1,
         "_write_file os.fdopen [work_dir]": 1,
@@ -325,7 +321,7 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 81
+_DEBT_CEILING = 79
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
