@@ -101,6 +101,13 @@ permissions:
   contents: read
   pull-requests: write
 
+# A newer push to the same PR cancels this run (runner slots are this repo's
+# CI bottleneck; tests/ops/test_pr_workflow_concurrency.py holds the rule).
+# Any other event groups by run id: it neither cancels nor is replaced.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   backtest:
     runs-on: ubuntu-24.04

@@ -19,7 +19,7 @@ updated_at: 2026-11-22
 
 ✅ **Accepted** (v2.1.0) — 工具鏈已完成，1:N 端到端整合待生產驗證
 📎 **Addendum** (v2.10.0) — 基礎設施指標（disk/PVC/node）的租戶歸屬政策，見下方 §Addendum
-🧭 **修訂** (2026-11-21) — 多叢集同租戶的叢集身分 `da_cluster`（由每台 Prometheus 的 external label 提供）與逐叢集的告警粒度，見下方「多叢集同租戶」；實作進行中。2026-11-22：通知的分組預設不按叢集拆；租戶可以逐叢集宣告預期的 exporter（`種類@叢集`）
+🧭 **修訂** (2026-11-21) — 多叢集同租戶的叢集身分 `da_cluster`（由每台 Prometheus 的 external label 提供）與逐叢集的告警粒度，見下方「多叢集同租戶」；實作進行中。2026-11-22：通知的分組預設不按叢集拆；租戶可以逐叢集宣告預期的 exporter（`種類@叢集`）；Kubernetes 的兩項「設定了卻沒有對應資料」檢查逐叢集判定
 
 ## 背景
 
@@ -167,7 +167,7 @@ groups:
 
 **決策：同一個租戶可以出現在多個叢集。每台 Prometheus 用一個 external label `da_cluster` 說明自己在哪個叢集；凡是以租戶 exporter 序列為輸入的規則，聚合與比對都以 (tenant, da_cluster) 為單位，告警也逐叢集各發一次。**
 
-這一節是上表 N:1「多叢集同租戶、DR 對（主站與備援站各一套）」的契約。**它描述的是完成後的行為，目前只完成一部分**：rule pack 已經逐叢集計算，Alertmanager 的 warning／critical 去重也已經逐叢集（第 5 點）；通知的分組依決策維持原樣、不按叢集拆（第 5 點）；逐叢集的存在判定（第 6 點）已經用在租戶 exporter 的缺席告警上，還沒涵蓋的檢查列在「後果與已知限制」。實作分階段進行，進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
+這一節是上表 N:1「多叢集同租戶、DR 對（主站與備援站各一套）」的契約。**它描述的是完成後的行為，目前只完成一部分**：rule pack 已經逐叢集計算，Alertmanager 的 warning／critical 去重也已經逐叢集（第 5 點）；通知的分組依決策維持原樣、不按叢集拆（第 5 點）；逐叢集的存在判定（第 6 點）已經用在租戶 exporter 的缺席告警上；Kubernetes 的兩項「設定了卻沒有對應資料」檢查也逐叢集判定，不需要宣告；還沒涵蓋的檢查列在「後果與已知限制」。實作分階段進行，進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
 
 ### 為什麼需要
 
@@ -255,7 +255,9 @@ redis_up{job="tenant-exporters", tenant="t1", da_cluster="edge-b"}              
 - **加總是逐叢集的。** 「該租戶所有實例加總」的規則（例如鎖等待、deadlock 次數）在每個叢集各自加總、各自比對閾值。
 - **逐叢集的存在判定要在序列帶 `da_cluster` 的地方評估。** 也就是收了各叢集資料的中央 Prometheus；規則分層部署時告警規則本來就放在那裡。各叢集拿同一份租戶設定、各自評估告警規則的部署，本地序列沒有 `da_cluster`，`種類@叢集` 在那裡等同只寫種類：本地有這一種 exporter 就全部算存在，本地沒有時則對該種類每一個宣告的叢集各發一則，告警上的叢集是本地 Prometheus 看不到的那些。這種部署請只寫種類，各叢集用各自的租戶設定。邊緣 Prometheus 若在抓取 job 上自己寫了 `da_cluster`、又拿共用的租戶設定自行評估，情況更糟：本地序列只帶本地那個叢集，其他宣告的叢集即使全部健康也會一直告警。
 - **沒有 `da_cluster` 的存在序列，對每個宣告的叢集都算存在。** 上一項的另一面：中央 Prometheus 若自己也直接抓租戶 exporter，那份本地序列會讓所有宣告的叢集都不告警。要逐叢集判定，就在那個抓取 job 上寫 `da_cluster`。
-- **逐叢集判定目前只涵蓋 exporter 缺席與未宣告。** 兩項檢查仍以整個租戶為單位，一個有回報的叢集會遮住另一個：「設了自訂 recipe 的磁碟告警卻沒有對應資料」（`CustomRecipeDiskInert`）與「設了依版本區分的閾值卻沒有版本資料」（`VersionAwareThresholdInert`）。「多個租戶的 exporter 同時缺席」的彙總告警（`MassExporterOutage`）以（租戶、種類）為單位計數，一個種類宣告了幾個叢集都算一組，不會指出是哪個叢集大量缺席。「同租戶還有健康的抓取目標、但其中一個掛了」的告警（`TenantExporterReplicaDown`）刻意維持跨叢集比對：只寫種類的租戶某個叢集整個掛掉時，只要那個叢集的抓取目標仍被發現、讀到 `up=0`，那是唯一的訊號。目標本身已經不在（例如 Service 被移除）時這條告警也不會響，而只寫種類的租戶因為另一個叢集有回應，exporter 缺席告警（`TenantExporterAbsent`）同樣不響——這種情形沒有任何訊號，要逐叢集宣告才有。進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
+- **「設定了卻沒有對應資料」的兩項 Kubernetes 檢查逐叢集判定，不需要宣告。** 「設了自訂 recipe 的磁碟告警卻沒有對應資料」（`CustomRecipeDiskInert`）以（租戶、叢集）為單位：租戶在某個叢集有 Pod 在跑、那個叢集卻沒有它的磁碟資料，就對那個叢集告警，別的叢集有資料不算數；租戶沒有 Pod 在跑的叢集不告警。「設了依版本區分的閾值卻沒有版本資料」（`VersionAwareThresholdInert`）以叢集為單位：設了這種閾值的租戶有 Pod、卻完全沒有 Pod label 資料的叢集各發一則。它只看容器 CPU 的版本閾值；只設了 memory 版本閾值的租戶不在這條告警的範圍內（它的閾值同樣會因為沒有 Pod label 而不生效，但這條告警不會指出來）。只跑其他租戶的叢集不告警，那裡沒有要套用的版本閾值。兩條告警都帶 `da_cluster`，annotation 會寫出是哪個叢集。在序列都沒有 `da_cluster` 的單一 Prometheus 上，兩條的行為與不分叢集時相同，只有一處例外：設了版本閾值的租戶全都沒有 Pod、別的租戶有 Pod、又沒有 Pod label 資料時，`VersionAwareThresholdInert` 以前會響，現在不響；那個閾值沒有生效的原因是底下沒有 Pod 在跑，租戶的第一個 Pod 出現後告警就會回來。
+- **這兩項檢查假設同一個叢集的兩種資料帶同一個 `da_cluster`。** 兩種資料指的是「有 Pod 在跑」與它要對照的那一種（磁碟資料、Pod label 資料）；它們經過同一台 Prometheus，所以要嘛都帶、要嘛都不帶。假設不成立時，結果可能是誤報，也可能是漏報。誤報：一種帶 `da_cluster`、另一種不帶，或同一個叢集同時經由帶 label 的 federation 與不帶 label 的本地抓取進來、而對照的資料只在其中一條路徑上，告警會對其實正常的叢集響（不分叢集時不響）。漏報：對照的資料以「另一個叢集」的身分進來時會替它消掉告警——例如叢集 A 的 Pod 資料不帶 label、也真的沒有 Pod label 資料，而叢集 B 的 Pod label 資料不帶 label，B 的資料就被當成 A 的。這裡刻意不採用「沒有 `da_cluster` 的資料替每個叢集都算數」的寬鬆規則（exporter 缺席告警有這條）：那樣中央 Prometheus 自己抓的叢集有資料時，會遮住另一個真的缺資料的叢集。中央自己抓的叢集（不帶 label）與 federate 上來的叢集（帶 label）並存時，兩邊各自判定，結果正確。
+- **還沒逐叢集的檢查。** 「多個租戶的 exporter 同時缺席」的彙總告警（`MassExporterOutage`）以（租戶、種類）為單位計數，一個種類宣告了幾個叢集都算一組，不會指出是哪個叢集大量缺席。租戶自助告警（`Custom_*`）讀的彙整序列仍以租戶為單位彙整，不分叢集。「同租戶還有健康的抓取目標、但其中一個掛了」的告警（`TenantExporterReplicaDown`）刻意維持跨叢集比對：只寫種類的租戶某個叢集整個掛掉時，只要那個叢集的抓取目標仍被發現、讀到 `up=0`，那是唯一的訊號。目標本身已經不在（例如 Service 被移除）時這條告警也不會響，而只寫種類的租戶因為另一個叢集有回應，exporter 缺席告警（`TenantExporterAbsent`）同樣不響——這種情形沒有任何訊號，要逐叢集宣告才有。進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
 - **維護模式是整個租戶。** 無法只對一個叢集進維護。
 - **各叢集不能有不同的閾值。** 同一個租戶在所有叢集用同一組閾值。
 - **通知預設不按叢集拆。** 平台不附通知模板，看到的是 Alertmanager 內建模板的輸出。兩個叢集同時觸發時，email 內文、PagerDuty 的 details、webhook payload 逐條列出告警與它的 `da_cluster`；單行標題是 `[FIRING:2] <告警名> <租戶> (<其他共同 label>)`，沒有叢集（只有一個叢集觸發時，標題會帶出叢集，因為那時它是整組共同的 label）。內建的 Slack 模板只有標題、沒有內文，兩個叢集同時觸發時看不出是哪兩個，要用逐條列出告警的自訂模板。PagerDuty 一組是一個 incident，所有叢集都恢復後才 resolve。預設不改的原因：租戶的 route 帶不帶 `group_by`，看部署的 `_routing_defaults`、routing profile 與租戶自己的 `_routing` 合起來最後有沒有值（工具產生的 `_defaults.yaml` 有給）；最後沒有值的租戶——哪一層都沒給，或租戶把它寫成 `null` 或空列表蓋掉——才沿用根 route 的分組，所以改平台預設值只會影響到這一部分租戶，不是全部；另一個原因是下面的第一項代價。

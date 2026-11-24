@@ -398,14 +398,21 @@ type promtoolTestDoc struct {
 // as exact matchers: a rule selector narrowing on them is still the #731
 // empty-set class, so permittedThresholdLabels / customAlertPermittedLabels
 // (which also gate rule expressions) deliberately stay without them.
+//
+// `da_cluster` is of the same kind: the exporter never emits it, the Prometheus
+// that hands the series on stamps it (its external label, ADR-006), so a
+// fixture of what a central Prometheus sees carries it (#4097: a threshold
+// series federated from two edges must still gate a sentinel once).
 var fixtureScrapeTargetLabels = map[string]bool{
-	"pod":      true,
-	"instance": true,
+	"pod":        true,
+	"instance":   true,
+	"da_cluster": true,
 }
 
-// withoutScrapeTargetLabels returns vs minus its exact pod/instance matchers,
-// for the fixture guard only. Any other matcher (and a non-exact pod/instance
-// one) is kept, so the closed-label check still rejects it.
+// withoutScrapeTargetLabels returns vs minus its exact matchers on the labels
+// of fixtureScrapeTargetLabels (pod / instance / da_cluster), for the fixture
+// guard only. Any other matcher (and a non-exact one on those labels) is
+// kept, so the closed-label check still rejects it.
 func withoutScrapeTargetLabels(vs *promqlparser.VectorSelector) *promqlparser.VectorSelector {
 	out := *vs
 	out.LabelMatchers = nil

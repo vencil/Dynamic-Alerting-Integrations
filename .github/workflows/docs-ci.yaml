@@ -15,10 +15,10 @@
 # that missed one input skipped the check that would have caught the break,
 # and the PR merged green. The filter was a hand-kept list; it is gone.
 #
-# The required NAMES of the `… — run` legs belong to the `*-gate` jobs at the
-# end of this file (#1398), which always run and fail unless their leg
-# concluded `success` — a skipped, cancelled or failed leg fails its gate.
-# check-links and head-blob-hygiene carry their required names directly.
+# Every job here reports its required name itself (`kind: job` in
+# .github/required-checks.yaml): none has `needs:`, `if:` or a matrix, so
+# none can be skipped, and a one-leg aggregate gate in front of it would only
+# cost one more runner slot and one more wait in the queue (#4224).
 #
 # Uses caching (npm + pip) for speed.
 
@@ -50,7 +50,7 @@ permissions:
 
 jobs:
   validate-mermaid:
-    name: Validate Mermaid Diagrams — run
+    name: Validate Mermaid Diagrams
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -106,8 +106,7 @@ jobs:
   check-links:
     name: Check Documentation Links
     runs-on: ubuntu-24.04
-    # ⛔ Unconditional on purpose (#2107), and it reports the required name
-    # itself — no gate job. Its input set is every Markdown file plus every
+    # ⛔ Unconditional on purpose (#2107). Its input set is every Markdown file plus every
     # link target, wherever it lives; no path filter can express that, so a
     # PR that only deleted or renamed a linked non-doc file skipped this leg
     # and merged a broken link. Re-adding an `if:` reds
@@ -175,7 +174,7 @@ jobs:
           python scripts/tools/lint/check_head_blob_hygiene.py --ci
 
   check-frontmatter:
-    name: Check Documentation Front Matter — run
+    name: Check Documentation Front Matter
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -207,7 +206,7 @@ jobs:
           python scripts/tools/dx/add_frontmatter.py --check --base-dir rule-packs/
 
   check-coverage:
-    name: Check Documentation Coverage — run
+    name: Check Documentation Coverage
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -239,7 +238,7 @@ jobs:
           python scripts/tools/dx/doc_coverage.py --ci
 
   mkdocs-build:
-    name: MkDocs Build Verification — run
+    name: MkDocs Build Verification
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -271,7 +270,7 @@ jobs:
           bash scripts/tools/lint/mkdocs_strict_check.sh
 
   doc-line-count:
-    name: Documentation Line Count Monitor — run
+    name: Documentation Line Count Monitor
     runs-on: ubuntu-24.04
     # On a push `pull_request.base.sha` is empty, so `base` checks out the
     # pushed commit itself and the delta is 0 — a no-op, not a failure.
@@ -298,7 +297,7 @@ jobs:
           fi
 
   drift-checks:
-    name: Drift Detection (validate_all.py) — run
+    name: Drift Detection (validate_all.py)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -464,135 +463,3 @@ jobs:
 
       - name: Run I-4 runbook smoke test
         run: bash scripts/tools/lint/smoke_test_i4_runbook.sh
-
-  validate-mermaid-gate:
-    name: Validate Mermaid Diagrams
-    runs-on: ubuntu-24.04
-    permissions: {}
-    needs: [validate-mermaid]
-    # The REQUIRED check (#1398). A job whose dependency failed or was
-    # skipped is itself skipped, and a skipped required check reports
-    # Success — so this job always runs and passes only when `validate-mermaid`
-    # concluded `success` (#3756: no result is forgiven).
-    if: always()
-    steps:
-      - name: Verify mermaid validation succeeded
-        env:
-          RUN_RESULT: ${{ needs.validate-mermaid.result }}
-        run: |
-          echo "validate-mermaid: $RUN_RESULT"
-          if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          echo "::error::validate-mermaid did not succeed (result=$RUN_RESULT)"
-          exit 1
-
-  check-frontmatter-gate:
-    name: Check Documentation Front Matter
-    runs-on: ubuntu-24.04
-    permissions: {}
-    needs: [check-frontmatter]
-    # The REQUIRED check (#1398). A job whose dependency failed or was
-    # skipped is itself skipped, and a skipped required check reports
-    # Success — so this job always runs and passes only when `check-frontmatter`
-    # concluded `success` (#3756: no result is forgiven).
-    if: always()
-    steps:
-      - name: Verify the front-matter check succeeded
-        env:
-          RUN_RESULT: ${{ needs.check-frontmatter.result }}
-        run: |
-          echo "check-frontmatter: $RUN_RESULT"
-          if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          echo "::error::check-frontmatter did not succeed (result=$RUN_RESULT)"
-          exit 1
-
-  check-coverage-gate:
-    name: Check Documentation Coverage
-    runs-on: ubuntu-24.04
-    permissions: {}
-    needs: [check-coverage]
-    # The REQUIRED check (#1398). A job whose dependency failed or was
-    # skipped is itself skipped, and a skipped required check reports
-    # Success — so this job always runs and passes only when `check-coverage`
-    # concluded `success` (#3756: no result is forgiven).
-    if: always()
-    steps:
-      - name: Verify the coverage check succeeded
-        env:
-          RUN_RESULT: ${{ needs.check-coverage.result }}
-        run: |
-          echo "check-coverage: $RUN_RESULT"
-          if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          echo "::error::check-coverage did not succeed (result=$RUN_RESULT)"
-          exit 1
-
-  mkdocs-build-gate:
-    name: MkDocs Build Verification
-    runs-on: ubuntu-24.04
-    permissions: {}
-    needs: [mkdocs-build]
-    # The REQUIRED check (#1398). A job whose dependency failed or was
-    # skipped is itself skipped, and a skipped required check reports
-    # Success — so this job always runs and passes only when `mkdocs-build`
-    # concluded `success` (#3756: no result is forgiven).
-    if: always()
-    steps:
-      - name: Verify the mkdocs build succeeded
-        env:
-          RUN_RESULT: ${{ needs.mkdocs-build.result }}
-        run: |
-          echo "mkdocs-build: $RUN_RESULT"
-          if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          echo "::error::mkdocs-build did not succeed (result=$RUN_RESULT)"
-          exit 1
-
-  doc-line-count-gate:
-    name: Documentation Line Count Monitor
-    runs-on: ubuntu-24.04
-    permissions: {}
-    needs: [doc-line-count]
-    # The REQUIRED check (#1398). A job whose dependency failed or was
-    # skipped is itself skipped, and a skipped required check reports
-    # Success — so this job always runs and passes only when `doc-line-count`
-    # concluded `success` (#3756: no result is forgiven).
-    if: always()
-    steps:
-      - name: Verify the line-count monitor succeeded
-        env:
-          RUN_RESULT: ${{ needs.doc-line-count.result }}
-        run: |
-          echo "doc-line-count: $RUN_RESULT"
-          if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          echo "::error::doc-line-count did not succeed (result=$RUN_RESULT)"
-          exit 1
-
-  drift-checks-gate:
-    name: Drift Detection (validate_all.py)
-    runs-on: ubuntu-24.04
-    permissions: {}
-    needs: [drift-checks]
-    # The REQUIRED check (#1398). A job whose dependency failed or was
-    # skipped is itself skipped, and a skipped required check reports
-    # Success — so this job always runs and passes only when `drift-checks`
-    # concluded `success` (#3756: no result is forgiven).
-    if: always()
-    steps:
-      - name: Verify drift detection succeeded
-        env:
-          RUN_RESULT: ${{ needs.drift-checks.result }}
-        run: |
-          echo "drift-checks: $RUN_RESULT"
-          if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          echo "::error::drift-checks did not succeed (result=$RUN_RESULT)"
-          exit 1

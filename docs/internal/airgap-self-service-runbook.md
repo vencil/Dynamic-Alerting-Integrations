@@ -83,7 +83,7 @@ python3 scripts/tools/dx/waveform_score.py inject.json --tolerances tol.yaml --j
 三態 verdict：**PASS**（injected-set 內零漏接、零遮蔽）／**FAIL**（任一 must_detect 漏接、
 exit 1）／**INDETERMINATE**（漏接被聚合規則剝 label 遮蔽、exit 1、需人工覆核）。
 另揭露（不改 verdict、供調規則）：`early_onset_fire`（規則過度敏感、故障成形前就叫）、
-`flapping_suspected`（fire↔resolve 斷續震盪）、`fan-out ratio`（單故障齊發幾條 series）、
+`flapping_suspected`（fire↔resolve 斷續震盪）、`alerts_per_series`（每條 series 同時開火幾筆告警）與 `fanout_series_injected`（注入的 fan-out series 數）、
 `episode_class_catch_rate`（按「故障事件 × 告警類別」計的接住比率；門檻仍按每個必叫變體計，
 見 ADR-030 §7）。
 

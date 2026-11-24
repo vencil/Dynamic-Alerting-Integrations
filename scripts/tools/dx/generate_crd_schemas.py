@@ -50,6 +50,9 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_label import safe_label  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    OutputWriteError, check_repo_artifact, ensure_dir, exit_on_output_write_error,
+    is_special_file, write_repo_artifact)
 from _lib_prometheus import TRANSPORT_ERRORS, transport_error_text  # noqa: E402
 
 try:
@@ -162,6 +165,11 @@ def run(check_only: bool) -> int:
     sources = decl.get("sources") or []
 
     previous = {}
+    # #3981: the lock is judged before it is read, as every target is — a
+    # FIFO there blocked the read in both modes, and a directory was read as
+    # "no lock" (the same-ref drift check silently off).
+    if is_special_file(LOCK):
+        raise OutputWriteError(LOCK, OSError(None, "not a regular file"), action="read")
     if LOCK.exists():
         try:
             previous = json.loads(LOCK.read_text(encoding="utf-8")).get("sources", {})
@@ -171,6 +179,11 @@ def run(check_only: bool) -> int:
     lock: Dict[str, dict] = {}
     drifted: List[str] = []
     written = 0
+    pending: List[Tuple[Path, str]] = []
+    # #3981 (review): two sources naming one (group, kind, version) are a
+    # declaration error — with the writes deferred, which one wins would
+    # depend on the file already on disk.
+    produced_by: Dict[str, str] = {}
 
     for src in sources:
         sid, url = src["id"], src["url"]
@@ -212,14 +225,21 @@ def run(check_only: bool) -> int:
             body = json.dumps(schema, separators=(",", ":"), sort_keys=True,
                               ensure_ascii=False) + "\n"
             rel = str(p.relative_to(REPO_ROOT)).replace(os.sep, "/")
+            if rel in produced_by:
+                print(f"ERROR: {sid}: {rel} is also produced by source {produced_by[rel]} — "
+                      f"one (group, kind, version) per output in {SOURCES.name}",
+                      file=sys.stderr)
+                return EXIT_CALLER_ERROR
+            produced_by[rel] = sid
             outputs.append(rel)
+            if is_special_file(p):  # a FIFO would block the read (#3981)
+                raise OutputWriteError(p, OSError(None, "not a regular file"), action="read")
             existing = p.read_text(encoding="utf-8") if p.exists() else None
             if existing != body:
                 if check_only:
                     drifted.append(f"{rel} (content differs from upstream {src['ref']})")
                 else:
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_text(body, encoding="utf-8", newline="\n")
+                    pending.append((p, body))
                     written += 1
 
         was = previous.get(sid, {}).get("sha256")
@@ -241,15 +261,23 @@ def run(check_only: bool) -> int:
         print(f"✓ {len(sources)} CRD sources match their vendored schemas.")
         return EXIT_OK
 
-    LOCK.write_text(
-        json.dumps({"sources": lock}, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-        encoding="utf-8", newline="\n")
+    # #3981: written only after every source was fetched and read — a
+    # later source that fails no longer leaves the earlier ones rewritten —
+    # and every target, the lock included, judged before the first write.
+    pending.append((LOCK, json.dumps({"sources": lock}, indent=2, sort_keys=True,
+                                     ensure_ascii=False) + "\n"))
+    for p, _body in pending:
+        check_repo_artifact(p)
+    for p, body in pending:
+        ensure_dir(p.parent)
+        write_repo_artifact(p, body)
     total = sum(len(v["outputs"]) for v in lock.values())
     print(f"✓ {total} CRD schemas vendored from {len(sources)} pinned sources "
           f"({written} file(s) changed).")
     return EXIT_OK
 
 
+@exit_on_output_write_error
 def main() -> int:
     try_utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])

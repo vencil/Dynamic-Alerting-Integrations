@@ -471,6 +471,8 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 2. 缺 kubelet volume-stats scrape job 或 `namespace→tenant` relabel（步驟 A 漏做）；
 3. CSI 未實作 NodeGetVolumeStats（前提不滿足）。
 
+同一個租戶跑在好幾個叢集時，這條告警逐叢集判定（[ADR-006](../adr/006-tenant-mapping-topologies.md)「多叢集同租戶」）：在收了各叢集資料的 Prometheus 上，租戶有 Running pod 卻沒有 volume-stats 的每個叢集各發一則，告警的 `da_cluster` 與 annotation 指出是哪一個；「沒有 volume-stats」指 `kubelet_volume_stats_available_bytes` 與 `kubelet_volume_stats_capacity_bytes` 兩者缺任何一個，只確認其中一個有資料不夠；別的叢集有 volume-stats 不會讓它不響。上面三個原因要在那個叢集查。
+
 > **能力界線（誠實）**：volume-stats 反映租戶視角的**邏輯**配額。底層 thin-provisioning 的實體爆盤（`volume_stats` 仍顯示有空間、實際 I/O 已凍結）不在此告警範圍內，應由平台 SRE 以 `node_filesystem_*` / CSI controller 指標（基礎設施視角）防禦。
 
 ---

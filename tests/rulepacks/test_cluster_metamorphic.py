@@ -87,7 +87,8 @@ UNREACHED_CEILING = 48
 #: Alerts whose annotations name the cluster the alert is for. Read off the
 #: rule packs (`_cluster_naming`) and held equal to this, so one cannot be
 #: added without the replay's reduced check being a decision.
-CLUSTER_NAMING = frozenset({"TenantExporterAbsent", "TenantExporterUndeclared"})
+CLUSTER_NAMING = frozenset({"TenantExporterAbsent", "TenantExporterUndeclared",
+                            "CustomRecipeDiskInert", "VersionAwareThresholdInert"})
 _NAMES_CLUSTER = re.compile(r"\{\{\s*with\s+\$labels\.da_cluster\s*\}\}")
 
 

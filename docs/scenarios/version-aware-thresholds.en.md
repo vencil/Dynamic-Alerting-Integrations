@@ -55,13 +55,17 @@ Which metrics accept a `version` label is declared by the platform under `dimens
 > **Silent-inert risk (you must know this)**: version-awareness relies on kube-state-metrics exposing the pod's version label. **If the platform's KSM does not enable the matching allowlist, the version thresholds you declare silently do nothing** (every pod is treated as `default`, your tightened v2 threshold never applies), and **you get no direct feedback on your side**. So:
 >
 > 1. Before adopting version thresholds for the first time, **confirm with the platform team that KSM is configured** (see the platform section below).
-> 2. The platform side has a runtime safety net — the `VersionAwareThresholdInert` alert notifies the platform team on misconfiguration.
+> 2. The platform side has a runtime safety net — the `VersionAwareThresholdInert` alert notifies the platform team on misconfiguration. It reads the container CPU version thresholds only: with a version threshold set for memory alone, a misconfiguration raises no such alert.
 
 ---
 
 ## For Platform Operators: KSM Allowlist Remediation
 
-> **This section is for platform operators / SRE.** If a `VersionAwareThresholdInert` alert sent you here: **this is not a tenant YAML mistake — kube-state-metrics is not exposing the pod version label**, so version-aware thresholds are silently inert platform-wide. Remediation below. The heading is kept English + stable because the alert's `runbook_url` deep-links to this anchor (do not rename).
+> **This section is for platform operators / SRE.** If a `VersionAwareThresholdInert` alert sent you here: **this is not a tenant YAML mistake — kube-state-metrics is not exposing the pod version label**, so version-aware thresholds are silently inert in the cluster that kube-state-metrics serves (with a single cluster, that is the whole platform). Remediation below. The heading is kept English + stable because the alert's `runbook_url` deep-links to this anchor (do not rename).
+>
+> **With several clusters**: each cluster has its own kube-state-metrics. On a Prometheus that holds every cluster's data, this alert fires once for each cluster where a tenant that set a version threshold has pods and there is no pod-label data at all, and the alert's `da_cluster` and annotations say which cluster's KSM to fix; another cluster being configured does not keep it quiet, and a cluster that runs only other tenants does not fire ([ADR-006](../adr/006-tenant-mapping-topologies.en.md), "One tenant in several clusters").
+>
+> **One case where it stays silent**: no tenant that set a version threshold has any pod (no `kube_pod_info` series; every phase counts, so a Pending pod or a finished one not yet deleted is a pod). Even if other tenants have pods and KSM exposes no pod labels, the alert does not fire (it used to); it fires once that tenant's first pod appears.
 
 ### Root cause
 

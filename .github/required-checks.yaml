@@ -45,21 +45,23 @@ enforcement_level: everyone
 
 required:
   # ── 由 aggregate gate 回報：底下的實跑 job 每支 PR 都跑（#3756 起不設 path
-  #    gate），gate 只在它等待的每個 job 都是 success 時通過 ──
+  #    gate），gate 只在它等待的每個 job 都是 success 時通過。只有真的在彙整多個
+  #    job（matrix 或多條 leg）時才設 gate：只等一個 job 的 gate 只多佔一個 runner、
+  #    多排一次隊（#4224）──
   - {name: Python Tests, kind: gate}
   - {name: Go Tests, kind: gate}
-  - {name: Portal Tests, kind: gate}
-  - {name: Smoke Tests (Chromium), kind: gate}
-  - {name: Go Lint, kind: gate}
-  - {name: Validate Tenant Config & Routes, kind: gate}
-  - {name: Version Consistency, kind: gate}
-  - {name: Validate Mermaid Diagrams, kind: gate}
-  - {name: Check Documentation Front Matter, kind: gate}
-  - {name: Check Documentation Coverage, kind: gate}
-  - {name: MkDocs Build Verification, kind: gate}
-  - {name: Documentation Line Count Monitor, kind: gate}
-  - {name: Drift Detection (validate_all.py), kind: gate}
   # ── 由每支 PR 都會跑、不會被跳過的 job 直接回報 ──
+  - {name: Portal Tests, kind: job}
+  - {name: Smoke Tests (Chromium), kind: job}
+  - {name: Go Lint, kind: job}
+  - {name: Validate Tenant Config & Routes, kind: job}
+  - {name: Version Consistency, kind: job}
+  - {name: Validate Mermaid Diagrams, kind: job}
+  - {name: Check Documentation Front Matter, kind: job}
+  - {name: Check Documentation Coverage, kind: job}
+  - {name: MkDocs Build Verification, kind: job}
+  - {name: Documentation Line Count Monitor, kind: job}
+  - {name: Drift Detection (validate_all.py), kind: job}
   - {name: Lint, kind: job}
   - {name: Lint Rule Packs, kind: job}
   - {name: Lint Documentation, kind: job}
@@ -121,10 +123,6 @@ advisory:
     reason: >-
       會下載 amtool／promtool／yq，網路失敗就紅；沒有 aggregate gate 擁有它的名稱，
       紅了不擋 merge。#3756 起每支 PR 都跑（原本只在文件路徑變動時跑）。
-  - name: Python Coverage
-    reason: >-
-      owner 決定（2026-09-19，PR #1910）：覆蓋率腿只回報與上傳，不擋 merge；放進必要
-      檢查會讓 tracer 的成本壓在必要腿的關鍵路徑上。
   - name: Bench + Compare (single-runner interleaved + canary)
     reason: >-
       Phase 2 起只提供資訊：退化會留言並貼 `perf-regression` label，job 除了基礎
