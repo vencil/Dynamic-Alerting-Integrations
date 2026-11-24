@@ -93,7 +93,7 @@ In practice the production SSOT is [`components/threshold-exporter/config/conf.d
 | Layer | Guards | Mechanism | Who pages |
 |---|---|---|---|
 | **pint** | rule correctness **at author time** | CI static check | CI blocks the PR |
-| **D1 Watchdog** | **engine** liveness (Prometheus eval + AM delivery) | `vector(1)` → external DMS | external dead-man's-switch |
+| **Watchdog** | **engine** liveness (Prometheus eval + AM delivery) | `vector(1)` → external DMS | external dead-man's-switch |
 | **runtime canary** | the **compile→deliver** runtime liveness of tenant custom alerts | resident fake tenant must-fire → `absent()` meta-alert | the meta-alert (internal, but watching the guarded chain itself) |
 
 The canary is evaluated by the **same** single-replica Prometheus — it guards the **narrower** case "the engine is alive but the tenant compile chain silently broke," which the Watchdog cannot see. "The whole Prometheus died" remains the Watchdog + external DMS's job. The three **stack** to be complete: author time → engine → tenant pipeline.

@@ -177,7 +177,13 @@ cAdvisor 的 CPU 指標本身不帶版本。kubernetes rule pack 在 recording r
 
 - **recipe 庫**：平台寫好 7 種 recipe：`threshold`、`rate`、`ratio`、`absence`、`p99_latency`、`forecast`、`slo_burn_rate`（最後一種見 [ADR-031](031-slo-burn-rate-recipe.md)）。租戶或平台填 metric、窗口、運算子、閾值與嚴重度、`mode` 等參數，存成宣告式 YAML。*取捨*：表達力受 recipe 庫限制，換來「合法的參數一定產生合法的 PromQL」。
 
-- **每個租戶只取一處宣告**：exporter 依序找租戶自己的 `_custom_alerts`、根目錄平台檔（例如 `_platform.yaml`）`tenants:` 底下該租戶的條目、租戶綁定的 profile，取到第一處就停，不合併。任何一層 `_defaults.yaml` 裡的 `_custom_alerts`、根目錄平台檔頂層的 `_custom_alerts` 都不會送出：不做子樹繼承。要讓一組租戶共用同一條政策，寫在 profile、讓這些租戶綁定它；租戶寫了自己的 `_custom_alerts` 就整個取代 profile 的清單，也可以改綁或解除綁定。
+- **宣告位置：每個租戶只取一處宣告**：exporter 依序找租戶自己的 `_custom_alerts`、根目錄平台檔（例如 `_platform.yaml`）`tenants:` 底下該租戶的條目、租戶綁定的 profile，取到第一處就停，不合併。根目錄平台檔頂層的 `_custom_alerts` 不會送出。`_defaults.yaml` 裡的 `_custom_alerts` 也一律不送出（不做子樹繼承），但寫的位置不同，後果不同：
+
+  - 子目錄 `_defaults.yaml`（頂層或 `defaults:` 底下）：不送出；da-guard 報 `subtree_default_reserved_key`（error），`da-guard effective` 對該租戶標 `not_served`（`value_rejected`）。
+  - 根 `_defaults.yaml` 頂層：不送出；da-guard 報 `root_defaults_unwrapped`（error）。
+  - 根 `_defaults.yaml` 的 `defaults:` 底下：**整份檔解碼失敗**，exporter 丟掉整份根預設檔，檔裡其他預設值也一併不送出；da-guard 以 exit 3 報這個檔無法解碼。
+
+  要讓一組租戶共用同一條政策，寫在 profile、讓這些租戶綁定它；租戶寫了自己的 `_custom_alerts` 就整個取代 profile 的清單，也可以改綁或解除綁定。
 
   範例（`finance/` 底下兩個租戶綁定同一個 profile，`pay-b` 另寫了自己的 recipe）：
 
@@ -318,7 +324,9 @@ portal 的 recipe 表單在瀏覽器執行、不跑 Go：它只做即時提示�
 
 ### 10. 磁碟與 PVC 告警（Addendum）
 
-租戶可以對磁碟容量設告警，沿用既有的 recipe（`forecast`、`ratio`、`threshold`），不新增種類。和一般 recipe 不同的有四點。
+租戶可以對磁碟的容量與 I/O 設告警，沿用既有的 recipe（`forecast`、`ratio`、`threshold`、`rate`），不新增種類。和一般 recipe 不同的有四點。
+
+**兩種信號、兩種粒度。** 容量（快寫滿、利用率）用 `kubelet_volume_stats_*`，每顆 PVC 一組序列（帶 `persistentvolumeclaim`）；I/O（IOPS、吞吐）用 `rate` recipe 跑 cAdvisor 的 `container_fs_{reads,writes}_total` 與 `_bytes_total`，粒度是每個容器，對不到特定 PVC：一個 Pod 掛多顆 PVC 時切不開。I/O 信號另有環境限制，NFS 這類網路儲存不經 cgroup blkio，`container_fs_*` 一直是 0（見 [BYO Prometheus 整合](../integration/byo-prometheus-integration.md)）。所以「精準到某一顆 PVC」只有容量這側做得到，以下三點都是講容量。
 
 **前提：PVC 由支援 volume stats 的 CSI driver 提供。** kubelet 只對實作了 `NodeGetVolumeStats` 的儲存後端送出 `kubelet_volume_stats_*`。平台的抓取設定從 kubelet 收 `kubelet_volume_stats_*`，把 `namespace` 直接當成 `tenant`（一個 namespace 對一個租戶，見 [ADR-006](006-tenant-mapping-topologies.md)）。
 
@@ -365,6 +373,13 @@ portal 的 recipe 表單在瀏覽器執行、不跑 Go：它只做即時提示�
 - **診斷工具只看 exporter 送出的清單。** `describe_tenant`（列出一個租戶最終設定的 CLI）顯示 exporter 為租戶送出的每條自訂告警與它的狀態，不顯示把子目錄 `_defaults.yaml` 與租戶自己的清單合起來的視圖，因為 exporter 從不送出那種合併結果。「這次 conf.d 變更影響什麼」由 config-diff 回答（[ADR-037](037-config-diff-compares-rendered-output.md)）。
 - **recipe-preview 映像多帶一支 da-guard。** 預覽與部署用同一份判定，映像因此變大（da-guard 是單一靜態 Go 執行檔）。
 - **全域規則數預算還沒做**（§4）。
+
+**驗收條件**（改動這套機制時要守住，各附守住它的測試）：
+
+1. 沒寫任何版本鍵的租戶，行為與引入版本感知之前相同：Pod 沒有版本標籤時補成 `default`，比對不帶版本的閾值（`tests/rulepacks/rule-pack-kubernetes_test.yaml`）。
+2. 滾動升級期間新舊版本的 Pod 並存，各自比自己版本的閾值、不因 `version × severity` 出現多對多；沒宣告的版本退回 default 並保留實際版本（`tests/rulepacks/rule-pack-kubernetes-version-aware_test.yaml`）。
+3. 超過 `max_metrics_per_tenant` 時，每次抓取截掉的是同一組版本閾值（`TestResolveAtWithStats_DeterministicTruncation`，`components/threshold-exporter/app/pkg/config/truncation_test.go`）。
+4. 自訂告警的指標沒有 `version` 標籤時，補成 `default` 後與閾值 join 並觸發（`tests/dx/fixtures/custom_alerts_promtool/threshold.yaml`，由 `tests/dx/test_custom_alerts_promtool.py` 執行）。
 
 ## 考慮過的替代方案
 

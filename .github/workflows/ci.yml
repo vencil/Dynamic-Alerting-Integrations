@@ -774,7 +774,7 @@ jobs:
         # fails the required check (#4118).
         run: python -m pytest tests/rulepacks/test_vm_alert_parity.py -v --durations=15 --durations-min=5.0
 
-      # pint (ADR-025 deferred item): static analysis of the rule-pack SOURCE.
+      # pint (ADR-025 supporting check): static analysis of the rule-pack SOURCE.
       # The high-ROI check is alerts/template — it mechanically catches the
       # "aggregation strips a label the alert template uses → silent-forever alert"
       # class (burned this repo 5×, until now guarded only by hand-comments).

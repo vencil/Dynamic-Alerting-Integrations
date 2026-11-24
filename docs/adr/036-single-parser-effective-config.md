@@ -220,7 +220,8 @@ tenant-api pod
 | 產生器有擋下的 finding | 422 `GENERATOR_FINDINGS` |
 | 子程序超過記憶體上限、輸出不完整、這次寫入產生的檔太大、git 屬性會讓 commit 的位元組與判定的不同 | 422 `GENERATOR_REJECTED`（reason `memory`、`incomplete`、`too_large`、`normalized` 等），重送同一筆也不會過 |
 | 判定期限到期、容器忙碌、git 讀取失敗、重驗後仍不一致、剩餘時間不夠判定或不夠重驗 | 429 `GENERATOR_BUSY`（reason `deadline`、`busy`、`git_read`、`mismatch`、`no_time`），可稍後重送 |
-| 常駐程序沒有回應或回應讀不懂、判定要跑的程式沒跑成、產生器比 policy 要求的版本舊、容器自己出錯 | 503 `VALIDATOR_UNAVAILABLE`（reason `unreachable`、`bad_response`、`tool_fault`、`generator_too_old`、`internal_error`） |
+| 產生器通過，但鍵的判決（[ADR-038](./038-unread-keys-judged-by-readers.md) 決定 5）沒有完成 | reason `key_verdict_*`：時間不夠（`key_verdict_no_time`、`key_verdict_deadline`）是 429 `GENERATOR_BUSY`，其餘（`key_verdict_memory`、`key_verdict_error`、`key_verdict_platform_file`）是 422 `GENERATOR_REJECTED` |
+| 常駐程序沒有回應或回應讀不懂、判定要跑的程式沒跑成、產生器比 policy 要求的版本舊或映像不給鍵的判決、容器自己出錯 | 503 `VALIDATOR_UNAVAILABLE`（reason `unreachable`、`bad_response`、`tool_fault`、`generator_too_old`、`internal_error`） |
 | 部署端 policy 檔不可用 | 503 `POLICY_UNAVAILABLE`（§5） |
 
 容器的回應只帶封閉的代碼與結構化欄位，不帶自由文字；細節寫在容器自己的 log。
@@ -228,7 +229,7 @@ tenant-api pod
 **判定要跑的程式必須跑成**：一次判定會跑三支 Go 程式：da-guard、da-read（Alertmanager 與 Prometheus 的設定載入器，§12）、da-crdecode（照 kubectl 的讀法讀 manifest）。其中任何一支沒跑成，那筆寫入就沒有結論，回 503 `tool_fault`，不論產生器少了它得出什麼結果。
 
 - 「沒跑成」是程式本身出問題：找不到、無法執行、逾時、被訊號結束、結束碼或輸出不在契約內。程式對輸入的回答不算：da-guard 判某個檔讀不了、da-read 拒收一份設定，照常是那筆寫入的結果。
-- da-read 與 da-crdecode 的拒收和用法錯一樣以結束碼 2 結束；分辨靠標準輸出：只有拒收會印出固定的被拒文件 `{"answer":"refused"}`，理由寫在 stderr。結束碼 2 而沒有這份文件就是沒跑成。所以 Python 工具與這兩支程式必須同版。
+- da-read 與 da-crdecode 的拒收和用法錯一樣以結束碼 2 結束；分辨靠標準輸出：只有拒收會印出固定的被拒文件 `{"answer":"refused"}`，理由寫在 stderr。結束碼 2 而沒有這份文件就是沒跑成。所以 Python 工具與這兩支程式必須同版。⚠️ v2.9.0 映像的 da-crdecode 還不印被拒文件（該映像也沒有 da-read）；把它和較新的 Python 工具搭在一起，每次拒收都會被當成程式沒跑成 <!-- image-caveat: v2.9.0 -->。
 - 因判定的記憶體上限而由 Go 執行期自己結束的程式不算故障：那筆寫入以 reason `memory` 拒收。
 - **就緒**：容器只在 policy 可用、產生器不比 policy 要求的舊、三支程式內建的自檢都通過、而且沒有還沒清除的工具故障時才回報就緒（`GET /v1/status` 的 `ready`）。自檢是每支程式自己的指令（`da-guard self-check`、`da-read self-check`、`da-crdecode --self-check`），以打包在 binary 裡的樣本把每個子指令跑一次，通過時印 `{"self_check":"passed"}`、結束碼 0。判定裡一出現工具故障，容器立刻回報未就緒並跑一輪自檢，只有通過的自檢清除故障。
 - 已知限制：自檢對每個子指令只跑一種輸入，判定實際走的旗標更多，所以自檢通過之後判定仍可能遇到工具故障；這時那筆請求回 503、容器回到未就緒，等下一輪自檢。
@@ -248,7 +249,10 @@ tenant-api pod
 - **哪些寫入要送驗**：凡是會改變檔案內容的寫入都送驗，包括只改閾值的；不由 Go 判斷「有沒有改到路由」。
 - **錯誤回應**：列出產生器回報的 finding，與被寫入檔有關的排在前面，並標出哪些在寫入前就存在。這只影響訊息，不影響判定。
 - **批次**：一次請求、一次 commit、全有全無。整批套用後整棵樹通過才寫入，否則整批拒收；同步與非同步批次規則相同。每個批次在獨立的暫存 git worktree 裡套用、判定、commit，再推進分支 ref、更新服務中的工作目錄；推進到一半中斷時，下次啟動或寫入前把這批路徑重設成分支上的內容。讀者不會看到從未 commit 的內容。
-- **批次 patch 的合併**：由 Go 讀出檔案、套用 patch、再寫回，合併後的內容一定送驗。合併要符合一條不變式，否則以 `TENANT_CONFIG_NOT_LOADABLE`（`config_error` 為 `not_round_trippable`）拒收：把原檔與合併結果都解析成 yaml.v3 的節點樹，這次編輯取代的部分以外，每個節點寫出來都要相同（種類、style、tag、純量原文、anchor 與別名所指的節點）。字元相同，對任何讀取端意思都相同，所以這條判準與讀取端無關。合併寫出的值一律用雙引號，避免任何讀取端把它讀成時間、數字或布林。
+- **批次 patch 的合併**：由 Go 讀出檔案、套用 patch、再寫回，合併後的內容一定送驗。合併要符合一條不變式，否則以 `TENANT_CONFIG_NOT_LOADABLE`（`config_error` 為 `not_round_trippable`）拒收：把原檔與合併結果都解析成 yaml.v3 的節點樹，這次編輯取代的部分以外，每個節點寫出來都要相同（種類、style、tag、純量原文、anchor 與別名所指的節點）。字元相同，對任何讀取端意思都相同，所以這條判準與讀取端無關。合併寫出的值用雙引號，避免任何讀取端把它讀成時間、數字或布林；唯一例外是 `_custom_alerts` 裡含換行、而且寫成 literal block（`|`）讀回仍是原字串的值，寫成 literal block，讓 diff 看得到逐行內容。
+  - 錯誤訊息只在呼叫者自己租戶的 block 裡寫出第一個差異的路徑，其他位置只說「另一處」：一份檔可能有多個租戶。解碼失敗時回固定文字，parser 的原文只寫進 server log。
+  - `PUT …/custom-alerts` 以 409 拒收；批次裡是那一筆的 code，整批回 422。
+  - 這條不變式另由離線差分測試（`components/tenant-api/internal/handler/batch_patch_diff_test.go`）對照產生器自己的讀法：一邊是 Go 合併後交給產生器讀，另一邊是產生器讀原檔再套同一個 patch，同一個檔裡的其他租戶也要比。
 - **驗的和寫的必須是同一份**：容器回傳它驗過的檔案路徑、內容 hash、base commit 與部署端 policy 檔的 hash；tenant-api 在寫入鎖之下核對。不一致就重驗一次，仍不一致就拒收（429 `mismatch`）。寫入的位元組必須和驗過的一模一樣。
 - **PR 模式驗的是分支起點**：驗的是 PR 分支所在的 base commit 加上這筆寫入。PR 合併進主幹後的結果不在 tenant-api 的判定範圍，由客戶 CI 或 merge queue 把關。
 
@@ -284,7 +288,7 @@ tenant-api pod
 | 步驟 | 內容 |
 |---|---|
 | 0 | `parse-tree` 與它的固定語料 `tests/shared/parse_tree_corpus.json` 先發布，行為不變；與解析無關的小工具搬出要刪的套件。重複鍵、多份文件、白名單外的型別標記原本有一部分由 Go 端的模仿程式擋下，刪它們之前 `parse-tree` 必須已經判為讀不了 |
-| 1 | tenant-api 寫入改問產生器容器；刪除 tenant-api 裡 Go 端的路由與 policy 判定、扁平鍵 `_routing_receiver_type`（寫入改回 400）與放行開關。前置：`da-tools init` 固定版本、git 寫入支援多檔一次 commit 並把批次改成全有全無、產生器容器與 chart 設定 |
+| 1 | tenant-api 寫入改問產生器容器；刪除 tenant-api 裡 Go 端的路由與 policy 判定、扁平鍵 `_routing_receiver_type`（寫入改回 400）與放行開關。不是路由判定的檢查保留：遮罩憑證佔位字串的回寫防護、確認 exporter 讀得了寫入內容的檢查、保留鍵的值檢查。前置：`da-tools init` 固定版本、git 寫入支援多檔一次 commit 並把批次改成全有全無、產生器容器與 chart 設定 |
 | 2 | da-guard 不再判路由與 policy，改報「未判定」（結束碼 4，§9）；`guard-defaults-impact.yml` 加跑產生器 |
 | 3 | 刪除 Go 端模仿 PyYAML 與模仿產生器語意的程式（§11）。從這一步起，沒有任何 Go 程式產生路由或 policy 的 finding |
 | 4 | 產生器與 Python 工具改讀解析結果 JSON，刪除讀 conf.d 用的、模仿 yaml.v3 的 Python loader |
@@ -432,7 +436,7 @@ PyYAML 把它當成合併，t1 的 receiver 是 `slack`，domain policy 禁止 s
 
 對齊的做法是讓一邊在自己的語言裡重寫另一邊解析器的每一條處理路徑：Go 端曾有專門模仿 PyYAML 的套件與 vendored yaml.v3 的 patch，Python 端有多個模仿 yaml.v3 的 loader。每補一條，旁邊就露出另一條；用隨機輸入同時餵兩邊比對，找得到落差，但證明不了兩邊相等。限縮 conf.d 到「兩邊必然讀出相同結果」的寫法也不可行：上表第二、三列的值都已加上引號、沒用任何進階功能，兩邊仍讀出不同結果。
 
-只把語意收斂到產生器也不夠：產生器仍用 PyYAML 讀、Go 端仍用 yaml.v3 讀，語法層的落差照樣存在。Go 端自己也有不只一個判定（exporter 以 yaml.v3 直接解碼，照讀多份文件、`!!binary`、檔案中段的 BOM 這類產生器拒收的檔），寫 conf.d 的 Python 工具以 PyYAML 讀寫、會丟註解，conf.d 以外的 YAML 又由 PyYAML 模仿 kubectl、Alertmanager 這些別的讀者。
+只把語意收斂到產生器也不夠：產生器仍用 PyYAML 讀、Go 端仍用 yaml.v3 讀，語法層的落差照樣存在。Go 端自己也有不只一個判定：實測 9 種 `parse-tree` 判為讀不了的寫法，exporter 以 yaml.v3 直接解碼時照讀其中 7 種（一個檔裡有多份文件、`!!binary`、`!!set`、檔案中段的 BOM、null 鍵 `~:`、非特定標記 `!`、只有 `---` 的尾端文件），只有 2 種本來就拒收（重複鍵、非純量鍵）；這 9 種現在是三個 Go 讀取端共用的測試矩陣。另外，寫 conf.d 的 Python 工具以 PyYAML 讀寫、會丟註解，conf.d 以外的 YAML 又由 PyYAML 模仿 kubectl、Alertmanager 這些別的讀者。
 
 問題的根源是「兩個解析器各讀一次，又要求結果一模一樣」。唯一不需要證明兩邊相等的做法，是只留一個解析器。
 
@@ -452,7 +456,14 @@ PyYAML 把它當成合併，t1 的 receiver 是 `slack`，domain policy 禁止 s
 
 - 任何讀取端都不得比產生器寬鬆。tenant-api 的寫入判準就是產生器自己的結果（§4），所以這一條對 tenant-api 由定義保證。
 - 「讀不了」是封閉清單：固定語料 `tests/shared/parse_tree_corpus.json` 每一列帶 `parse-tree` 應有的分類，清單裡的每一種 `kind` 至少有一列。
-- 同一份檔，每個 Go 讀取端判定「讀不了」的結果都相同：它們呼叫同一個套件。
+- 同一份檔，每個 Go 讀取端判定「讀不了」的結果都相同：它們呼叫同一個套件。上面那 9 種寫法加一份對照組，在 exporter（`config_parse_refused_test.go`）、da-guard（`cmd/da-guard/parse_verdict_exit_test.go`，結束碼 3）與 `pkg/config/parse_verdict_test.go` 各跑一次；tenant-api 對這類本文回 400（`TestPutTenant_ParseTreeRefusedBodyIs400`）。
+
+守住這些行為的測試：
+
+- 故障注入矩陣（`tests/ops/test_gsvc_tool_fault_matrix.py`）：一次真實判定實際呼叫的（程式, 子指令）由記錄得出，每一格各打舊版用法錯、SIGKILL 等故障，另打程式不存在與不可執行；回應只能是 503 `tool_fault` 或沒有判定結果的拒收，絕不是通過或 finding。
+- 期限與記憶體（`tests/ops/test_generator_service.py`）：期限到期時結束判定與它的子孫程序、排隊中到期、超過記憶體上限只拒收那一筆。
+- `da-guard write` 的每種操作只改被編輯的部分、被拒時什麼都不寫（`cmd/da-guard/write_test.go`）。
+- 結束碼 3 > 1 > 4 的優先順序（`TestUndetermined_ExitPrecedence`）。
 
 **已知限制**：
 

@@ -171,7 +171,13 @@ Cross-tenant isolation is already handled by the existing architecture: the `ten
 
 - **The recipe library**: the platform has written 7 recipes: `threshold`, `rate`, `ratio`, `absence`, `p99_latency`, `forecast`, `slo_burn_rate` (the last one is [ADR-031](031-slo-burn-rate-recipe.md)). A tenant or the platform fills in the metric, window, operator, threshold and severity, `mode` and so on, stored as declarative YAML. *Trade-off*: expressiveness is bounded by the recipe library; in exchange, valid parameters always produce valid PromQL.
 
-- **One declaration per tenant**: the exporter looks in order at the tenant's own `_custom_alerts`, the tenant's entry under `tenants:` in a root-level platform file (for example `_platform.yaml`), and the profile the tenant binds; it stops at the first one found and does not merge. `_custom_alerts` in any `_defaults.yaml`, or at the top level of a root platform file, is never served: there is no subtree inheritance. To share one policy across a group of tenants, write it in a profile and bind those tenants to it; a tenant that writes its own `_custom_alerts` replaces the profile's list entirely, and can also rebind or unbind.
+- **Where a recipe is declared: one declaration per tenant**: the exporter looks in order at the tenant's own `_custom_alerts`, the tenant's entry under `tenants:` in a root-level platform file (for example `_platform.yaml`), and the profile the tenant binds; it stops at the first one found and does not merge. `_custom_alerts` at the top level of a root platform file is not served. `_custom_alerts` in a `_defaults.yaml` is never served either (there is no subtree inheritance), but where it is written changes the consequence:
+
+  - A subdirectory `_defaults.yaml` (top level or under `defaults:`): not served; da-guard reports `subtree_default_reserved_key` (error), and `da-guard effective` marks it `not_served` (`value_rejected`) for the tenant.
+  - The top level of the root `_defaults.yaml`: not served; da-guard reports `root_defaults_unwrapped` (error).
+  - Under `defaults:` in the root `_defaults.yaml`: **the whole file fails to decode**, the exporter drops the entire root defaults file, and every other default in it stops being served too; da-guard exits 3 reporting the file cannot be decoded.
+
+  To share one policy across a group of tenants, write it in a profile and bind those tenants to it; a tenant that writes its own `_custom_alerts` replaces the profile's list entirely, and can also rebind or unbind.
 
   Example (two tenants under `finance/` bind the same profile; `pay-b` also writes its own recipe):
 
@@ -312,7 +318,9 @@ Why not several implementations plus a parity test: with one rule written in sev
 
 ### 10. Disk and PVC alerts (Addendum)
 
-Tenants can alert on disk capacity with the existing recipes (`forecast`, `ratio`, `threshold`); no new recipe was added. Four things differ from an ordinary recipe.
+Tenants can alert on disk capacity and I/O with the existing recipes (`forecast`, `ratio`, `threshold`, `rate`); no new recipe was added. Four things differ from an ordinary recipe.
+
+**Two signals, two granularities.** Capacity (filling up, utilization) uses `kubelet_volume_stats_*`, one set of series per PVC (carrying `persistentvolumeclaim`); I/O (IOPS, throughput) runs the `rate` recipe over cAdvisor's `container_fs_{reads,writes}_total` and `_bytes_total`, whose granularity is per container and cannot target a specific PVC: a Pod mounting several PVCs cannot be split. The I/O signal also depends on the environment: network storage such as NFS bypasses cgroup blkio, so `container_fs_*` stays 0 (see [BYO Prometheus integration](../integration/byo-prometheus-integration.en.md)). So "down to one specific PVC" is possible on the capacity side only, and the three points below are about capacity.
 
 **Prerequisite: the PVC is provided by a CSI driver that supports volume stats.** kubelet serves `kubelet_volume_stats_*` only for storage backends that implement `NodeGetVolumeStats`. The platform's scrape config collects `kubelet_volume_stats_*` from kubelet and uses `namespace` as `tenant` directly (one namespace per tenant, see [ADR-006](006-tenant-mapping-topologies.en.md)).
 
@@ -359,6 +367,13 @@ The scheduled thresholds of [config-driven design](../design/config-driven.en.md
 - **Diagnostic tools look only at the list the exporter serves.** `describe_tenant` (the CLI that lists a tenant's final config) shows each custom alert the exporter serves for the tenant and its status, and shows no view merging a subdirectory `_defaults.yaml` with the tenant's own list, because the exporter never serves such a merge. "What does this conf.d change affect" is answered by config-diff ([ADR-037](037-config-diff-compares-rendered-output.en.md)).
 - **The recipe-preview image carries an extra da-guard.** Preview and deployment use the same judgment, so the image is larger (da-guard is a single static Go binary).
 - **The global rule-count budget is not built** (§4).
+
+**Acceptance conditions** (to hold when changing this mechanism, each with the test that holds it):
+
+1. A tenant that writes no version key behaves as before version awareness: a Pod without a version label is filled in as `default` and compared against the threshold without a version (`tests/rulepacks/rule-pack-kubernetes_test.yaml`).
+2. During a rolling update, old and new Pods coexist and each is compared against its own version's threshold, with no many-to-many from `version × severity`; an undeclared version falls back to default and keeps its actual version (`tests/rulepacks/rule-pack-kubernetes-version-aware_test.yaml`).
+3. Over `max_metrics_per_tenant`, every scrape cuts the same set of version thresholds (`TestResolveAtWithStats_DeterministicTruncation`, `components/threshold-exporter/app/pkg/config/truncation_test.go`).
+4. A custom alert's metric without a `version` label is filled in as `default`, joins the threshold and fires (`tests/dx/fixtures/custom_alerts_promtool/threshold.yaml`, run by `tests/dx/test_custom_alerts_promtool.py`).
 
 ## Alternatives considered
 

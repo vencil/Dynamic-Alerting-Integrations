@@ -93,7 +93,7 @@ meta-alert 是一條**手寫的平台規則**（不是編譯產出），且**刻
 | 層 | 守護對象 | 機制 | 誰 page |
 |---|---|---|---|
 | **pint** | 規則**作者時**正確性 | CI 靜態檢查 | CI 擋 PR |
-| **D1 Watchdog** | **引擎**活性（Prometheus 評估 + AM 投遞） | `vector(1)` → 外部 DMS | 外部 dead-man's-switch |
+| **Watchdog** | **引擎**活性（Prometheus 評估 + AM 投遞） | `vector(1)` → 外部 DMS | 外部 dead-man's-switch |
 | **runtime canary** | 租戶自訂告警的**編譯→投遞**執行期活性 | 常駐假租戶必觸發 → `absent()` meta-alert | meta-alert（內部，但盯的是被守護鏈本身） |
 
 canary 由**同一個** single-replica Prometheus 評估——它守的是「引擎活著、但租戶編譯鏈悄悄斷了」這個 Watchdog 看不到的**較窄**情境。「整個 Prometheus 死掉」仍是 Watchdog + 外部 DMS 的職責。三者**疊起來**才完整：作者時 → 引擎 → 租戶管線。
