@@ -119,7 +119,7 @@ alertmanager:
 
 ### AlertmanagerConfig CR 仍會排在前面
 
-Alertmanager CR 也選取 AlertmanagerConfig CR 時（`alertmanagerConfigSelector`／`alertmanagerConfigNamespaceSelector` 有設；**kube-prometheus-stack 預設就把 selector 設成 `{}`，選取所在 namespace 的全部 AlertmanagerConfig**），Operator 仍把那些 CR 的路由插在 `configSecret` 的路由之前，帶強制的 `continue: true` 與 namespace matcher。
+Alertmanager CR 也選取 AlertmanagerConfig CR 時（`alertmanagerConfigSelector`／`alertmanagerConfigNamespaceSelector` 有設；**kube-prometheus-stack 預設就把兩個 selector 都設成 `{}`，選取所有 namespace 的全部 AlertmanagerConfig**），Operator 仍把那些 CR 的路由插在 `configSecret` 的路由之前，帶強制的 `continue: true` 與 namespace matcher。
 
 - 平台自己的 CR 不再產生；升級前留下的請刪掉（`operator-check` 第 4 項會對它們 warn）：
 

@@ -99,7 +99,7 @@ Prometheus Operator（kube-prometheus-stack）是 Kubernetes 上部署 Prometheu
 ## 後果與已知限制
 
 - **Operator 路徑多一步**：conf.d 改了，要重跑 `generate-routes` 並更新 Secret（GitOps 時把產出放進 pipeline）。換到的是兩條路徑同一份路由、同一組測試。
-- **Alertmanager CR 若同時選取 `AlertmanagerConfig`**（設了 `alertmanagerConfigSelector`；kube-prometheus-stack 預設是 `{}`，選取同 namespace 的全部），那些 CR 的路由仍會被插在 configSecret 的路由之前。平台自己不產 CR；舊版 `operator-generate` 留下的（帶 `app.kubernetes.io/part-of=dynamic-alerting`）要刪掉，`operator-check` 會對它們報 WARN。別的團隊的 CR 因為 `continue: true` 攔不走告警，但會多送一份；要讓平台路由之前什麼都沒有，就把 selector 設成不選任何 `AlertmanagerConfig`。
+- **Alertmanager CR 若同時選取 `AlertmanagerConfig`**（設了 `alertmanagerConfigSelector`；kube-prometheus-stack 預設把 `alertmanagerConfigSelector` 與 `alertmanagerConfigNamespaceSelector` 都設成 `{}`，選取所有 namespace 的全部 AlertmanagerConfig），那些 CR 的路由仍會被插在 configSecret 的路由之前。平台自己不產 CR；舊版 `operator-generate` 留下的（帶 `app.kubernetes.io/part-of=dynamic-alerting`）要刪掉，`operator-check` 會對它們報 WARN。別的團隊的 CR 因為 `continue: true` 攔不走告警，但會多送一份；要讓平台路由之前什麼都沒有，就把 selector 設成不選任何 `AlertmanagerConfig`。
 - **被拒絕的參數**：`operator-generate --components alertmanager` 與只給 `AlertmanagerConfig` 用的旗標（`--config-dir`、`--api-version`、`--receiver-template`、`--secret-name`、`--secret-key`）結束碼 2，訊息附上 `generate-routes` 與 configSecret 的做法；`migrate-to-operator` 也不產 `AlertmanagerConfig`。
 - **PrometheusRule 的 label 要對上 selector**：`operator-generate` 預設帶 `release=kube-prometheus-stack`，Helm release 名稱不同時用 `--selector-label` 改；`operator-check` 會報出沒被載入的情況。
 - **平台 Rule Pack 在 Operator 路徑少幾條規則**：讀取 kube-prometheus-stack 沒有的指標來源的規則（例如 `PrometheusConfigReloadFailed`）不會放進 PrometheusRule；`operator-generate` 在 stderr 逐條列出，並寫進該 PrometheusRule 的 `dynamic-alerting.io/operator-excluded-rules` annotation。
