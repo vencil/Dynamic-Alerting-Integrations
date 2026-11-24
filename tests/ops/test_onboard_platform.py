@@ -765,6 +765,14 @@ class TestBuildOnboardHintsDbTypes:
         hints = self._hints(config_dir, ["node_network_receive_bytes_total > 1e9"])
         assert hints["db_types"] == {}
 
+    def test_the_kind_comes_from_the_registry_namespaces(self, config_dir):
+        """#4270: ClickHouse's metrics are CamelCase (the hand map had
+        `clickhouse_`); kube_* is the platform's, not an exporter kind."""
+        hints = self._hints(config_dir, ["ClickHouseMetrics_TCPConnection > 100",
+                                         "kube_pod_info > 0"])
+        assert hints["db_types"] == {"tenant-x": ["clickhouse"],
+                                     "tenant-y": ["clickhouse"]}
+
     def test_unparseable_rule_is_skipped(self, config_dir):
         """metric_key 為 None 的規則不影響其他規則的推斷。"""
         hints = self._hints(config_dir, ["pg_up == 0", "vector(1)"])
@@ -1736,3 +1744,234 @@ def test_rule_files_given_twice_adds_up(tmp_path, monkeypatch, capsys):
                                         "--rule-files", str(tmp_path / "d"),
                                         "-o", str(tmp_path / "out")]) == 0
     assert "Scanned 2 file(s), 2 rule(s)" in capsys.readouterr().err
+
+
+# ============================================================
+# #4097: Phase 3 says whether the Prometheus config names its cluster
+# (`global.external_labels.da_cluster`, ADR-006 contract 1 and 7)
+# ============================================================
+
+_JOB = "scrape_configs:\n- job_name: a\n  static_configs: [{targets: [h]}]\n"
+_IDENTITY_UNSET = ("external_labels.da_cluster is not set — add it under "
+                   "global.external_labels with this cluster's id (ADR-006)")
+_IDENTITY_UNKNOWN = ("this file has no `global` section, so it cannot tell whether "
+                     "external_labels.da_cluster is set — check the running Prometheus "
+                     "with `da-tools byo-check prometheus --prometheus <url>`")
+#: (the config's text, the judgement) — the three outcomes and their edges.
+_IDENTITY_CASES = {
+    "set": ("global:\n  external_labels:\n    da_cluster: cluster-a\n" + _JOB,
+            {"status": "set", "value": "cluster-a",
+             "detail": "external_labels.da_cluster = cluster-a"}),
+    "global-without-external-labels": (
+        "global:\n  scrape_interval: 15s\n" + _JOB,
+        {"status": "missing", "value": None, "detail": _IDENTITY_UNSET}),
+    "other-external-labels": (
+        "global:\n  external_labels:\n    env: prod\n" + _JOB,
+        {"status": "missing", "value": None, "detail": _IDENTITY_UNSET}),
+    "empty-value": (
+        "global:\n  external_labels:\n    da_cluster: ''\n" + _JOB,
+        {"status": "missing", "value": None, "detail": _IDENTITY_UNSET}),
+    "empty-global": (
+        "global: {}\n" + _JOB,
+        {"status": "missing", "value": None, "detail": _IDENTITY_UNSET}),
+    # written on a scrape job, it is not the external label
+    "on-a-job-only": (
+        "global:\n  scrape_interval: 15s\nscrape_configs:\n- job_name: a\n"
+        "  static_configs: [{targets: [h], labels: {da_cluster: cluster-a}}]\n",
+        {"status": "missing", "value": None, "detail": _IDENTITY_UNSET}),
+    "no-global": (_JOB, {"status": "unknown", "value": None, "detail": _IDENTITY_UNKNOWN}),
+}
+
+
+def _identity_param():
+    return pytest.mark.parametrize("text, expected", list(_IDENTITY_CASES.values()),
+                                   ids=list(_IDENTITY_CASES))
+
+
+class TestClusterIdentity:
+    def _main(self, monkeypatch, argv):
+        import onboard_platform as op
+        from _lib_exitcodes import emit_result
+        monkeypatch.setattr("sys.argv", ["onboard_platform.py", *argv])
+        try:
+            return emit_result(op.main())
+        except SystemExit as exc:
+            return exc.code
+
+    @_identity_param()
+    def test_the_judgement_of_the_parsed_document(self, tmp_path, text, expected):
+        import onboard_platform as op
+        path = tmp_path / "prometheus.yml"
+        path.write_text(text, encoding="utf-8")
+        assert op.analyze_cluster_identity(op.parse_prometheus_config(path)) == expected
+
+    def test_a_configmap_is_judged_on_its_prometheus_yml(self, tmp_path):
+        import onboard_platform as op
+        inner = _IDENTITY_CASES["set"][0]
+        path = tmp_path / "cm.yaml"
+        path.write_text(yaml.dump({"apiVersion": "v1", "kind": "ConfigMap",
+                                   "metadata": {"name": "prom"},
+                                   "data": {"prometheus.yml": inner}}), encoding="utf-8")
+        assert op.analyze_cluster_identity(op.parse_prometheus_config(path))["status"] == "set"
+
+    @_identity_param()
+    def test_the_json_report_carries_it_and_the_exit_code_does_not_change(
+            self, tmp_path, monkeypatch, capsys, text, expected):
+        """A finding like a job without a tenant mapping: reported, rc 0."""
+        import json
+        path = tmp_path / "prometheus.yml"
+        path.write_text(text, encoding="utf-8")
+        rc = self._main(monkeypatch, ["--scrape-config", str(path), "--json", "--dry-run"])
+        doc = json.loads(capsys.readouterr().out)
+        assert rc == 0
+        assert doc["cluster_identity"] == expected
+        # one place: not repeated under the phase
+        assert "cluster_identity" not in doc["phases"]["phase3"]["summary"]
+
+    @_identity_param()
+    def test_stderr_and_the_analysis_file_say_it(self, tmp_path, monkeypatch, capsys,
+                                                 text, expected):
+        path = tmp_path / "prometheus.yml"
+        path.write_text(text, encoding="utf-8")
+        out = tmp_path / "out"
+        assert self._main(monkeypatch, ["--scrape-config", str(path), "-o", str(out)]) == 0
+        prefix = {"set": "  Cluster identity: ", "missing": "  WARN: cluster identity: ",
+                  "unknown": "  NOTE: cluster identity: "}[expected["status"]]
+        assert prefix + expected["detail"] in capsys.readouterr().err.splitlines()
+        written = yaml.safe_load(
+            (out / ".onboard" / "scrape-analysis.yaml").read_text(encoding="utf-8"))
+        assert written["cluster_identity"] == expected
+
+    # A config with no scrape_configs: Phase 3 has no result (rc 1 on its
+    # own, as before), and the verdict is still in every output.
+    _NO_JOBS = {
+        "set": ("global:\n  external_labels:\n    da_cluster: cluster-a\n",
+                _IDENTITY_CASES["set"][1]),
+        "missing": ("global:\n  scrape_interval: 15s\n",
+                    _IDENTITY_CASES["global-without-external-labels"][1]),
+        "unknown": ("rule_files: []\n", _IDENTITY_CASES["no-global"][1]),
+    }
+
+    @pytest.mark.parametrize("text, expected", list(_NO_JOBS.values()), ids=list(_NO_JOBS))
+    def test_no_scrape_configs_json_report_has_it(self, tmp_path, monkeypatch, capsys,
+                                                  text, expected):
+        import json
+        path = tmp_path / "prometheus.yml"
+        path.write_text(text, encoding="utf-8")
+        rc = self._main(monkeypatch, ["--scrape-config", str(path), "--json", "--dry-run"])
+        doc = json.loads(capsys.readouterr().out)
+        assert rc == 1  # unchanged: no phase produced a result
+        assert doc["phases"] == {} and doc["cluster_identity"] == expected
+
+    @pytest.mark.parametrize("text, expected", list(_NO_JOBS.values()), ids=list(_NO_JOBS))
+    def test_no_scrape_configs_written_file_and_stderr_have_it(self, tmp_path, monkeypatch,
+                                                               capsys, text, expected):
+        path = tmp_path / "prometheus.yml"
+        path.write_text(text, encoding="utf-8")
+        out = tmp_path / "out"
+        assert self._main(monkeypatch, ["--scrape-config", str(path), "-o", str(out)]) == 1
+        captured = capsys.readouterr()
+        prefix = {"set": "  Cluster identity: ", "missing": "  WARN: cluster identity: ",
+                  "unknown": "  NOTE: cluster identity: "}[expected["status"]]
+        assert prefix + expected["detail"] in captured.err.splitlines()
+        analysis = out / ".onboard" / "scrape-analysis.yaml"
+        assert yaml.safe_load(analysis.read_text(encoding="utf-8")) == {"cluster_identity": expected}
+        assert str(analysis) in captured.out
+
+    @pytest.mark.parametrize("text, expected", list(_NO_JOBS.values()), ids=list(_NO_JOBS))
+    def test_no_scrape_configs_hints_have_it(self, tmp_path, monkeypatch, text, expected):
+        import json
+        path = tmp_path / "prometheus.yml"
+        path.write_text(text, encoding="utf-8")
+        am = tmp_path / "am.yaml"
+        am.write_text(yaml.dump(make_am_config(
+            routes=[{"matchers": ['tenant="t1"'], "receiver": "r"}],
+            receivers=[{"name": "default"}, {"name": "r", "webhook_configs": [
+                {"url": "https://hooks.example.com/x"}]}])), encoding="utf-8")
+        out = tmp_path / "out"
+        assert self._main(monkeypatch, ["--alertmanager-config", str(am),
+                                        "--scrape-config", str(path), "-o", str(out)]) == 0
+        hints = json.loads((out / "onboard-hints.json").read_text(encoding="utf-8"))
+        assert hints["cluster_identity"] == expected
+
+    def test_the_dry_run_summary_says_it(self, tmp_path, monkeypatch, capsys):
+        path = tmp_path / "prometheus.yml"
+        path.write_text("global:\n  scrape_interval: 15s\n", encoding="utf-8")
+        self._main(monkeypatch, ["--scrape-config", str(path), "--dry-run"])
+        captured = capsys.readouterr()
+        assert f"  WARN: cluster identity: {_IDENTITY_UNSET}" in captured.err.splitlines()
+        assert f"cluster_identity: missing — {_IDENTITY_UNSET}" in captured.out.splitlines()
+
+    def test_no_prometheus_config_no_identity_anywhere(self, tmp_path, monkeypatch, capsys):
+        import json
+        am = tmp_path / "am.yaml"
+        am.write_text(yaml.dump(make_am_config(
+            routes=[{"matchers": ['tenant="t1"'], "receiver": "r"}],
+            receivers=[{"name": "default"}, {"name": "r", "webhook_configs": [
+                {"url": "https://hooks.example.com/x"}]}])), encoding="utf-8")
+        out = tmp_path / "out"
+        assert self._main(monkeypatch, ["--alertmanager-config", str(am), "-o", str(out)]) == 0
+        assert "cluster_identity" not in json.loads(
+            (out / "onboard-hints.json").read_text(encoding="utf-8"))
+        assert not (out / ".onboard" / "scrape-analysis.yaml").exists()
+        capsys.readouterr()
+        assert self._main(monkeypatch, ["--alertmanager-config", str(am), "--json",
+                                        "--dry-run"]) == 0
+        assert "cluster_identity" not in json.loads(capsys.readouterr().out)
+
+    @_identity_param()
+    def test_the_onboarding_hints_carry_it(self, tmp_path, monkeypatch, text, expected):
+        import json
+        path = tmp_path / "prometheus.yml"
+        path.write_text(text, encoding="utf-8")
+        am = tmp_path / "am.yaml"
+        am.write_text(yaml.dump(make_am_config(
+            routes=[{"matchers": ['tenant="t1"'], "receiver": "r"}],
+            receivers=[{"name": "default"}, {"name": "r", "webhook_configs": [
+                {"url": "https://hooks.example.com/x"}]}])),
+            encoding="utf-8")
+        out = tmp_path / "out"
+        assert self._main(monkeypatch, ["--alertmanager-config", str(am),
+                                        "--scrape-config", str(path), "-o", str(out)]) == 0
+        hints = json.loads((out / "onboard-hints.json").read_text(encoding="utf-8"))
+        assert hints["tenants"] == ["t1"]
+        assert hints["cluster_identity"] == expected
+
+    def test_hints_without_phase_3_have_no_cluster_identity(self):
+        assert "cluster_identity" not in _build_onboard_hints(None, None, None)
+
+    def test_the_judgement_is_the_shared_one(self):
+        """One reading: what federation-check and byo-check judge with."""
+        import onboard_platform as op
+        import _lib_cluster_identity as lib
+        assert op.cluster_identity is lib.cluster_identity
+        assert op.config_external_labels is lib.config_external_labels
+        assert op.CLUSTER_IDENTITY_UNSET is lib.CLUSTER_IDENTITY_UNSET
+
+    def test_the_shared_judgement_is_the_one_called(self, monkeypatch):
+        """A private copy of the judgement in onboard_platform would not see this."""
+        import onboard_platform as op
+        seen = []
+        monkeypatch.setattr(op, "config_external_labels",
+                            lambda config: seen.append(config) or {"da_cluster": "x"})
+        doc = {"scrape_configs": []}
+        assert op.analyze_cluster_identity(doc)["value"] == "x"
+        assert seen == [doc]
+
+    def test_the_file_is_parsed_once(self, tmp_path, monkeypatch):
+        """The scrape jobs and the identity come from one parsed document."""
+        import onboard_platform as op
+        import _lib_consumer_read
+        path = tmp_path / "prometheus.yml"
+        path.write_text(_IDENTITY_CASES["set"][0], encoding="utf-8")
+        calls = []
+        real = _lib_consumer_read.prometheus_config
+        monkeypatch.setattr(_lib_consumer_read, "prometheus_config",
+                            lambda *a, **kw: calls.append(1) or real(*a, **kw))
+        assert self._main(monkeypatch, ["--scrape-config", str(path), "--dry-run"]) == 0
+        assert len(calls) == 1
+
+    def test_the_relabel_suggestion_does_not_write_the_cluster_label(self):
+        """`da_cluster` comes from the external labels, never from relabelling."""
+        analysis = analyze_relabel_configs({"job_name": "a"})
+        assert "da_cluster" not in yaml.dump(analysis["suggestions"])

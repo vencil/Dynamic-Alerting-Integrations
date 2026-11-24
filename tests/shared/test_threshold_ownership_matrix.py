@@ -85,9 +85,9 @@ def _tree(root: Path, files: dict[str, str]) -> Path:
 @pytest.fixture
 def stubs(monkeypatch):
     # 2000 points a minute apart: ~33 distinct hours, above the #2941 floor of 24.
-    monkeypatch.setattr(tr, "query_prometheus_range_ts",
-                        lambda url, promql, *a, **k: [
-                            (1_700_000_000.0 + 60 * i, 40.0) for i in range(2000)])
+    monkeypatch.setattr(tr, "query_prometheus_range_rows",
+                        lambda url, promql, *a, **k: [({}, [
+                            (1_700_000_000.0 + 60 * i, 40.0) for i in range(2000)])])
 
 
 def _args(conf_d: Path) -> argparse.Namespace:

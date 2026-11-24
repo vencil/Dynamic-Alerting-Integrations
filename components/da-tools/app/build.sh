@@ -222,6 +222,10 @@ TOOL_FILES=(
     # Stdlib-only by design; safe to bundle without extra deps.
     _lib_compat.py
     _lib_prometheus.py
+    # #4097 — the one reading of a Prometheus' cluster identity
+    # (global.external_labels.da_cluster); imported by ops/federation_check,
+    # ops/byo_check and ops/onboard_platform. Stdlib-only, no I/O.
+    _lib_cluster_identity.py
     # #3207/#3210 — the one cluster reader (kubectl get -o json) of
     # ops/operator_check.py; #3539 — the one place kubectl is started, for
     # the writes too (grafana_import, cutover_tenant, _grar_render).
@@ -304,8 +308,8 @@ TOOL_FILES=(
     # below); imported by ops/onboard_platform. Stdlib-only.
     _lib_consumer_read.py
     # #1595 D1b — the metric-family → source table and the Prometheus Operator
-    # portability derivation; imported by ops/operator_generate. Imports
-    # ops/generate_rule_pack_split (above).
+    # portability derivation; imported by ops/operator_generate and
+    # ops/generate_rule_pack_split. Imports _lib_consumer_read (above).
     _lib_metric_sources.py
     # Data files
     metric-dictionary.yaml

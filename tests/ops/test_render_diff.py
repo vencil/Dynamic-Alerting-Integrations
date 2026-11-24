@@ -65,7 +65,7 @@ def _routes(d: rd.RenderDiff, cls=rd.RouteChange) -> list:
     return [c for c in d.routes.changes if isinstance(c, cls)]
 
 
-# ── ADR-037 的兩個範例，逐字重現 ──────────────────────────────────────
+# ── ADR-037 決策段的兩個範例 ──────────────────────────────────────
 
 
 def test_adr_example_group_wait_reaches_the_two_inheriting_tenants(tmp_path, da_guard):

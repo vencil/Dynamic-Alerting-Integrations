@@ -24,7 +24,8 @@ Prometheus。每個計畫帶租戶檔的路徑（``source_file``，相對 ``--co
 
 另外列出的類別（都不進計畫）：沒量成的閾值（``not_measured``，#3133，報告不完整、
 結束碼 2）、需人工 review 的（``force_manual``）、未分類的 lower-bound ``<``
-（``ungoverned_lower_bound``）、by-design 不適用的（``not_applicable``）。
+（``ungoverned_lower_bound``）、by-design 不適用的（``not_applicable``）、在多個叢集
+量到而被其中一個叢集擋下的（``held_by_cluster``，#1200：建議值會讓那個叢集多響）。
 
 結束碼（dev-rules §13）：0 = 報告完整（不論有沒有腐敗閾值）；2 = 呼叫端錯誤（參數、
 路徑、da-guard 或 observed-map 不可用）或有閾值沒量成（報告不完整）。本工具不產生 1。
@@ -170,6 +171,27 @@ class NotMeasuredKey:
     error: str
 
 
+#: How much of a not-measured reason the text report and stderr carry.
+_NOT_MEASURED_MAX = 300
+
+
+@dataclass
+class ClusterHeldKey:
+    """A key measured in several clusters (#1200) whose recommendation one
+    cluster held back and that is therefore not in the plan: the value its
+    other clusters ask for would start firing in ``cluster`` — one the
+    recommender had no value of its own for (idle, within margin) — so no value
+    is proposed (a lower-bound floor), or the value was raised until the
+    change fell under the gate (an upper-bound key). Listed with the
+    recommender's ``reason`` so that it does not simply vanish from the
+    governance run."""
+
+    tenant: str
+    key: str
+    cluster: str
+    reason: str
+
+
 @dataclass
 class InheritedKey:
     """A threshold a tenant inherits from a defaults / platform / profile file
@@ -196,6 +218,8 @@ class GovernanceResult:
     force_manual: list[ForceManualKey] = field(default_factory=list)
     inherited: list[InheritedKey] = field(default_factory=list)
     not_measured: list[NotMeasuredKey] = field(default_factory=list)
+    #: #1200: keys one cluster held back, not in the plan (`ClusterHeldKey`).
+    held_by_cluster: list[ClusterHeldKey] = field(default_factory=list)
     #: #3617: how many thresholds were queried — measured or not. A threshold
     #: within margin lands in no list above, so the answered part cannot be
     #: counted from them.
@@ -358,6 +382,19 @@ def collect_force_manual(
     return out
 
 
+def collect_cluster_held(
+    reports: list["recommend.TenantRecommendation"], min_delta_pct: float,
+) -> list[ClusterHeldKey]:
+    """Keys a cluster held back (``held_by_cluster``, #1200) that did not
+    make the plan — see ``ClusterHeldKey``. One that is still actionable is
+    in the plan with the held value, and is not repeated here."""
+    out = [ClusterHeldKey(report.tenant, r.key, r.held_by_cluster, r.reason)
+           for report in reports for r in report.keys
+           if getattr(r, "held_by_cluster", None) is not None and not is_governance_actionable(r, min_delta_pct)]
+    out.sort(key=lambda u: (u.tenant, u.key))
+    return out
+
+
 def collect_not_measured(
     reports: list["recommend.TenantRecommendation"],
 ) -> list[NotMeasuredKey]:
@@ -391,6 +428,7 @@ def format_text_report(
     force_manual: Optional[list["ForceManualKey"]] = None,
     inherited: Optional[list["InheritedKey"]] = None,
     not_measured: Optional[list["NotMeasuredKey"]] = None,
+    held_by_cluster: Optional[list["ClusterHeldKey"]] = None,
 ) -> str:
     lines: list[str] = []
     lines.append("Threshold governance report — read-only (nothing is written)")
@@ -466,14 +504,32 @@ def format_text_report(
         if not nm:
             return []
         head = (
-            f"✗ {len(nm)} 個閾值沒量成（Prometheus 查詢沒得到回答，#3133），報告不完整："
+            f"✗ {len(nm)} 個閾值沒量成（查詢失敗，或 da_cluster 分不開的列；#3133、#1200），"
+            "報告不完整："
             if _LANG == "zh" else
-            f"✗ {len(nm)} threshold(s) not measured (the Prometheus query was not "
-            "answered — #3133); the report is partial:"
+            f"✗ {len(nm)} threshold(s) not measured ({recommend.NOT_MEASURED_CAUSES} "
+            "— #3133, #1200); the report is partial:"
+        )
+        # The whole reason up to `_NOT_MEASURED_MAX`: it ends with what to do
+        # (which endpoint to query), and 80 characters cut that off.
+        return ["", "-" * 78, head] + [
+            f"  {safe_label(u.tenant)}/{safe_label(u.key)}: "
+            f"{safe_label(u.error[:_NOT_MEASURED_MAX])}"
+            for u in nm]
+
+    def _held_lines() -> list[str]:
+        held = held_by_cluster or []
+        if not held:
+            return []
+        head = (
+            f"⚠ {len(held)} 個閾值被某個叢集擋下、不在計畫內（多叢集，#1200；原因見各行）："
+            if _LANG == "zh" else
+            f"⚠ {len(held)} threshold(s) held back by one cluster, not in the plan "
+            "(several clusters — #1200; reason per line):"
         )
         return ["", "-" * 78, head] + [
-            f"  {safe_label(u.tenant)}/{safe_label(u.key)}: {safe_label(u.error[:80])}"
-            for u in nm]
+            f"    {safe_label(k.tenant)} / {safe_label(k.key)}: {safe_label(k.reason)}"
+            for k in held]
 
     def _deferred_note() -> str:
         # Fold the two review-worthy counts into Summary so a tail-scan catches
@@ -482,6 +538,7 @@ def format_text_report(
         n_ung = len(ungoverned or [])
         n_fm = len(force_manual or [])
         n_nm = len(not_measured or [])
+        n_held = len(held_by_cluster or [])
         parts: list[str] = []
         if n_nm:
             parts.append(
@@ -491,6 +548,10 @@ def format_text_report(
             parts.append(
                 f" ⚠ 另有 {n_fm} 個閾值需人工 review。" if _LANG == "zh"
                 else f" ⚠ {n_fm} threshold(s) also need manual review.")
+        if n_held:
+            parts.append(
+                f" ⚠ 另有 {n_held} 個閾值被某個叢集擋下。" if _LANG == "zh"
+                else f" ⚠ {n_held} threshold(s) also held back by one cluster.")
         if n_ung:
             parts.append(
                 f" ⚠ 另有 {n_ung} 個未分類 `<` 閾值未治理。" if _LANG == "zh"
@@ -499,7 +560,8 @@ def format_text_report(
 
     def _deferred_block() -> list[str]:
         # All surfaced-but-not-planned categories, above the bottom line.
-        return (_not_measured_lines() + _force_manual_lines() + _ungoverned_lines()
+        return (_not_measured_lines() + _force_manual_lines() + _held_lines()
+                + _ungoverned_lines()
                 + _not_applicable_lines() + _inherited_lines())
 
     if not plans:
@@ -565,6 +627,7 @@ def json_document(
     force_manual: Optional[list["ForceManualKey"]] = None,
     inherited: Optional[list["InheritedKey"]] = None,
     not_measured: Optional[list["NotMeasuredKey"]] = None,
+    held_by_cluster: Optional[list["ClusterHeldKey"]] = None,
 ) -> dict:
     """The --json document (run() encodes it, #3216)."""
     ung = ungoverned or []
@@ -590,6 +653,11 @@ def json_document(
             "not_measured": len(nm),
         },
     }
+    if held_by_cluster:
+        # #1200: only when a cluster held a key back — a run with none has
+        # the document it always had.
+        out["held_by_cluster"] = [asdict(u) for u in held_by_cluster]
+        out["summary"]["held_by_cluster"] = len(held_by_cluster)
     if nm:
         # #3133: as threshold-recommend marks its own report.
         out.update({"status": "partial", "reason": "prometheus_query_error"})
@@ -623,6 +691,7 @@ def run(args: argparse.Namespace) -> GovernanceResult:
         force_manual=collect_force_manual(reports),
         inherited=collect_inherited(reports),
         not_measured=collect_not_measured(reports),
+        held_by_cluster=collect_cluster_held(reports, args.min_delta_pct),
         queried=sum(1 for r in reports for k in r.keys if k.queried),
     )
 
@@ -712,15 +781,18 @@ def _main(args: argparse.Namespace) -> "Report | None":
     if not args.json_output:
         print(format_text_report(
             result.plans, result.ungoverned, result.not_applicable,
-            result.force_manual, result.inherited, not_measured=result.not_measured))
+            result.force_manual, result.inherited, not_measured=result.not_measured,
+            held_by_cluster=result.held_by_cluster))
 
     # #3133: a threshold not measured makes the report partial — a caller error
     # (exit 2). A complete report is exit 0 whether or not it lists rot.
     if result.not_measured:
         first = result.not_measured[0]
-        print(f"ERROR: Prometheus query failed for {len(result.not_measured)} threshold(s); "
+        print(f"ERROR: {len(result.not_measured)} threshold(s) not measured "
+              f"({recommend.NOT_MEASURED_CAUSES}); "
               f"the report is partial (first: {safe_label(first.tenant)}/"
-              f"{safe_label(first.key)}: {safe_label(first.error[:80])})", file=sys.stderr)
+              f"{safe_label(first.key)}: {safe_label(first.error[:_NOT_MEASURED_MAX])})",
+              file=sys.stderr)
         status = EXIT_CALLER_ERROR
     else:
         status = EXIT_OK
@@ -729,7 +801,8 @@ def _main(args: argparse.Namespace) -> "Report | None":
         # partial answer — none measured is no answer (rc 2, stdout empty).
         return partial_answer(json_document(  # #3216: run() encodes it
             result.plans, result.ungoverned, result.not_applicable,
-            result.force_manual, result.inherited, result.not_measured), status,
+            result.force_manual, result.inherited, result.not_measured,
+            result.held_by_cluster), status,
             unanswered=[f"{m.tenant}/{m.key}" for m in result.not_measured],
             of=result.queried)
     sys.exit(status)

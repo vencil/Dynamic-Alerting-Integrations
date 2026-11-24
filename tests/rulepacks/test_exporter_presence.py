@@ -121,7 +121,6 @@ def test_job_db_map_names_only_kinds():
     values = set(_lib_constants.JOB_DB_MAP.values())
     assert values, "JOB_DB_MAP is empty: the subset check would pass on nothing"
     assert values <= _registry_kinds(), sorted(values - _registry_kinds())
-    assert set(_lib_constants.METRIC_PREFIX_DB_MAP.values()) <= _registry_kinds()
 
 
 def _schema_entry_pattern() -> str:
@@ -396,7 +395,7 @@ def test_mass_exporter_outage_is_portable_to_operator_mode():
     """It reads tenant exporters' own series under the tenant-exporters job,
     which an Operator install scrapes as that job (#3720)."""
     rule = next(r for r in _rules(PLATFORM) if r.get("alert") == "MassExporterOutage")
-    assert ms.operator_unportable(rule["expr"]) == []
+    assert ms.operator_unportable(ms._lib_consumer_read.promql_shape([rule["expr"]])[0]) == []
 
 
 _SPLIT_CENTRAL_TEST = """\

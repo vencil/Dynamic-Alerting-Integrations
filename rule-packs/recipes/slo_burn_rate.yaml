@@ -19,18 +19,24 @@ emitted_shape: |
   # recording (6 metric-side + the standard threshold record; NO maintenance
   # suppression here — measurement is never suppressed, budget burn stays fully
   # recorded in TSDB through a maintenance window):
-  custom:metric:<id>:<win> = sum by(tenant)(rate(<bad><sel>[<win>]))
-                             / (sum by(tenant)(rate(<total><sel>[<win>])) > 0)
+  custom:metric:<id>:<win> = sum by(tenant,da_cluster)(rate(<bad><sel>[<win>]))
+                             / (sum by(tenant,da_cluster)(rate(<total><sel>[<win>])) > 0)
                              # <win> ∈ 1h / 5m / 6h / 30m (fixed recipe semantics)
-  custom:bad:<id>:<win>    = sum by(tenant)(increase(<bad><sel>[<win>]))   # 5m / 30m
+  custom:bad:<id>:<win>    = sum by(tenant,da_cluster)(increase(<bad><sel>[<win>]))   # 5m / 30m
+  # Per cluster (ADR-006 "one tenant in several clusters"): where the series carry
+  # `da_cluster`, each cluster burns its own budget — its own error ratio, its own
+  # bad-event count — and the three operands of a core are paired within ONE
+  # cluster (`and on(tenant, da_cluster)`), so one cluster's long window never
+  # fires with another cluster's short window. The alert carries the cluster.
+  # Series without the label behave exactly as `by(tenant)` / `on(tenant)`.
   # per-severity cores (multi-window AND; threshold join = the EXISTING
   # version exact-or-fallback + group_left(name, mode) idiom; maintenance
   # `unless` tail on the ALERT promise only):
-  custom:<id>:critical:core =  (ratio:1h > thr_crit) and on(tenant)
-                               (ratio:5m > thr_crit) and on(tenant)
+  custom:<id>:critical:core =  (ratio:1h > thr_crit) and on(tenant, da_cluster)
+                               (ratio:5m > thr_crit) and on(tenant, da_cluster)
                                (bad:5m  > <min_events>)          # fast burn
-  custom:<id>:warning:core  =  (ratio:6h > thr_warn) and on(tenant)
-                               (ratio:30m > thr_warn) and on(tenant)
+  custom:<id>:warning:core  =  (ratio:6h > thr_warn) and on(tenant, da_cluster)
+                               (ratio:30m > thr_warn) and on(tenant, da_cluster)
                                (bad:30m > <min_events>*6)        # slow burn
   # thr_crit / thr_warn = the EXISTING user_threshold{severity} series: the Go
   # exporter resolves M×(1−objective/100) at resolve time (M from slo_period:

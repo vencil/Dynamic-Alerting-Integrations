@@ -1112,42 +1112,37 @@ def test_only_recording_outputs_and_manufactured_series_are_not_leaves():
     assert set(leaves) == {"mysql_up", "user_threshold", "da_config_event"}
 
 
-# ── extractor patch (blind spots of the split-tool base) ──────────────────
-
-def test_extractor_catches_metric_before_closing_paren():
-    got = gate.extract_metrics(
-        "(time() - da_config_last_reload_complete_unixtime_seconds) > 600")
-    assert got == {"da_config_last_reload_complete_unixtime_seconds"}
-
-
-def test_extractor_catches_bare_absent():
-    got = gate.extract_metrics(
-        "absent(federation_revocation_last_reconcile_timestamp_seconds)")
-    assert got == {"federation_revocation_last_reconcile_timestamp_seconds"}
-
-
-def test_extractor_does_not_leak_grouping_labels_or_keywords():
-    got = gate.extract_metrics(
-        'max by (mode, namespace) (vector_tenant_projection_gate_info'
-        '{category="mismatch"}) > 0')
-    assert got == {"vector_tenant_projection_gate_info"}
-    assert gate.extract_metrics("vector(1)") == set()
-
+# ── what a rule reads: Prometheus' parse tree (#4219) ─────────────────────
+# Each shape below needed a patch to the text extractor this gate used to run
+# (a metric before `)` or `,`, bare absent(), grouping labels and keywords,
+# compact comparisons, matcher names, capitalised names). The parse tree
+# reads them all with no patch; these pin that the gate's reading does.
 
 @pytest.mark.parametrize("expr,want", [
-    # compact comparisons, no whitespace (#1595 D1b: `==` / `!=` were missed)
-    ("mysql_up==0", {"mysql_up"}),
-    ("mysql_up!=1", {"mysql_up"}),
-    ("mysql_up>0", {"mysql_up"}),
-    ("mysql_up<1", {"mysql_up"}),
-    ('up{job="tenant-exporters"}==0', {"up"}),
-    ("a==bool b", {"a", "b"}),
-    # matcher names inside {...} never leak, with any operator after them
-    ('kube_pod_status_ready{condition="true",pod!="x"}==1', {"kube_pod_status_ready"}),
-    ('kube_pod_status_ready{condition=~"t.*"}!=0', {"kube_pod_status_ready"}),
+    ("(time() - da_config_last_reload_complete_unixtime_seconds) > 600",
+     ["da_config_last_reload_complete_unixtime_seconds"]),
+    ("absent(federation_revocation_last_reconcile_timestamp_seconds)",
+     ["federation_revocation_last_reconcile_timestamp_seconds"]),
+    ('max by (mode, namespace) (vector_tenant_projection_gate_info{category="mismatch"}) > 0',
+     ["vector_tenant_projection_gate_info"]),
+    ("vector(1)", []),
+    ("mysql_up==0", ["mysql_up"]),
+    ("a==bool b", ["a", "b"]),
+    ('kube_pod_status_ready{condition=~"t.*"}!=0', ["kube_pod_status_ready"]),
+    ("rate(foo_total[5m])*100", ["foo_total"]),
+    ('label_replace(rabbitmq_node_mem_alarm, "a", "b", "", "")', ["rabbitmq_node_mem_alarm"]),
+    ("ClickHouseMetrics_TCPConnection > 0", ["ClickHouseMetrics_TCPConnection"]),
 ])
-def test_extractor_catches_compact_comparisons(expr, want):
-    assert gate.extract_metrics(expr) == want
+def test_what_a_rule_reads_comes_from_the_parse_tree(expr, want):
+    assert gate._lib_consumer_read.promql_metric_names([expr], raise_refused=True) == [want]
+
+
+def test_the_alert_series_are_manufactured_not_leaves():
+    """#4219: ALERTS / ALERTS_FOR_STATE are read now (a capitalised name was
+    skipped); Prometheus writes them, so neither is a scrape leaf."""
+    leaves = gate.leaf_metrics({"ALERTS": {"a"}, "ALERTS_FOR_STATE": {"b"}, "x": {"c"}},
+                               outputs=set())
+    assert set(leaves) == {"x"}
 
 
 # ── the CLI exit-code contract (main), independent of the real artifacts ──
@@ -1171,16 +1166,6 @@ def test_main_ci_passes_when_clean(monkeypatch):
                         lambda: {"errors": [], "infos": ["5 ledgered"],
                                  "classes": {}, "counts": {}})
     assert gate.main(["--ci"]) == gate.EXIT_OK
-
-
-def test_extract_metrics_compact_operator_writing():
-    """Metric directly followed by an operator (no whitespace) must still be
-    extracted; only function names (followed by `(`) are excluded
-    (Gemini review of #1221 — `tenant_api_uptime_seconds>60` was missed)."""
-    from check_scrape_reachability import extract_metrics
-    assert "tenant_api_uptime_seconds" in extract_metrics("tenant_api_uptime_seconds>60")
-    assert "foo_total" in extract_metrics("rate(foo_total[5m])*100")
-    assert "rate" not in extract_metrics("rate(foo_total[5m])*100")
 
 
 def test_a_refused_manifest_is_named_not_skipped(tmp_path):

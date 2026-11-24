@@ -604,3 +604,34 @@ def test_every_job_the_shipped_rules_read_up_under_is_classified():
     unknown = {j for j in jobs if j is not None} - cid.PLATFORM_JOBS - cid.CLUSTER_JOBS
     assert not unknown, f"add to PLATFORM_JOBS or CLUSTER_JOBS on purpose: {sorted(unknown)}"
     assert not cid.PLATFORM_JOBS & cid.CLUSTER_JOBS
+
+
+def test_every_compiled_recipe_keeps_the_cluster_and_absence_says_it_does_not(tmp_path, da_guard_env):
+    """The shipped custom-alert pack is compiled from this repo's conf.d, which
+    declares two recipes; the baseline being empty says nothing about the
+    other five. The example tree declares all seven (and `==`), so its
+    compiled pack is judged here: nothing in it drops the cluster but the
+    absence cores, and those carry the compiler's own tenant-wide
+    declaration — rendered without it, they are the findings."""
+    sys.path.insert(0, os.path.join(_TOOLS, "dx"))
+    import compile_custom_alerts as cc
+
+    pack = cc.build_pack(cid.PROJECT_ROOT / "rule-packs" / "recipes" / "examples" / "conf.d")
+    recipes = {r["labels"]["recipe"] for g in pack.groups for r in g["rules"]
+               if r.get("record") == "custom_recipe_info"}
+    assert recipes == {"threshold", "rate", "ratio", "p99_latency", "absence", "forecast", "slo_burn_rate"}
+    name = _lib_consumer_read.RULE_PACKS.file_name("custom-alerts")
+    absence_cores = sorted(pack.declarations)
+    assert len(absence_cores) == 2 and all(":core" in c and "absence__" in c for c in absence_cores)
+
+    declared = tmp_path / "declared"
+    (declared / "rule-packs").mkdir(parents=True)
+    (declared / "rule-packs" / name).write_text(
+        cc._render(pack.groups, declarations=pack.declarations), encoding="utf-8")
+    assert cid.findings(declared) == {} and cid.stale_declarations(declared) == []
+
+    plain = tmp_path / "plain"
+    (plain / "rule-packs").mkdir(parents=True)
+    (plain / "rule-packs" / name).write_text(cc._render(pack.groups), encoding="utf-8")
+    assert cid.findings(plain) == {name: [
+        f"custom-alerts-normalization / {core}: by-drops-cluster (tenant)" for core in absence_cores]}

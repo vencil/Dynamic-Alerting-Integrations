@@ -640,7 +640,7 @@ def _record_profiles(fname: str, level: str, profiles: dict,
                 f"routing_profiles.{key_segment(name)}",
                 f"routing profile '{shown_key(name)}' is defined in both {shown_file(first)} and "
                 f"{shown_file(fname)} — a profile name must be unique across the whole "
-                f"conf.d tree (ADR-007 amendment 2026-09-28); rename or "
+                f"conf.d tree (ADR-007 §Scope in a hierarchical conf.d); rename or "
                 f"remove one of them")
             continue
         origin[name] = fname
@@ -1164,7 +1164,7 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         print(f"ERROR: {config_dir_problem.message}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # #2326 (ADR-016 "Amendment 2026-09-28", ADR-017 Decision 9): this reader walks the WHOLE
+    # #2326 (ADR-016 §Decision item 3, ADR-017 Decision 9): this reader walks the WHOLE
     # tree, with the walker every other reader of the threshold plane uses
     # (`list_config_tree`: hidden directories pruned, directory symlinks
     # reported). Until #2326 it was flat — a tenant in a subdirectory got no
@@ -1650,7 +1650,7 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
             f"tree that declares one tenant in two files (DuplicateTenantError), and routes "
             f"built from a blend of both would match neither; keep the tenant in "
             f"one file ({', '.join(shown_file(f) for f in files)})")
-    # ADR-035 D3: an invalid id is judged on the DECLARATIONS — every key a
+    # ADR-035 §3: an invalid id is judged on the DECLARATIONS — every key a
     # tenant file puts under `tenants:`, a body that is not a mapping (null,
     # a scalar) included — not on the loaded set: such a body is never
     # loaded, and judging only what loaded let `Team_D:` (null) through to
@@ -1779,7 +1779,7 @@ class TenantTree:
     # #2315: {tenant_id: [file, ...]} — ids two tenant files declare
     # (`_lib_confd.tenant_declarations`, validate-config's own scan).
     duplicate_tenants: dict[str, list[str]] = field(default_factory=dict)
-    # ADR-035 D3: declared tenant ids `is_valid_tenant_id` refuses, sorted.
+    # ADR-035 §3: declared tenant ids `is_valid_tenant_id` refuses, sorted.
     # Nothing is rendered for them here; the generator refuses the whole
     # tree on them in every mode (`_refuse_invalid_tenant_ids`).
     invalid_tenant_ids: list[str] = field(default_factory=list)

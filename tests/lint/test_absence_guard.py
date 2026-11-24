@@ -44,24 +44,33 @@ def _rules():
                 yield pack.name, rule
 
 
-def _reads_optional_absence(expr: str) -> bool:
-    for metric in ms.ABSENT_RE.findall(expr):
-        fam = ms.resolve_family(metric)
-        if fam and fam[2] in ms.OPTIONAL_CHARTS:
-            return True
+def _reads_optional_absence(tree: dict) -> bool:
+    """An absent() / absent_over_time() over an optional chart's metric, read
+    off the parse tree (#4219: the text pattern this used went with the text
+    scanners)."""
+    for node in cr.shape_nodes(tree):
+        if node["kind"] == "call" and node["name"] in ("absent", "absent_over_time"):
+            for arg in node["args"]:
+                for metric in cr.shape_metric_names(arg):
+                    fam = ms.resolve_family(metric)
+                    if fam and fam[2] in ms.OPTIONAL_CHARTS:
+                        return True
     return False
 
 
 def test_every_optional_chart_absence_is_guarded():
     unguarded, guarded, scanned = [], set(), 0
-    for pack, rule in _rules():
+    rules = list(_rules())
+    trees = cr.promql_shape_each([str(rule.get("expr", "")) for _, rule in rules],
+                                 raise_refused=True)
+    for (pack, rule), tree in zip(rules, trees):
         scanned += 1
         expr = str(rule.get("expr", ""))
         name = rule.get("alert") or rule.get("record")
         problems = ms.unguarded_absences(expr)
         if problems:
             unguarded.append((pack, name, problems))
-        elif _reads_optional_absence(expr):
+        elif _reads_optional_absence(tree):
             guarded.add(name)
     assert scanned > 100, f"only {scanned} rules scanned"
     assert not unguarded, (

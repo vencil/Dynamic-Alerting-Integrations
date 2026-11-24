@@ -371,3 +371,51 @@ class TestUnscannableFileFailsTheRun:
                               encoding="utf-8", timeout=60)
         assert proc.returncode == 2, proc.stdout + proc.stderr
         assert "bom.py" in proc.stderr
+
+
+def test_an_unchanged_ledger_on_stdin_is_left_alone(tmp_path):
+    """#3981: the ledger is rewritten through the artifact entry, and only
+    when it changes — so a current ledger that is also this process's stdin
+    stays rc 0 (the entry refuses to replace a standard stream)."""
+    tool = Path(__file__).resolve().parents[2] / "scripts" / "tools" / "lint" / "check_open_encoding.py"
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text('import subprocess\nsubprocess.run(["x"], text=True)\n',
+                              encoding="utf-8")
+    ledger = tmp_path / "ledger.json"
+    argv = [sys.executable, str(tool), "--write-subprocess-baseline",
+            "--subprocess-baseline", str(ledger), str(src)]
+    first = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                           stdin=subprocess.DEVNULL, timeout=120)
+    assert first.returncode == 0, first.stderr
+    before = ledger.read_bytes()
+    with open(ledger, "rb") as stdin:
+        again = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                               stdin=stdin, timeout=120)
+    assert again.returncode == 0, again.stderr
+    assert ledger.read_bytes() == before
+
+
+def test_the_ledger_bytes_are_pinned_and_a_crlf_copy_is_rewritten(tmp_path):
+    """#3981 (review): what the ledger writer emits is pinned byte for byte
+    (indent 2, LF, one trailing newline), and "unchanged" is judged on those
+    bytes — a CRLF copy with the same content is rewritten, not kept."""
+    tool = Path(__file__).resolve().parents[2] / "scripts" / "tools" / "lint" / "check_open_encoding.py"
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text('import subprocess\nsubprocess.run(["x"], text=True)\n',
+                              encoding="utf-8")
+    ledger = tmp_path / "ledger.json"
+    argv = [sys.executable, str(tool), "--write-subprocess-baseline",
+            "--subprocess-baseline", str(ledger), str(src)]
+    done = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                          stdin=subprocess.DEVNULL, timeout=120)
+    assert done.returncode == 0, done.stderr
+    data = json.loads(ledger.read_text(encoding="utf-8"))
+    assert ledger.read_bytes() == (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode()
+    golden = ledger.read_bytes()
+    ledger.write_bytes(golden.replace(b"\n", b"\r\n"))
+    done = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                          stdin=subprocess.DEVNULL, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert ledger.read_bytes() == golden

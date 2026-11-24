@@ -210,6 +210,44 @@ class TestCheckEdge:
                     checks = {c["check"]: c["status"] for c in fc.check_edge("http://edge:9090")}
         assert (checks["edge_external_labels"], checks["edge_cluster_identity"]) == (cluster, identity)
 
+    @pytest.mark.parametrize("config, expected", [
+        # Prometheus 3 prints UTF-8 label names; the key after one is still read
+        ("global:\n  external_labels:\n    cluster.name: a\n    da_cluster: edge-1\n", "pass"),
+        # a multi-line value is a block scalar: its lines are not keys …
+        ("global:\n  external_labels:\n    aa: |-\n      line1\n      line2\n"
+         "    da_cluster: edge-1\n", "pass"),
+        # … whatever they look like
+        ("global:\n  external_labels:\n    aa: |-\n      note: 1\n      da_cluster: fake\n"
+         "    zz: x\n", "fail"),
+        ("global:\r\n  external_labels:\r\n    da_cluster: edge-1\r\n", "pass"),
+        # blank is not a value (it used to pass)
+        ("global:\n  external_labels:\n    da_cluster: '  '\n", "fail"),
+    ], ids=["utf8-key", "block-value-before", "crafted-block-value", "crlf", "blank"])
+    def test_the_shared_reader_decides_the_identity(self, config, expected):
+        http_mapping = {"config": ({"status": "success", "data": {"yaml": config}}, None)}
+        prom_mapping = {"tenant": ({"status": "success", "data": {"result": []}}, None)}
+        with patch("urllib.request.urlopen", return_value=_mock_urlopen_ok()):
+            with patch.object(_lib_prometheus, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
+                with patch.object(fc, "query_prometheus", side_effect=_mock_query_prometheus(prom_mapping)):
+                    checks = {c["check"]: c for c in fc.check_edge("http://edge:9090")}
+        assert checks["edge_cluster_identity"]["status"] == expected, checks["edge_cluster_identity"]
+        assert "caller_error" not in checks["edge_cluster_identity"]
+
+    @pytest.mark.parametrize("config", ["", "scrape_configs: []\n"], ids=["empty", "no-global"])
+    def test_a_text_that_is_not_a_config_rendering_was_not_read(self, config):
+        """It used to read as "No external_labels configured" (exit 1): now a
+        caller error on the config read, and no identity verdict at all."""
+        http_mapping = {"config": ({"status": "success", "data": {"yaml": config}}, None)}
+        prom_mapping = {"tenant": ({"status": "success", "data": {"result": []}}, None)}
+        with patch("urllib.request.urlopen", return_value=_mock_urlopen_ok()):
+            with patch.object(_lib_prometheus, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
+                with patch.object(fc, "query_prometheus", side_effect=_mock_query_prometheus(prom_mapping)):
+                    checks = {c["check"]: c for c in fc.check_edge("http://edge:9090")}
+        c = checks["edge_external_labels"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True), c
+        assert c["detail"].startswith("Config API failed: no top-level `global:`"), c
+        assert "edge_cluster_identity" not in checks
+
     def test_the_identity_label_is_the_one_the_rules_group_on(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location(

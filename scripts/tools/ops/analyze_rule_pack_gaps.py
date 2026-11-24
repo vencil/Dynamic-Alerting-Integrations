@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_io import find_metric_dictionary, safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import YamlFileError  # noqa: E402
 import _lib_input  # noqa: E402  (#3445: --metric-dictionary is read by the lib)
+import _registry_lib  # noqa: E402  (#4270: a metric's pack, from the registry's metric_prefixes)
 import _lib_parse_cache  # noqa: E402  (#2906: the single file through parse-tree)
 from _lib_parse_tree import FileUnreadable, Timestamp  # noqa: E402
 from _lib_python import (  # noqa: E402
@@ -60,20 +61,6 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, Report, json_file_text  #
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Rule pack prefixes mapped to pack names
-RULE_PACK_PREFIXES = {
-    "mariadb": ["mysql_", "mariadb_"],
-    "postgresql": ["pg_", "postgres_"],
-    "redis": ["redis_"],
-    "mongodb": ["mongodb_"],
-    "elasticsearch": ["elasticsearch_", "es_"],
-    "oracle": ["oracle_", "oracledb_"],
-    "db2": ["db2_"],
-    "clickhouse": ["clickhouse_"],
-    "kafka": ["kafka_"],
-    "rabbitmq": ["rabbitmq_"],
-    "kubernetes": ["kube_", "container_", "pod_", "node_"],
-}
 
 
 #: The kind of a top level da-guard reports as not a mapping (its message:
@@ -257,12 +244,8 @@ def match_by_prefix(metric_name):
 
     Returns (pack_name, confidence) or (None, 0.0).
     """
-    metric_lower = metric_name.lower()
-    for pack, prefixes in RULE_PACK_PREFIXES.items():
-        for prefix in prefixes:
-            if metric_lower.startswith(prefix):
-                return pack, 0.7
-    return None, 0.0
+    pack = _registry_lib.pack_of_metric(metric_name, ignore_case=True)
+    return (pack, 0.7) if pack else (None, 0.0)
 
 
 def tokenize(name):

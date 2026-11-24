@@ -1,0 +1,658 @@
+# promtool unit test — Custom Alerts, ONE TENANT IN TWO CLUSTERS (ADR-006
+# "one tenant in several clusters", #4097).
+# Driven by tests/dx/test_custom_alerts_promtool.py (compiles example → temp pack).
+#
+# The tenant's metric series carry `da_cluster` (east / west), as they do on a
+# Prometheus where two clusters' data meet. The threshold, the maintenance
+# state and the metadata are one per tenant and carry none. Every recipe is
+# judged per cluster: one alert per cluster that crosses, carrying that
+# cluster's `da_cluster` and that cluster's OWN value — never the larger of
+# the two (max), their sum, or a ratio mixed from both.
+#
+# Each case is built so the tenant-wide reading gives a DIFFERENT answer (a
+# different value, an alert with no cluster, or the opposite verdict), so a
+# recipe that loses the label fails here by name. Three cases are the
+# exception on purpose: the two `absence` cases (it stays tenant-wide: present
+# in any cluster counts) and "maintenance mutes both" (maintenance is one per
+# tenant; that case fails when the mute is paired per cluster instead).
+rule_files:
+  - rule-pack-custom-alerts.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── threshold: east 500 (below), west 1500 (above 1000) → west only, 1500 ──
+  - interval: 15s
+    input_series:
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '500x48'
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '1500x48'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m__for1m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+        values: '1000x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__order_queue_depth__gt__w5m__for1m
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: warning
+              tenant: shop-a
+              da_cluster: west
+              recipe: threshold
+              name: queue_depth_high
+              version: default
+            exp_annotations:
+              summary: "Custom alert [queue_depth_high] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [queue_depth_high] 觸發"
+              description: "threshold on order_queue_depth: value 1500.00 crossed the configured threshold"
+              description_zh: "order_queue_depth 的 threshold: 值 1500.00 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── threshold: BOTH clusters above → two alerts, each with its own value ──
+  - interval: 15s
+    input_series:
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '1200x48'
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '1500x48'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m__for1m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+        values: '1000x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__order_queue_depth__gt__w5m__for1m
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: warning
+              tenant: shop-a
+              da_cluster: east
+              recipe: threshold
+              name: queue_depth_high
+              version: default
+            exp_annotations:
+              summary: "Custom alert [queue_depth_high] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [queue_depth_high] 觸發"
+              description: "threshold on order_queue_depth: value 1200.00 crossed the configured threshold"
+              description_zh: "order_queue_depth 的 threshold: 值 1200.00 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: warning
+              tenant: shop-a
+              da_cluster: west
+              recipe: threshold
+              name: queue_depth_high
+              version: default
+            exp_annotations:
+              summary: "Custom alert [queue_depth_high] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [queue_depth_high] 觸發"
+              description: "threshold on order_queue_depth: value 1500.00 crossed the configured threshold"
+              description_zh: "order_queue_depth 的 threshold: 值 1500.00 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── threshold: both above, tenant in maintenance → BOTH muted (maintenance
+  #    is tenant-wide: one series with no cluster mutes every cluster) ──
+  - interval: 15s
+    input_series:
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '1200x48'
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '1500x48'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m__for1m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+        values: '1000x48'
+      - series: 'user_state_filter{tenant="shop-a", filter="maintenance"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__order_queue_depth__gt__w5m__for1m
+        exp_alerts: []
+
+  # ── threshold, version-aware join with two clusters: the tenant has a
+  #    version-specific row (v2 → 1000) and the default row (2000). Every
+  #    (cluster, version) series joins ONE row — exact when its version has
+  #    one, else the default — and the rule evaluates (no many-to-many):
+  #      east v2 1500 > 1000 (exact)      → fires
+  #      west v2  800 < 1000 (exact)      → silent
+  #      east v3 1800 < 2000 (default)    → silent
+  #      west v3 2500 > 2000 (default)    → fires ──
+  - interval: 15s
+    input_series:
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="east", version="v2", pod="api-1"}'
+        values: '1500x48'
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="west", version="v2", pod="api-1"}'
+        values: '800x48'
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="east", version="v3", pod="api-2"}'
+        values: '1800x48'
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="west", version="v3", pod="api-2"}'
+        values: '2500x48'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m__for1m", tenant="shop-a", severity="warning", name="queue_depth_high", version="v2"}'
+        values: '1000x48'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m__for1m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+        values: '2000x48'
+    promql_expr_test:
+      - expr: 'custom:threshold__order_queue_depth__gt__w5m__for1m:warning:core'
+        eval_time: 11m
+        exp_samples:
+          - labels: 'custom:threshold__order_queue_depth__gt__w5m__for1m:warning:core{tenant="shop-a", da_cluster="east", version="v2", name="queue_depth_high"}'
+            value: 1500
+          - labels: 'custom:threshold__order_queue_depth__gt__w5m__for1m:warning:core{tenant="shop-a", da_cluster="west", version="v3", name="queue_depth_high"}'
+            value: 2500
+      - expr: 'count by (da_cluster, version) (ALERTS{alertname="Custom_threshold__order_queue_depth__gt__w5m__for1m", alertstate="firing"})'
+        eval_time: 11m
+        exp_samples:
+          - labels: '{da_cluster="east", version="v2"}'
+            value: 1
+          - labels: '{da_cluster="west", version="v3"}'
+            value: 1
+
+  # ── rate: east 40/s (below 50), west 66.67/s (above) → west only, with
+  #    west's own 66.67 (the tenant-wide sum is 106.67) ──
+  - interval: 15s
+    input_series:
+      - series: 'http_requests_total{tenant="shop-a", da_cluster="east", method="POST", status="500", namespace="shop", pod="api-1"}'
+        values: '0+600x48'
+      - series: 'http_requests_total{tenant="shop-a", da_cluster="west", method="POST", status="500", namespace="shop", pod="api-1"}'
+        values: '0+1000x48'
+      - series: 'user_threshold{component="custom", metric="http_requests_total", recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m__x38e5c05de00b3e8d", tenant="shop-a", severity="warning", name="http_5xx_spike"}'
+        values: '50x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m__x38e5c05de00b3e8d
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: warning
+              tenant: shop-a
+              da_cluster: west
+              recipe: rate
+              name: http_5xx_spike
+              version: default
+            exp_annotations:
+              summary: "Custom alert [http_5xx_spike] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [http_5xx_spike] 觸發"
+              description: 'rate on http_requests_total{method="POST", status=~"5.."}: value 66.67 crossed the configured threshold'
+              description_zh: 'http_requests_total{method="POST", status=~"5.."} 的 rate: 值 66.67 已越過設定閾值'
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── rate: 40/s in EACH cluster. Neither crosses 50; only their sum (80)
+  #    does → silent. (Behaviour change: a sum recipe is per cluster now.) ──
+  - interval: 15s
+    input_series:
+      - series: 'http_requests_total{tenant="shop-a", da_cluster="east", method="POST", status="500", namespace="shop", pod="api-1"}'
+        values: '0+600x48'
+      - series: 'http_requests_total{tenant="shop-a", da_cluster="west", method="POST", status="500", namespace="shop", pod="api-1"}'
+        values: '0+600x48'
+      - series: 'user_threshold{component="custom", metric="http_requests_total", recipe_id="rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m__x38e5c05de00b3e8d", tenant="shop-a", severity="warning", name="http_5xx_spike"}'
+        values: '50x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_rate__http_requests_total__s_method_POST__sre_status_5____gt__w5m__for1m__x38e5c05de00b3e8d
+        exp_alerts: []
+
+  # ── ratio: west's errors spike (1000/10000 = 0.10 > 0.05) while east carries
+  #    a hundred times the traffic with no errors. The tenant-wide ratio is
+  #    1000/1010000 ≈ 0.001 and stays under; west's own ratio fires. A ratio
+  #    whose denominator alone lost the cluster would divide nothing (the two
+  #    sides no longer share labels) and stay silent too. ──
+  - interval: 15s
+    input_series:
+      - series: 'http_errors_total{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '0x48'
+      - series: 'http_requests_total{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '0+1000000x48'
+      - series: 'http_errors_total{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '0+1000x48'
+      - series: 'http_requests_total{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '0+10000x48'
+      - series: 'user_threshold{component="custom", metric="http_errors_total", recipe_id="ratio__http_errors_total__gt__w5m__den_http_requests_total__for1m", tenant="shop-a", severity="critical", name="error_ratio_high"}'
+        values: '0.05x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_ratio__http_errors_total__gt__w5m__den_http_requests_total__for1m
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: critical
+              tenant: shop-a
+              da_cluster: west
+              recipe: ratio
+              name: error_ratio_high
+              version: default
+            exp_annotations:
+              summary: "CRITICAL Custom alert [error_ratio_high] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [error_ratio_high] 達臨界 觸發"
+              description: "ratio on http_errors_total: value 0.10 crossed the configured threshold"
+              description_zh: "http_errors_total 的 ratio: 值 0.10 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── p99: west's 99th percentile lands in the (2,5] bucket (4.97 > 2); east
+  #    serves a thousand times the requests, all under 1s. Merged, the tenant's
+  #    p99 is under 1s and nothing fires; west's own quantile does. ──
+  - interval: 15s
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", da_cluster="east", le="1", namespace="shop", pod="api-1"}'
+        values: '0+100000x48'
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", da_cluster="east", le="2", namespace="shop", pod="api-1"}'
+        values: '0+100000x48'
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", da_cluster="east", le="5", namespace="shop", pod="api-1"}'
+        values: '0+100000x48'
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", da_cluster="east", le="+Inf", namespace="shop", pod="api-1"}'
+        values: '0+100000x48'
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", da_cluster="west", le="1", namespace="shop", pod="api-1"}'
+        values: '0+10x48'
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", da_cluster="west", le="2", namespace="shop", pod="api-1"}'
+        values: '0+10x48'
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", da_cluster="west", le="5", namespace="shop", pod="api-1"}'
+        values: '0+100x48'
+      - series: 'http_request_duration_seconds_bucket{tenant="shop-a", da_cluster="west", le="+Inf", namespace="shop", pod="api-1"}'
+        values: '0+100x48'
+      - series: 'user_threshold{component="custom", metric="http_request_duration_seconds", recipe_id="p99_latency__http_request_duration_seconds__gt__w5m__q0_99__for1m", tenant="shop-a", severity="warning", name="api_latency_p99"}'
+        values: '2x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_p99_latency__http_request_duration_seconds__gt__w5m__q0_99__for1m
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: warning
+              tenant: shop-a
+              da_cluster: west
+              recipe: p99_latency
+              name: api_latency_p99
+              version: default
+            exp_annotations:
+              summary: "Custom alert [api_latency_p99] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [api_latency_p99] 觸發"
+              description: "p99_latency on http_request_duration_seconds: value 4.97 crossed the configured threshold"
+              description_zh: "http_request_duration_seconds 的 p99_latency: 值 4.97 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── forecast (ratio mode, per PVC): both clusters have a PVC of the SAME
+  #    name. West's is filling (avail falling, ratio ~0.18 → predicted under
+  #    0.15 within 4h); east's is large and flat (0.9). Merged by (tenant, PVC)
+  #    the pair reads (9000+…)/(10000+1000) ≈ 0.89 and never fires; per
+  #    cluster, west's volume fires. predict_linear / count_over_time read the
+  #    base record per series, so the label rides through them. ──
+  - interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{tenant="shop-a", da_cluster="west", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '800-1.2x540'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="shop-a", da_cluster="west", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '1000+0x540'
+      - series: 'kubelet_volume_stats_available_bytes{tenant="shop-a", da_cluster="east", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '9000+0x540'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="shop-a", da_cluster="east", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '10000+0x540'
+      - series: 'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim", tenant="shop-a", severity="warning", name="disk_will_fill", mode="page"}'
+        values: '0.15+0x540'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x540'
+    alert_rule_test:
+      - eval_time: 520m
+        alertname: Custom_forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: warning
+              tenant: shop-a
+              da_cluster: west
+              recipe: forecast
+              name: disk_will_fill
+              mode: page
+              version: default
+              persistentvolumeclaim: data-shop-0
+            exp_annotations:
+              summary: "Custom alert [disk_will_fill] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [disk_will_fill] 觸發"
+              description: 'forecast on kubelet_volume_stats_available_bytes: value 0.00 crossed the configured threshold'
+              description_zh: 'kubelet_volume_stats_available_bytes 的 forecast: 值 0.00 已越過設定閾值'
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── slo_burn_rate, SAME cluster burns in both windows: west sustains a 2%
+  #    error ratio, east serves the same traffic with no errors. West fires
+  #    both tiers with its own 0.02. Summed, the tenant's ratio is 1% — under
+  #    the fast threshold (0.0144) — and the critical alert would be lost. ──
+  - interval: 1m
+    input_series:
+      - series: 'checkout_requests_errors_total{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '0+20x120'
+      - series: 'checkout_requests_total{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '0+1000x120'
+      - series: 'checkout_requests_errors_total{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '0x120'
+      - series: 'checkout_requests_total{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '0+1000x120'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="critical", name="checkout_availability"}'
+        values: '0.0144x120'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="warning", name="checkout_availability"}'
+        values: '0.006x120'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: critical
+              tenant: shop-a
+              da_cluster: west
+              recipe: slo_burn_rate
+              name: checkout_availability
+              version: default
+              metric_group: slo_checkout_availability
+              slo_burn: "true"
+            exp_annotations:
+              summary: "CRITICAL Custom alert [checkout_availability] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [checkout_availability] 達臨界 觸發"
+              description: "slo_burn_rate on checkout_requests_errors_total: value 0.02 crossed the configured threshold"
+              description_zh: "checkout_requests_errors_total 的 slo_burn_rate: 值 0.02 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: warning
+              tenant: shop-a
+              da_cluster: west
+              recipe: slo_burn_rate
+              name: checkout_availability
+              version: default
+              metric_group: slo_checkout_availability
+              slo_burn: "true"
+            exp_annotations:
+              summary: "Custom alert [checkout_availability] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [checkout_availability] 觸發"
+              description: "slo_burn_rate on checkout_requests_errors_total: value 0.02 crossed the configured threshold"
+              description_zh: "checkout_requests_errors_total 的 slo_burn_rate: 值 0.02 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── slo_burn_rate, the windows burn in DIFFERENT clusters → silent.
+  #    west: 5% errors for the first 35 minutes, then none. At 70m its 1h
+  #          ratio is ~0.021 (> 0.0144) but its 5m ratio is 0.
+  #    east: no errors until minute 65, then 3%. At 70m its 5m ratio is ~0.03
+  #          (> 0.0144) with ~150 bad events (> 10), but its 1h ratio is
+  #          ~0.0025.
+  #    Neither cluster passes both gates of the fast tier. Paired on(tenant)
+  #    alone, west's long window + east's short window + east's bad events
+  #    would fire a critical alert for a burn no cluster has. The slow tier is
+  #    silent either way (west's 30m ratio is 0; east's 6h ratio is ~0.002). ──
+  - interval: 1m
+    input_series:
+      - series: 'checkout_requests_errors_total{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '0+50x35 1750x84'
+      - series: 'checkout_requests_total{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '0+1000x120'
+      - series: 'checkout_requests_errors_total{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '0x65 30+30x9 300x44'
+      - series: 'checkout_requests_total{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '0+1000x120'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="critical", name="checkout_availability"}'
+        values: '0.0144x120'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="warning", name="checkout_availability"}'
+        values: '0.006x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
+        exp_alerts: []
+    promql_expr_test:
+      # the premise, so the silence above is the pairing's doing and not a
+      # gate that was never open: west's long gate and east's short gate hold
+      - expr: 'count by (da_cluster) (custom:metric:slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m:1h > 0.0144)'
+        eval_time: 70m
+        exp_samples:
+          - labels: '{da_cluster="west"}'
+            value: 1
+      - expr: 'count by (da_cluster) (custom:metric:slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m:5m > 0.0144)'
+        eval_time: 70m
+        exp_samples:
+          - labels: '{da_cluster="east"}'
+            value: 1
+      - expr: 'count by (da_cluster) (custom:bad:slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m:5m > 10)'
+        eval_time: 70m
+        exp_samples:
+          - labels: '{da_cluster="east"}'
+            value: 1
+
+  # ── `==` any-match: east reads 100, west reads the configured code 1236 →
+  #    west only, value 1236 ──
+  - interval: 15s
+    input_series:
+      - series: 'mysql_semisync_master_last_errno{tenant="shop-a", da_cluster="east", namespace="shop", pod="mariadb-0"}'
+        values: '100x48'
+      - series: 'mysql_semisync_master_last_errno{tenant="shop-a", da_cluster="west", namespace="shop", pod="mariadb-0"}'
+        values: '1236x48'
+      - series: 'user_threshold{component="custom", metric="mysql_semisync_master_last_errno", recipe_id="threshold__mysql_semisync_master_last_errno__eq__w5m__for1m", tenant="shop-a", severity="critical", name="semisync_errno_1236"}'
+        values: '1236x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__mysql_semisync_master_last_errno__eq__w5m__for1m
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: critical
+              tenant: shop-a
+              da_cluster: west
+              recipe: threshold
+              name: semisync_errno_1236
+              version: default
+            exp_annotations:
+              summary: "CRITICAL Custom alert [semisync_errno_1236] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [semisync_errno_1236] 達臨界 觸發"
+              description: "threshold on mysql_semisync_master_last_errno: value 1236 matched the configured code"
+              description_zh: "mysql_semisync_master_last_errno 的 threshold: 值 1236 等於設定代碼"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── `==` any-match: the code in BOTH clusters (two pods in west) → one
+  #    alert per cluster, not one per tenant and not one per pod ──
+  - interval: 15s
+    input_series:
+      - series: 'mysql_semisync_master_last_errno{tenant="shop-a", da_cluster="east", namespace="shop", pod="mariadb-0"}'
+        values: '1236x48'
+      - series: 'mysql_semisync_master_last_errno{tenant="shop-a", da_cluster="west", namespace="shop", pod="mariadb-0"}'
+        values: '1236x48'
+      - series: 'mysql_semisync_master_last_errno{tenant="shop-a", da_cluster="west", namespace="shop", pod="mariadb-1"}'
+        values: '1236x48'
+      - series: 'user_threshold{component="custom", metric="mysql_semisync_master_last_errno", recipe_id="threshold__mysql_semisync_master_last_errno__eq__w5m__for1m", tenant="shop-a", severity="critical", name="semisync_errno_1236"}'
+        values: '1236x48'
+    promql_expr_test:
+      - expr: 'count by (da_cluster) (ALERTS{alertname="Custom_threshold__mysql_semisync_master_last_errno__eq__w5m__for1m", alertstate="firing"})'
+        eval_time: 11m
+        exp_samples:
+          - labels: '{da_cluster="east"}'
+            value: 1
+          - labels: '{da_cluster="west"}'
+            value: 1
+
+  # ── absence stays TENANT-WIDE: the heartbeat is present in east only →
+  #    silent. A recipe declares no clusters to expect the metric in, so
+  #    present in at least one cluster counts as present (ADR-006 contract 6);
+  #    west's missing heartbeat is NOT reported. ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{component="custom", metric="app_heartbeat_total", recipe_id="absence__app_heartbeat_total__absent__w10m__for1m", tenant="shop-a", severity="critical", name="heartbeat_gone"}'
+        values: '0x60'
+      - series: 'app_heartbeat_total{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-7c9-x"}'
+        values: '0+1x60'
+      # west is known to the platform (another metric of the tenant reports
+      # from it) but has no heartbeat series
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '5x60'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: Custom_absence__app_heartbeat_total__absent__w10m__for1m
+        exp_alerts: []
+
+  # ── absence: missing in EVERY cluster → fires once, for the tenant (the
+  #    alert carries no cluster: it is not a statement about one) ──
+  - interval: 15s
+    input_series:
+      - series: 'user_threshold{component="custom", metric="app_heartbeat_total", recipe_id="absence__app_heartbeat_total__absent__w10m__for1m", tenant="shop-a", severity="critical", name="heartbeat_gone"}'
+        values: '0x60'
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '5x60'
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '5x60'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: Custom_absence__app_heartbeat_total__absent__w10m__for1m
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: critical
+              tenant: shop-a
+              recipe: absence
+              name: heartbeat_gone
+              version: default
+            exp_annotations:
+              summary: "CRITICAL Custom alert [heartbeat_gone] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [heartbeat_gone] 達臨界 觸發"
+              description: "absence on app_heartbeat_total: value 0.00 crossed the configured threshold"
+              description_zh: "app_heartbeat_total 的 absence: 值 0.00 已越過設定閾值"
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
+  # ── the tenant's thresholds, maintenance state and metadata ALSO carry
+  #    `da_cluster` (ADR-006 contract 3: they do when they are federated from
+  #    each cluster, same content). They are still one per tenant: the
+  #    threshold record collapses them, so nothing matches many-to-many and
+  #    each cluster is judged once. east 500 (below), west 1500 → west only. ──
+  - interval: 15s
+    input_series:
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '500x48'
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '1500x48'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m__for1m", tenant="shop-a", severity="warning", name="queue_depth_high", da_cluster="east"}'
+        values: '1000x48'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m__for1m", tenant="shop-a", severity="warning", name="queue_depth_high", da_cluster="west"}'
+        values: '1000x48'
+      - series: 'user_state_filter{tenant="shop-a", filter="maintenance", da_cluster="east"}'
+        values: '0x48'
+      - series: 'user_state_filter{tenant="shop-a", filter="maintenance", da_cluster="west"}'
+        values: '0x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold", da_cluster="east"}'
+        values: '1x48'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold", da_cluster="west"}'
+        values: '1x48'
+    promql_expr_test:
+      - expr: 'sum by (da_cluster) (ALERTS{alertname="Custom_threshold__order_queue_depth__gt__w5m__for1m", alertstate="firing"})'
+        eval_time: 11m
+        exp_samples:
+          - labels: '{da_cluster="west"}'
+            value: 1
+
+  # ── one cluster's series carry `da_cluster`, the other's do not (a central
+  #    Prometheus that also scrapes its own cluster directly). The unlabelled
+  #    series are a group of their own: labelled east 500 (below), unlabelled
+  #    1500 → one alert, with no `da_cluster`. ──
+  - interval: 15s
+    input_series:
+      - series: 'order_queue_depth{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '500x48'
+      - series: 'order_queue_depth{tenant="shop-a", namespace="shop", pod="api-1"}'
+        values: '1500x48'
+      - series: 'user_threshold{component="custom", metric="order_queue_depth", recipe_id="threshold__order_queue_depth__gt__w5m__for1m", tenant="shop-a", severity="warning", name="queue_depth_high"}'
+        values: '1000x48'
+    promql_expr_test:
+      - expr: 'sum by (da_cluster) (ALERTS{alertname="Custom_threshold__order_queue_depth__gt__w5m__for1m", alertstate="firing"})'
+        eval_time: 11m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: 'custom:metric:threshold__order_queue_depth__gt__w5m__for1m'
+        eval_time: 11m
+        exp_samples:
+          - labels: 'custom:metric:threshold__order_queue_depth__gt__w5m__for1m{tenant="shop-a", version="default", da_cluster="east"}'
+            value: 500
+          - labels: 'custom:metric:threshold__order_queue_depth__gt__w5m__for1m{tenant="shop-a", version="default"}'
+            value: 1500
+
+  # ── slo_burn_rate, the bad-event floor is met in a DIFFERENT cluster → silent.
+  #    east: 1 error in every 2 requests, but only 1 error a minute — both
+  #          ratio gates of both tiers hold, the floor does not (5 bad events
+  #          in 5m against 10; 30 in 30m against 60).
+  #    west: 60 errors a minute out of 60000 requests — the floor holds, no
+  #          ratio gate does (0.001).
+  #    Paired on(tenant) alone, east's ratios + west's bad events would fire
+  #    for a burn no cluster has. ──
+  - interval: 1m
+    input_series:
+      - series: 'checkout_requests_errors_total{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '0+1x500'
+      - series: 'checkout_requests_total{tenant="shop-a", da_cluster="east", namespace="shop", pod="api-1"}'
+        values: '0+2x500'
+      - series: 'checkout_requests_errors_total{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '0+60x500'
+      - series: 'checkout_requests_total{tenant="shop-a", da_cluster="west", namespace="shop", pod="api-1"}'
+        values: '0+60000x500'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="critical", name="checkout_availability"}'
+        values: '0.0144x500'
+      - series: 'user_threshold{component="custom", metric="checkout_requests_errors_total", recipe_id="slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m", tenant="shop-a", severity="warning", name="checkout_availability"}'
+        values: '0.006x500'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
+        exp_alerts: []
+    promql_expr_test:
+      # the premise: east passes the ratio gates, west passes the floor
+      - expr: 'count by (da_cluster) (custom:metric:slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m:5m > 0.0144)'
+        eval_time: 7h
+        exp_samples:
+          - labels: '{da_cluster="east"}'
+            value: 1
+      - expr: 'count by (da_cluster) (custom:metric:slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m:1h > 0.0144)'
+        eval_time: 7h
+        exp_samples:
+          - labels: '{da_cluster="east"}'
+            value: 1
+      - expr: 'count by (da_cluster) (custom:bad:slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m:5m > 10)'
+        eval_time: 7h
+        exp_samples:
+          - labels: '{da_cluster="west"}'
+            value: 1

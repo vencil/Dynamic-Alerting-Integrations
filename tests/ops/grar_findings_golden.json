@@ -321,22 +321,22 @@
  },
  "subtree_blocking/output-alertmanager": {
   "rc": 2,
-  "stderr": "ERROR: 2 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_defaults.receiver is null — below the conf.d root that takes the receiver away from every tenant under team/ that does not set its own, and their alerts fall silently to the catch-all (ADR-017 Decision 9); set a value or remove the key\n  routing profile 'p' is defined in both other/_routing_profiles.yaml and team/_routing_profiles.yaml — a profile name must be unique across the whole conf.d tree (ADR-007 amendment 2026-09-28); rename or remove one of them\n",
+  "stderr": "ERROR: 2 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_defaults.receiver is null — below the conf.d root that takes the receiver away from every tenant under team/ that does not set its own, and their alerts fall silently to the catch-all (ADR-017 Decision 9); set a value or remove the key\n  routing profile 'p' is defined in both other/_routing_profiles.yaml and team/_routing_profiles.yaml — a profile name must be unique across the whole conf.d tree (ADR-007 §Scope in a hierarchical conf.d); rename or remove one of them\n",
   "stdout": "Config files: 6 read, 0 skipped\n"
  },
  "subtree_blocking/strict": {
   "rc": 2,
-  "stderr": "ERROR: 2 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_defaults.receiver is null — below the conf.d root that takes the receiver away from every tenant under team/ that does not set its own, and their alerts fall silently to the catch-all (ADR-017 Decision 9); set a value or remove the key\n  routing profile 'p' is defined in both other/_routing_profiles.yaml and team/_routing_profiles.yaml — a profile name must be unique across the whole conf.d tree (ADR-007 amendment 2026-09-28); rename or remove one of them\n",
+  "stderr": "ERROR: 2 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_defaults.receiver is null — below the conf.d root that takes the receiver away from every tenant under team/ that does not set its own, and their alerts fall silently to the catch-all (ADR-017 Decision 9); set a value or remove the key\n  routing profile 'p' is defined in both other/_routing_profiles.yaml and team/_routing_profiles.yaml — a profile name must be unique across the whole conf.d tree (ADR-007 §Scope in a hierarchical conf.d); rename or remove one of them\n",
   "stdout": "Config files: 6 read, 0 skipped\n"
  },
  "subtree_blocking/validate": {
   "rc": 2,
-  "stderr": "ERROR: 2 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_defaults.receiver is null — below the conf.d root that takes the receiver away from every tenant under team/ that does not set its own, and their alerts fall silently to the catch-all (ADR-017 Decision 9); set a value or remove the key\n  routing profile 'p' is defined in both other/_routing_profiles.yaml and team/_routing_profiles.yaml — a profile name must be unique across the whole conf.d tree (ADR-007 amendment 2026-09-28); rename or remove one of them\n",
+  "stderr": "ERROR: 2 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_defaults.receiver is null — below the conf.d root that takes the receiver away from every tenant under team/ that does not set its own, and their alerts fall silently to the catch-all (ADR-017 Decision 9); set a value or remove the key\n  routing profile 'p' is defined in both other/_routing_profiles.yaml and team/_routing_profiles.yaml — a profile name must be unique across the whole conf.d tree (ADR-007 §Scope in a hierarchical conf.d); rename or remove one of them\n",
   "stdout": "Config files: 6 read, 0 skipped\n"
  },
  "subtree_blocking/validate_strict": {
   "rc": 2,
-  "stderr": "ERROR: 2 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_defaults.receiver is null — below the conf.d root that takes the receiver away from every tenant under team/ that does not set its own, and their alerts fall silently to the catch-all (ADR-017 Decision 9); set a value or remove the key\n  routing profile 'p' is defined in both other/_routing_profiles.yaml and team/_routing_profiles.yaml — a profile name must be unique across the whole conf.d tree (ADR-007 amendment 2026-09-28); rename or remove one of them\n",
+  "stderr": "ERROR: 2 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_defaults.receiver is null — below the conf.d root that takes the receiver away from every tenant under team/ that does not set its own, and their alerts fall silently to the catch-all (ADR-017 Decision 9); set a value or remove the key\n  routing profile 'p' is defined in both other/_routing_profiles.yaml and team/_routing_profiles.yaml — a profile name must be unique across the whole conf.d tree (ADR-007 §Scope in a hierarchical conf.d); rename or remove one of them\n",
   "stdout": "Config files: 6 read, 0 skipped\n"
  },
  "subtree_refused/output-alertmanager": {

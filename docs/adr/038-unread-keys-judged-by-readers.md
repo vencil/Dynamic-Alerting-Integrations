@@ -20,67 +20,22 @@ updated_at: 2026-11-22
 
 ✅ **Accepted**（2026-10-16 起草並由 owner 核可）。
 
-2026-10-16 修訂（實作登錄表時依實測修正）：讀取端多一類 `policy_engine`；層多一層子目錄 `_defaults.yaml`；探針改為雙向，涵蓋所有比對得到輸出的讀取端（決定 2、3）。決定 8 的成本說明更新。
+修訂：2026-10-16 至 2026-11-22 間依實作逐次修訂，內容都已併入括號所列的決定；被後來的修訂取代的做法不再列出。
 
-2026-10-17 修訂：`_` 開頭的鍵都不再產生閾值列，登錄表沒有的 `_` 鍵 exporter 完全不讀，與 JSON schema 一致（決定 2）；判決因此不再有 `platform_violation`，這類鍵判為 `unread`（決定 4、6）。
-
-2026-11-05 修訂：閾值鍵的 `disable` 連帶關掉同一族的 `_critical` 與維度鍵，不分同族鍵來自哪一層；被連帶關掉的鍵判為有讀。「只關到一部分」的警告因此不再存在，一併移除；租戶自己檔裡的同族鍵被連帶關掉時報 `disable_cascade` 警告；只在 `dimensions:` 出現的 base 也算一族（決定 8）。
-
-2026-10-17 修訂：自訂告警編譯器改照 exporter 的讀法編譯，兩者讀 `_custom_alerts` 的層相同（決定 2）。
-
-2026-10-21 修訂：產生器那半以登錄表的宣告為準，由雙向探針保證與程式一致，不在每次判定時另外量產生器的輸出（決定 1、5）；Go 的寫入檢查只留值與結構的檢查，鍵名交給共用判決（決定 2）；profile 裡的 `_` 鍵依登錄表的 profile 層直接判、不經租戶（決定 4）；產生器容器接上共用判決前，served-values 先能只算指定的租戶，記憶體與時間預算照 ADR-036 §3（決定 5、11）。
-
-2026-10-22 修訂：登錄表多記每個鍵的值的形狀、由 exporter 的哪個判斷式判值、批次操作可否移除這個鍵（決定 2）；exporter 讀的鍵，值在寫入關卡由 exporter 自己的解析程式判（決定 1）；新增決定 12，規定磁碟上既有的錯值怎麼處理。
-
-2026-10-23 修訂：只算一筆寫入的租戶的模式由 served-values 擴及 effective，判決也只判那些租戶（決定 5）。
-
-2026-10-24 修訂：產生器容器裡的判決有自己的那一份期限，判不完回「判決未完成」與原因，並記錄量到的成本（決定 5）。
-
-2026-10-28 修訂：tenant-api 把判決附在寫入回應的 `warnings`，並訂定哪些 finding 給誰看（決定 5）。
-
-2026-10-28 修訂：產生器 `--validate` 也報出共用判決；產生器容器執行產生器時不讓它再判一次（決定 5）。
-
-2026-10-30 修訂：判決併入產生器容器的同一次判定，不另有期限、不讓位，取代 2026-10-24 的「判決有自己的那一份期限」；tenant-api 改成判到就擋之後的規則，取代 2026-10-28 的「判決只放進 `warnings`」：判決未完成時寫入不收，不設降級路徑。寫入檢查只對被寫的租戶做反事實重算（決定 2、5、8、11）。
-
-2026-10-31 修訂：讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判，取代「GET 的鍵名回報改用共用判決」；exporter 載入時只記它自己讀不到哪些鍵、不帶嚴重度。Go、Python、portal 的鍵名判斷刪除，`version` 標籤與改名提示經 da-guard 交給 CI 照印；維度鍵要它的每個 label 都在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告過才送出（決定 11）。
-
-2026-11-01 修訂：維度鍵改以 `dimensions:` 宣告的 label 判定是否送出，取代「base 已宣告即送出」；出貨清單由門檻登錄表生成（決定 11）。
-
-2026-11-03 修訂：沒有讀取端讀的鍵一律 error，不分寫在租戶檔、profile、子目錄 `_defaults.yaml` 或根平台檔的 `tenants:`，例外只留只因 `disable_noop` 而未讀（warning）與 `_state_<filter>` 指向未宣告的 filter（notice）；profile 的每個鍵（含閾值鍵）逐 profile 直接判；等級與誰被擋分開，寫入閘門擋不擋只看 finding 所在的檔是不是這次寫入的檔（決定 4、5、6）。
-
-2026-11-04 修訂：判決改由 da-guard 計算（`da-guard key-verdict`），取代「放在 Python 的共用函式」；需要判決的工具都讀它的輸出、不自己判（決定 5）。
-
-2026-11-04 修訂：各閘門判到就擋，決定 4 的等級生效，擋不擋由判決的 `blocks` 欄位決定；整棵樹的 CI 也擋判不了的閾值鍵；寫入閘門比對新舊的單位跟著 finding 的單位走；profile 閾值鍵逐 profile 直接判延到 #3395（決定 4、6、7）。
-
-2026-11-04 修訂：沒有租戶綁定的 profile 上的閾值鍵不判，報 `profile_not_judged` notice，取代「profile 的每個鍵都逐 profile 直接判」；tenant-api 的預覽走寫入同一套判定；tenant-api 與產生器容器擋不擋讀判決的 `blocks`（決定 4、5、6）。
-
-2026-11-05 修訂：`dimensions:` 的 base 不能是 `<key>_critical`，這種宣告不宣告任何東西，`<key>_critical{…}` 一律沒有列（決定 11）。
-
-2026-11-07 修訂：讀了但值讀不懂的保留鍵進共用判決（`value_unread`），在寫它的檔與層判，不在合併後的值上判：租戶檔 error，profile 與根平台檔 `tenants:` notice；`_metadata` 的子鍵與 `_severity_dedup` 也各有讀取端的值檢查。tenant-api 不因這類 finding 另外拒收，沿用決定 12 的寫入檢查（決定 10、12）。
-
-2026-11-07 修訂：送出了但沒有告警比較的鍵由 validate-config 的 `no_alert` 列以 `metric_observed_map.yaml` 判、只報不擋；範例樹的 3 個 `_critical` 鍵是規則包缺 critical 層，不是索引沒處理後綴（決定 10）。
-
-2026-11-12 修訂：沒經過 CI 就進了 exporter 所讀 ConfigMap 的樹，由 threshold-exporter chart 可選的 CronJob 跑 `validate-config` 判，失敗時告警（後果與已知限制）。
-
-2026-11-13 修訂：閾值 registry 的 `retired_keys:` 登記的退役閾值鍵，不論寫在哪一層、有沒有讀取端讀，一律判 `unread`、原因 `retired`、等級 error，finding 帶點名替代鍵的提示；tenant-api 的 batch `unset` 可以刪它（決定 4）。
-
-2026-11-14 修訂：保留鍵寫成排程（時窗或 `expires:`）進共用判決（`schedule_unread`），在寫它的檔與層判，等級同 `value_unread`（決定 10）。
-
-2026-11-14 修訂：判決對每個租戶判全天：任一時段有讀取端讀就算被讀，整天都沒人讀才是 `unread`，只有 `expires:` 是否已過依執行的時間點判；/metrics 收集不了的時段以送進 registry 之前已產生的列判。判決不再判閾值的值（讀不懂、非有限數的值交給主閘門）；判決文件拿掉只在那一刻成立的 `served`，格式升為 `da-guard.key-verdict/v3` 與 `da-tools.explain-keys/v2`（決定 1、5、8、9、10）。
-
-2026-11-14 修訂：`key_checks` 改成每項檢查一筆結構化記錄（種類、作者寫的鍵與它的指標名、改名時替代的指標名、每種一句不帶作者文字的說明），產生器與 validate-config 依這些欄位以固定句型印出，不再原樣印 Go 寫好、引用整個鍵與 label 值的句子；判決文件升為 `da-guard.key-verdict/v4`、served-values 文件升為 `da-guard.served-values/v2`（決定 11）。
-
-2026-11-15 修訂：子目錄 `_defaults.yaml` 的 defaults 寫了 exporter 不套用的保留鍵，判決報 `unread`、原因 `subtree_default_reserved_key`，與 da-guard 同名 finding 讀同一份集合（決定 10）。
-
-2026-11-15 修訂：平台預設啟用的閾值由讀取端內建（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11）。沒讀到任何根平台檔的樹不再無從判斷，租戶寫的閾值鍵照常判；租戶寫預設啟用的鍵，即使根目錄沒寫，也判為有讀；這些鍵的 `disable` 過期即失效（決定 4、7、8）。
-
-2026-11-16 修訂：`disable` 可以寫在根目錄 `defaults:`（只限內建層給值的鍵），每個租戶繼承，連帶與判定規則與子目錄的 `disable` 相同（決定 8）。
-
-2026-11-18 修訂：判決不再有 `undecidable`：判決文件拿掉 `undecidable` 與 `undecidable_blocks` 兩個欄位，各閘門也不再有「判不了的閾值鍵」這種結果；決定 7 改寫成「沒讀到根平台檔的樹」（決定 5、6、7）。
-
-2026-11-19 修訂：根 `defaults:` 裡沒有讀取端讀的 `_` 鍵（登錄表沒有的鍵，以及 defaults 合併每一層都丟掉的 `_metadata`），判在那份檔上，沒有租戶繼承它時也判；`_metadata` 的原因是 `merge_dropped`（決定 4）。
-
-2026-11-22 修訂：值讀不懂的保留鍵在平台檔 `tenants:` 與 profile 原本一律是 notice；兩種情形改為三層都是 error——exporter 不讀的 `_expected_exporters`，以及還寫著已移除的 `_metadata.db_type`（決定 10）。
+- 2026-10-16：讀取端多一類 `policy_engine`，層多一層子目錄 `_defaults.yaml`，探針雙向（決定 2、3、8）。
+- 2026-10-17：`_` 開頭的鍵不產生閾值列，登錄表沒有的 `_` 鍵判為 `unread`；自訂告警編譯器照 exporter 的讀法讀 `_custom_alerts`（決定 2、4、6）。
+- 2026-10-21、22：產生器那半以登錄表的宣告為準；登錄表記每個鍵的值的形狀與判值的判斷式；新增決定 12（決定 1、2、5、12）。
+- 2026-10-23 至 31：判決併入產生器容器的同一次判定，只算被寫的租戶；判決未完成時寫入不收；讀取租戶設定（GET）不即時判；各處手寫的鍵名判斷刪除（決定 2、5、11）。
+- 2026-11-01、05：維度鍵以 `dimensions:` 宣告的 label 判定是否送出；`<key>_critical` 不能當 `dimensions:` 的 base（決定 11）。
+- 2026-11-03、04：沒有讀取端讀的鍵一律 error；判決由 da-guard 計算（`da-guard key-verdict`），各閘門擋不擋看判決的 `blocks`；沒有租戶綁定的 profile 上的閾值鍵報 `profile_not_judged`（決定 4、5、6）。
+- 2026-11-05：`disable` 連帶關掉同一族的鍵，租戶自己檔裡的同族鍵被連帶關掉時報 `disable_cascade`（決定 8）。
+- 2026-11-07：讀了但值讀不懂的保留鍵判 `value_unread`；送出了但沒有告警比較的鍵由 validate-config 的 `no_alert` 只報不擋（決定 10、12）。
+- 2026-11-12：沒經過 CI 就進了 exporter 所讀 ConfigMap 的樹，由 chart 可選的 CronJob 跑 `validate-config`（後果與已知限制）。
+- 2026-11-13：`retired_keys:` 登記的退役閾值鍵判 `unread`、原因 `retired`（決定 4）。
+- 2026-11-14：寫成排程的保留鍵判 `schedule_unread`；判決對每個租戶判全天；判決不判閾值的值；`key_checks` 改為結構化記錄（決定 1、5、8、9、10、11）。
+- 2026-11-15、16：子目錄 defaults 寫了 exporter 不套用的保留鍵報 `subtree_default_reserved_key`；平台預設啟用的閾值由讀取端內建；根 `defaults:` 可以寫 `disable`（決定 4、7、8、10）。
+- 2026-11-18、19：決定 7 改為「沒讀到根平台檔的樹」；根 `defaults:` 裡沒有讀取端讀的 `_` 鍵判在那份檔上，`_metadata` 的原因是 `merge_dropped`（決定 4、5、6、7）。
+- 2026-11-22：exporter 不讀的 `_expected_exporters`，以及還寫著已移除的 `_metadata.db_type`，三層都是 error（決定 10）。
 
 ## 摘要
 
@@ -451,18 +406,11 @@ _defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode (valid:
        no_alert `mongodb_connections_current_critical` — served, but no shipped alert compares it — file(s) examples/mongo-prod.yaml — tenant(s) mongo-prod
 ```
 
-### 11. 推進順序
+### 11. 各讀取端的行為
 
-每一項都可以單獨發布：
+共用判決上線後，各讀取端各自的行為如下：
 
-1. 登錄表、產生出來的常數與 schema、黑箱探針。行為不變。
-2. da-guard 輸出 `read_by` 與原因、反事實 `disable_noop`、explain 與 `--assert`；共用函式接上 validate-config，只報不擋。
-3. 產生器 `--validate` 與產生器容器接上共用函式，da-guard 的 exit 4 擴大範圍。需要等 [ADR-036](./036-single-parser-effective-config.md) §7 的步驟 2（da-guard 加上「未判定」）先完成；接上容器前，served-values 先能只算指定的租戶並量過記憶體（決定 5）。
-4. 決定 10 的各項，以及 `_state_` 的平台側 notice。
-
-閘門改成「判到就擋」不在本 ADR，依 [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016) 推進。各處手寫的鍵名判斷，與同一入口的閘門改成擋下同一步或之後才刪；判決未完成時寫入不收（決定 5），所以除了決定 2 所列兩處刻意的放寬，任何一個中間版本都不比之前寬鬆。tenant-api 這條入口依序是：產生器容器先改成在同一次判定的期限內判、不讓位、只對被寫的租戶做反事實重算、error 不截斷，這時仍只報不擋；tenant-api 再在同一版改成依判決擋下，並刪掉 Go 的鍵名段與 handler 對 `_` 鍵的預檢。同一版內，其餘各處的鍵名判斷也拿掉：
-
-- 讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判。即時判要佔產生器容器的判定佇列，而讀權限的使用者也能觸發；要看用 `da-tools explain-keys` 或 CI 的 validate-config，寫入時則由判決擋下。這和 Kubernetes 的 warning 只出現在寫入回應裡同型。git 管理的租戶不經 API 寫入，它的這類問題只有 CI 會報。
+- 讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判。即時判要佔產生器容器的判定佇列，而讀權限的使用者也能觸發；要看用 `da-tools explain-keys` 或 CI 的 validate-config，寫入時則由判決擋下。這和 Kubernetes 的 warning 只出現在寫入回應裡同型。git 管理的租戶不經 API 寫入，它的這類問題由 CI 報；threshold-exporter chart 可選的設定驗證 CronJob 啟用、且 image 帶有共用判決時，也會報。
 - exporter 載入時，改記它自己讀不到的鍵（沒有任何一列讀的鍵、對這種鍵寫的 `disable`、登錄表沒有讀取端的 `_` 鍵），不帶嚴重度：這是讀取端在原地的事實，嚴重度由判決決定（決定 4）。沒有跑 CI 的部署仍有這個訊號。exporter 另外兩則它自己讀取時的訊息照舊：profile 裡的路由層鍵不套用，以及 `_critical` 找不到 base 的預設值。
 - 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判，經 da-guard served-values 每個租戶的 `key_checks` 交給 validate-config 與產生器 `--validate`。`key_checks` 每項檢查一筆記錄：檢查的種類（封閉集合）、作者寫的整個鍵、它的指標名、改名時替代的指標名，以及每個種類一句固定的說明；只有鍵與指標名帶作者寫的字。讀取端以固定句型組出那一行，鍵與指標名照 Python 唯一的鍵顯示規則出去：名稱形的照印，其餘（帶 label 的鍵一定是）印成 `<key:xxxxxx>` 摘要替身，所以鍵與 label 值的原文不會進產生器的輸出。exporter 的載入 log 與 tenant-api 仍用同一筆記錄產生的完整句子。帶 `key_checks` 的兩份文件以 `schema` 欄位標示形狀：讀取端遇到較早的版本，就說 da-guard 比工具舊、要升級或重建；遇到不認得的版本（可能比工具新），只說 schema 不合，不說較舊。版本只看這個欄位，不從個別欄位的形狀推斷，所以舊文件的句子形狀出現在新版本的文件裡，算壞掉的輸出。例：租戶 `ta` 寫 `container_cpu{version="V2!"}: "5"`，產生器 `--validate` 印出 ``WARN: tenant=ta: key check version_label_charset: metric container_cpu, key <key:8c0e11> — the `version` label violates ^[a-z0-9][a-z0-9._-]*$ (ADR-024 OQ-6; pilot-calibratable)``；改名類的那一行是 NOTICE，另帶 `replacement metric <新指標名>`。portal 的鍵名判斷同時刪除。原本比對兩份手寫判斷的成員矩陣保留，改成驗證共用判決。
 - 維度鍵（`<base>{…}`）只有在它的每個 label 都在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告過時，exporter 才送出；不論它寫在租戶檔、profile、子目錄還是根 `defaults:`。比對的是那一列送出的 label 名稱：regex 選擇器送出 `<label>_re`（`version=~"v3.*"` 送出 `version_re`），要宣告的是 `version_re`，宣告 `version` 不涵蓋它。base 不能是 `<key>_critical`（新舊拼法皆然）：`<key>_critical` 是 `<key>` 的 critical 層的名字，不是 base，所以這種宣告不宣告任何東西（根 `defaults:` 只給 `<key>_critical`、沒給 `<key>` 時它會被當成自己的 base 送出，那本身就是 da-guard 報 `root_defaults_critical_key` 的設定錯誤；它的維度版同樣不送，刻意比那個 warning 嚴），`<key>_critical{…}` 沒有列，da-guard 對根檔報 `root_dimensions_critical_base`（error）；每個維度的 critical 門檻寫成 `<key>{label="v"}: "N:critical"`。其他維度鍵沒有列，判決讀成 `unread`（`no_row`）；兩個例外同樣沒有列：值寫 `disable` 的依決定 8 報 `disable_noop`，Policy-as-Code 規則指名的讀成 `read`（`policy_engine` 讀它）。理由是出貨的規則包以 `max by(…)` 合成門檻，只保留它分組的 label（多數只有 `tenant`）；不在分組裡的 label 無法成為獨立維度，值會併進同一組的門檻，寫了也不會依維度生效。出貨的 `dimensions:` 來自門檻登錄表（`rule-packs/threshold-registry.yaml`）每個 key 的 `dimensions`：`--regen` 由它重生出貨的宣告與 `scaffold_tenant.RULE_PACKS`，`da-tools init` 與 `scaffold_tenant` 讀的是後者；測試兩個方向對照登錄表與規則包的分組，目前是 `container_cpu`、`container_memory` 的 `version`。自訂規則若依某個 label 讀，平台在 `dimensions:` 加上該 base 與 label。例：

@@ -188,6 +188,9 @@ modules:
       _StdoutSink.write: "delegates to sys.stdout.write (#3107 v2); pinned by the `-` case in tests/shared/test_lib_io_operator_output.py"
       _StdoutSink.flush: "delegates to sys.stdout.flush (#3107 v2); no value computation"
       _StdoutSink.close: "marks the sink closed without flushing sys.stdout (#4055); no value computation, pinned by tests/shared/test_lib_io_operator_output.py::test_closing_the_stdout_sink_never_flushes_stdout"
+      _OperatorBuffer.write: "delegates to BufferedWriter.write and keeps the OSError it raised (#4230); I/O, no value computation, pinned by the /dev/full cases in tests/shared/test_lib_io_operator_output.py"
+      _OperatorBuffer.flush: "delegates to BufferedWriter.flush and keeps the OSError it raised (#4230); I/O, no value computation, same file"
+      _operator_text: "builds the text handle io.open would over an _OperatorBuffer (#4230); I/O construction, no value computation, pinned by test_the_file_handle_is_what_io_open_would_give in the same file"
       _kernel_open_operator_output: "open(2) + R2/V15 fchmod (#3107 v2); side-effecting I/O, modes pinned by example in tests/shared/test_lib_io_operator_output.py"
       open_operator_output: "context manager over the kernel open (#3107 v2 R0–R5); side-effecting I/O, pinned in tests/shared/test_lib_io_operator_output.py and the write audit of tests/shared/test_output_path_write_failure.py"
       write_operator_output: "thin wrapper over open_operator_output (#3107 v2)"
@@ -264,6 +267,21 @@ modules:
       _malformed: "Message templating for QueryError"
       QueryError.error_line: "Message templating (stderr / envelope line); exact text pinned in tests/shared/test_query_error.py"
 
+  scripts/tools/_lib_cluster_identity.py:
+    covered: []
+    excluded:
+      external_labels: "#4097 line reader of global.external_labels in Prometheus' own rendering of its config; held to texts Prometheus' config.Load(...).String() printed (UTF-8 and quoted keys, block-scalar values, look-alikes in a scrape job, CRLF, not-a-rendering) by tests/shared/test_lib_cluster_identity.py"
+      _indent: "#4097 count of leading spaces; exercised by every external_labels case in tests/shared/test_lib_cluster_identity.py"
+      _key_and_rest: "#4097 one mapping line split into key and value text (plain, spaced, single- and double-quoted keys); pinned on Prometheus-printed lines by tests/shared/test_lib_cluster_identity.py::TestKeys"
+      _scalar: "#4097 unquote of a one-line yaml value; pinned by tests/shared/test_lib_cluster_identity.py::TestKeys::test_quoted_values_lose_their_quotes"
+      config_external_labels: "#4097 two-key lookup in a parsed config (no global → None, else the mapping or {}); table in tests/shared/test_lib_cluster_identity.py::test_config_external_labels, and through da-read in tests/ops/test_onboard_platform.py::TestClusterIdentity"
+      cluster_identity: "#4097 one-key lookup (a non-blank string or None) shared by federation_check, byo_check, onboard_platform and check_scrape_reachability; table in tests/shared/test_lib_cluster_identity.py::test_cluster_identity"
+      rows_by_cluster: "#1200 grouping of a query answer's rows by their da_cluster label (absent / empty / not a string = the group \"\"), sorted, nothing merged; table in tests/shared/test_lib_cluster_identity.py::test_rows_by_cluster, and through both tools in tests/ops/test_backtest_per_cluster.py and tests/ops/test_threshold_recommend_per_cluster.py"
+      repeated_rows: "#1200 per-cluster message for the groups whose rows overlap in time, naming the labels the rows differ in ({} when none does; rows one after the other are one series); table in tests/shared/test_lib_cluster_identity.py::test_repeated_rows, exact texts through both tools in tests/ops/test_backtest_per_cluster.py and tests/ops/test_threshold_recommend_per_cluster.py (TestRowsTheLabelDoesNotTellApart)"
+      in_time_order: "#1200 sort of one cluster's rows by their first sample's time (a row with no sample first); pinned by tests/shared/test_lib_cluster_identity.py::test_in_time_order, and through both tools by test_rows_one_after_the_other_are_one_series"
+      markdown_text: "#1200 per-character escaping of a text that carries a cluster name into a Markdown report (control characters to ?, markup characters backslash-escaped); table in tests/shared/test_lib_cluster_identity.py::test_markdown_text, through both tools' reports with a hostile cluster name"
+      cluster_text: "#1200 two-branch templating of a group's name for a report; pinned by tests/shared/test_lib_cluster_identity.py::test_cluster_text"
+
   scripts/tools/_lib_godispatch.py:
     # Note: members of this module are class methods on
     # GoBinaryDispatcher, so the manifest uses dotted Class.method
@@ -333,9 +351,9 @@ modules:
   # ── Ops: routing pipeline + rule-pack split ──────────────────────
 
   scripts/tools/ops/generate_rule_pack_split.py:
-    covered:
-      - extract_metrics_from_expr
+    covered: []
     excluded:
+      metrics_read: "Reads metric names off Prometheus' parse tree via da-read (#4219), not a pure function; example-covered by tests/ops/test_generate_rule_pack_split.py::TestMetricsRead"
       get_lang: "Trivial env-var dispatcher; covered transitively by detect_cli_lang"
       t: "Bilingual string selector wrapper around get_lang"
       _safe_write: "I/O wrapper around write_operator_output_or_die (#1641, #3107)"
@@ -348,7 +366,7 @@ modules:
       _is_external_pipeline_input: "Pure string classifier for federated external inputs (liveness/injected/per-tenant-exporter); covered by explicit unit tests in tests/ops/test_generate_rule_pack_split.py"
       is_federated_exporter_metric: "TRK-353 shared per-tenant-exporter-family predicate (the one provenance SSOT, also imported by check_scrape_reachability); single startswith over _FEDERATED_EXPORTER_PREFIXES — example-covered by tests/ops/test_generate_rule_pack_split.py::TestIsExternalPipelineInput (family hit / non-family `*_up` miss) and by the platform-gauge mutation pins in tests/lint/test_check_scrape_reachability.py"
       _group_follows_suffix: "Boolean suffix-convention predicate driving the fail-loud routing WARN; covered by tests/ops/test_generate_rule_pack_split.py"
-      split_rule_pack: "Orchestrator combining extract_metrics_from_expr + extract_recording_outputs + to_prometheus_rule_crd"
+      split_rule_pack: "Orchestrator routing groups to edge / central by suffix and data-locality"
       process_rule_packs: "Top-level orchestrator over directory walk + split_rule_pack"
       main: "CLI entry point"
 
@@ -434,7 +452,7 @@ modules:
       _parse_policy_duration: "Pure duration parser (multi-unit/fractional/negative-reject); table-covered by test_grar_strict_hardening.py::TestParsePolicyDuration (23 example cases)"
       _timing_bound_violations: "#2490 the one max_repeat_interval / min_group_wait comparison both check_domain_policies modes call; table-pinned strict == lenient (only the level differs) by test_grar_policy_duration_strict_lenient_parity.py"
       _rendered_duration: "#2490 str() then _lib_validation.am_duration_seconds (pinned row by row against Go by test_am_duration_parity.py); strict-policy use pinned by test_grar_am_duration.py and test_grar_strict_hardening.py"
-      find_watchdog_suppressing_inhibits: "ADR-025 D1 inhibit-immunity validator; fully covered by test_generate_routes_orchestration.py::TestWatchdogInhibitImmunity (exact/regex/match-all/empty/severity/legacy-map cases)"
+      find_watchdog_suppressing_inhibits: "ADR-025 §1 inhibit-immunity validator; fully covered by test_generate_routes_orchestration.py::TestWatchdogInhibitImmunity (exact/regex/match-all/empty/severity/legacy-map cases)"
       assert_watchdog_inhibit_immunity: "Raises-wrapper over find_watchdog_suppressing_inhibits; covered by TestWatchdogInhibitImmunity + the assemble fail-closed test"
       find_tenant_silenceable_platform_inhibits: "Tenant-cannot-silence-platform finder (tenant-gated source × platform-matching target); example-covered by test_generate_routes_orchestration.py::TestPlatformAlertsNotTenantSilenceable (committed-base / mutation self-proof / narrowness / derived-label-set cases)"
       assert_platform_alerts_not_tenant_silenceable: "Raises-wrapper over find_tenant_silenceable_platform_inhibits; covered by TestPlatformAlertsNotTenantSilenceable (assemble fail-closed + --validate tripwire)"

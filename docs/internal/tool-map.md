@@ -98,7 +98,7 @@ lang: zh
 | `gen_agent_adapters.py` | Generate the per-vendor agent adapters from the neutral .agents/ SSOT (TRK-361). |
 | `gen_am_duration_json.py` | Generate am-duration.json from the tenant-config schema (#2711). |
 | `gen_recipe_contract.py` | Generate the recipe copies from the one contract. |
-| `gen_tenant_id_json.py` | Generate tenant-id.json from the tenant-config schema (ADR-035 D2). |
+| `gen_tenant_id_json.py` | Generate tenant-id.json from the tenant-config schema (ADR-035 §2). |
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
 | `generate_byo_rulepack_table.py` | BYO Prometheus 規則包表產生器（#1267） |
 | `generate_changelog.py` | Generate CHANGELOG draft entries from conventional commits. |
@@ -207,7 +207,7 @@ lang: zh
 | `check_orphan_docs.py` | 孤兒文件偵測 |
 | `check_orphan_lint.py` | orphan / dead-lint detector (#717; supersedes #456 residue). |
 | `check_orphan_recordings.py` | Orphan recording-rule gate — every recording rule must have a consumer somewhere in the platform (TRK-339 WS2a / #1200). |
-| `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
+| `check_path_metadata_consistency.py` | Refuse (with --ci) a conf.d/ hierarchical path that contradicts `_metadata`. |
 | `check_percent_render_pinned.py` | check_percent_render_pinned — a percent-rendered annotation must be pinned by a firing test. |
 | `check_pint.py` | Prometheus rule linting (pint engine + thin Vibe wrapper). |
 | `check_pipestatus_errexit.py` | PIPESTATUS read where errexit and pipefail are on and never relaxed (TRK-382 / #1845). |
@@ -254,6 +254,7 @@ lang: zh
 ## 共用函式庫
 
 - `scripts/tools/_lib_atomic_write.py`：Atomic write helper shared by the regen tools (Trap #60, #2082, #2128).
+- `scripts/tools/_lib_cluster_identity.py`：Which cluster a Prometheus says it is in — `global.external_labels.da_cluster`.
 - `scripts/tools/_lib_compat.py`：Cross-platform compatibility helpers for Dynamic Alerting CLI tools.
 - `scripts/tools/_lib_confd.py`：Single answer to "what is in a conf.d/ directory".
 - `scripts/tools/_lib_confedit.py`：a Python tool's change to conf.d files, made by Go (ADR-036 §2).

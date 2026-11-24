@@ -40,6 +40,7 @@ BUILD_EXEMPT = frozenset({
     "_lib_constants.py",
     "_lib_validation.py",
     "_lib_prometheus.py",
+    "_lib_cluster_identity.py",  # #4097: the one reading of a Prometheus' cluster identity; library, not CLI
     "_lib_atomic_write.py",  # #3107: library, not CLI
     "_lib_kubectl.py",  # #3207/#3210, #3539: kubectl launcher and cluster reader, library not CLI
     "_lib_engine.py",  # #3611 / #3539: engine locate/run, imported by _lib_kubectl; library not CLI

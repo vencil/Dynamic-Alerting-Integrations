@@ -8,7 +8,7 @@ lang: zh
 
 # 跨機 A/A 稽核資料集（2026-08）
 
-[ADR-032](../../../adr/032-paired-interleaved-bench-measurement.md) §證據 4 引用的每一個數字，都由這個目錄重現。**ADR 裡出現、這裡跑不出來的數字，就是沒有依據的數字。**
+[ADR-032](../../../adr/032-paired-interleaved-bench-measurement.md) §證據 3 引用的每一個數字，都由這個目錄重現。**ADR 裡出現、這裡跑不出來的數字，就是沒有依據的數字。**
 
 ## 一行重現
 
@@ -28,7 +28,7 @@ python3 docs/internal/audit-reports/bench-xmachine-2026-08/reproduce.py
 | **輸入（fixtures）** | 無外部 fixture。四支 bench 皆來自 `components/threshold-exporter/app`，各 shard **自行編譯同一份原始碼**；`shard_meta.csv` 的 `binary_sha256` 是各機實測值 |
 | **原始資料取件** | 從 collect job 的 log 還原（見下「從原始 log 重建」）；208 筆記錄逐筆 SHA-256 驗證通過 |
 | **negative validation** | `python3 .../selftest.py` —— 植入已知效應與已知**無**效應各一，驗估計量兩者都認得；外加 digest 分歧必須被拒 |
-| **逐項輸出與解讀** | ADR-032 §證據 4；本檔以下各節 |
+| **逐項輸出與解讀** | ADR-032 §證據 3；本檔以下各節 |
 
 ## 檔案
 
@@ -36,7 +36,7 @@ python3 docs/internal/audit-reports/bench-xmachine-2026-08/reproduce.py
 |---|---|
 | `shard_meta.csv` | 16 列：shard、CPU 型號、nproc、Go 版本、**binary SHA-256** |
 | `measurements.csv` | 768 列 = 16 shard × 6 輪 × 2 側 × 4 bench；`ns_per_op_median` 是該次呼叫 `count=5` 的中位數 |
-| `reproduce.py` | 重現 ADR §證據 4 的每個數字 |
+| `reproduce.py` | 重現 ADR §證據 3 的每個數字 |
 | `selftest.py` | negative validation；匯入 `reproduce.py` 的 `estimators()`，不重寫算式 |
 
 ## 這批資料為什麼能當證據

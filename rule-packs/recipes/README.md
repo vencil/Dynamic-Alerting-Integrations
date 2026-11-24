@@ -51,6 +51,7 @@ tenants:
 
 - **防注入**：`metric` 嚴格 `^[a-zA-Z_][a-zA-Z0-9_]*$`（禁冒號/括號/運算子）；label 過濾只能走 `selectors`/`selectors_re`，由編譯器組裝 + value 跳脫。保留 label（`tenant`/`version`/`severity`/…）禁設。
 - **向量化（O(M)）**：相同 shape signature `(recipe, metric, op, window/horizon, quantile, denominator/capacity, selectors, for, min_events)` 的多租戶**共用一條規則**（`on(tenant) group_left`）；規則數 = shape 數，非租戶數。`for` 入 signature（控制平面靜態屬性）；`forecast` 用 `horizon`（推導 lookback）取代 `window`；`slo_burn_rate` 無 `window`（burn 窗固定屬 recipe 語意）、`objective`/`slo_period` 走資料平面**不入 shape**（改值不 re-slug），`min_events` 入 shape（字面值寫進規則）。
+- **逐叢集判定**：租戶跨多個叢集時（序列帶叢集身分 `da_cluster`），每個 recipe 以（租戶、叢集）為單位聚合與比對，告警帶 `da_cluster`；加總（`rate`）與比值（`ratio`、`forecast` 比值模式、`slo_burn_rate`）只用該叢集自己的序列，SLO 的多窗條件要在同一個叢集成立。`absence` 例外：任一個叢集有該指標就算存在，編譯出的規則上方有 `# da_cluster: tenant-wide …` 註記。閾值與維護狀態是租戶一份。見 [ADR-006「多叢集同租戶」](../../docs/adr/006-tenant-mapping-topologies.md)。
 - **每個租戶、每個形狀、每個 severity 只能一條**：規則以 `on(tenant, version)` join 租戶的門檻列，同一租戶兩條同形狀、同 severity 的 recipe（名稱或 mode 不同也一樣）會讓這條共用規則對所有租戶評估失敗。exporter 只送清單中的第一條、丟棄其餘並計入 `da_custom_alert_parse_errors`，da-guard 以 `custom_alert_duplicate_series` 報出（[#3112](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3112)）。
 - **shape slug = `recipe_id`**：去重鍵 + recording-rule 名 + alertname + `user_threshold` 上的選擇 label。exporter 送出的序列與編譯出的規則取自同一個 Go 函式，由 [`tests/dx/fixtures/recipe_id_vectors.json`](../../tests/dx/fixtures/recipe_id_vectors.json) 釘住：改 slug 會改名所有已部署的規則與序列。
 
@@ -63,7 +64,7 @@ tenants:
 
 ### latency / freshness 型 SLI：instrumentation 先行（recipe 支援 deferred）
 
-v1 的 `slo_burn_rate` 只接 availability／error-ratio 型（兩個 counter 的比率）。latency 與 freshness 型的 **recipe 支援是 defer-with-trigger**（首個客戶需求觸發，見 [ADR-031 §Deferred](../../docs/adr/031-slo-burn-rate-recipe.md#deferred附-trigger)），但 instrumentation 可以現在就鋪——等 recipe 到位時資料已在：
+v1 的 `slo_burn_rate` 只接 availability／error-ratio 型（兩個 counter 的比率）。latency 與 freshness 型的 **recipe 支援是 defer-with-trigger**（首個客戶需求觸發，見 [ADR-031 §延後的項目](../../docs/adr/031-slo-burn-rate-recipe.md#延後的項目)），但 instrumentation 可以現在就鋪——等 recipe 到位時資料已在：
 
 - **latency 型（如「95% 請求 < 300ms」）**：宣告介面的 `selectors` 同時套用分子分母，histogram 的 `le` 會污染分母——正解不是等 recipe 吃 histogram，而是**在源頭產出 counter 對**：instrument 一個 `*_slow_requests_total`（超過門檻的請求數）counter，與既有 `*_requests_total` 配對。**這其實是今天就能用的 workaround**：把「慢」定義成「壞事件」，availability 型宣告（`metric: *_slow_requests_total` / `denominator_metric: *_requests_total`、`objective: "95"`）現在就能算 latency SLO 的 burn rate——代價是門檻（300ms）燒死在 instrumentation、改門檻要改 code。
 - **freshness 型（如「資料不超過 N 分鐘未更新」）**：本質是 timestamp 差值、非 counter 比率。鋪法三選一：K8s 內 batch job 完成時寫 completion-timestamp gauge 到 node-exporter **textfile collector**（job 寫 `.prom` 檔）；無常駐 exporter 的短命 job 用 **Pushgateway**；log-only 系統用 **Vector `log_to_metric`** transform 從完成 log 派生 gauge。**誠實邊界：completion-timestamp gauge 今天接不上任何 recipe**——「太舊」語意需要 `time() - gauge > N` 的時間差運算，recipe 宣告介面沒有它（這正是 freshness 型被 deferred 的原因；epoch timestamp 對靜態閾值恆真或恆假＝死告警）。過渡期要告警，得由平台側 raw rule 承接 `time() - gauge > N`，或改鋪「持續刷新的 age gauge」（值＝現在−完成時刻，需常駐程序計算）再配 `threshold` recipe。先鋪 timestamp gauge 的價值在於**資料先落 TSDB**——未來 freshness recipe 會直接消費同一 gauge。

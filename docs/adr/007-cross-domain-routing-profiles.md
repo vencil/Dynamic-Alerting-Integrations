@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-03-16
-updated_at: 2026-11-12
+updated_at: 2026-11-24
 ---
 # ADR-007: 跨域路由設定檔與域策略
 
@@ -17,352 +17,126 @@ updated_at: 2026-11-12
 
 ## 狀態
 
-✅ **Accepted** (v2.1.0) — 四層路由 + 域策略驗證已完成，Profile 繼承鏈為 v2.7.0+ 候選
+✅ **Accepted**（v2.1.0）。
 
-2026-10-16 修訂：domain policy（含 `require_critical_escalation`）與解析後 routing 的檢查只由路由產生器做，da-guard 與 tenant-api 不再各有一份 Go 版的檢查；相關段落改寫為現況。
+2026-09-28 修訂：profile 與 domain policy 以所在子樹為範圍，profile 名稱全樹唯一，policy 疊加判定（見「階層式 conf.d 下的範圍」）。
 
-## 背景
+2026-10-16 修訂：domain policy（含 `require_critical_escalation`）與解析後 routing 的檢查只由路由產生器做，da-guard 與 tenant-api 不再各有一份。
 
-隨著平台管理的租戶數量成長，路由配置出現大量重複。多個租戶共享相同的 on-call 團隊、通知頻道、和群組策略，但每個租戶的 `_routing` 區塊都需要獨立配置。
-
-### 問題陳述
-
-1. **配置重複**：10 個租戶歸同一團隊管理時，相同的 `receiver`, `group_by`, `group_wait` 等設定重複 10 次
-2. **變更放大**：團隊 Slack 頻道更名需修改 N 個租戶的配置
-3. **域約束缺失**：不同業務域（金融域、電商域）對路由有不同的合規要求（如金融域禁止 Slack 通知、必須 PagerDuty），但缺乏強制機制
-4. **繼承衝突**：多層配置合併 (`_routing_defaults` → tenant `_routing`) 在跨域場景下語意不清
-
-需要一個機制讓路由配置可重用、可約束、且可跨域共享。
+2026-11-24 修訂：改寫為現行行為；拿掉不存在的 CLI 旗標（`--audit`、`--resolve-profiles`、`--check-policies`）。
 
 ## 決策
 
-**採用兩層架構：Routing Profiles（重用）+ Domain Policies（約束），而非三層的 Contact Profile 模型。**
+**路由設定分兩層：routing profile 負責重用，domain policy 負責約束。** 不採用三層的 contact profile 模型。
 
-### 第一層：Routing Profiles（路由設定檔）
+1. **Routing profile**：`_routing_profiles.yaml` 定義具名的路由設定，租戶以 `_routing_profile: <名稱>` 引用。合併順序是 `_routing_defaults` → profile → 租戶自己的 `_routing`，每一步都是頂層逐鍵淺合併。
+2. **Domain policy**：`_domain_policy.yaml` 對一組租戶宣告合規約束（允許或禁止的 receiver type、`group_by`、`repeat_interval` 上限、`group_wait` 下限、critical 必須升級到 PagerDuty）。它不注入任何設定，只**驗證**合併後的結果。
+3. **`_routing_enforced` 不參與合併**：它另外產成帶 `continue: true` 的路由，排在租戶路由之前，租戶無法覆蓋。
+4. **只有路由產生器判 domain policy。** `--validate --strict` 下違規是擋下的 ERROR，不加 `--strict` 是 WARN。
 
-在 `_routing_profiles.yaml` 中定義命名路由配置，租戶透過 `_routing_profile` 引用：
+### 範例：一條違反 domain policy 的路由
 
 ```yaml
-# _routing_profiles.yaml — 位於 config-dir
+# _routing_profiles.yaml
 routing_profiles:
   team-sre-apac:
     receiver:
-      type: slack
-      api_url: {secret: {key: slack-api-url}}
-    group_by: [tenant, alertname, severity]
-    group_wait: 30s
-    group_interval: 5m
-    repeat_interval: 4h
-    routes:
-      - match: { severity: critical }
-        receiver:
-          type: pagerduty
-          service_key: {secret: {key: pagerduty-service-key}}
-        repeat_interval: 15m
-
-  team-dba-global:
-    receiver:
       type: webhook
-      url: "https://alerting.internal/dba-global"
-    group_by: [tenant, alertname, pack]
-    group_wait: 1m
-    group_interval: 10m
-    repeat_interval: 8h
+      url: "https://alerting.internal/sre-apac"
+    group_by: [tenant, alertname, severity]
+    repeat_interval: 4h
 ```
 
 ```yaml
-# db-a.yaml — 租戶配置
+# _domain_policy.yaml
+domain_policies:
+  finance:
+    description: "Finance domain"
+    tenants: [db-a]
+    constraints:
+      forbidden_receiver_types: [slack, webhook]
+      max_repeat_interval: 1h
+```
+
+```yaml
+# db-a.yaml
 tenants:
   db-a:
-    _routing_profile: team-sre-apac   # 引用 profile，無需重複
-    cpu_usage_percent: "80"
-    memory_usage_percent: "85"
+    _routing_profile: team-sre-apac
+    mysql_connection_usage_percent: "80"
 ```
 
-**合併語意**：`_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced`（NOC 覆蓋，不可變）。後者覆蓋前者，但 `_routing_enforced` 永遠最終覆蓋。
+`generate_alertmanager_routes.py --config-dir conf.d --validate --strict` 的輸出（結束碼 1；不加 `--strict` 時兩則改為 WARN、結束碼 0）：
 
-Profile 的欄位與 tenant `_routing` 相同（`routing-profiles.schema.json` 直接引用 `tenant-config.schema.json#/definitions/routing`，不另寫一份）。合併是淺合併：tenant `_routing` 寫了哪個鍵，就整份取代 profile 的同名鍵，`routes` 與 `overrides` 也一樣；要讓某個 tenant 不用 profile 的 `routes`，寫 `routes: []`。
-
-**`routes`（依 label 分流的子路由）**：每條 `match` 只做 label 等值比對（`{label: value}`，全部相等才命中），不支援 regex 與 `continue`。產生器把每條 `routes` 產成 tenant 主路由底下的一條子路由，排在 `overrides` 產生的子路由之後，所以比對順序是 `overrides` → `routes` → 主路由自己的 receiver，先命中者勝。`tenant="<id>"` matcher 只在主路由上，子路由只帶自己 `match` 轉成的 matcher；子路由沒寫的 `group_wait` / `group_interval` / `repeat_interval` / `group_by` 沿用 tenant 主路由，有寫的走與主路由相同的 timing 護欄。receiver 名稱為 `tenant-<id>-route-<i>`，與 override 的 `tenant-<id>-override-<i>` 分開。不合法的條目（`match` 為空、label 名不合法、值不是字串、含不支援的鍵）以 `WARN … skipping` 略過，`--validate` 會因此失敗。`_routing_defaults` 不接受 `routes`。
-
-### 第二層：Domain Policies（域策略）
-
-在 `_domain_policy.yaml` 中定義業務域的合規約束。Domain Policies 是**驗證規則**，不是繼承層級：
-
-```yaml
-# _domain_policy.yaml — 位於 config-dir
-domain_policies:
-  finance:
-    description: "金融域合規要求"
-    tenants: [db-a, db-b, db-e]
-    constraints:
-      allowed_receiver_types: [pagerduty, email]
-      forbidden_receiver_types: [slack, webhook]
-      enforce_group_by: [tenant, alertname, severity]
-      max_repeat_interval: 1h
-      min_group_wait: 30s
-      require_critical_escalation: true
-
-  ecommerce:
-    description: "電商域標準"
-    tenants: [db-c, db-d]
-    constraints:
-      allowed_receiver_types: [slack, pagerduty, email]
-      max_repeat_interval: 12h
+```text
+Config files: 3 read, 0 skipped
+Found 1 tenant(s) with routing config: db-a
+Found 1 tenant(s) for severity dedup: db-a
+  ERROR: domain_policy 'finance', tenant 'db-a': receiver type 'webhook' is forbidden — fix: domain forbids ['slack', 'webhook']; switch the tenant's receiver.type to a compliant type or amend the domain policy
+  ERROR: domain_policy 'finance', tenant 'db-a': repeat_interval '4h' exceeds max '1h' — fix: lower the tenant's repeat_interval to '1h' or less, or raise the policy's max_repeat_interval
+Validation: 1 route(s), 1 receiver(s), 2 inhibit rule(s)
+FAIL: 2 error(s) found (listed above)
 ```
 
-**驗證時機**：`generate_alertmanager_routes.py` 產生最終路由時，逐條檢查 Domain Policy constraints。違反約束時：
-- `--strict` 模式：報錯終止
-- 預設模式：發出 WARNING 並標記
+租戶 `db-a` 沒寫自己的 `_routing`，它的路由完全來自 profile；policy 判的是合併之後的結果。
 
-**`require_critical_escalation` 判準**（#2244）：租戶至少要有一條 `severity=critical` 的路徑通往 PagerDuty，這項檢查不保證每一則 critical 告警都會送到 PagerDuty。合規條件是租戶主 receiver 的 type 為 `pagerduty`，或者有一條實際產出的 `routes` 條目以 `match` 比對 `severity: critical` 並送往 `pagerduty` receiver；只換成別的 receiver type 或別的目標都不算升級。
+## 背景
 
-合規之後，凡是還收得到 critical 告警的非 PagerDuty 目的地，每個報一則 WARN，在兩種模式下都不影響 exit code（#2312）。路由順序是 overrides → routes → 主 receiver，先符合者勝出。對每個 receiver 不是 PagerDuty 的目的地 N，把它會攔下的 critical 告警寫成 `C_N`：N 的 `match` 再加上 `severity: critical`（override 的 match 是它的 `alertname` 或 `metric_group`，主 receiver 的 match 視為空）。
-- N 的 `match` 寫了 `critical` 以外的 `severity`：收不到 critical，不報。
-- N 之前有任何子路由 P 的 `match` 是 `C_N` 的子集（P 是不是 PagerDuty 都算，tenant route 自帶的 `tenant=<租戶>` 也算進 `C_N`）：P 先攔走，N 收不到，不報。
-- 其餘情況報 WARN，點名 N 與它攔走的條件，例如 `severity=critical, team=app`。
+租戶數量成長之後，路由設定大量重複：多個租戶共用同一個 on-call 團隊、通知頻道與分組策略，卻要在每個租戶的 `_routing` 各寫一份。團隊的 Slack 頻道改名，就得改 N 個檔。不同業務域對路由有不同的合規要求（例如金融域禁止 Slack、必須接 PagerDuty），但沒有機制能強制。
 
-主 receiver 是不是 PagerDuty，不影響子路由的判定：子路由攔走的 critical，本來就會送到後面的升級目的地。只有 N 是主 receiver 本身時，WARN 才會說 critical 落到主 receiver。這個判定只在 tenant route 子樹內、只針對等值 matcher 時精確。有兩處不在它的模型裡：一是排在 tenant route 之前的平台路由（例如 `alertname="Watchdog"` 或 `component="sentinel"` 的路由）沒有納入，match 寫到那些值的子路由其實收不到告警，仍可能被報，所以這部分只會多報。二是 receiver 內容無效、generator 不會 render 的子路由仍被當成存在：它本身可能被多報，也可能讓後面的 N 被當成已攔走而少報。custom 子樹帶著同一批子路由，判定在那裡同樣成立（#2342）。
+## 決定的細節
 
-這個約束只由產生器判（[ADR-036](036-single-parser-effective-config.md) §9）：不合規的 finding kind 是 `critical_escalation_missing`（`--strict` 下為擋下的 ERROR），上述 WARN 是 `critical_escalation_leak`；`tests/shared/routing_policy_parity_matrix.json` 的 `escalation` 欄釘住判定結果。da-guard 不判 domain policy：樹上有 `_domain_policy.yaml` 時列為未判定（exit 4），交給產生器。tenant-api 不自己判：每筆寫入由產生器對寫入後的整棵樹判，不合規是 422 `GENERATOR_FINDINGS`（[ADR-036](036-single-parser-effective-config.md) §4），WARN 不擋寫入。因為判的是整棵樹，改 routing profile 或 domain policy 檔之後，任何經 tenant-api 的寫入都會碰到既有租戶的不合規。
+### Routing profile
 
-### 為何拒絕三層 Contact Profile 模型
+- **欄位與租戶的 `_routing` 相同**：`routing-profiles.schema.json` 直接引用 `tenant-config.schema.json#/definitions/routing`，不另寫一份。
+- **淺合併**：租戶 `_routing` 寫了哪個頂層鍵，就整份取代 profile 的同名鍵，`routes` 與 `overrides` 也一樣。要讓某個租戶不用 profile 的 `routes`，寫 `routes: []`。不引用 profile 的租戶行為不變。
+- **`routes`（依 label 分流的子路由）**：每條 `match` 只做 label 等值比對（全部相等才命中），不支援 regex 與 `continue`。每條產成租戶主路由底下的一條子路由，排在 `overrides` 之後，所以比對順序是 `overrides` → `routes` → 主路由自己的 receiver，先命中者勝。子路由沒寫的 `group_wait`／`group_interval`／`repeat_interval`／`group_by` 沿用主路由，有寫的走與主路由相同的時間護欄。receiver 名稱是 `tenant-<id>-route-<i>`。不合法的條目（`match` 為空、label 名不合法、值不是字串、含不支援的鍵）以 WARN 略過，`--validate` 因此失敗。`_routing_defaults` 不接受 `routes`。
 
-設計討論中曾提出的三層模型（Contact Profile → Routing Profile → Domain Policy）存在過度工程化的風險：
+### Domain policy
 
-- **Contact Profile 與 Alertmanager Receiver 重疊**：contact 資訊（Slack channel、PagerDuty key）已在 Alertmanager `receivers` 中定義，額外抽象增加同步成本
-- **三層合併語意複雜**：四方合併（defaults → contact → profile → tenant）的覆蓋順序難以預測，調試成本高
-- **YAGNI**：目前沒有租戶需要在同一 profile 中混用不同 contact，需求出現時可向上擴展
+- **判的是解析後的 routing**：主 receiver、`overrides`、`routes` 的 receiver type 都判；`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判、可同時觸發。
+- **`require_critical_escalation`**：租戶至少要有一條 `severity=critical` 的路徑通往 PagerDuty。合規條件是主 receiver 的 type 為 `pagerduty`，或有一條實際產出的 `routes` 條目以 `match` 比對 `severity: critical` 並送往 `pagerduty`。不合規的 finding 是 `critical_escalation_missing`（`--strict` 下擋下）。值必須是布林（未加引號的 `true`／`false`）：寫成 `yes`、`on` 或字串，任何模式都擋下，不會被當成 true。
+- **critical 外漏的 WARN**：合規之後，凡是還收得到 critical 告警、又不是 PagerDuty 的目的地，各報一則 `critical_escalation_leak` WARN，不影響結束碼。判法：把目的地 N 的 `match` 加上 `severity: critical` 當成它會攔下的告警 `C_N`；N 的 `match` 寫了別的 `severity` 就收不到 critical；N 之前若有任何子路由的 `match` 是 `C_N` 的子集，告警先被攔走，也不報。這個判定只在租戶路由子樹內、只針對等值 matcher 時精確：排在租戶路由之前的平台路由（例如 Watchdog、sentinel）沒納入，可能多報；receiver 內容無效、不會產出的子路由仍被當成存在，可能多報或少報。`tests/shared/routing_policy_parity_matrix.json` 的 `escalation` 欄釘住判定結果。
+- **誰判**：只有路由產生器（[ADR-036](036-single-parser-effective-config.md) §9）。da-guard 不判：樹上有 `_domain_policy.yaml` 時列為未判定（結束碼 4），交給產生器。tenant-api 不自己判：每筆寫入由產生器對寫入後的整棵樹判，不合規是 422 `GENERATOR_FINDINGS`（[ADR-036](036-single-parser-effective-config.md) §4），WARN 不擋寫入。因為判的是整棵樹，改了 profile 或 policy 之後，任何經 tenant-api 的寫入都會碰到既有租戶的不合規。CI 以 `generate-routes --validate --strict` 擋下違規。
 
-## 基本原理
+### 階層式 conf.d 下的範圍
 
-### Routing Profiles 的價值
+在階層式 conf.d（[ADR-016](016-conf-d-directory-hierarchy-mixed-mode.md)）下，路由產生器與 `check_routing_profiles.py` 在每一層都讀 `_routing_profiles.yaml` 與 `_domain_policy.yaml`（`.yml` 亦可）：
 
-**配置收斂**：10 個租戶共用同一 profile，路由變更從 O(N) 降為 O(1)。
+- **profile 對所在子樹可見**：租戶解析 `_routing_profile: X` 時，找自己這一層或祖先層定義的 profile。profile 名稱**整棵樹唯一**：同一個名稱定義在兩個檔案是錯誤（根目錄同時有 `.yaml` 與 `.yml` 撞名也算），訊息點名兩個檔案，產生器結束碼 2。
+- **policy 只作用於所在子樹**：子樹 policy 的 `tenants:` 點名子樹外的租戶是錯誤（`--strict` 下 ERROR，否則 WARN），訊息與「到處都找不到這個租戶」分開。不同層級的 policy **疊加判定**：租戶必須滿足每一條適用於它的 policy，所以子樹只能收緊。
+- **合併順序不變**：`_routing_defaults` 改由各目錄層組成的鏈提供，`_routing_enforced` 只認根目錄；規格見 [ADR-017 決策 9](017-defaults-yaml-inheritance-dual-hash.md#9-路由設定沿目錄逐層繼承)。tenant-api 只服務根目錄的租戶檔；寫入時的 policy 判定由產生器對整棵樹做。
 
-**語意明確**：Profile 是「完整的路由模板」，不是部分片段。合併順序清晰：defaults → profile → tenant override → enforced。
+### 相關工具
 
-**向後相容**：不引用 `_routing_profile` 的租戶行為完全不變，profile 機制是 opt-in。
+- `check_routing_profiles.py`（pre-commit）：profile 引用存在、policy 的租戶清單一致。
+- `explain_route.py --show-profile-expansion`：列出 profile 展開前後的差異與實際產出的子路由。
+- `scaffold_tenant.py --routing-profile`：新租戶直接引用 profile。
+- `da-tools opa-evaluate`：以 Rego 定義額外的策略（與 domain policy 並存）。
 
-### Domain Policies 的設計哲學
+## 後果與已知限制
 
-**約束不是繼承**：Domain Policy 不向租戶「注入」配置，而是「驗證」最終合併結果。這避免了多重繼承的菱形問題。
+- **路由變更從 O(N) 變成 O(1)**：N 個租戶共用一個 profile，改 profile 即全部生效。
+- **合規可機器驗證**：平台工程師宣告「金融域不得用 Slack」，由產生器與 CI 執行，不靠人工審查。
+- **policy 的 `tenants` 清單要手動維護**，與實際的租戶檔同步；租戶到千級時會帶來合併衝突。以 regex 或前綴比對租戶（`tenant_matchers`）尚未實作，見下方延後項。
+- **合併順序要寫清楚**：`_routing_defaults` → profile → 租戶 `_routing`，`_routing_enforced` 在合併之外。
 
-**聲明式合規**：平台工程師可宣告「金融域租戶不得使用 Slack」，由工具鏈自動執行，而非依賴人工審查。
+## 考慮過的替代方案
 
-**可審計**：`generate_alertmanager_routes.py --audit` 輸出完整的策略符合性報告。
+- **三層 contact profile 模型**（contact → routing profile → domain policy）：contact 資訊與 Alertmanager 的 receiver 重疊，多一層要同步；四方合併的覆蓋順序難以預測；目前沒有租戶需要在同一 profile 中混用不同 contact。需求出現時可再往上加一層。
+- **租戶群組繼承**：分組概念直覺，但隱式繼承容易意外覆蓋，與既有的 defaults／enforced 機制衝突。
+- **直接寫 Alertmanager 原生的 route tree**：零額外抽象，但沒有「具名模板」，要手工重複，也沒有約束驗證。
 
-## 後果
+## 延後的項目
 
-### 正面影響
+- **profile 繼承另一個 profile**（extends）：未實作。觸發條件：出現需要多層 profile 的團隊結構。
+- **`tenant_matchers`**：以 regex 或前綴取代 policy 裡的 `tenants` 陣列（兩者可並存，精確清單優先）。未實作。觸發條件：租戶數量讓手動清單成為負擔。
 
-✅ 路由配置重複率大幅降低，N 個租戶共用 profile 後只需維護一份
-✅ 團隊路由變更為原子操作（修改 profile → 所有引用租戶自動生效）
-✅ 域策略提供機器可驗證的合規約束，CI 以 `--validate --strict` 自動攔截違規（v2.10.0 起 blocking）
-✅ 現有租戶完全向後相容，profile 和 policy 均為 opt-in
-✅ 與 `_routing_enforced`（NOC 覆蓋）機制無衝突
+## 相關
 
-### 負面影響
-
-⚠️ `generate_alertmanager_routes.py` 需擴展解析 `_routing_profiles.yaml` 和 `_domain_policy.yaml`
-⚠️ 合併順序 (defaults → profile → tenant → enforced) 需充分文件化，避免混淆
-⚠️ Domain Policy 的 `tenants` 清單需與實際 tenant YAML 同步維護
-
-### 運維考量
-
-- `generate_alertmanager_routes.py` 新增 `--resolve-profiles` 和 `--check-policies` 子命令
-- CI hook：`check_routing_profiles.py` 驗證 profile 引用存在、policy tenant 清單一致
-- 告警路由的除錯工具 `explain_route.py` 需顯示 profile 展開前後的差異
-- 建議 profile 命名規範：`team-{team}-{region}` 或 `domain-{domain}-{tier}`
-
-### 未來擴展性
-
-當租戶數量達到千級規模時，硬編碼 `tenants` 陣列會產生嚴重的 Merge Conflict 和維護負擔。實作 `generate_alertmanager_routes.py` 時，可考慮支援 `tenant_matchers`（regex / prefix 匹配）作為 `tenants` 的替代語法：
-
-```yaml
-domain_policies:
-  finance:
-    tenant_matchers:        # 與 tenants 二擇一
-      - "^finance-db-.*"   # regex：自動套用給所有 finance-db 開頭的租戶
-      - "payment-gateway"   # 精確匹配仍可用
-    constraints:
-      forbidden_receiver_types: [slack, webhook]
-```
-
-此擴展與 v1 的 `tenants` 陣列向後相容（兩者可共存，`tenants` 精確匹配優先），實作時機可依需求決定。
-
-## 替代方案考量
-
-### 方案 A：三層 Contact Profile 模型 (已拒絕)
-- 優點：更細粒度的聯絡人管理
-- 缺點：與 Alertmanager receiver 概念重疊、三層合併語意複雜、YAGNI
-
-### 方案 B：Tenant Group 繼承 (已考量)
-- 優點：直覺的分組概念
-- 缺點：隱式繼承易產生意外覆蓋、與現行 defaults/enforced 機制衝突
-
-### Approach C: Native Alertmanager Route Tree (Considered)
-- 優點：零額外抽象
-- 缺點：Alertmanager route tree 不支援「命名模板」，需手工重複；無約束驗證能力
-
-## 設計細節
-
-### 合併流水線
-
-```
-┌──────────────────┐
-│ _routing_defaults │  ← 全域預設值
-└────────┬─────────┘
-         ▼
-┌──────────────────────┐
-│ routing_profiles[ref] │  ← 團隊/域共享的命名配置
-└────────┬─────────────┘
-         ▼
-┌──────────────────┐
-│ tenant _routing   │  ← 租戶級覆寫（可選）
-└────────┬─────────┘
-         ▼
-┌──────────────────────┐
-│ domain_policies       │  ← 驗證約束（不修改值，僅報錯/警告）
-└────────┬─────────────┘
-         ▼
-┌──────────────────────┐
-│ _routing_enforced     │  ← NOC 不可變覆蓋
-└──────────────────────┘
-```
-
-### Profile 引用解析
-
-```python
-# generate_alertmanager_routes.py 的邏輯（虛擬碼）
-def shallow_merge(base, layer):
-    # 逐頂層鍵：整個值取代，不往裡面合併
-    # （routes / overrides / receiver 都一樣）
-    merged = dict(base)
-    for k, v in layer.items():
-        merged[k] = v
-    return merged
-
-def resolve_tenant_routing(tenant_cfg, profiles, defaults):
-    base = copy(defaults)
-
-    # 若引用了 profile，先合併 profile
-    if '_routing_profile' in tenant_cfg:
-        profile = profiles[tenant_cfg['_routing_profile']]
-        base = shallow_merge(base, profile)
-
-    # 再合併租戶級覆寫
-    if '_routing' in tenant_cfg:
-        base = shallow_merge(base, tenant_cfg['_routing'])
-
-    return base
-
-# _routing_enforced 不併進租戶的 routing：它另外產成帶 `continue: true` 的
-# route，排在租戶 route 之前（_grar_routes.py 的 _build_enforced_routes），
-# 租戶因此無法覆蓋它。
-```
-
-三步都是淺合併（`_grar_merge.py` 的 `merge_routing_with_defaults`），與第一層底下「合併語意」
-那段一致；`_routing_enforced` 不併進結果，enforced 路由分開產出。
-
-### Policy 驗證邏輯
-
-```python
-def check_domain_policies(resolved_routing, tenant_id, policies):
-    violations = []
-    for policy_name, policy in policies.items():
-        if tenant_id not in policy['tenants']:
-            continue
-        constraints = policy['constraints']
-
-        if 'forbidden_receiver_types' in constraints:
-            for recv_type in extract_receiver_types(resolved_routing):
-                if recv_type in constraints['forbidden_receiver_types']:
-                    violations.append(f"{policy_name}: {recv_type} forbidden")
-
-        if 'max_repeat_interval' in constraints:
-            if resolved_routing.get('repeat_interval') > parse_duration(constraints['max_repeat_interval']):
-                violations.append(f"{policy_name}: repeat_interval exceeds max")
-
-    return violations
-```
-
-### Amendment 2026-09-28 (#2326)：profile 與 policy 的目錄範圍
-
-**狀態：已實作**（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)）：
-路由生成器與 `check_routing_profiles`
-在每一層都讀 `_routing_profiles.yaml` 與 `_domain_policy.yaml`。profile 名稱重複定義與其他
-阻擋性的樹形錯誤一起被拒收（生成器 rc 2；保留根目錄優先、依名稱順序先出現的定義，點名後者）。
-tenant-api 只服務根目錄的租戶檔；寫入時的 policy 判定由產生器對整棵樹做，每一層的 `_domain_policy.yaml` 都讀（[ADR-036](036-single-parser-effective-config.md) §4）。
-
-在階層式 conf.d（[ADR-016](016-conf-d-directory-hierarchy-mixed-mode.md)）下：
-
-- **Routing profiles**：`_routing_profiles.yaml` / `.yml` 可以放在子目錄，其中的 profile
-  對該子樹裡的租戶可見。租戶解析 `_routing_profile: X` 時，找的是自己這一層或祖先層定義的
-  profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩個檔案即為錯誤（根目錄同時有 `.yaml`
-  與 `.yml` 且撞名也算；今天是後者靜默覆蓋，這是行為變更）。
-- **Domain policies**：`_domain_policy.yaml` / `.yml` 可以放在子目錄，只作用於所在子樹。
-  子樹 policy 的 `tenants:` 點名子樹外的租戶是**錯誤**（`--strict` 下 ERROR，否則 WARN），
-  訊息與「到處都找不到這個租戶」分開。不同層級的 policy **疊加判定**：租戶必須滿足每一條
-  適用於它的 policy，所以子樹只能收緊。
-- **合併順序不變**：`_routing_defaults` → profile → tenant `_routing`，每一步都是頂層逐鍵
-  淺合併。`_routing_defaults` 本身改由各目錄層組成的鏈提供，`_routing_enforced` 維持只認
-  根目錄；兩者的規格見 [ADR-017 決策 9](017-defaults-yaml-inheritance-dual-hash.md#9-路由設定沿目錄逐層繼承)。
-
-## v2.1.0 Implementation Summary
-
-- `generate_alertmanager_routes.py` — 四層合併（defaults → profile → tenant → enforced）+ `check_domain_policies()` 驗證（21 tests）
-- `check_routing_profiles.py` — Profile/Policy lint 工具（28 tests + pre-commit hook 自動執行）
-- `explain_route.py` — Routing 偵錯工具，支援 `--show-profile-expansion` trace 模式（25 tests + da-tools CLI 整合）
-- `scaffold_tenant.py --routing-profile` — Onboarding 整合，新 tenant 可直接引用 profile（9 tests）
-- `_parse_config_files()` → `_parse_platform_config()` + `_parse_tenant_overrides()` 子函式重構
-- 範例配置 `conf.d/examples/_routing_profiles.yaml`、`conf.d/examples/_domain_policy.yaml`
-- JSON Schema：`routing-profiles.schema.json`（#2245 起引用 `tenant-config.schema.json` 的 `routing` 定義）、`domain-policy.schema.json`
-- Go/Python 雙端 `_routing_profile` reserved key 同步
-- Self-Service Portal：routing profile 驗證 + 範例切換 UI
-
-## 演進狀態
-
-- **v2.1.0**（已完成）：四層合併管線、check_routing_profiles lint、explain_route 偵錯工具
-- **v2.3.0**（已完成）：OPA 整合——`da-tools opa-evaluate` 支援 Rego 定義域策略（routing-compliance / threshold-bounds / naming-convention 三個範例策略）
-- **v2.5.0**（已完成）：receiver-type 約束前移至 API-time enforcement（tenant-api 403 回應）；時序（`max_repeat_interval` / `min_group_wait`）與 `enforce_group_by` 約束仍於組譯期驗證
-- **v2.6.0**（已完成）：`generate_alertmanager_routes.py` 重構（21 helpers extracted），`_build_receiver_config()` 改為 strategy pattern
-- **v2.10.0**（開發中）：`--strict` 接線至 CLI 與 CI——組譯期 domain-policy 違規由 WARN 轉 ERROR 並 blocking（`--validate --strict` exit 1，違規訊息含實際值 vs 域限制 + 修法提示）
-
-- **#2245**：profile 與 tenant 的 `routes` 開始產出子路由（先前產生器靜默丟棄）；domain policy 與 `--policy` 網域檢查涵蓋這些 receiver；`explain_route` 改列實際產出的子路由；`check_confd_schema` 開始以 schema 檢查 `_routing_profiles.yaml`，`validate-config` 開始對它做 YAML 引號檢查
-- **#2244**：`require_critical_escalation` 開始由 `check_domain_policies()` 執行（先前只有 lint 認得這個鍵），判準見上方「第二層」
-- **#2280**：domain policy 判的是**解析後**的 routing（`_routing_defaults` → profile → tenant `_routing`，產生器自己的合併）；主 receiver、`overrides`、`routes` 的 receiver type 都依 domain policy 判，`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判、可同時觸發；`routes` 條目形狀與 `_routing_defaults.routes` 也檢查
-- **#2325**：`require_critical_escalation` 的值照 PyYAML 解讀（未加引號的 `yes`／`on` 是 true），判準見上方「第二層」
-- **#2326**（2026-09-28 已決定並實作）：profile 與 domain policy 以所在子樹為範圍、profile 名稱全樹唯一、policy 疊加判定——見上方「Amendment 2026-09-28」
-
-**殘留**：
-- Profile 繼承鏈（profile extends another profile）— 排入 v2.7.0+ 候選
-- `tenant_matchers`（regex / prefix）替代硬編碼 `tenants` 陣列 — 排入 v2.7.0+ 候選
-
-## 相關決策
-
-- [ADR-001: 嚴重度 Dedup 採用 Inhibit 規則](./001-severity-dedup-via-inhibit.md) — inhibit rules 與 routing 互補
-- [ADR-003: Sentinel Alert 模式](./003-sentinel-alert-pattern.md) — sentinel 告警影響 routing 行為
-- [ADR-006: 租戶映射拓撲](./006-tenant-mapping-topologies.md) — 1:N 映射後的租戶仍適用 routing profiles
-
-## 參考資料
-
-- [`docs/architecture-and-design.md`](../architecture-and-design.md) §2.9 — Routing Guardrails
-- [`docs/architecture-and-design.md`](../architecture-and-design.md) §2.11 — Dual-Perspective routing
-- [`generate_alertmanager_routes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/generate_alertmanager_routes.py) — 路由產生器（將擴展）
-- [Alertmanager Route Configuration](https://prometheus.io/docs/alerting/latest/configuration/#route) — 官方文件
-
-## 相關資源
-
-| 資源 | 相關性 |
-|------|--------|
-| [001-severity-dedup-via-inhibit](001-severity-dedup-via-inhibit.md) | ⭐⭐ |
-| [002-oci-registry-over-chartmuseum](002-oci-registry-over-chartmuseum.md) | ⭐ |
-| [003-sentinel-alert-pattern](003-sentinel-alert-pattern.md) | ⭐⭐ |
-| [004-federation-central-exporter-first](004-federation-central-exporter-first.md) | ⭐ |
-| [005-projected-volume-for-rule-packs](005-projected-volume-for-rule-packs.md) | ⭐ |
-| [006-tenant-mapping-topologies](006-tenant-mapping-topologies.md) | ⭐⭐⭐ |
-| [007-cross-domain-routing-profiles](007-cross-domain-routing-profiles.md) | ⭐⭐⭐ |
-| [README](README.md) | ⭐⭐⭐ |
-| ["架構與設計 — 動態多租戶警報平台技術白皮書"](../architecture-and-design.md) | ⭐⭐⭐ |
-| ["架構與設計 — 附錄 A"](../architecture-and-design.md#附錄角色與工具速查) | ⭐⭐ |
+- [ADR-001](001-severity-dedup-via-inhibit.md) —— 嚴重度去重的 inhibit 規則，與路由互補
+- [ADR-003](003-sentinel-alert-pattern.md) —— sentinel 告警
+- [ADR-006](006-tenant-mapping-topologies.md) —— 租戶映射拓撲
+- [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.md)、[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) —— 目錄階層與繼承
+- [ADR-036](036-single-parser-effective-config.md) —— 誰判路由
+- [Alertmanager route 設定](https://prometheus.io/docs/alerting/latest/configuration/#route)

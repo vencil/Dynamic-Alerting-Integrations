@@ -119,7 +119,7 @@ With `useExistingSecret: true` the chart ignores `alertmanager.config` (includin
 
 ### AlertmanagerConfig CRs still go first
 
-When the Alertmanager CR also selects AlertmanagerConfig CRs (`alertmanagerConfigSelector` / `alertmanagerConfigNamespaceSelector` set; **kube-prometheus-stack sets the selector to `{}` by default, which selects every AlertmanagerConfig in its namespace**), the Operator still prepends those CRs' routes ahead of the `configSecret`'s routes, with the forced `continue: true` and the namespace matcher.
+When the Alertmanager CR also selects AlertmanagerConfig CRs (`alertmanagerConfigSelector` / `alertmanagerConfigNamespaceSelector` set; **kube-prometheus-stack sets both selectors to `{}` by default, which selects every AlertmanagerConfig in every namespace**), the Operator still prepends those CRs' routes ahead of the `configSecret`'s routes, with the forced `continue: true` and the namespace matcher.
 
 - The platform's own CRs are no longer generated; delete the ones left from before the upgrade (`operator-check` check 4 warns about them):
 

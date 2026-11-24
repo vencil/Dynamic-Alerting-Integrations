@@ -1988,7 +1988,7 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 }
 
 // warnInvalidTenantIDs logs one WARN per tenant id of cfg that breaks the
-// tenant-id rule (ADR-035 D4), citing the rule's own wording.
+// tenant-id rule (ADR-035 §4), citing the rule's own wording.
 //
 // The exporter does NOT reject such a tenant: it stays loaded and its series
 // are still exported, because the gate is CI and the write side, and dropping

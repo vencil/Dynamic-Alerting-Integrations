@@ -322,7 +322,8 @@ RECEIVER_URL_FIELDS: Final[dict[str, list[str]]] = {
 #   命中平台的 ingress-nginx job，jvm 則從 job 名稱看不出來；所以 live 的 nginx／jvm
 #   exporter 在 blind-spot 是 `unrecognized`、不會是 blind spot（宣告了仍算 covered）；
 #   tests/rulepacks/test_exporter_presence.py 與 tests/ops/test_blind_spot_discovery.py 守著。
-# METRIC_PREFIX_DB_MAP: Metric 名稱前綴 → kind；onboard_platform 用。
+# 指標名稱前綴 → kind 不在這裡：由 threshold registry 的 metric_prefixes 決定
+# （_registry_lib.pack_of_metric，#4270）。
 JOB_DB_MAP: Final[dict[str, str]] = {
     # MariaDB / MySQL
     "mysql": "mariadb", "mariadb": "mariadb", "mysqld": "mariadb",
@@ -347,19 +348,6 @@ JOB_DB_MAP: Final[dict[str, str]] = {
     "clickhouse": "clickhouse",
     # DB2
     "db2": "db2",
-}
-
-METRIC_PREFIX_DB_MAP: Final[dict[str, str]] = {
-    "mysql_": "mariadb", "mariadb_": "mariadb",
-    "pg_": "postgresql", "postgres_": "postgresql",
-    "redis_": "redis",
-    "mongo_": "mongodb", "mongodb_": "mongodb",
-    "kafka_": "kafka",
-    "rabbitmq_": "rabbitmq", "rabbit_": "rabbitmq",
-    "elasticsearch_": "elasticsearch", "es_": "elasticsearch",
-    "oracle_": "oracle",
-    "clickhouse_": "clickhouse",
-    "db2_": "db2",
 }
 
 # ============================================================

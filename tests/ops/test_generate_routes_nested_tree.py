@@ -12,7 +12,7 @@ with ``_routing_defaults``, a root tenant ``roota.yaml`` and a nested
 
 The route tree a customer deploys had no route for ``nestedb`` — its alerts
 fell to the catch-all — while threshold-exporter served its thresholds.
-ADR-017 Decision 9 / ADR-016 / ADR-007 "Amendment 2026-09-28" (option P2) make the
+ADR-017 Decision 9 / ADR-016 §Decision item 3 / ADR-007 §Scope in a hierarchical conf.d make the
 routing plane hierarchical; this file pins the semantics listed there:
 
 * tenants at any depth get routes; hidden directories and README-only
@@ -24,7 +24,7 @@ routing plane hierarchical; this file pins the semantics listed there:
 * (d) subtree policies scoped + additive; an entry naming a tenant outside
   the subtree is ERROR under --strict, WARN otherwise, worded apart from
   "not found";
-* (e) one tenant id in two files → rc 2;
+* (e) one tenant id in two files → rc 1 (validate-config's own scan);
 * (f) a nested platform file's `tenants:` block → WARN, read by no plane.
 
 ⛔ rc 2 has several unrelated causes in this tool (#1642), so every refusal

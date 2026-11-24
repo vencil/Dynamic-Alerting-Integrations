@@ -357,7 +357,7 @@ def main():
         with _lib_io.open_operator_output("-", flag="-o") as fh:
             fh.write("partial-doc\\n")
             open(sys.argv[2], encoding="utf-8")  # not stdout's failure
-    except _lib_io.OutputWriteError:
+    except FileNotFoundError:
         pass
     print("after")
     return 0
@@ -414,3 +414,146 @@ def test_a_body_error_is_not_replaced_by_a_failed_stdout(monkeypatch):
         with _lib_io.open_operator_output("-", flag="-o") as fh:
             fh.write("x")
             raise ValueError("the body's own error")
+
+
+# #4230: only the output handle's own failure is the output path's. Any other
+# OSError of the ``with`` body propagates as it is — not an OutputWriteError
+# that tells the operator to check the value given to the flag.
+
+_BODY_OSERROR = """\
+import sys
+sys.path.insert(0, sys.argv[1])
+import _lib_exitcodes, _lib_io
+def main():
+    with _lib_io.open_operator_output(sys.argv[2], flag="-o") as fh:
+        fh.write("partial-doc\\n")
+        open(sys.argv[3], encoding="utf-8")  # another file: not the output's failure
+    return 0
+_lib_exitcodes.run(main)
+"""
+
+
+def _body_target(tmp_path, where):
+    return "-" if where == "stdout" else str(tmp_path / "out.json")
+
+
+@pytest.mark.parametrize("where", ["stdout", "file"])
+def test_another_oserror_of_the_body_is_not_the_outputs(tmp_path, where, monkeypatch):
+    monkeypatch.setattr(_lib_exitcodes, "_stdout_owner", None, raising=False)
+    missing = tmp_path / "missing" / "input.yaml"
+    with pytest.raises(FileNotFoundError) as caught:
+        with _lib_io.open_operator_output(_body_target(tmp_path, where), flag="-o") as fh:
+            fh.write("x")
+            open(missing, encoding="utf-8")
+    assert not isinstance(caught.value, _lib_io.OutputWriteError)
+    assert caught.value.filename == str(missing)
+
+
+@pytest.mark.parametrize("where", ["stdout", "file"])
+def test_the_operator_is_not_told_to_check_the_flag_for_another_files_error(tmp_path, where):
+    """The acceptance line of #4230, end to end through ``run``."""
+    missing = tmp_path / "missing" / "input.yaml"
+    done = _run_script(tmp_path, _BODY_OSERROR, _body_target(tmp_path, where), str(missing))
+    assert "check the value given to -o" not in done.stderr, done.stderr
+    assert "cannot write" not in done.stderr, done.stderr
+    assert "OutputWriteError" not in done.stderr, done.stderr
+    assert str(missing) in done.stderr, done.stderr
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/full"), reason="no /dev/full")
+def test_a_body_error_with_unflushed_output_stays_the_bodys(tmp_path):
+    """The cleanup's own flush fails on /dev/full; it must not turn the
+    body's error into the output's (the attribution is read before it)."""
+    missing = tmp_path / "missing" / "input.yaml"
+    with pytest.raises(FileNotFoundError) as caught:
+        with _lib_io.open_operator_output("/dev/full", flag="-o") as fh:
+            fh.write("x")
+            open(missing, encoding="utf-8")
+    assert not isinstance(caught.value, _lib_io.OutputWriteError)
+
+
+_FILE_WRITE_FAILS = """\
+import sys
+sys.path.insert(0, sys.argv[1])
+import _lib_exitcodes, _lib_io
+def main():
+    _lib_io.write_operator_output_or_die(sys.argv[2], "x" * int(sys.argv[3]), flag="-o")
+    return 0
+_lib_exitcodes.run(main)
+"""
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/full"), reason="no /dev/full")
+@pytest.mark.parametrize("size", [10, 100_000], ids=["flush", "write"])
+def test_a_failed_write_to_a_named_path_is_still_one_line_rc_2(tmp_path, size):
+    done = _run_script(tmp_path, _FILE_WRITE_FAILS, "/dev/full", str(size))
+    lines = done.stderr.splitlines()
+    assert done.returncode == 2, done.stderr
+    assert len(lines) == 1, done.stderr
+    assert lines[0].startswith("ERROR: cannot write /dev/full:"), done.stderr
+    assert "check the value given to -o" in lines[0], done.stderr
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/full"), reason="no /dev/full")
+def test_a_write_the_body_makes_through_the_handle_is_the_outputs():
+    """A write that fails inside the body (not the final flush) is still the
+    output path's failure."""
+    with pytest.raises(_lib_io.OutputWriteError) as caught:
+        with _lib_io.open_operator_output("/dev/full", flag="-o") as fh:
+            fh.write("x" * 100_000)
+            raise AssertionError("not reached: the write above fails")
+    assert caught.value.flag == "-o"
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/full"), reason="no /dev/full")
+def test_a_write_through_the_handles_buffer_is_the_outputs():
+    """#4230 review: the failure is kept at the buffer, so a caller writing
+    bytes through ``fh.buffer`` is covered as the text writes are."""
+    with pytest.raises(_lib_io.OutputWriteError):
+        with _lib_io.open_operator_output("/dev/full", flag="-o") as fh:
+            fh.buffer.write(b"x" * 100_000)
+            raise AssertionError("not reached: the write above fails")
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/full"), reason="no /dev/full")
+@pytest.mark.parametrize("where", ["stdout", "file"])
+def test_a_swallowed_write_failure_does_not_claim_a_later_error(tmp_path, where, monkeypatch):
+    """#4230 review: only the OSError the handle raised is the output's — not
+    any later one, after the body caught that one."""
+    missing = tmp_path / "missing" / "input.yaml"
+    if where == "stdout":
+        monkeypatch.setattr(sys, "stdout", open("/dev/full", "w", encoding="utf-8"))
+        monkeypatch.setattr(_lib_exitcodes, "_stdout_owner", None, raising=False)
+        monkeypatch.setattr(_lib_exitcodes, "discard_failed_stdout", lambda: None)
+    target = "-" if where == "stdout" else "/dev/full"
+    with pytest.raises(FileNotFoundError) as caught:
+        with _lib_io.open_operator_output(target, flag="-o") as fh:
+            try:
+                fh.write("x" * 100_000)
+                fh.flush()
+            except OSError:
+                pass
+            open(missing, encoding="utf-8")
+    assert not isinstance(caught.value, _lib_io.OutputWriteError)
+
+
+def test_the_file_handle_is_what_io_open_would_give(tmp_path):
+    p = tmp_path / "f.txt"
+    with _lib_io.open_operator_output(str(p), flag="-o") as fh:
+        assert fh.mode == "w" and fh.encoding == "utf-8"
+        assert fh.line_buffering is False
+        assert fh.buffer.raw.name == fh.fileno()
+
+
+@pytest.mark.skipif(not hasattr(os, "openpty"), reason="no pty")
+def test_a_terminal_output_is_line_buffered():
+    """As io.open: a line written to a terminal shows when it ends."""
+    master, slave = os.openpty()
+    try:
+        with _lib_io.open_operator_output(os.ttyname(slave), flag="-o") as fh:
+            assert fh.line_buffering is True
+            fh.write("line\n")
+            assert os.read(master, 100).replace(b"\r", b"") == b"line\n"
+    finally:
+        os.close(master)
+        os.close(slave)

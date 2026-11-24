@@ -808,7 +808,7 @@ class TestCLI:
 
 
 class TestAcceptance:
-    """ADR-037 與 #1516 P2c 的驗收，在出貨的範例 conf.d 上跑。"""
+    """ADR-037 決策段範例的驗收，在出貨的範例 conf.d 上跑。"""
 
     def test_comment_only_change_is_rc_0(self, tmp_path):
         old, new = _sample_pair(tmp_path)
@@ -1070,7 +1070,7 @@ class TestCredentialsAreNotPrinted:
             looks_secret - not_credentials - set(cd._CREDENTIAL_KEYS)
 
 
-# ── 7. 平台設定：`_` 檔的頂層鍵（ADR-037 決定 3，第一階段） ─────────────
+# ── 7. 平台設定：`_` 檔的頂層鍵（ADR-037 決定 3） ─────────────
 
 
 def _settings(doc):
@@ -1127,7 +1127,7 @@ class TestPlatformSettings:
         ("_profiles.yaml", "profiles:\n  unused:\n    cpu: 1\n"),
     ], ids=["empty-tenants", "unbound-profile"])
     def test_full_coverage_without_a_difference_is_a_note(self, tmp_path, rel, text):
-        """#2962 (ADR-037 決定 3 第二步)：完整涵蓋、讀取端就在這裡讀、渲染沒有差異
+        """#2962 (ADR-037 決定 3)：完整涵蓋、讀取端就在這裡讀、渲染沒有差異
         ⇒「沒有效果」，只附註、不影響結束碼。"""
         base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
         old, new = _pair(tmp_path, base, {**base, rel: text})

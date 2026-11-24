@@ -1110,7 +1110,7 @@ def _argv_for(tool_rel: str, tree: pathlib.Path,
 # tool -> (stream the warning belongs on, a landmark proving the tool still
 # did its real work after warning). ⛔ The channel is part of the contract,
 # not an implementation detail: four of these have a machine-readable stdout
-# (`--json`, or the lint's `path:0: warning:` annotations) that a warning on
+# (`--json`, or the lint's `path:0: error:` annotations) that a warning on
 # stdout makes unparseable. `offboard_tenant`'s stdout IS its human report —
 # same channel as its own "無法讀取" warning — so stdout is correct there.
 # `generate_tenant_metadata` left this table in #2115 0-B/B4: it no longer

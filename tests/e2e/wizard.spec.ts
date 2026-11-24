@@ -4,25 +4,21 @@
  * SCOPE DISCLAIMER (Day 5 retrospective review, 2026-04-16):
  *   This is SMOKE coverage, not comprehensive E2E. It proves:
  *     - the tool loads without 404 / JS error
- *     - the first visible contract (role cards, Start-Here badge) renders
+ *     - the first visible contract (role cards) renders, and the Start-Here
+ *       badge appears after role + goal selection
  *     - TRK-104-style absolute hrefs don't leak
- *     - 0 Critical axe violations (with a budget of 2 non-Critical for the
- *       known amber Start-Here badge borderline contrast — see wizard.md §A11y)
+ *     - 0 Critical and 0 non-Critical axe violations
  *   It does NOT cover:
  *     - full multi-step traversal (role → scenario → config generation)
- *     - the 19 state-specific color waivers from ADR-016 (DEC-A)
- *     - token-layer contrast issues on wizard (Day 5 retrospective runtime
- *       axe showed wizard itself has 0 violations — ADR-016 Option A
- *       validated in this spec's axe coverage)
- *   For broader Phase .a0 a11y picture across all migrated tools, see
- *   `_axe-audit-day1to3.spec.ts` and `_axe-audit-day4.spec.ts`.
+ *     - token-pair contrast in the dark theme (axe runs in the default theme
+ *       only; see ADR-014 "known limitations")
  *
  * Validates:
  *   - jsx-loader.html?component=wizard loads without 404
  *   - Page title matches expected pattern
  *   - Role selector renders (wizard is role-pick-first)
  *   - No TRK-104-style hardcoded portal-absolute hrefs leak in
- *   - axe-core WCAG 2.1 AA: 0 Critical violations
+ *   - axe-core WCAG 2 A/AA: 0 violations
  *
  * Uses the shared portal-tool-smoke helpers so new specs stay concise.
  */
@@ -39,9 +35,6 @@ test.describe('Getting Started Wizard @critical', () => {
 
     await runToolSmokeChecks(page, {
       expectedTitleMatch: /Wizard|Getting Started|Role|Dynamic Alerting/i,
-      // Wizard has a known amber "START HERE" badge with borderline contrast
-      // that is tracked separately (see wizard.md critique §Accessibility).
-      // Allow up to 2 non-Critical violations while migration is in-flight.
       allowedNonCriticalViolations: 0,
     });
   });
@@ -69,10 +62,10 @@ test.describe('Getting Started Wizard @critical', () => {
   test('Start-Here badge is visible after role + goal selection', async ({ page }) => {
     await loadPortalTool(page, 'wizard');
 
-    // v2.7.0 calibration (§8.11.4): wizard.jsx:364 renders the badge as plain
-    // text inside `<span className="... bg-amber-200">START HERE</span>` —
-    // no role="status" / aria-label is applied. The badge only becomes
-    // visible at step 2 (after role + goal selection).
+    // wizard.jsx renders the badge as plain text inside a token-styled
+    // `<span>` (warning-soft background) — no role="status" / aria-label is
+    // applied. The badge only becomes visible at step 2 (after role + goal
+    // selection).
     //
     // Adding `role="status"` is out of scope for this regression guard — it
     // would be a behaviour change. We match on the canonical uppercase text

@@ -1010,6 +1010,10 @@ class CustomAlertPack(NamedTuple):
     parse_failed: list[str]
     unreadable: list[UnreadableFile]
     stderr_lines: list[str]
+    # {recorded name: comment text} the serialiser writes directly above that
+    # rule (compile_custom_alerts._render): the `da_cluster: tenant-wide …`
+    # declaration of an absence core, which check_cluster_identity.py reads.
+    declarations: dict[str, str] = {}
 
 
 class DaGuardNotFoundError(FileNotFoundError):
@@ -1359,7 +1363,8 @@ def _run_da_guard(
 # (key-verdict since v3, #3835; served-values since v2, #3703), so they pass
 # `fields_added_since=()`.
 _FIELDS_ADDED_SINCE = (("skipped",), ("unreadable",), ("parse_failed",),
-                       ("dead_entries",))  # #3502: effective's
+                       ("dead_entries",),   # #3502: effective's
+                       ("declarations",))   # #4097: compile-custom-alerts'
 
 
 def _accepts(cmd: list[str], timeout: float) -> bool:
@@ -2391,11 +2396,17 @@ def load_custom_alert_pack(
                 raise _ShapeError(f"lifecycle entry {shown_value(u)} is not of its shape")
             uses.append(LifecycleUse(str(u["recipe"]), str(u["status"]), tuple(str(t) for t in u["tenants"])))
         block_errors = {str(k): str(v) for k, v in block_errors.items()}
+        declarations = doc["declarations"]
+        if not isinstance(declarations, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) and v and "\n" not in v
+                for k, v in declarations.items()):
+            raise _ShapeError(f"declarations is {shown_value(declarations)}")
         return CustomAlertPack(
             groups, shapes, not_compiled, block_errors, uses,
             [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
             [str(f) for f in doc["parse_failed"]],
-            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]], [])
+            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]], [],
+            dict(declarations))
 
     pack, _returncode, stderr = _run_da_guard(
         CUSTOM_ALERT_PACK_SUBCOMMAND, [], conf_d, binary, timeout, CustomAlertPackError,

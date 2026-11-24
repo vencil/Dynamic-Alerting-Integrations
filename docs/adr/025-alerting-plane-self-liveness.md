@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: observability
 created_at: 2026-06-14
-updated_at: 2026-07-28
+updated_at: 2026-11-24
 ---
 
 # ADR-025: 告警平面自我存活性 — 讓告警系統能偵測自己的死亡
@@ -18,157 +18,165 @@ updated_at: 2026-07-28
 
 ## 狀態
 
-✅ **Accepted**（決策 2026-06-14 經 PR [#836](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/836) 接受）。
+✅ **Accepted**（2026-06-14）。
 
-本 ADR 記錄一個決策：為平台的告警平面（Prometheus + Alertmanager）加上「自己死掉會被外部察覺」的存活心跳，並劃清「高可用與大規模儲存由 operator 負責」的責任邊界。目前進度見下方〈實作現況〉；operator 設定與靜音/抑制禁區見 [Operator 指南](../integration/alerting-plane-self-liveness.md)。
+2026-11-24 修訂：改寫為現行行為。決策不變。
 
-## 摘要
-
-平台出貨的 Prometheus 與 Alertmanager 都是單一實例，而所有平台告警都由這個 Prometheus 評估——它一旦掛掉，所有告警會**靜默停止**，沒有人會收到通知。本 ADR 加一條送到平台**外部**的存活心跳來補這個盲點；高可用與大規模儲存則維持交由 operator 的監控後端負責。
-
-## 問題
-
-監控系統有個經典難題：**它無法監控自己**。
-
-- 平台的 Prometheus 與 Alertmanager 各只跑一個副本。
-- 平台十多條維運告警（包含「指標來源元件掛了」這類）**全由這同一個 Prometheus 評估**。
-- 所以當 Prometheus（或 Alertmanager）本身死掉，這些告警**不會觸發**——畫面一片安靜、看似沒事，實則整條告警鏈已停擺。
-
-平台**已有**高可用設計，但範圍是**資料平面**（產生指標的元件跑兩副本、用 `max` 去重）；**監控平面自己不在其中**。本 ADR 補的正是監控平面這一塊。
-
-這也跟租戶端的存活性是**兩回事**：租戶能用 `absence` 規則顧自己的指標，但租戶**無法**修好死掉的平台 Prometheus，也不該為此被呼叫。
+Operator 要做的設定、TTL 怎麼抓、靜音與抑制的禁區，見 [Operator 指南](../integration/alerting-plane-self-liveness.md)。
 
 ## 決策
 
-### D1：存活心跳送到外部監測點
+平台出貨的 Prometheus 與 Alertmanager 各只跑一個副本，平台自己的告警全部由這個 Prometheus 評估。它（或 Alertmanager）一死，所有告警安靜地停止，沒有人會收到通知。為此決定三件事：
 
-加一條**永遠在觸發**的告警（這種模式業界慣稱 *Watchdog*），透過一條**獨立且置於最高優先級**的路由，固定把訊號送到一個**平台外部**的心跳監測服務。
+1. **存活心跳送到平台外部。** 一條永遠在觸發的告警 `Watchdog`，經一條獨立、排在最前面的路由，固定頻率送到平台外部的心跳監測服務。外部服務「該收到卻沒收到」時才呼叫人。
+2. **斷網環境由叢集外部輪詢健康端點。** 送不出心跳的環境，改由叢集外部的監測系統定期探測 Prometheus 與 Alertmanager 的健康端點。
+3. **高可用與大規模儲存交給 operator。** 平台不把多副本 Prometheus／Alertmanager 或大規模時序儲存做進產品。
 
-```yaml
-# 規則：表達式永遠成立 → 永遠處於 firing
-- alert: Watchdog
-  expr: vector(1)
-  labels: { severity: none }   # 非真正嚴重度；用意是讓它不落入人類頻道（詳見下方「靜音與抑制免疫」）
-  annotations:
-    summary: "告警管線心跳——這條一旦停了，代表 Prometheus 已死"
+### 範例：心跳的規則、路由與 receiver
+
+規則：表達式永遠成立，所以告警永遠處於 firing。
+
+```yaml {.quote src="rule-packs/rule-pack-platform.yaml"}
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Alerting pipeline heartbeat — if this stops reaching the external monitor, Prometheus/Alertmanager is down"
 ```
 
-```yaml
-# Alertmanager 路由：給 Watchdog 一條獨立、零聚合、固定頻率的專線
+Alertmanager 設定：`Watchdog` 是 `routes` 的第一條，有自己的分組與頻率，`continue: false` 讓它不再往下比對；receiver 從掛載的 Secret 讀心跳 URL。
+
+```yaml {.quote src="k8s/03-monitoring/configmap-alertmanager.yaml"}
 route:
+  group_by: ["alertname", "tenant"]
+# ...
   routes:
-    # ⚠️ 必須是 routes 的「第一條」（最高優先級），見下方說明
-    - matchers: [ alertname="Watchdog" ]
-      receiver: watchdog-heartbeat
-      group_by: [alertname]     # 強制獨立聚合，不繼承頂層 group_by（本平台 root 為 [alertname,tenant]）致心跳頻率錯亂
+# ...
+    - matchers:
+        - alertname="Watchdog"
+      group_by: ["alertname"]
       group_wait: 0s
       group_interval: 1m
-      repeat_interval: 3m       # 外部 TTL 要比這更長，見下方緩衝說明
-      continue: false           # 絕不落到其他 receiver 或人類頻道
+      repeat_interval: 3m
+      receiver: "watchdog-heartbeat"
+      continue: false
+# ...
 receivers:
-  - name: watchdog-heartbeat
+# ...
+  - name: "watchdog-heartbeat"
+# ...
     webhook_configs:
-      # 心跳 URL 嵌 token/UUID＝機密，禁明文寫進 ConfigMap（會踩 secret-scan）。
-      # 用 url_file 指向掛載的 Secret；Secret 未填＝停用、僅留盲點紀錄。
       - url_file: /etc/alertmanager/secrets/watchdog-heartbeat/watchdog-heartbeat-url
-      # ⚠️ 需要多通道冗餘（雙外部監測）時，在此處加多個 webhook_configs，
-      #    絕不可在上方路由樹拆成多條 route——會被 continue: false 攔斷。
+        send_resolved: false
 ```
 
-**關鍵是「反過來想」**：外部服務不是「收到訊號就告警」，而是「**預期每幾分鐘要收到一次；一旦沒收到，才呼叫人**」。這樣不論是 Prometheus 死、Alertmanager 死、還是訊號送不出去（防火牆 / 憑證問題），心跳一停，外部就會察覺。
+結果：`promtool test rules tests/rulepacks/platform-watchdog_test.yaml` 斷言 `Watchdog` 在第 0 分鐘與第 30 分鐘都在觸發、標籤只有 `severity: none`，不需要任何輸入序列。Alertmanager 收到後立刻送出第一次（`group_wait: 0s`），之後每 3 分鐘重送一次（`repeat_interval: 3m`）。外部監測設 5 分鐘逾時：每 3 分鐘收到一次就保持安靜；Prometheus 死、Alertmanager 死、或訊號出不了叢集（防火牆、憑證），5 分鐘內收不到，外部就呼叫人。
 
-**為什麼一定要「外部」**：監控系統不能監控自己——心跳的接收端必須在一個**不會跟平台一起死**的地方，這是唯一能真正兜底的位置。
+### 1. 存活心跳送到平台外部
 
-**路由必須置頂**：Alertmanager 由上往下評估路由。Watchdog 這條**必須放在 `routes` 陣列的第一條**，否則可能被前面某條範圍較廣、且 `continue: false` 的路由（例如某個 severity 攔截或既有的租戶告警專線）先吞掉，導致心跳永遠送不出去。
+這種「永遠觸發、停了才代表出事」的告警，業界稱為 *Watchdog*；接收端反過來判斷的監測方式稱為 dead-man's switch（收不到訊號才觸發的開關）。
 
-**靜音與抑制免疫**：訊號就算評估正常、也進了置頂路由，送出前仍可能被攔下——攔下就收不到心跳、反而誤報「平台死亡」。兩個攔截點：
+**接收端一定要在平台外部。** 監控系統無法監控自己：心跳的接收端若和 Prometheus 在同一個叢集或網路，它們會一起死。只有不會跟平台一起死的地方，才能在平台整體失聯時發出警報。
 
-- **全域 Silence**：重大故障時 SRE 常下 `.*` 萬用靜音壓告警海嘯，會一併壓掉 Watchdog。
-- **`inhibit_rules`**：例如 `ClusterDown` 觸發時抑制所有常規告警。
+**路由必須是第一條。** Alertmanager 由上往下比對路由。若前面有一條範圍較廣、`continue: false` 的路由（例如租戶自訂告警的隔離路由），它會先吃掉 `Watchdog`，心跳就永遠送不出去。路由產生器（`da-tools generate-routes`）每次重新產生設定時，都把 `Watchdog` 這條放回 `routes` 的第一條；路由的分組用 `[alertname]`，不繼承 root 的 `[alertname, tenant]`，心跳頻率才不會被分組打亂。
 
-關鍵認知：Alertmanager **沒有「抑制免疫」這種原語**。`severity: none` 只是讓 Watchdog 不落入既有 severity-targeted 的抑制，**不是萬用免疫**——一條未來的廣域 inhibit（`target_matchers` 命中 Watchdog 任一標籤）仍會壓掉它。所以免疫得靠**設計約束 + 機械把關**：
+**心跳不能被靜音或抑制擋掉。** 訊號就算評估正常、也進了第一條路由，送出前仍可能被 Alertmanager 擋下；擋下就等於外部收不到心跳，反而誤報「平台已死」。擋下的地方有兩個：
 
-- 任何 `inhibit_rules` 的 `target_matchers` **不得** match `alertname="Watchdog"`（用 lint / config-review 驗，比依賴標籤約定可靠）。
-- operator 手冊**嚴禁**對 `alertname="Watchdog"` 施加 Silence；全域萬用靜音（`.*`）**必須顯式排除** Watchdog。
+- **Silence（靜音）**：重大故障時常下萬用靜音壓告警海嘯，會一起壓掉 `Watchdog`。
+- **`inhibit_rules`（抑制規則）**：例如某條叢集掛掉的告警觸發時，抑制所有常規告警。
 
-**心跳頻率與逾時要留緩衝**：外部監測的逾時門檻（TTL）必須**比 `repeat_interval` 長**，吸收網路延遲**與極端負載下的規則評估滯後（rule evaluation lag）**——資源被擠兌時 Prometheus 雖活著（pod 沒死），其規則評估迴圈會嚴重落後、心跳因而錯後。例如 `repeat_interval: 3m` → 外部 TTL 設 **5m**；這 2 分鐘緩衝是為了防引擎內部排程飢餓，不只是吸收幾秒的網路抖動。這條容錯契約要寫進 operator 手冊。
+Alertmanager 沒有「免於抑制」的設定。`severity: none` 只讓 `Watchdog` 不落入以 severity 為目標的抑制，一條目標更廣的抑制仍會壓掉它。所以改用兩道約束：
 
-**URL 是設定開關，不是硬性依賴**：operator 把自己的心跳 URL 放進掛載的 Secret（`url_file`）即生效；Secret 留空（placeholder）則明確記錄為已知盲點。
+- **抑制規則由路由產生器檢查。** 路由產生器組出最終設定時，檢查每一條 `inhibit_rules` 的 `target_matchers`：若全部比對得上 `Watchdog` 的標籤（`alertname="Watchdog"`、`severity="none"`），就拒絕輸出。例如一條 `target_matchers: ['severity=~".*"']` 的規則會得到：
 
-### D2：斷網環境改用「被動健康檢查」
+  ```text
+  ADR-025 invariant violated: inhibit rule(s) would suppress the always-firing Watchdog heartbeat (inhibit_rules[0] target=['severity=~".*"']). No inhibit_rules target_matchers may match alertname="Watchdog" — the heartbeat must always reach the external dead-man's-switch. Remove or narrow the rule (see the alerting-plane self-liveness runbook).
+  ```
 
-完全斷網的環境（如金融內網、產線邊緣）送不出心跳。退路是**反向操作**：由**叢集外部**的上層網管系統**定期主動探測**平台的健康檢查端點（Prometheus 與 Alertmanager 都內建 `/-/ready`、`/-/healthy`）。
+- **靜音由 operator 規範約束。** 不得對 `alertname="Watchdog"` 下 Silence；萬用靜音要明確排除 `Watchdog`。這一條沒有機械檢查。
 
-⚠️ **這不是 Kubernetes 的 readiness / liveness probe**。Kubernetes 內建探測失敗只會重啟 Pod 或把它移出服務——那是**叢集內部**行為、**沒有對外告警能力**，斷網或整個節點死亡時幫不上忙。這裡指的是**叢集外部**的監測系統主動輪詢，才能在平台整體失聯時發出警報。
+**外部逾時要比重送間隔長。** 外部逾時必須比 `repeat_interval` 長，吸收網路延遲，也吸收極端負載下的規則評估落後：資源被擠壓時 Prometheus 雖然還活著，規則評估迴圈會落後，心跳因而延遲。`repeat_interval: 3m` 時建議外部逾時 5 分鐘，並在外部設首次心跳的寬限期，避免平台重啟時誤報。
 
-### D3：高可用與大規模儲存：交給 operator，不自己做
+**心跳 URL 是設定，不是硬性依賴。** URL 內嵌 token，屬於機密，不寫進 ConfigMap；receiver 以 `url_file` 讀掛載的 Secret，送出時才讀檔，輪換 URL 不必重載 Alertmanager。出貨的 Secret 是佔位值：此時心跳送不出去，`AlertmanagerWebhookNotificationsFailing` 會觸發，提示 operator 去設定。路由產生器也會檢查 `watchdog-heartbeat` receiver 有沒有接上任何通知設定：沒接時印出警告；以 operator 自己的 base 設定組裝、又帶 `--strict` 時，改為錯誤並以結束碼 1 結束。要同時送到兩個外部監測（冗餘），在 `watchdog-heartbeat` 這個 receiver 裡加多個 `webhook_configs`，不要拆成多條路由：路由產生器每次都移除所有 `Watchdog` 路由、只放回一條，而手寫設定裡第二條路由會被第一條的 `continue: false` 擋住。
 
-平台**不**把「Prometheus / Alertmanager 多副本」或「大規模時序儲存」做進產品。理由：
+### 2. 斷網環境：由叢集外部輪詢健康端點
 
-- 平台一貫定位是**只負責規則與授權、儲存後端保持中立**——同一套規則在任何相容後端上都能跑。
-- 正式環境的 operator 會自帶高可用監控棧（本案目標客戶本來就在跑大規模時序資料庫）。
-- 出貨的範例部署維持單副本，是明確的「示範用」姿態。
+完全斷網的環境（例如金融內網、產線邊緣）送不出心跳。退路是反方向：由叢集外部的上層網管系統，定期探測 Prometheus 與 Alertmanager 的 `/-/ready`、`/-/healthy`。
 
-若未來平台真要提供高可用範例，計費遙測（目前尚未建置）必須一開始就設計成「多副本不重複計數」。但這屬於 operator 的儲存層職責，不是這條心跳要解的事。
+這不是 Kubernetes 的 readiness／liveness probe。Kubernetes 的探測失敗只會重啟 Pod 或把它移出服務，那是叢集內部的動作，不會對外發告警，在斷網或整個節點死掉時也幫不上忙。這裡指的是叢集外部的監測系統主動輪詢，平台整體失聯時才發得出警報。
 
-## 不採用的方案
+### 3. 高可用與大規模儲存交給 operator
 
-- **和平台同生共死的自託管心跳**：若心跳監測跟 Prometheus 在同一叢集 / 同一網路，它們會一起死——等於沒有。要自託管，就必須放在**真正獨立**的另一個叢集或機器。
-- **拿既有日誌管線當心跳來源**：平台的日誌儲存只是儲存、本身不評估告警，而且那條日誌串流在預設部署裡根本沒開。拿它當心跳是「看起來重用、其實要新蓋一套」，且仍兜不回外部錨點。
+平台不把多副本 Prometheus／Alertmanager 或大規模時序儲存做進產品，理由：
 
-## 實作現況
+- 平台的定位是只負責規則與授權、對儲存後端保持中立：同一套規則在任何相容的後端上都能跑。
+- 正式環境的 operator 預期自帶高可用的監控棧。
+- 出貨的範例部署維持單副本，是示範用的姿態。
 
-引擎死亡的盲點已補，且所有延後項的**設計就緒半**都已完成；唯一還沒上線的是「規則評估正確性」的**常駐**端到端保證（見〈之後再說〉）。
+### 其餘平台告警怎麼送到人
 
-- **Watchdog + 外部 dead-man's-switch（D1）** — 已實作（[#838](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/838)）。
-- **CI 規則靜態檢查（pint）** — 採用 OSS `pint`、hard-gate `alerts/template`，攔截「聚合砍掉 template 用到的 label → 告警永遠靜默」這個本 repo 燒過多次的類別（[#843](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/843)）。
-- **後端相容性 — PromQL / value parity** — 每 PR 由 `tests/rulepacks/test_vm_alert_parity.py`（全 fixture 過 `vmalert-tool unittest` = 生產 MetricsQL 引擎）守，把「儲存後端中立」變成可驗證 CI 事實；`test_vm_backend_parity.py` 退役成 on-demand 的「vmalert-tool == 真 vmsingle」等價 anchor（原 docker-VM job 已併入 gate A，[#947](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/947)）。
-- **合成探測對接面** — 帶 `component="synthetic-probe"` 的告警保證落 `synthetic-receiver` 且 `continue:false`，讓客戶用自己現有的探測器零風險驗端到端投遞（見 [合成探測對接](../integration/synthetic-probe-interop.md)）。
-- **runtime canary 租戶** — **設計就緒**（完整設計 + CI promtool 範例見 [Runtime Canary 設計](../design/runtime-canary.md)）；管線在正式環境已串通，**仍延後的是常駐部署**（詳見〈之後再說〉）。
+上面的路由只處理 `Watchdog`。其餘平台自我監控告警走既有機制，不需要新元件：
 
-## 之後再說（各有明確觸發條件）
+- 除 `Watchdog` 外，平台自我監控告警都帶 `alert_source: platform`。平台告警多半沒有 tenant 標籤可以依附，這個標籤讓 operator 能用正向條件選到它們。
+- `Watchdog` 刻意不帶這個標籤：它已有第一條路由，多一個標籤會讓心跳被拉進第二條投遞路徑。這兩個方向都由 `tests/ops/test_generate_routes_orchestration.py` 的 `TestPlatformAlertSourceContract` 檢查。
+- 出貨預設不投遞：這些告警落在 root 的 `default` receiver，它沒有任何通知設定。平台不預設把告警送到不知道的地方，與心跳 URL 由 operator 設定是同一個姿態。
+- operator 要收，用 `_routing_enforced`（平台級的強制路由）比對 `alert_source="platform"`。設定範例與限制見 [BYO Alertmanager 整合指南](../integration/byo-alertmanager-integration.md)第 11 節〈平台自監控告警的投遞〉。
 
-> **取捨的軸**：本平台要取代或整合「已經在用成熟監控產品」的客戶。這些能力（心跳/Watchdog、高可用、合成探測）業界本來就有，所以該做到哪、門檻是**被取代的既有產品設下的標準**，不是我們內部的成熟度。據此每項拆兩半：**評估階段就要拿得出的可信設計 + 一個能跑的範例（便宜，值得先做）** vs **真正營運才需要的常駐元件（昂貴，等明確觸發條件再做）**；客戶**已經有**的能力一律走**對接、不重造**。
+## 背景
 
-| 項目 | 一句話 | 觸發條件 |
-|---|---|---|
-| **Canary 租戶（runtime）** — **設計就緒** | 常駐假租戶 + 必觸發 dead-man's-switch（`CustomAlertPipelineCanaryDown`），抓 Watchdog 看不到的 exporter / 編譯管線靜默死亡（完整設計、壞租戶隔離兩層說明與範例見 [Runtime Canary 設計](../design/runtime-canary.md)） | **常駐部署**延後：重大規則編譯重構 / 多租戶路由大改前先佈署當安全網，或首個正式環境「告警評估悄悄失敗」事件後佈署防再犯 |
-| **端到端合成探測（平台自建探針）** | interop 對接面（sinkhole route）**已落地**（見下）；仍 defer 的是「**平台主動發**一條合成告警走完 Prometheus→Alertmanager→外部」的自建探針——多半 interop 即足夠、未必要做 | 心跳 + canary 上線後出現「規則評估悄悄失敗」事件 |
-| **後端相容性 — staleness / 時間語意** | 驗規則在客戶後端上的**時間相關**語意（staleness marker、gap 上的 `absence`、`predict_linear` 外插）正確——需真實時間軸 gap，非 dense fixture 測得出 | 首個客戶整合到自有後端 |
+監控系統有個老問題：它無法監控自己。
 
-> **兩個被否決的子方案（記此免重走）**：
-> - **後端相容性不採用 `promql-compliance-tester`**：它跑的是固定通用 PromQL 題庫、需約 1 小時 scrape 資料、且不能離線，對不上我們的需求——我們要驗的是**自己編譯產出**的 idiom（`and on()` / `group_left` / `max by` …）。改用一個薄 harness、復用既有 promtool golden 當參考即可（見 [backend-compat-baseline.md](../internal/backend-compat-baseline.md)）。
-> - **canary 不做 CI-gate 變體**：曾評估把合成 `absence` fixture 餵進「編譯器 + promtool + amtool」當 CI 閘門，但它與既有 absence 測試、Go 標籤契約、路由 orchestration 測試重疊約九成，且 CI 沒有 exporter、得自行合成 series——反而把要驗的端到端**砍小**成 CI fixture 自身的性質。保留的是**常駐 runtime canary**（抓 exporter / 編譯管線的靜默死亡，[#731](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/731) 類盲點），見上表與 [Runtime Canary 設計](../design/runtime-canary.md)。
+- 平台的 Prometheus 與 Alertmanager 各只跑一個副本。
+- 平台自我監控的告警（包括「產生指標的元件掛了」這類）全部由這同一個 Prometheus 評估。
+- 所以 Prometheus 或 Alertmanager 本身死掉時，這些告警不會觸發。畫面一片安靜，看起來沒事，其實整條告警鏈已經停了。
 
-## 範圍邊界
+平台已有的高可用設計只涵蓋資料平面：產生指標的 threshold-exporter 跑兩個副本，規則用 `max by(tenant)` 去重（見[高可用性設計](../design/high-availability.md)）。監控平面自己不在其中，這份 ADR 補的就是這一塊。
+
+這也和租戶端的存活性是兩回事。租戶可以用 `absence` 規則顧自己的指標（見[自訂規則治理](../custom-rule-governance.md)），但租戶修不好死掉的平台 Prometheus，也不該為此被呼叫。
 
 | 這份 ADR 管 | 不在這份 |
 |---|---|
-| 監控平面（Prometheus + Alertmanager + 到外部心跳的路由）自我存活 | 租戶側存活（租戶用 `absence` 顧自己指標，見 value-form cookbook） |
-| 平台 operator 視角 | 資料平面高可用（已有設計） |
+| 監控平面（Prometheus、Alertmanager、到外部心跳的路由）自己的存活 | 租戶端的存活（租戶以 `absence` 規則顧自己的指標） |
+| 平台 operator 的視角 | 資料平面的高可用（已有設計） |
 
-## 後果
+## 後果與已知限制
 
-- **正面**：用「一條規則 + 一條路由 + 一個路由測試」、零新增元件，補上「告警系統自己死掉沒人知道」的盲點；與「儲存後端中立」定位一致，不和客戶後端打架。
-- **負面**：
-    - 外部心跳是 operator 要自備的依賴（斷網退路＝被動探測）。
-    - 心跳只能證明「引擎還活著」，不能證明「規則評估正確」（→ 留給 runtime canary）。
-    - 單副本示範部署下，真出事仍需人工復原（高可用是 operator 的責任）。
+- **一條規則加一條路由，不新增元件**，就補上「告警系統自己死掉沒人知道」的盲點；和「儲存後端中立」的定位一致，不和客戶的後端衝突。
+- **外部心跳是 operator 要自備的依賴。** Secret 還是佔位值時，平台沒有心跳保護。斷網環境的退路是外部輪詢健康端點。
+- **`AlertmanagerWebhookNotificationsFailing` 看的是所有 webhook 的失敗數。** 它的表達式只以 `integration="webhook"` 篩選、不分 receiver，所以任一租戶的 webhook receiver 壞掉也會觸發它，不只是心跳。它設為 `warning`、`for: 15m`。
+- **心跳只證明引擎還活著，不證明規則評估正確。** 引擎活著、但租戶自訂告警的編譯管線或 exporter 悄悄斷掉，`Watchdog` 看不到；這要靠 runtime canary（見下方〈還沒做〉）。
+- **抑制規則的檢查只涵蓋路由產生器組出的設定。** 繞過路由產生器、直接手改 `alertmanager.yml` 的抑制規則不受檢查；Silence 完全沒有機械檢查，只靠 operator 規範。
+- **單副本的範例部署出事時要人工復原。** 高可用是 operator 的責任。
 
-## 後記：平台告警的投遞怎麼接（不改上述決策）
+配套的檢查：
 
-本 ADR 的決策段落只處理 `Watchdog` 這一條的專線；**其餘平台自監控告警怎麼送到人**當時不在範圍內，出貨狀態是「落在 root `default` receiver、無 notifier」。這造成一個實務落差：operator 讀完本 ADR 知道心跳怎麼設，卻找不到「那其他的要怎麼收」的答案。
+- **規則靜態檢查（pint）**：CI 以 pint 的 `alerts/template` 檢查規則來源，攔「聚合砍掉了告警模板用到的標籤，告警因此永遠不觸發」這類錯誤；`Watchdog` 所在的平台 rule pack 也在範圍內。設定在 `.pint.hcl`。
+- **後端相容性**：`tests/rulepacks/test_vm_alert_parity.py` 在每個 PR 把所有 promtool 測試資料跑過 `vmalert-tool unittest`（VictoriaMetrics 的 MetricsQL 引擎）；未登記在 `tests/rulepacks/vm_deviation_catalog.yaml` 的差異會讓檢查失敗。`tests/rulepacks/test_vm_backend_parity.py` 在 VictoriaMetrics 版本釘選變更時，對真實的 vmsingle 驗證兩者等價；`tests/rulepacks/test_vm_replay_staleness.py` 每晚以 `vmalert -replay` 量測資料中斷（staleness）時的時序差異。
+- **合成探測的對接面**：帶 `component="synthetic-probe"` 的告警一定落到 `synthetic-receiver`、`continue: false`，客戶可以用自己現有的探測器驗證端到端投遞，測試告警不會呼叫到人（見[合成探測對接](../integration/synthetic-probe-interop.md)）。
 
-補充說明（**不修改上述任何決策**）：
+## 考慮過的替代方案
 
-- 接的機制是既有的 `_routing_enforced`（平台級 enforced route），不需要新元件。
-- 平台告警沒有 tenant 可依附，故帶正向 discriminator label `alert_source: platform`（`Watchdog` **刻意不帶**——它有 index-0 專線，多一個 discriminator 會讓心跳被拉進第二條投遞路徑，與本 ADR「置頂 + `continue: false`」的推理一致）。
-- 出貨仍維持**零投遞**（不預設把告警送到未知目的地），與本 ADR「URL 是設定開關，不是硬性依賴」同一姿態。
+- **和平台同生共死的自架心跳監測**：監測和 Prometheus 在同一個叢集或網路，會一起死，等於沒有。要自架，就得放在真正獨立的另一個叢集或機器。
+- **拿既有的日誌管線當心跳來源**：日誌儲存只存資料、不評估告警，拿它當心跳等於另外蓋一套；而且它在平台內部，仍然不是外部的錨點。
+- **後端相容性用 `promql-compliance-tester`**：它跑的是固定的通用 PromQL 題庫，我們要驗的是平台自己編譯出來的寫法（`and on()`、`group_left`、`max by` 等）。改用既有的 promtool 測試資料當參考，跑過 VictoriaMetrics 的引擎比對（見 [backend-compat-baseline.md](../internal/backend-compat-baseline.md)）。
+- **把 canary 做成 CI 閘門**：把合成的 `absence` 測試資料餵進「編譯器 + promtool + amtool」。它和既有的 absence 測試、Go 端的標籤契約、路由測試大幅重疊；而且 CI 裡沒有 exporter，序列得自己合成，驗到的只剩測試資料本身的性質，不是端到端。保留的是常駐的 runtime canary。
 
-完整設定範例、`tenant=""` 兜底的負向斷言陷阱、以及「一條 enforced route 無法同時表達 critical OR platform」等誠實限制，見 [BYO Alertmanager 整合指南 §11 平台自監控告警的投遞](../integration/byo-alertmanager-integration.md#11-平台自監控告警的投遞)。
+## 還沒做、各自的觸發條件
+
+| 項目 | 內容 | 觸發條件 |
+|---|---|---|
+| runtime canary 的常駐部署 | 一個常駐的假租戶加一條必觸發的 dead-man's switch（`CustomAlertPipelineCanaryDown`），抓 `Watchdog` 看不到的 exporter／編譯管線靜默死亡。設計與 CI 範例已完成，見 [Runtime Canary 設計](../design/runtime-canary.md) | 重大的規則編譯重構或多租戶路由大改之前先部署當安全網；或第一次正式環境發生「告警評估悄悄失敗」之後部署防再犯 |
+| 平台自建的端到端合成探測 | 平台主動發一條合成告警，走完 Prometheus → Alertmanager → 外部。客戶多半用上面的對接面就夠，未必要做 | 心跳與 canary 上線後，仍發生「規則評估悄悄失敗」 |
+| 後端的時間外插語意 | `predict_linear` 在客戶後端上的時間外插是否正確；需要真實時間軸，密集的測試資料驗不出 | 沒有明確的觸發條件，仍開；見 [backend-compat-baseline.md](../internal/backend-compat-baseline.md) |
+
+取捨的軸：本平台要取代或整合已經在用成熟監控產品的客戶。心跳、高可用、合成探測這些能力業界本來就有，該做到哪，門檻是被取代的既有產品設下的標準。所以每一項先做評估階段就要拿得出來的設計與可跑的範例（便宜），常駐元件（昂貴）等觸發條件；客戶已經有的能力走對接，不重造。
 
 ## 相關
 
-- value-form cookbook 收尾：[#832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/832)——租戶側存活性所在，與本 ADR 不同平面。
-- 資料平面高可用設計：[高可用性設計](../design/high-availability.md)（互補）。
-- 既有的隔離式告警路由（Alertmanager 設定中的租戶自訂告警專線）可作為 Watchdog 路由範本。
+- [Operator 指南：告警平面自我存活性](../integration/alerting-plane-self-liveness.md) — 心跳設定、TTL、靜音與抑制禁區、排障
+- [BYO Alertmanager 整合指南](../integration/byo-alertmanager-integration.md) — 第 11 節，平台自監控告警的投遞
+- [高可用性設計](../design/high-availability.md) — 資料平面的高可用（互補）
+- [Runtime Canary 設計](../design/runtime-canary.md)
+- [合成探測對接](../integration/synthetic-probe-interop.md)
+- 實作位置：規則在 `rule-packs/rule-pack-platform.yaml`；路由與 receiver 由 `scripts/tools/ops/_grar_routes.py` 產生，抑制規則的檢查在 `scripts/tools/ops/_grar_validate.py`；出貨的 Alertmanager 設定在 `k8s/03-monitoring/configmap-alertmanager.yaml`，佔位 Secret 在 `k8s/03-monitoring/secret-watchdog-heartbeat.yaml`

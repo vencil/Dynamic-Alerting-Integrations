@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: helm
 created_at: 2026-03-13
-updated_at: 2026-10-10
+updated_at: 2026-11-22
 ---
 # ADR-002: OCI Registry 替代 ChartMuseum
 
@@ -19,7 +19,7 @@ updated_at: 2026-10-10
 
 ## 狀態
 
-✅ **Accepted**（v1.12.0）
+✅ **Accepted**（2026-03）
 
 ## 名詞
 
