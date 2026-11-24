@@ -765,6 +765,14 @@ class TestBuildOnboardHintsDbTypes:
         hints = self._hints(config_dir, ["node_network_receive_bytes_total > 1e9"])
         assert hints["db_types"] == {}
 
+    def test_the_kind_comes_from_the_registry_namespaces(self, config_dir):
+        """#4270: ClickHouse's metrics are CamelCase (the hand map had
+        `clickhouse_`); kube_* is the platform's, not an exporter kind."""
+        hints = self._hints(config_dir, ["ClickHouseMetrics_TCPConnection > 100",
+                                         "kube_pod_info > 0"])
+        assert hints["db_types"] == {"tenant-x": ["clickhouse"],
+                                     "tenant-y": ["clickhouse"]}
+
     def test_unparseable_rule_is_skipped(self, config_dir):
         """metric_key 為 None 的規則不影響其他規則的推斷。"""
         hints = self._hints(config_dir, ["pg_up == 0", "vector(1)"])

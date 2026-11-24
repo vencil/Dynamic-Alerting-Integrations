@@ -189,7 +189,7 @@ def generate() -> None:
     text = _BASELINE_HEADER + body
     # #3981 (review): an unchanged baseline is not rewritten — only a replaced
     # file must pass the entry's checks (it refuses this process's stdin).
-    if not (_BASELINE.is_file() and _BASELINE.read_text(encoding="utf-8") == text):
+    if not (_BASELINE.is_file() and _BASELINE.read_bytes() == text.encode("utf-8")):  # bytes, not CRLF-blind
         write_repo_artifact(_BASELINE, text)  # the artifact entry
     n = len(_flatten(tree))
     print(f"check_percent_render_pinned: wrote baseline with {n} unpinned annotation(s) "

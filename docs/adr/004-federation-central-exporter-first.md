@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-07
-updated_at: 2026-10-10
+updated_at: 2026-11-22
 ---
 # ADR-004: Federation 架構——中央 Exporter 優先
 
@@ -21,7 +21,7 @@ updated_at: 2026-10-10
 
 ## 狀態
 
-✅ **Accepted** (v1.12.0) → **Extended** (v2.3.0)
+✅ **Accepted**（2026-03）→ **Extended**（v2.3.0）
 
 v2.3.0：新增邊緣評估——Rule Pack 的正規化部分可在邊緣 Prometheus 評估，threshold-exporter 與告警評估仍在中央。
 

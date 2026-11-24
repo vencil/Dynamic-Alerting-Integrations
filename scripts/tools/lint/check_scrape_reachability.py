@@ -943,8 +943,9 @@ def classify(metric: str, jobs: list[dict], services: list[dict]) -> tuple[str, 
     # shortcut used to sit here (and its twin in the split tool), classifying
     # every platform gauge whose name happens to end in `_up` as tenant-exporter
     # liveness — the one metric it was load-bearing for was the misclassified
-    # one (TRK-353 / #1250). New exporter family → register its prefix in the
-    # _FEDERATED_EXPORTER_PREFIXES SSOT; a name suffix is not evidence.
+    # one (TRK-353 / #1250). New exporter family → declare its prefix in the
+    # threshold registry's `metric_prefixes` (#4270); a name suffix is not
+    # evidence.
     if is_federated_exporter_metric(metric):
         if _tenant_exporter_face_exists(jobs):
             return REACHABLE_IF_EXPORTED, (

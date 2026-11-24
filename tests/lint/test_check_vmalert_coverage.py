@@ -271,3 +271,16 @@ def test_an_unchanged_baseline_on_stdin_is_left_alone(tree, monkeypatch, capsys)
         os.close(saved)
     assert rc == 0, capsys.readouterr().err
     assert baseline.read_bytes() == before
+
+
+def test_a_crlf_copy_of_the_baseline_is_rewritten(tree, monkeypatch):
+    """#3981 (review): "unchanged" is judged on bytes, so a CRLF copy of the
+    current baseline is rewritten to LF rather than kept."""
+    rp, tr = tree
+    baseline = tr / "vmalert_coverage_baseline.yaml"
+    monkeypatch.setattr(sys, "argv", ["check_vmalert_coverage.py", "--generate"])
+    assert cov.main() == 0
+    golden = baseline.read_bytes()
+    baseline.write_bytes(golden.replace(b"\n", b"\r\n"))
+    assert cov.main() == 0
+    assert baseline.read_bytes() == golden

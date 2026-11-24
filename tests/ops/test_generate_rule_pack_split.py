@@ -340,8 +340,13 @@ class TestIsExternalPipelineInput:
         # Per-tenant exporters are tenant-labeled → federated → excused.
         for m in ("mysql_global_status_uptime", "mongodb_up", "kafka_brokers",
                   "rabbitmq_identity_info", "pg_stat_database_deadlocks",
-                  "redis_up", "db2_up", "clickhouse_replication_queue"):
+                  "redis_up", "db2_up", "ClickHouseMetrics_ReplicatedFetchQueueSize"):
             assert grps._is_external_pipeline_input(m) is True, m
+
+    def test_a_name_no_exporter_kind_writes_is_not_external(self):
+        """#4270: the prefixes are the registry's `metric_prefixes`. The hand
+        copy had `clickhouse_`, which no ClickHouse metric is named."""
+        assert grps._is_external_pipeline_input("clickhouse_replication_queue") is False
 
     def test_cluster_ksm_raw_not_external(self):
         # kube-state-metrics / kubelet raw is namespace-labeled → NOT federated
