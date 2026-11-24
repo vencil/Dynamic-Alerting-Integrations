@@ -447,7 +447,7 @@ def test_cluster_text():
     ("edge www.example.test west", "edge www\\.example.test west"),
     ("WWW.x.test", "WWW\\.x.test"),
     ("see https://x.test/a", "see https\\://x.test/a"),
-    ("a@b.test", "a\\@b.test"),
+    ("a@b.test", "a<span>@</span>b.test"),
     ("awww.x plain-east.1 x: 1", "awww.x plain-east.1 x: 1"),
 ])
 def test_markdown_text_leaves_no_bare_address_to_autolink(text, escaped):

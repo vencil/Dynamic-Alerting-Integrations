@@ -238,7 +238,7 @@ def repeated_rows(groups: "dict[str, list[dict[str, Any]]]", span: Any) -> "dict
 
 #: The characters `markdown_text` escapes: the ones that start markup inside
 #: a line of GitHub-flavoured Markdown (a table cell among them).
-_MARKDOWN_ACTIVE = "\\`*_[]<>|~&#@"
+_MARKDOWN_ACTIVE = "\\`*_[]<>|~&#"
 
 
 # What GitHub links with no markup: `www.` at a word start, and `scheme://`.
@@ -254,8 +254,11 @@ def markdown_text(text: str) -> str:
     table's ``|``, a code span's backtick, an HTML tag's ``<``, emphasis, a
     link, an entity) is backslash-escaped, so it renders as itself. GitHub
     also links bare addresses (`www.…`, `https://…`, `a@b.c`) with no markup
-    at all: the `@`, the `:` of `://` and the dot after a leading `www` are
-    escaped for that."""
+    at all: the `:` of `://` and the dot after a leading `www` are escaped
+    for that. A backslash does not stop the address form — GitHub still
+    renders `a\\@b.c` as a `mailto:` link — so an `@` is written inside a
+    `<span>`: the address is then no longer one run of text, which is what
+    the link is made from."""
     out = []
     for ch in text:
         if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp"):
@@ -264,7 +267,8 @@ def markdown_text(text: str) -> str:
             out.append("\\" + ch)
         else:
             out.append(ch)
-    return _SCHEME.sub(r"\\:", _WWW.sub(r"\1\\.", "".join(out)))
+    text = _SCHEME.sub(r"\\:", _WWW.sub(r"\1\\.", "".join(out)))
+    return text.replace("@", "<span>@</span>")
 
 
 def cluster_text(cluster: str) -> str:
