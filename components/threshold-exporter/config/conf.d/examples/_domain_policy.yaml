@@ -9,7 +9,7 @@
 #   _routing_defaults → routing_profiles[ref] → tenant _routing → domain_policies(validate)
 #
 # This file sits in the examples/ SUBDIRECTORY, so it applies to the tenants of
-# this subtree only (#2326, ADR-007 amendment 2026-09-28): naming a tenant that
+# this subtree only (#2326, ADR-007 §Scope in a hierarchical conf.d): naming a tenant that
 # lives outside examples/ is an ERROR under --strict (the entry is not
 # enforced), and the conf.d root's own policies still apply here on top
 # (policies at different levels are judged additively).

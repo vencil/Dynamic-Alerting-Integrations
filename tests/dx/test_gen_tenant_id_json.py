@@ -1,4 +1,4 @@
-"""Tests for gen_tenant_id_json (ADR-035 D2).
+"""Tests for gen_tenant_id_json (ADR-035 §2).
 
 tenant-id.json is DERIVED from tenant-config.schema.json definitions.tenantId
 and consumed by Go (pkg/tenantid, go:embed) and the portal. These pin that the
