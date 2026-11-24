@@ -283,7 +283,7 @@ da-tools check-alert MariaDBHighConnections db-a
 
 給了 `--config-dir`、而那個 conf.d 上有 da-guard 驗證會點名的路徑時，本工具在任何檢查之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
 
-**用途**：切換後或排查時快速確認單一租戶。⚠️ Pod 與 exporter 兩項是為 MariaDB 寫的：Pod 檢查查租戶同名 namespace 裡 `app=mariadb` 的 Pod（需要 `kubectl` 與叢集存取權，da-tools 映像不含 `kubectl`），exporter 檢查查 `mysql_up{instance="<tenant>"}`。工具先從 Prometheus 的 `tenant_expected_exporter{tenant="<tenant>"}` 讀租戶宣告的 exporter 種類（`pack` label；租戶在 `_expected_exporters` 宣告了才有這條 series）。只有宣告的種類含 `mariadb` 時才跑這兩項；其他種類或沒宣告的租戶，兩項列在輸出的 `skipped` 並附原因，`status` 是 `unchecked`，不是 `healthy` 也不是 `error`。所以沒宣告的 MariaDB 租戶也不會做這兩項檢查；要檢查就在 `_expected_exporters` 宣告 `mariadb`。⚠️ v2.9.0 映像還是舊行為：不看租戶宣告了什麼，非 MariaDB 租戶一律回 `status: error`（`Pod not found`）。 <!-- image-caveat: v2.9.0 -->
+**用途**：切換後或排查時快速確認單一租戶。⚠️ Pod 與 exporter 兩項是為 MariaDB 寫的：Pod 檢查查租戶同名 namespace 裡 `app=mariadb` 的 Pod（需要 `kubectl` 與叢集存取權，da-tools 映像不含 `kubectl`），exporter 檢查查 `min by(tenant, da_cluster) (mysql_up{job="tenant-exporters",tenant="<tenant>"})`，逐叢集判定（見下方「多叢集的租戶」）。工具先從 Prometheus 的 `tenant_expected_exporter{tenant="<tenant>"}` 讀租戶宣告的 exporter 種類（`pack` label；租戶在 `_expected_exporters` 宣告了才有這條 series）。只有宣告的種類含 `mariadb` 時才跑這兩項；其他種類或沒宣告的租戶，兩項列在輸出的 `skipped` 並附原因，`status` 是 `unchecked`，不是 `healthy` 也不是 `error`。所以沒宣告的 MariaDB 租戶也不會做這兩項檢查；要檢查就在 `_expected_exporters` 宣告 `mariadb`。⚠️ v2.9.0 映像還是舊行為：不看租戶宣告了什麼，非 MariaDB 租戶一律回 `status: error`（`Pod not found`）。 <!-- image-caveat: v2.9.0 -->
 
 **語法**
 
@@ -328,6 +328,18 @@ Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選�
 {"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "expected exporters=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "expected exporters=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
 ```
 
+**多叢集的租戶**（[ADR-006](adr/006-tenant-mapping-topologies.md)、[#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200)）：exporter 檢查逐叢集判定，叢集取自 `mysql_up` 序列的 `da_cluster`。只涵蓋 `mariadb` 這一種，規則與 `TenantExporterAbsent` 告警對 `mysql_up` 的判定相同：
+
+- 序列的值不是 1：`issues` 列 `Exporter reports DOWN in <叢集>, … (mysql_up!=1)`，點名叢集；序列不帶 `da_cluster`（直接查抓取 exporter 的那台 Prometheus）時仍是 `Exporter reports DOWN (mysql_up!=1)`。
+- 租戶以 `mariadb@<叢集>` 逐叢集宣告時，宣告的叢集沒有帶該 `da_cluster` 的序列就列 `Exporter absent in <叢集>`，結束碼 `1`。一條不帶 `da_cluster` 的序列對每個宣告的叢集都算存在。只寫 `mariadb`（沒宣告叢集）時維持原樣：任何一個叢集有序列就算存在。
+- 有逐叢集宣告、或序列來自一個以上的叢集時，輸出多兩個欄位。`exporter_clusters` 每個叢集一筆 `{"cluster", "declared", "state"}`：`state` 是 `up`、`down`、`absent`，或 `unlabelled`（宣告的叢集沒有自己的序列，由不帶 `da_cluster` 的那條序列算作存在）；不帶 `da_cluster` 的那條序列自己的 `cluster` 是 `null`。`pod_check` 是 `{"scope": "current kubectl context only", "phase": …}`：Pod 檢查只看 `kubectl` 目前 context 的那一個叢集，其他叢集的 Pod 沒有檢查。這時在目前的 context 找不到 Pod 不列入 `issues`、不影響結束碼（`phase` 是 `null`，`note` 說明原因）；找到但不是 Running 仍是 `Pod status is …`。
+
+```json
+{"status": "error", "tenant": "db-a", "issues": ["Exporter absent in edge-a"], "recent_logs": [], "pod_check": {"scope": "current kubectl context only", "phase": "Running"}, "exporter_clusters": [{"cluster": "edge-a", "declared": true, "state": "absent"}, {"cluster": "edge-b", "declared": true, "state": "up"}]}
+```
+
+維護與靜音模式是租戶一份，federate 上來的多條副本不影響判定。⚠️ v2.9.0 映像還是舊行為：查的是 `mysql_up{instance="<tenant>"}`，不分叢集，也不看逐叢集的宣告。 <!-- image-caveat: v2.9.0 -->
+
 **繼承鏈（`--config-dir`）**：租戶有沒有、綁到哪個 profile、每個 key 來自哪一層取 `da-guard effective`（tenant-api `/effective`），每個值取 exporter 實際送出的（`da-guard served-values`，即 `/metrics`），不再由 Python 重讀 YAML（[#2526](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2526)、[#2547](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2547)）。整棵樹都讀（子目錄的租戶與各層 `_defaults.yaml` 也算）。`--show-inheritance` 的 `resolved` 是 `/metrics` 送出的值（`/metrics` 不送的 key，例如停用或根目錄沒宣告的，顯示 `/effective` 的值）；`chain` 是每個值寫在哪一層、寫了什麼。兩者不同時（例如讀不成數字的 `2024-02-30` 送的是 defaults 的值、`expires:` 已過期）輸出不解釋原因，原因看 `da-guard served-values` 的 stderr。`chain` 每層只列它寫下且勝出的 key（被覆寫的 defaults 不列），根目錄平台檔的 `tenants:` 是自己的一層 `platform`；`profile_name` 是 exporter 實際綁上的 profile，引用了不存在的 profile 時為 `null` 並在 stderr 說明；`declared` 仍是根目錄 `_defaults.yaml` 的 `optional_overrides:`（只取名稱原文）。tree 裡沒有這個租戶時結束碼 2（stderr 一行 `ERROR: no tenant …`，`--json` 時 stdout 為空），與 tenant-api `/effective` 對未知租戶回 404 同義（[#1524](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1524)；先前印 `{"error": ...}`、結束碼 0）。⚠️ v2.9.0 映像仍是舊行為：`--config-dir` 不存在、不是目錄或樹裡沒有該租戶都回 0。 <!-- image-caveat: v2.9.0 --> 需要 da-guard（映像內建；repo 內 `make da-guard-build`）；找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（含 served-values 拒收整棵樹、或兩份輸出的租戶對不上）時，不給部分答案，結束碼 2 並轉出 da-guard 的 stderr。⚠️ v2.9.0 映像仍以 Python 讀 conf.d、不需要 da-guard。 <!-- image-caveat: v2.9.0 -->
 
 **範例**
@@ -341,7 +353,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 | 代碼 | 說明 |
 |------|------|
 | `0` | `status: healthy`，或 `status: unchecked`（Pod 與 exporter 兩項被跳過，其餘沒有問題） |
-| `1` | `status: error`：Pod 不在或不是 Running、`mysql_up` 不是 1 |
+| `1` | `status: error`：Pod 不在或不是 Running、`mysql_up` 不是 1、宣告的叢集沒有 exporter 在回報（`Exporter absent in <叢集>`） |
 | `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗，含維護／靜默模式的查詢（後者先前被當成 `normal`、結束碼 `0`，此時 `operational_mode` 為 `unknown`，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`，或 `kubectl` 在時限內沒回應（每次上限 120 秒；兩者都是 stderr 一行說明，[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）；`--config-dir` 不存在、不是目錄（含空字串）或進不去，在任何查詢之前就停（[#1524](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1524)；先前結束碼 0，且 `check` 模式的輸出與沒給 `--config-dir` 相同）；樹裡沒有這個租戶；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr）。stdout 依情況而定：缺 tenant 由 argparse 擋下，stdout 是空的；Prometheus 查詢失敗是上述 `status: error` 文件；其餘（`--show-inheritance` 沒配 `--config-dir`、`--config-dir` 不可用、樹裡沒有該租戶、`kubectl` 不在或沒回應、da-guard 這一類）stdout 是空的，原因只在 stderr（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)；[#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115)～#3558 之間是一份 `"status": "caller_error"` 的 envelope） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：`status` 是 `healthy` 或 `error` 都回 `0`，沒有 `kubectl` 時以 Python traceback 結束（rc=1）。用 v2.9.0 時請讀輸出的 `status`。 <!-- image-caveat: v2.9.0 -->
