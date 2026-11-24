@@ -152,7 +152,7 @@ def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: 
     return warnings
 
 
-# ── ADR-025 D1 / #838: Watchdog inhibition-immunity invariant ──────
+# ── ADR-025 §1 / #838: Watchdog inhibition-immunity invariant ──────
 #
 # Alertmanager has NO "exempt from inhibition" primitive — the Watchdog's
 # severity:none label only keeps it out of severity-targeted inhibits, it is NOT
@@ -473,7 +473,7 @@ def find_watchdog_suppressing_inhibits(inhibit_rules: list[dict] | None) -> list
 def assert_watchdog_inhibit_immunity(inhibit_rules: list[dict] | None) -> None:
     """Fail-closed guard: raise ValueError if any inhibit rule would suppress the
     Watchdog heartbeat. Run on the FINAL merged inhibit set at every render path
-    so a Watchdog-suppressing rule can never be shipped (ADR-025 D1)."""
+    so a Watchdog-suppressing rule can never be shipped (ADR-025 §1)."""
     offending = find_watchdog_suppressing_inhibits(inhibit_rules)
     if not offending:
         return

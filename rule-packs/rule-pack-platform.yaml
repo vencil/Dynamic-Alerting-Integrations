@@ -53,7 +53,7 @@
 groups:
   - name: platform-self-monitoring
     rules:
-      # --- Alerting-Plane Self-Liveness (ADR-025 D1 / #838) ---
+      # --- Alerting-Plane Self-Liveness (ADR-025 §1 / #838) ---
       # The "who watches the watcher" gap: Prometheus + Alertmanager are
       # single-replica, and every alert below is evaluated by THIS Prometheus
       # — if it (or Alertmanager) dies, all of them silently stop firing and
@@ -86,7 +86,7 @@ groups:
             alertname="Watchdog" (ADR-025).
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md"
 
-      # --- Watchdog egress health (ADR-025 §D1 / #838) ---
+      # --- Watchdog egress health (ADR-025 §1 / #838) ---
       # Internal complement to the EXTERNAL dead-man's-switch. If Alertmanager
       # is alive and evaluating but its webhook notifications are FAILING, the
       # Watchdog heartbeat is not actually leaving the cluster (bad/empty
