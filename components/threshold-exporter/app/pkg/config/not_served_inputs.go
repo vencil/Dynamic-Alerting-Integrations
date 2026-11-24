@@ -27,7 +27,7 @@ import (
 
 // TenantValuesInput is a fingerprint of one tenant's built map — every key
 // and every field of its ScheduledValue (default, each window and value in
-// order, expires, reason). Equal fingerprints of the same map content are
+// order, expires, reason, and what it gives way to on expiry). Equal fingerprints of the same map content are
 // guaranteed; distinct content colliding is a 64-bit FNV-1a collision.
 func TenantValuesInput(overrides map[string]ScheduledValue) uint64 {
 	keys := make([]string, 0, len(overrides))
@@ -40,9 +40,8 @@ func TenantValuesInput(overrides map[string]ScheduledValue) uint64 {
 		_, _ = h.Write([]byte(s))
 		_, _ = h.Write([]byte{0})
 	}
-	for _, k := range keys {
-		sv := overrides[k]
-		field(k)
+	var value func(sv ScheduledValue)
+	value = func(sv ScheduledValue) {
 		field(sv.Default)
 		for _, o := range sv.Overrides {
 			field(o.Window)
@@ -52,8 +51,18 @@ func TenantValuesInput(overrides map[string]ScheduledValue) uint64 {
 		if sv.Expiry != nil {
 			field(sv.Expiry.Expires)
 			field(sv.Expiry.Reason)
+			// #4263: what the value gives way to is read by the resolve
+			// as much as the value is (liveValue).
+			if l := sv.Expiry.lapse; l != nil {
+				_, _ = h.Write([]byte{3, byte(l.layer)})
+				value(l.value)
+			}
 		}
 		_, _ = h.Write([]byte{2})
+	}
+	for _, k := range keys {
+		field(k)
+		value(overrides[k])
 	}
 	return h.Sum64()
 }
@@ -107,23 +116,27 @@ func (c *ThresholdConfig) TenantValuesNotServedAndDisabled(tenant string, now ti
 }
 
 // ValuesNotServedExpiryEdge is the earliest `expires:` instant of overrides
-// that now has not passed — the instant after which isThresholdExpired (the
+// (and of every value they give way to, #4263) that now has not passed —
+// the instant after which isThresholdExpired (the
 // one time-dependent input of a tenant's verdicts besides the whole-day
 // schedule reading) changes for one of its values. ok is false when there
 // is none (no time-box, all passed, or unparseable — which the resolver
 // treats as never expiring).
 func ValuesNotServedExpiryEdge(overrides map[string]ScheduledValue, now time.Time) (edge time.Time, ok bool) {
-	for _, sv := range overrides {
-		if sv.Expiry == nil || sv.Expiry.Expires == "" {
-			continue
-		}
-		t, err := time.Parse(time.RFC3339, sv.Expiry.Expires)
-		if err != nil || now.After(t) {
-			continue
-		}
-		if !ok || t.Before(edge) {
-			edge, ok = t, true
-		}
+	for _, top := range overrides {
+		// #4263: every value the resolve may serve on expiry (lapseChain).
+		lapseChain(top, func(sv ScheduledValue) {
+			if sv.Expiry == nil || sv.Expiry.Expires == "" {
+				return
+			}
+			t, err := time.Parse(time.RFC3339, sv.Expiry.Expires)
+			if err != nil || now.After(t) {
+				return
+			}
+			if !ok || t.Before(edge) {
+				edge, ok = t, true
+			}
+		})
 	}
 	return edge, ok
 }

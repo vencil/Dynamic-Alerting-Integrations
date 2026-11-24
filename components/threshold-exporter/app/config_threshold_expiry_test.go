@@ -115,7 +115,8 @@ func TestValidateTenantKeys_ExpiresFailLoud(t *testing.T) {
 	if !strings.Contains(all, "invalid `expires:`") || !strings.Contains(all, "db-malformed") {
 		t.Errorf("expected malformed-expires warning for db-malformed, got:\n%s", all)
 	}
-	if !strings.Contains(all, "is ignored") || !strings.Contains(all, "db-scope") {
+	// #4263: nothing beneath and no root value — refused, naming why.
+	if !strings.Contains(all, "is refused — nothing gives") || !strings.Contains(all, "db-scope") {
 		t.Errorf("expected out-of-scope warning for db-scope, got:\n%s", all)
 	}
 	for _, line := range cfg.ValidateTenantKeys().Errors {

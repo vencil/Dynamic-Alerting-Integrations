@@ -134,6 +134,10 @@ func applySubtreeDefaults(
 		// one directory deeper. The single-level tests could not see it.
 		// (CodeRabbit, #1569.)
 		var inherited map[string]struct{}
+		// #4263: per key the tenant holds with an `expires:`, the value the
+		// deepest level would have applied had the tenant not held it —
+		// what that value gives way to (stackLapse, after the chain).
+		var shadowed map[string]ScheduledValue
 		for _, defaultsPath := range tenantDefaults[tenantID] {
 			if filepath.Dir(filepath.Clean(defaultsPath)) == rootDir {
 				continue // the global defaults file — already in cfg.Defaults
@@ -169,6 +173,14 @@ func applySubtreeDefaults(
 							tenantSets[tenantID][defaultsPath] = map[string]bool{}
 						}
 						tenantSets[tenantID][defaultsPath][key] = true
+					}
+					if held, ok := heldAcrossSpellings(overrides, key); ok && overrides[held].Expiry != nil {
+						if value, verdict := subtreeLevelValue(cfg, key, raw); verdict == subtreeApplied {
+							if shadowed == nil {
+								shadowed = map[string]ScheduledValue{}
+							}
+							shadowed[held] = value // the deeper level wins
+						}
 					}
 					continue // the tenant authored it — never touched
 				}
@@ -246,6 +258,11 @@ func applySubtreeDefaults(
 				// value is already servedValue's (subtreeLevelValue, #3295):
 				// a reserved key's window was dropped before any verdict.
 				overrides[key] = value
+			}
+		}
+		for held, value := range shadowed {
+			if sv, ok := stackLapse(overrides[held], value, lapseLayerSubtree); ok {
+				overrides[held] = sv
 			}
 		}
 	}

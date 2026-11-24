@@ -431,23 +431,11 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 	return now.After(t)
 }
 
-// headLive reports whether the tenant's value sv of family base key base
-// applies at now — the one expiry rule of a family head (#3046): an
-// `expires:` is honoured only for a key the root `defaults:` values
-// (resolveBaseRows' fail-safe hook, PREVENT #656: a lapsed value falls back
-// to the platform default); every other head — a declared key, a base only
-// `dimensions:` names — keeps its value, as resolveDeclaredRows does.
-func headLive(base string, defaults map[string]float64, sv ScheduledValue, now time.Time) bool {
-	if expiryHonoured(base, defaults) {
-		return !isThresholdExpired(sv, now)
-	}
-	return true
-}
-
-// expiryHonoured reports whether a tenant value of key may lapse at its
-// `expires:` (PREVENT #656) — the one rule the resolver (headLive), the
-// expiry event (ResolveThresholdExpiriesAt) and the write check
-// (ValidateTenantKeys) share: the root `defaults:` (canonical) values key,
+// expiryHonoured reports whether a tenant value of base key key, with
+// nothing beneath it in the merge, may lapse to the root at its `expires:`
+// (PREVENT #656) — lapsesToRoot's base half, so the rule the resolver
+// (liveValue), the expiry event and the write check (canLapse) share: the
+// root `defaults:` (canonical) values key,
 // and not with the built-in layer's off (BuiltinOffDefault, #4163) — nor,
 // for a key of the off table, with a value the root decode refused, which
 // seedBuiltinOff keeps in off's place and which reads as off does. A value
@@ -463,7 +451,8 @@ func expiryHonoured(key string, defaults map[string]float64) bool {
 }
 
 // familyHeadOff reports whether the tenant switches family base off at now
-// (#3046): its value applies (headLive) and is a `disable`
+// (#3046): its value applies (liveValue: an expired one reads as what it
+// gives way to) and is a `disable`
 // (thresholdRowDisabled; `disable:<severity>` is none, #3141) — or the
 // tenant's merged config gives base no value the base phase reads (none
 // written, an expired one, one it cannot read) and the root `defaults:`
@@ -473,7 +462,7 @@ func expiryHonoured(key string, defaults map[string]float64) bool {
 // the root `defaults:` ones — is then served no row.
 //
 // ⛔ THE one reading. resolveBaseRows' and resolveDeclaredRows' State 3 are
-// this same pair (headLive, thresholdRowDisabled) on the value they already
+// this same pair (liveValue, thresholdRowDisabled) on the value they already
 // resolved; the sibling phases and da-guard (FamilyView) ask this function —
 // nothing else decides whether a family is switched off.
 //
@@ -487,13 +476,16 @@ func familyHeadOff(base string, defaults map[string]float64, overrides map[strin
 // the schedule at valueAt — da-guard's reading of one part of the day,
 // which, like the resolver's (AtMinuteOfDay), reads `expires:` at --at.
 func familyHeadOffSplit(base string, defaults map[string]float64, overrides map[string]ScheduledValue, expiryAt, valueAt time.Time) bool {
-	if sv, ok := overrides[base]; ok && headLive(base, defaults, sv, expiryAt) {
-		v := sv.resolveValue(valueAt, nil)
-		if off, _ := thresholdRowDisabled(v); off {
-			return true
-		}
-		if _, _, parsed := parseThresholdValue(v); parsed {
-			return false
+	if sv, ok := overrides[base]; ok {
+		// #4263: an expired value reads as what it gives way to (liveValue).
+		if sv, live := liveValue(base, defaults, sv, expiryAt); live {
+			v := sv.resolveValue(valueAt, nil)
+			if off, _ := thresholdRowDisabled(v); off {
+				return true
+			}
+			if _, _, parsed := parseThresholdValue(v); parsed {
+				return false
+			}
 		}
 		// A value the base phase cannot read falls back to the root's,
 		// as resolveBaseRows does: below.
@@ -611,8 +603,9 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 		severity := "warning" // default severity
 
 		// Check tenant override (skip _state_ overrides).
-		// PREVENT #656: a time-boxed override past its expires: instant is treated
-		// as absent → falls through to State 2 (platform default). The value still
+		// PREVENT #656: a time-boxed override past its expires: instant gives
+		// way to the layer beneath it, else is treated as absent → State 2
+		// (liveValue, #4263). The value still
 		// emits (with the default) so this is fail-safe (more protection, never
 		// silent) and leaves the cardinality count unchanged; collectThresholdExpiries
 		// emits da_config_event so a cleanup PR removes the stale YAML.
@@ -623,7 +616,12 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			// verdict below.
 			rec.claim(metricKey)
 		}
-		if exists && headLive(metricKey, defaults, sv, now) { // familyHeadOff's rule
+		if exists {
+			// #4263: an expired value reads as what it gives way to
+			// (liveValue, familyHeadOff's rule); none left → State 2.
+			sv, exists = liveValue(metricKey, defaults, sv, now)
+		}
+		if exists {
 			override := sv.resolveValue(now, logf)
 			if rec != nil {
 				rec.noteInvalidWindows(tenant, metricKey, sv)
@@ -759,6 +757,9 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 		if !set {
 			continue // declared but unset — the dormant state, correctly silent
 		}
+		// #4263: an expired value gives way to the layer beneath it; with
+		// none (no root value to fall to) it is served past `expires:`.
+		sv, _ = liveValue(metricKey, defaults, sv, now)
 
 		// resolveBaseRows already emits this key for every tenant, and would
 		// produce a byte-identical label set. Nothing forbids a key from being
@@ -821,7 +822,7 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 			rec.noteInvalidWindows(tenant, metricKey, sv)
 		}
 		// State 3: disable — familyHeadOff's reading (a declared key has no
-		// expiry: headLive), which also switches its dimensional family off
+		// expiry: liveValue), which also switches its dimensional family off
 		// (#3046). For the key itself this is
 		// indistinguishable in OUTPUT from "never set" — both emit nothing.
 		// It is still honoured so a tenant can express intent, and so a
@@ -908,12 +909,14 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 			}
 		}
 
-		// PREVENT #656 v1: `expires:` is intentionally NOT honored on _critical
-		// overrides — most have no platform default to fail-safe back to (reverting
-		// would go SILENT, the very thing PREVENT avoids). A root
-		// `<base>_critical` is one since #4173, but the reading stays one for
-		// every `_critical`: expires here is a no-op; ValidateTenantKeys warns
-		// the author. Honored only in resolveBaseRows.
+		// #4254: `expires:` reads as on every threshold (liveValue): an
+		// expired value gives way to the layer beneath it, else to the
+		// root's `<base>_critical` (#4173, the loop below), else — nothing
+		// to fall back to — it is served past `expires:` (PREVENT #656).
+		sv, live := liveValue(key, defaults, sv, now)
+		if !live {
+			continue // the root's critical value, below
+		}
 		override := sv.resolveValue(now, logf)
 		if rec != nil {
 			rec.noteInvalidWindows(tenant, key, sv)
@@ -976,8 +979,10 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 			continue
 		}
 		baseKey, _ := criticalRowBase(key)
-		if _, own := overrides[key]; own {
-			continue
+		if sv, own := overrides[key]; own {
+			if _, live := liveValue(key, defaults, sv, now); live {
+				continue
+			}
 		}
 		if _, read := criticalRowRead(key, defaults); !read || !finiteThreshold(rv) {
 			continue
@@ -1046,8 +1051,13 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		return off
 	}
 	for key, v := range defaults {
-		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !dimensionalRowRead(key, c.Dimensions) {
+		if !dimensionalRowRead(key, c.Dimensions) {
 			continue
+		}
+		if sv, own := overrides[key]; own {
+			if _, live := liveValue(key, defaults, sv, now); live {
+				continue
+			}
 		}
 		if familyOff(key) {
 			continue // a root default of a family the tenant switched off
@@ -1064,8 +1074,11 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		if rec != nil {
 			rec.claim(key) // #3378
 		}
-		if _, hasDefault := defaults[key]; hasDefault && isThresholdExpired(sv, now) {
-			continue // the default above is served
+		// #4263: an expired value reads as what it gives way to; none
+		// left → the root's value above is served.
+		sv, live := liveValue(key, defaults, sv, now)
+		if !live {
+			continue
 		}
 		rows = c.appendDimensionalRow(rows, tenant, key, sv, familyOff(key), now, sink, logf, rec)
 	}
@@ -1456,8 +1469,8 @@ func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool,
 
 // ResolveThresholdExpiriesAt resolves time-boxed threshold expiry state for
 // all tenants at now (PREVENT #656). Used by the collector to emit
-// da_config_event when a loosened threshold's TTL lapses. v1: base standard
-// metrics only.
+// da_config_event when a loosened threshold's TTL lapses: every value that
+// can give way (canLapse, #4263) — the ones liveValue lapses.
 func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedThresholdExpiry {
 	return c.ResolveThresholdExpiriesAtLogf(now, log.Printf)
 }
@@ -1481,15 +1494,13 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAtLogf(now time.Time, logf fun
 			if sv.Expiry == nil || sv.Expiry.Expires == "" {
 				continue
 			}
-			// v1 scope: expires is honored only on base standard metrics — those
-			// with a platform default to fail-safe back to (resolveBaseRows is the
-			// only resolution path with the expiry hook). Reserved keys, dimensional
-			// ({...}), _critical variants and custom alerts are NOT in defaults →
-			// skipped here so we never emit an expiry event for a threshold whose
-			// value won't actually revert. The same promise covers the dedup-loser
-			// case below: a deprecated-spelled entry whose canonical sibling is
-			// ALSO set never governed the value at all. ValidateTenantKeys warns on
-			// out-of-scope expires so it isn't a silent no-op.
+			// Only a value that actually gives way emits (canLapse, the
+			// resolver's rule, #4263): one with nothing beneath it is served
+			// past `expires:` and never emits an expiry event. The same
+			// promise covers the dedup-loser case below: a deprecated-spelled
+			// entry whose canonical sibling is ALSO set never governed the
+			// value at all. ValidateTenantKeys refuses an `expires:` that
+			// cannot take effect, so it isn't a silent no-op.
 			canonKey, wasAlias := canonicalKeyFor(metricKey)
 			// #1231 review F2: same-map conflict — resolve's canonical-wins dedup
 			// ignores this entry entirely, so its lapsed expires reverts nothing.
@@ -1503,7 +1514,9 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAtLogf(now time.Time, logf fun
 			}
 			// A `_` key is no base row wherever it is declared
 			// (baseRowsSkipKey, #3045): nothing reverts.
-			if !expiryHonoured(canonKey, canonDefaults) || baseRowsSkipKey(canonKey) {
+			// #4263: only a value that can give way (canLapse, the
+			// resolver's own rule) is an expiry.
+			if !canLapse(canonKey, canonDefaults, sv) || baseRowsSkipKey(canonKey) {
 				continue
 			}
 			t, err := time.Parse(time.RFC3339, sv.Expiry.Expires)
@@ -1901,7 +1914,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 				// ResolveThresholdExpiriesAt (which gates on canonDefaults
 				// alone) still emitted its expiry event, splitting the very
 				// pair the contract test below exists to hold together.
-				if expiryHonoured(canonKey, canonDefaults) && !baseRowsSkipKey(canonKey) {
+				if canLapse(canonKey, canonDefaults, sv) && !baseRowsSkipKey(canonKey) {
 					if _, err := time.Parse(time.RFC3339, sv.Expiry.Expires); err != nil {
 						v.Errors = append(v.Errors, fmt.Sprintf(
 							"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expiry.Expires, canonKey))
@@ -1927,16 +1940,17 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 					// lapsing leaves the threshold with no value at all —
 					// whatever the tenant was getting stops, and the alert
 					// goes quiet with nothing said. That is the silent revert
-					// PREVENT #656 forbids, and it is verbatim why
-					// resolveCriticalRows and resolveDimensionalRows refuse
-					// expires too — declared keys are the fourth member of
-					// that same "nothing to fall back to" family.
+					// PREVENT #656 forbids (canLapse: nothing beneath it and
+					// no root value).
 					v.Errors = append(v.Errors, fmt.Sprintf(
 						"WARN: tenant=%s: `expires:` on %q is refused — %q is declared without a platform value (optional_overrides), so there is no default to revert to: on expiry the threshold would have NO value and the alert would go silent. Remove `expires:`; delete the override itself when you want it gone.",
 						tenant, canonKey, canonKey))
 				} else {
+					// #4263: nothing beneath the value in the merge and no
+					// root value to give way to (canLapse) — a `_critical`
+					// or dimensional key the root gives no number, a `_` key.
 					v.Errors = append(v.Errors, fmt.Sprintf(
-						"WARN: tenant=%s: `expires:` on %q is ignored — only base standard metrics (in _defaults.yaml) support time-boxed thresholds in v1", tenant, canonKey))
+						"WARN: tenant=%s: `expires:` on %q is refused — nothing gives %q a value beneath this one (no other layer writes it and the root `defaults:` gives it no number), so on expiry the threshold would have NO value and the alert would go silent. Remove `expires:`, or give %q a value at the root.", tenant, canonKey, canonKey, canonKey))
 				}
 			}
 
@@ -2201,6 +2215,21 @@ func (c *ThresholdConfig) applyProfiles(logf func(format string, args ...any)) {
 		})
 		for key, profileValue := range fill {
 			overrides[key] = profileValue
+		}
+		// #4263: what the profile would fill for a key the tenant holds
+		// with an `expires:` — profileFill's own verdict, asked as if the
+		// tenant held nothing — is what that value gives way to.
+		for key, profileValue := range profileFill(canonicalView(profile), map[string]ScheduledValue{}, canonDeclared, nil) {
+			if _, filled := fill[key]; filled {
+				continue
+			}
+			held, ok := heldAcrossSpellings(overrides, key)
+			if !ok || overrides[held].Expiry == nil {
+				continue
+			}
+			if sv, ok := stackLapse(overrides[held], profileValue, lapseLayerProfile); ok {
+				overrides[held] = sv
+			}
 		}
 	}
 }

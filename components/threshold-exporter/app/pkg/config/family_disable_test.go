@@ -87,7 +87,7 @@ func TestFamilyDisable_FollowsTheSchedule(t *testing.T) {
 	}
 }
 
-// The base's expiry rule is the base phase's (headLive): a lapsed `disable`
+// The base's expiry rule is the base phase's (liveValue): a lapsed `disable`
 // of a key the root values is treated as absent — the base is served its
 // default, and so is its family; a declared base keeps its `disable`
 // (no expiry), and so its family stays off.

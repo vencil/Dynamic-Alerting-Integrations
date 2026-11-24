@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-11-22
+updated_at: 2026-11-24
 ---
 # ADR-017: _defaults.yaml 多層繼承與雙雜湊熱重載
 
@@ -39,6 +39,7 @@ updated_at: 2026-11-22
 | 2026-11-21 | 平台不給值的鍵也進內建層，值是 off：根目錄不必再宣告，租戶的值、`<鍵>_critical` 與 profile 的值都送出 | 決策 11 |
 | 2026-11-21 | 根目錄 `defaults:` 的 `<鍵>_critical` 是每個租戶的 critical 預設值，租戶可覆寫；基底沒有值時不送，基底關掉時跟著關 | 決策 3、11 |
 | 2026-11-22 | Helm chart 的 `thresholdConfig.defaults` 預設為空，不寫登錄表的鍵；init 也不再寫 `optional_overrides:` 清單 | 決策 11、替代方案 E |
+| 2026-11-24 | 閾值過了 `expires:`，改送刪掉那一行時租戶會拿到的值（下面一層的值，沒有就是根目錄的值），`<鍵>_critical` 與維度鍵也適用；下面沒有任何值時照送原值 | 決策 10、11 |
 
 ## 名詞
 
@@ -311,7 +312,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 1. **最終設定逐字顯示每一層寫下的值，不刪、不改。** 閾值若被 YAML 的型別讀成另一個數，顯示原文，因為 exporter 讀的就是原文：子目錄寫 `017`，最終設定顯示 `"017"`、`/metrics` 送 17；寫 `0x1F`，最終設定顯示 `"0x1F"` 並標 `value_rejected`，`/metrics` 改送上一層的值。`/metrics` 不送的值，在每個租戶的 `not_served` 逐鍵標出原因與所顯示那個值的來源檔。唯一的例外是子目錄 `_defaults.yaml` 寫的 `_` 開頭鍵：兩邊都不套用，最終設定不顯示子目錄那份，何時列進 `not_served` 見決策 4 的表。原因是封閉集合，完整清單見 [CLI 參考的 `da-guard effective`](../cli-reference.md#guard)。
 2. **原因取自 exporter 載入與解析時自己的判定，不靠比對兩份輸出。** 合法寫法的原文與送出值本來就可能不同（例如 `"60:critical"`），用值比對會誤判。
-3. **`not_served` 為空不代表 `/metrics` 送的就是最終設定顯示的值。** 例如租戶覆寫已經過期（`expires:`）時，最終設定顯示原文，`/metrics` 送平台預設，`not_served` 仍是空的。
+3. **`not_served` 為空不代表 `/metrics` 送的就是最終設定顯示的值。** 例如租戶覆寫已經過期（`expires:`）時，最終設定顯示原文，`/metrics` 送的是刪掉那一行時租戶會拿到的值（下面一層的值，沒有就是根目錄的值），`not_served` 仍是空的。
 4. **鏈上語法壞掉的 `_defaults.yaml` 不讓租戶消失。** exporter 不讀那個檔；`/effective` 把它當成空檔，租戶照常回傳並列在 `chain_parse_failed`，`merged_hash` 以略過該檔後的鏈計算。tenant-api 回 HTTP 200，`da-guard effective` 結束碼 3，da-guard 的主檢查也以結束碼 3 停下。
 5. **鍵名保留撰寫者的拼法。** 舊拼法（例如 `mysql_cpu`）不算 `not_served`：`/metrics` 以正式名稱送出同一個閾值，兩種拼法的對照在 `da-guard served-values` 的 `aliases`。
 
@@ -340,7 +341,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 內建層對每個租戶都給值，不看部署裡有沒有裝對應的規則包：多一列不等於多一條告警，告警要響還需要規則包已部署、指標存在。Helm chart 的 `thresholdConfig.defaults` 預設是空的，不渲染任何登錄表的鍵，所以 chart 與 exporter 映像要一起升級；部署方在那裡寫的數字，在 ConfigMap 裡算根目錄寫的數字。
 
-**平台不給值的鍵：內建層給 off。** 登錄表標 `operator` 的鍵在內建層的值是 off：它算「根目錄 `defaults:` 有值」，所以上面那條規則照樣適用——租戶、profile、子目錄給的值都送出，租戶寫的 `<鍵>_critical` 也送 critical 列，即使租戶沒給基底值；但 off 本身不送基底列，也不關掉整族。客戶的根目錄因此不必再把這些鍵寫進 `defaults:` 或列在 `optional_overrides:`，租戶才寫得動它們。根目錄給數字照舊蓋過 off，寫 `null` 等於沒寫（仍是 off，租戶的值照送），寫 `"disable"` 照下方「根目錄的 `"disable"`」整族關閉。根目錄 `optional_overrides:` 還列著這些鍵也無妨：列名對內建層裡的鍵是多餘的，不擋 profile 給值。兩點與有數字的鍵不同：這些鍵的 `expires:` 不生效（過期等於退回 off，告警會悄悄消失，所以值過了 `expires:` 照送；tenant-api 寫入時擋下，已在磁碟上的由 exporter 每次載入設定時記一行 WARN）；`validate-config` 的 `platform_defaults` 列把它們按規則包分行列出，附設定了門檻或 `disable` 的租戶數（`0/N` 表示這個鍵的告警對所有租戶都不會響）。
+**平台不給值的鍵：內建層給 off。** 登錄表標 `operator` 的鍵在內建層的值是 off：它算「根目錄 `defaults:` 有值」，所以上面那條規則照樣適用——租戶、profile、子目錄給的值都送出，租戶寫的 `<鍵>_critical` 也送 critical 列，即使租戶沒給基底值；但 off 本身不送基底列，也不關掉整族。客戶的根目錄因此不必再把這些鍵寫進 `defaults:` 或列在 `optional_overrides:`，租戶才寫得動它們。根目錄給數字照舊蓋過 off，寫 `null` 等於沒寫（仍是 off，租戶的值照送），寫 `"disable"` 照下方「根目錄的 `"disable"`」整族關閉。根目錄 `optional_overrides:` 還列著這些鍵也無妨：列名對內建層裡的鍵是多餘的，不擋 profile 給值。兩點與有數字的鍵不同：這些鍵的 `expires:` 只在下面還有一層給值時生效（平台檔的 `tenants:`、profile 或子目錄的 `_defaults.yaml`，過期後送那一層的值）；下面沒有任何一層給值時，過期等於退回 off，告警會悄悄消失，所以值過了 `expires:` 照送，tenant-api 寫入時擋下，已在磁碟上的由 exporter 每次載入設定時記一行 WARN；`validate-config` 的 `platform_defaults` 列把它們按規則包分行列出，附設定了門檻或 `disable` 的租戶數（`0/N` 表示這個鍵的告警對所有租戶都不會響）。
 
 例：根目錄 `_defaults.yaml` 只寫 `defaults: {jvm_threads: "disable"}`，租戶檔：
 

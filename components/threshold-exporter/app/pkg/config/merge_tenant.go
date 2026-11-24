@@ -686,6 +686,21 @@ func mergeTenantConfig(root rootPlatform, tenantCfg ThresholdConfig) TenantMerge
 			}
 			out.platform[tenant] = supplies
 		}
+		// #4263: what the platform layer would supply for a key the body
+		// holds with an `expires:` — supplyFor's own verdict, asked as if
+		// the body held nothing — is what that value gives way to, as
+		// overlayTenantLayer stacks it on /metrics.
+		for _, sup := range root.supplyFor(tenant, map[string]ScheduledValue{}) {
+			for k, v := range sup.keys {
+				held, ok := heldAcrossSpellings(merged.Tenants[tenant], k)
+				if !ok || merged.Tenants[tenant][held].Expiry == nil {
+					continue
+				}
+				if sv, ok := stackLapse(merged.Tenants[tenant][held], v, lapseLayerFile); ok {
+					merged.Tenants[tenant][held] = sv
+				}
+			}
+		}
 	}
 	out.profileFiles, out.profileFileOrder = root.mergeProfilesInto(merged.Profiles)
 
