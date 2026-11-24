@@ -309,10 +309,11 @@ def _conflicting_flags(args, only_set):
     string, so `--only ""` — which #1620 pins as "no restriction" — is not a
     conflict with anything.
 
-    Callers were measured before any pair was rejected: the two automatic
-    invocations (Makefile `lint-docs`, docs-ci.yaml `drift-checks`) pass
-    `--only` with `--ci` or with `$(ARGS)`, and no file in the repo passes
-    any pair listed here outside this tool's own tests.
+    Callers were measured before any pair was rejected: the automatic
+    invocations (then Makefile `lint-docs` and docs-ci.yaml `drift-checks`;
+    since #4224 only the Makefile, which CI runs as `Lint Documentation`)
+    pass `--only` with `--ci` or with `$(ARGS)`, and no file in the repo
+    passes any pair listed here outside this tool's own tests.
     """
     pairs = []
     if args.smart and only_set:
