@@ -1503,14 +1503,14 @@
         "selectors": {
           "type": "object",
           "title": "Exact Label Filters (=)",
-          "description": "label → value, compiled to exact matchers `{label=\"value\"}`. The labels the platform reserves (`reserved_labels` in components/threshold-exporter/app/pkg/config/recipe_contract.json) are rejected.",
+          "description": "label → value, compiled to exact matchers `{label=\"value\"}`. The labels the platform reserves (`reserved_labels` in components/threshold-exporter/app/pkg/config/recipe_contract.json) are rejected, as is a value containing U+FFFD (Prometheus refuses it in a rule).",
           "propertyNames": { "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$" },
           "additionalProperties": { "type": "string" }
         },
         "selectors_re": {
           "type": "object",
           "title": "Regex Label Filters (=~)",
-          "description": "label → regex, compiled to regex matchers `{label=~\"pattern\"}` (anchored by Prometheus).",
+          "description": "label → regex, compiled to regex matchers `{label=~\"pattern\"}` (anchored by Prometheus). Each value must compile as a Prometheus (RE2) regex and contain no U+FFFD; one that does not is rejected like any other invalid field.",
           "propertyNames": { "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$" },
           "additionalProperties": { "type": "string" }
         },

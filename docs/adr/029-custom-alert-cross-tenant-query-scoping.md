@@ -19,6 +19,8 @@ updated_at: 2026-11-24
 
 2026-11-24 修訂：改寫為現行行為。決策不變。
 
+2026-11-24 修訂：selector 的值改為在寫入與產生路徑同步確認 Prometheus 載入得了，原本「`selectors_re` 的正規表示式語法沒有同步驗證」的已知限制移除。
+
 本 ADR 只有中文版（依語言政策，部分 ADR 不另製英文版）。
 
 ## 決策
@@ -27,7 +29,7 @@ updated_at: 2026-11-24
 
 - **編譯期**指租戶宣告的自訂告警（`_custom_alerts`）被轉成 Prometheus 規則的那一步；**評估期**指 Prometheus 之後依規則查詢資料的那一步。
 - 平台維持一個共用的 Prometheus 與**向量化規則**：同一種告警形狀（shape，即 recipe 加上參數的組合）不論幾個租戶宣告，都只產生一組規則，規則跨所有租戶評估，再以 `tenant` 標籤配對各租戶自己的閾值（見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §4）。
-- 租戶填的每個值，在寫進規則**之前**就驗證：只能選平台寫好的 recipe，名稱類欄位（metric、告警名、標籤名）限字元集，列舉欄位限列舉，數值限格式與值域；selector 的值拒絕模板字元、其餘經跳脫後寫入，不能釘住平台保留的標籤（`selectors_re` 的正規表示式語法例外，見「決策細節」）。產生出來的標籤與 annotation 只能含平台自己寫的模板片段。
+- 租戶填的每個值，在寫進規則**之前**就驗證：只能選平台寫好的 recipe，名稱類欄位（metric、告警名、標籤名）限字元集，列舉欄位限列舉，數值限格式與值域；selector 的值拒絕模板字元、其餘經跳脫後寫入，不能釘住平台保留的標籤；值不能含 Prometheus 字串常值拒收的字元（無效 UTF-8 與 U+FFFD），`selectors_re` 的值還必須能被 Prometheus 編譯成正規表示式。產生出來的標籤與 annotation 只能含平台自己寫的模板片段。
 - 把隔離移到評估期（換成每個租戶各自查詢範圍的 ruler）**目前不做**，四個條件任一成立時重新評估，見下方「重新評估的條件」。
 
 ### 範例：一個合法宣告與它產生的規則
@@ -92,7 +94,8 @@ tenants:
 - **一份判斷，三個入口。** 驗證邏輯是 threshold-exporter 的 Go 程式（`components/threshold-exporter/app/pkg/config/custom_alert.go`），欄位的列舉、字元集與保留標籤集中在 recipe 契約檔 `components/threshold-exporter/app/pkg/config/recipe_contract.json`。tenant-api 寫入前呼叫它（`ValidateTenantCustomAlerts`，`PUT .../custom-alerts`、整份租戶設定寫入與批次寫入都經過）；exporter 載入設定時用它決定哪些宣告送出閾值序列，被拒的宣告不送、記一筆 ERROR log 並計入 `da_custom_alert_parse_errors`；編譯器（`da-guard compile-custom-alerts`，由 `compile_custom_alerts.py` 執行）只為 exporter 實際送出或已關閉的宣告產生規則。所以不經 tenant-api、直接改 conf.d 的宣告也走同一份判斷。
 - **只放行平台寫的模板。** 編譯器在輸出前檢查每條規則的標籤與 annotation：除了 `{{ $value | printf "%.Nf" }}`、`{{ $labels.X }}`，以及讀取該告警所屬租戶 metadata 的固定模板之外，出現任何模板動作或反引號都直接失敗。
 - **契約檔缺欄位時拒絕啟動。** recipe 契約檔若少了保留標籤或禁用模板字元的清單、或清單為空，解析失敗、程式無法啟動，不會退化成「什麼都接受」。
-- **`promtool check rules` 是最後一道防線，不是主防線。** CI 對產生的 `rule-packs/rule-pack-custom-alerts.yaml` 跑 `promtool check rules`；主防線是上面的同步驗證，若只靠非同步的 CI，寫入、編譯、重新載入之間會有暴露窗。例外：`selectors_re` 的正規表示式語法目前沒有同步驗證，寫壞的 regex 會通過三個入口、產生無法載入的規則，只有 CI 與 pre-commit 對產生規則包的檢查擋得下（`promtool check rules`，以及以 Prometheus 規則載入器 `da-read prometheus-rules` 讀規則包的 rule-pack 檢查）；跳脫保證它不會跳出字串、讀到別的租戶，但規則檔解析失敗時，Prometheus 的規則管理器拒收這次所有規則檔、沿用上一份規則（重新載入記為失敗），之後任何規則變更都上不去。
+- **`promtool check rules` 是最後一道防線，不是主防線。** CI 對產生的 `rule-packs/rule-pack-custom-alerts.yaml` 跑 `promtool check rules`；主防線是上面的同步驗證，若只靠非同步的 CI，寫入、編譯、重新載入之間會有暴露窗。
+- **selector 的值在同一份判斷裡先確認 Prometheus 載入得了。** 兩件事：值不含 PromQL 字串常值拒收的字元（無效 UTF-8 與 U+FFFD；tenant-api 收到的 JSON 裡任何無效位元組，解碼後都會變成 U+FFFD）；`selectors_re` 的值以 Prometheus 載入 `=~` 比對器的方式編得過（以 Perl 語法解析、再加頭尾錨點編譯）。不符合的宣告和其他無效欄位一樣被拒：tenant-api 回 400、exporter 不送、編譯器略過並警告。這道檢查存在的理由是可用性而非隔離：跳脫已保證值不會跳出字串，但只要規則包裡有一個 selector 載入失敗，Prometheus 的規則管理器會拒收這次所有規則檔、沿用上一份規則，之後的規則變更都上不去。
 
 **平台功能的代價。** 這道限制沒有擋掉平台目前需要的任何東西，但不是「零」：平台自己的 annotation 現在就用了一個查詢函式，以固定模板讀取該告警所屬租戶的 metadata（`runbook_url`、`owner`、`tier`），它被允許是因為放行清單逐字比對這個模板。平台要在自訂告警的模板裡加入新的查詢，就得改放行清單與它的測試，經過程式審查。這是刻意接受的取捨。Prometheus 沒有關閉模板查詢函式的伺服器開關，「絕不讓未驗證的租戶輸入抵達能呼叫查詢的模板」是唯一做得到的形式。
 
@@ -126,7 +129,6 @@ tenants:
 - **變容易的**：跨租戶讀從「輸入穿透到規則」變成「在編譯邊界被攔下」；平台維持規則數隨形狀數成長的向量化，不需改架構。
 - **新的租戶輸入不會自動受保護。** 這是邊界形狀的防護，只保護目前納入驗證的輸入。日後任何新的租戶可控輸入（多一個標籤欄位、多一個數值參數）只要進到規則產生，就要另外加驗證。受保護輸入的逐項清單留在驗證點的程式註解與 recipe 契約檔，不在這份公開文件列舉：公開列舉等於給出攻擊面地圖。
 - **租戶可以指名任何指標。** metric 欄位只限字元集，不限於「屬於這個租戶的指標」；隔離來自配對：規則只對帶著該租戶 `tenant` 標籤的序列觸發。指標的 `tenant` 標籤由抓取設定加上，抓取設定標錯，這道隔離就跟著錯。
-- **`selectors_re` 的正規表示式語法沒有同步驗證。** 寫壞的 regex 不會被寫入路徑擋下，要靠 CI 與 pre-commit 的規則包檢查；漏過它們進到線上時，規則更新被擋住、舊規則繼續評估（見「決策細節」）。
 - **維護旗標以租戶為單位。** 一個租戶跑在多個叢集時，開啟維護會擋掉它在所有叢集的自訂告警。
 
 由以下測試守住：
@@ -137,6 +139,7 @@ tenants:
 | 輸出的標籤與 annotation 只含平台模板 | `custom_alert_compile_test.go` 的 `TestAssertTemplateSafe` |
 | 規則對租戶指標聚合或配對所依的標籤，都在保留標籤內 | `custom_alert_compile_test.go` 的 `TestCompiledAggregationKeysOnTenantMetricsAreReserved` |
 | 各 recipe 按叢集聚合與配對 | `custom_alert_compile_test.go` 的 `TestCompiledRulesKeepTheClusterPerRecipe`、`TestSloCorePairsItsWindowsPerCluster` |
+| selector 的值放行與否，與 Prometheus 解析器對產出 selector 的判定一致；載入不了的被三個入口拒收 | `custom_alert_selector_value_test.go` 的 `TestSelectorValues_MatchPrometheusParser`、`TestSelectorRegex_ExporterAndCompilerRefuse`；tenant-api 的 `TestPutCustomAlerts_UnloadableSelectorValueRejected400` |
 | 契約檔缺保留標籤或禁用字元清單時拒絕啟動 | `recipe_contract_test.go` 的 `TestParseRecipeContract_FailsClosed` |
 | tenant-api 對不合法宣告回 400 並列出 violations、不寫入 | `components/tenant-api/internal/handler/tenant_custom_alerts_test.go` 的 `TestPutCustomAlerts_InvalidRecipe400WithViolations` |
 
