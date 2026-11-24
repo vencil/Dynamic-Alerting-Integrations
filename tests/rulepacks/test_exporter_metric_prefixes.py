@@ -135,13 +135,14 @@ def test_a_query_exporter_packs_metrics_are_under_its_namespace():
 def test_no_two_namespaces_overlap_nor_a_platform_family():
     kinds = {n: m["metric_prefixes"] for n, m in _packs().items() if m.get("presence")}
     flat = [(n, p) for n, ps in kinds.items() for p in ps]
+    # case aside too: the onboarding heuristics match ignoring case
     clash = [f"{a}:{p} / {b}:{q}" for i, (a, p) in enumerate(flat) for (b, q) in flat[i + 1:]
-             if p.startswith(q) or q.startswith(p)]
+             if p.lower().startswith(q.lower()) or q.lower().startswith(p.lower())]
     platform = ([prefix for prefix, _k, _s in ms.FAMILY_TABLE] + list(ms.FAMILY_EXACT)
                 + list(ms.PER_TARGET_PREFIXES) + list(ms.PER_TARGET_EXACT)
                 + list(grps._QUERY_EXPORTER_BUILTINS))
     clash += [f"{n}:{p} / platform {f}" for n, p in flat for f in platform
-              if f.startswith(p) or p.startswith(f)]
+              if f.lower().startswith(p.lower()) or p.lower().startswith(f.lower())]
     assert not clash, clash
 
 

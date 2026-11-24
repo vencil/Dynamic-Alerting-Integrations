@@ -116,19 +116,24 @@ def parse_prometheus_text(raw: str) -> dict[str, set[str]]:
 
 
 def detect_db_type(raw: str) -> str:
-    """The exporter kind of the first sample whose metric name is under a
-    kind's registry `metric_prefixes` (#4270: a hand list here matched
+    """The exporter kind the scraped samples' metric names are under (each
+    kind's registry `metric_prefixes`, #4270: a hand list here matched
     substrings and wrote ClickHouse as `clickhouse_`), case aside; "unknown"
-    when none is."""
+    when none is. A kind whose metrics many targets expose incidentally (the
+    registry's `undeclared_notice: false`: jvm_* from any JVM, e.g. a Kafka
+    broker through jmx_exporter) answers only when no other kind does."""
+    found: "list[str]" = []
     for line in raw.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         name = re.split(r"[{\s]", line, maxsplit=1)[0]
         kind = _registry_lib.pack_of_metric(name, ignore_case=True, kinds_only=True)
-        if kind:
-            return kind
-    return "unknown"
+        if kind and kind not in found:
+            found.append(kind)
+    packs = _registry_lib.generated_packs()
+    primary = [k for k in found if packs[k].get("undeclared_notice") is not False]
+    return (primary or found or ["unknown"])[0]
 
 
 def scrape_metrics_endpoint(endpoint: str,

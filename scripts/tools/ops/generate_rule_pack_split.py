@@ -269,9 +269,10 @@ _PLATFORM_CONFIG_METRICS = frozenset({
 })
 _PLATFORM_CONFIG_PREFIXES = ("user_",)
 # Per-tenant exporter families (tenant-labeled → federated → legal on central).
-# Deliberately EXCLUDES kube_/kubelet_ (namespace-labeled → not federated). A new
-# per-tenant exporter that reads raw on central would be added here; a new
-# kube_/kubelet_ on central is a bug caught by KNOWN_CENTRAL_RAW_EXEMPTIONS.
+# Deliberately EXCLUDES kube_/kubelet_ (namespace-labeled → not federated): the
+# kubernetes pack has no `presence:`, so it is no exporter kind. A new per-tenant
+# exporter declares its `metric_prefixes` in the registry; a new kube_/kubelet_
+# on central is a bug caught by KNOWN_CENTRAL_RAW_EXEMPTIONS.
 # Read from the registry's `metric_prefixes` of every exporter kind (#4270):
 # a hand copy here wrote ClickHouse as `clickhouse_`, which no ClickHouse
 # metric is named.
