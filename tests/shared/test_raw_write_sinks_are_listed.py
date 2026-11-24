@@ -364,8 +364,8 @@ REGISTERED: dict[str, dict[str, int]] = {
     },
     "scripts/tools/_lib_output.py": {
         "_kernel_open_operator_output os.chmod [entry]": 1,
+        "_operator_text io.open(w) [entry]": 1,
         "ensure_dir .mkdir [entry]": 1,
-        "open_operator_output io.open(w) [entry]": 1,
         "write_repo_artifact atomic_write_text() [entry]": 1,
     },
     # #3756. The state file and the per-segment list beside it are the

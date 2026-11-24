@@ -241,7 +241,9 @@ def _operator_text(fd: int) -> io.TextIOWrapper:
     """``io.open(fd, "w", encoding="utf-8", newline="\\n")`` over an
     :class:`_OperatorBuffer`: the same buffer size (``st_blksize``), line
     buffering on a terminal, and ``mode``."""
-    raw = io.FileIO(fd, "w", closefd=True)
+    # io.open, not io.FileIO: the raw write sink stays one the sink gates
+    # (tests/shared/test_raw_write_sinks_are_listed.py) can see.
+    raw = io.open(fd, "wb", buffering=0, closefd=True)
     try:
         size = io.DEFAULT_BUFFER_SIZE
         with contextlib.suppress(OSError, AttributeError):
