@@ -180,7 +180,7 @@ cAdvisor 的 CPU 指標本身不帶版本。kubernetes rule pack 在 recording r
 - **宣告位置：每個租戶只取一處宣告**：exporter 依序找租戶自己的 `_custom_alerts`、根目錄平台檔（例如 `_platform.yaml`）`tenants:` 底下該租戶的條目、租戶綁定的 profile，取到第一處就停，不合併。根目錄平台檔頂層的 `_custom_alerts` 不會送出。`_defaults.yaml` 裡的 `_custom_alerts` 也一律不送出（不做子樹繼承），但寫的位置不同，後果不同：
 
   - 子目錄 `_defaults.yaml`（頂層或 `defaults:` 底下）：不送出；da-guard 報 `subtree_default_reserved_key`（error），`da-guard effective` 對該租戶標 `not_served`（`value_rejected`）。
-  - 根 `_defaults.yaml` 頂層：不送出；da-guard 報 `root_defaults_unwrapped`（error）。
+  - 根 `_defaults.yaml` 頂層：不送出；檔案有 `defaults:` 包裝時 da-guard 報 `defaults_toplevel_ignored`，沒有包裝時報 `root_defaults_unwrapped`，兩者都是 error。
   - 根 `_defaults.yaml` 的 `defaults:` 底下：**整份檔解碼失敗**，exporter 丟掉整份根預設檔，檔裡其他預設值也一併不送出；da-guard 以 exit 3 報這個檔無法解碼。
 
   要讓一組租戶共用同一條政策，寫在 profile、讓這些租戶綁定它；租戶寫了自己的 `_custom_alerts` 就整個取代 profile 的清單，也可以改綁或解除綁定。

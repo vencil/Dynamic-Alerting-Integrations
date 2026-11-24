@@ -174,7 +174,7 @@ Cross-tenant isolation is already handled by the existing architecture: the `ten
 - **Where a recipe is declared: one declaration per tenant**: the exporter looks in order at the tenant's own `_custom_alerts`, the tenant's entry under `tenants:` in a root-level platform file (for example `_platform.yaml`), and the profile the tenant binds; it stops at the first one found and does not merge. `_custom_alerts` at the top level of a root platform file is not served. `_custom_alerts` in a `_defaults.yaml` is never served either (there is no subtree inheritance), but where it is written changes the consequence:
 
   - A subdirectory `_defaults.yaml` (top level or under `defaults:`): not served; da-guard reports `subtree_default_reserved_key` (error), and `da-guard effective` marks it `not_served` (`value_rejected`) for the tenant.
-  - The top level of the root `_defaults.yaml`: not served; da-guard reports `root_defaults_unwrapped` (error).
+  - The top level of the root `_defaults.yaml`: not served; da-guard reports `defaults_toplevel_ignored` when the file has a `defaults:` wrapper and `root_defaults_unwrapped` when it has none, both errors.
   - Under `defaults:` in the root `_defaults.yaml`: **the whole file fails to decode**, the exporter drops the entire root defaults file, and every other default in it stops being served too; da-guard exits 3 reporting the file cannot be decoded.
 
   To share one policy across a group of tenants, write it in a profile and bind those tenants to it; a tenant that writes its own `_custom_alerts` replaces the profile's list entirely, and can also rebind or unbind.

@@ -229,7 +229,7 @@ tenant-api pod
 **判定要跑的程式必須跑成**：一次判定會跑三支 Go 程式：da-guard、da-read（Alertmanager 與 Prometheus 的設定載入器，§12）、da-crdecode（照 kubectl 的讀法讀 manifest）。其中任何一支沒跑成，那筆寫入就沒有結論，回 503 `tool_fault`，不論產生器少了它得出什麼結果。
 
 - 「沒跑成」是程式本身出問題：找不到、無法執行、逾時、被訊號結束、結束碼或輸出不在契約內。程式對輸入的回答不算：da-guard 判某個檔讀不了、da-read 拒收一份設定，照常是那筆寫入的結果。
-- da-read 與 da-crdecode 的拒收和用法錯一樣以結束碼 2 結束；分辨靠標準輸出：只有拒收會印出固定的被拒文件 `{"answer":"refused"}`，理由寫在 stderr。結束碼 2 而沒有這份文件就是沒跑成。所以 Python 工具與這兩支程式必須同版。⚠️ v2.9.0 映像的 da-crdecode 還不印被拒文件（該映像也沒有 da-read）；把它和較新的 Python 工具搭在一起，每次拒收都會被當成程式沒跑成 <!-- image-caveat: v2.9.0 -->。
+- da-read 與 da-crdecode 的拒收和用法錯一樣以結束碼 2 結束；分辨靠標準輸出：只有拒收會印出固定的被拒文件 `{"answer":"refused"}`，理由寫在 stderr。結束碼 2 而沒有這份文件就是沒跑成。所以 Python 工具與這兩支程式必須同版。⚠️ v2.9.0 映像沒有 da-crdecode，也沒有 da-read <!-- image-caveat: v2.9.0 -->。
 - 因判定的記憶體上限而由 Go 執行期自己結束的程式不算故障：那筆寫入以 reason `memory` 拒收。
 - **就緒**：容器只在 policy 可用、產生器不比 policy 要求的舊、三支程式內建的自檢都通過、而且沒有還沒清除的工具故障時才回報就緒（`GET /v1/status` 的 `ready`）。自檢是每支程式自己的指令（`da-guard self-check`、`da-read self-check`、`da-crdecode --self-check`），以打包在 binary 裡的樣本把每個子指令跑一次，通過時印 `{"self_check":"passed"}`、結束碼 0。判定裡一出現工具故障，容器立刻回報未就緒並跑一輪自檢，只有通過的自檢清除故障。
 - 已知限制：自檢對每個子指令只跑一種輸入，判定實際走的旗標更多，所以自檢通過之後判定仍可能遇到工具故障；這時那筆請求回 503、容器回到未就緒，等下一輪自檢。
@@ -249,7 +249,7 @@ tenant-api pod
 - **哪些寫入要送驗**：凡是會改變檔案內容的寫入都送驗，包括只改閾值的；不由 Go 判斷「有沒有改到路由」。
 - **錯誤回應**：列出產生器回報的 finding，與被寫入檔有關的排在前面，並標出哪些在寫入前就存在。這只影響訊息，不影響判定。
 - **批次**：一次請求、一次 commit、全有全無。整批套用後整棵樹通過才寫入，否則整批拒收；同步與非同步批次規則相同。每個批次在獨立的暫存 git worktree 裡套用、判定、commit，再推進分支 ref、更新服務中的工作目錄；推進到一半中斷時，下次啟動或寫入前把這批路徑重設成分支上的內容。讀者不會看到從未 commit 的內容。
-- **批次 patch 的合併**：由 Go 讀出檔案、套用 patch、再寫回，合併後的內容一定送驗。合併要符合一條不變式，否則以 `TENANT_CONFIG_NOT_LOADABLE`（`config_error` 為 `not_round_trippable`）拒收：把原檔與合併結果都解析成 yaml.v3 的節點樹，這次編輯取代的部分以外，每個節點寫出來都要相同（種類、style、tag、純量原文、anchor 與別名所指的節點）。字元相同，對任何讀取端意思都相同，所以這條判準與讀取端無關。合併寫出的值用雙引號，避免任何讀取端把它讀成時間、數字或布林；唯一例外是 `_custom_alerts` 裡含換行、而且寫成 literal block（`|`）讀回仍是原字串的值，寫成 literal block，讓 diff 看得到逐行內容。
+- **批次 patch 的合併（`PUT …/custom-alerts` 同）**：由 Go 讀出檔案、套用變更、再寫回，合併後的內容一定送驗。合併要符合一條不變式，否則以 `TENANT_CONFIG_NOT_LOADABLE`（`config_error` 為 `not_round_trippable`）拒收：把原檔與合併結果都解析成 yaml.v3 的節點樹，這次編輯取代的部分以外，每個節點寫出來都要相同（種類、style、tag、純量原文、anchor 與別名所指的節點）。字元相同，對任何讀取端意思都相同，所以這條判準與讀取端無關。批次 patch 寫出的值一律是字串、用雙引號，避免任何讀取端把它讀成時間、數字或布林；批次不能寫 `_custom_alerts`（回 400，要改用 PUT）。`PUT …/custom-alerts` 寫出的字串同樣用雙引號，但含換行、而且寫成 literal block（`|`）讀回仍是原字串的寫成 literal block，讓 diff 看得到逐行內容；數字與布林照型別寫出。
   - 錯誤訊息只在呼叫者自己租戶的 block 裡寫出第一個差異的路徑，其他位置只說「另一處」：一份檔可能有多個租戶。解碼失敗時回固定文字，parser 的原文只寫進 server log。
   - `PUT …/custom-alerts` 以 409 拒收；批次裡是那一筆的 code，整批回 422。
   - 這條不變式另由離線差分測試（`components/tenant-api/internal/handler/batch_patch_diff_test.go`）對照產生器自己的讀法：一邊是 Go 合併後交給產生器讀，另一邊是產生器讀原檔再套同一個 patch，同一個檔裡的其他租戶也要比。
@@ -436,7 +436,7 @@ PyYAML 把它當成合併，t1 的 receiver 是 `slack`，domain policy 禁止 s
 
 對齊的做法是讓一邊在自己的語言裡重寫另一邊解析器的每一條處理路徑：Go 端曾有專門模仿 PyYAML 的套件與 vendored yaml.v3 的 patch，Python 端有多個模仿 yaml.v3 的 loader。每補一條，旁邊就露出另一條；用隨機輸入同時餵兩邊比對，找得到落差，但證明不了兩邊相等。限縮 conf.d 到「兩邊必然讀出相同結果」的寫法也不可行：上表第二、三列的值都已加上引號、沒用任何進階功能，兩邊仍讀出不同結果。
 
-只把語意收斂到產生器也不夠：產生器仍用 PyYAML 讀、Go 端仍用 yaml.v3 讀，語法層的落差照樣存在。Go 端自己也有不只一個判定：實測 9 種 `parse-tree` 判為讀不了的寫法，exporter 以 yaml.v3 直接解碼時照讀其中 7 種（一個檔裡有多份文件、`!!binary`、`!!set`、檔案中段的 BOM、null 鍵 `~:`、非特定標記 `!`、只有 `---` 的尾端文件），只有 2 種本來就拒收（重複鍵、非純量鍵）；這 9 種現在是三個 Go 讀取端共用的測試矩陣。另外，寫 conf.d 的 Python 工具以 PyYAML 讀寫、會丟註解，conf.d 以外的 YAML 又由 PyYAML 模仿 kubectl、Alertmanager 這些別的讀者。
+只把語意收斂到產生器也不夠：產生器仍用 PyYAML 讀、Go 端仍用 yaml.v3 讀，語法層的落差照樣存在。Go 端自己也有不只一個判定：實測 9 種 `parse-tree` 判為讀不了的寫法，exporter 以 yaml.v3 直接解碼時照讀其中 7 種（一個檔裡有多份文件、`!!binary`、`!!set`、檔案中段的 BOM、null 鍵 `~:`、非特定標記 `!`、只有 `---` 的尾端文件），只有 2 種本來就拒收（重複鍵、非純量鍵）；這 9 種現在是 exporter、da-guard 與 `pkg/config` 共用的測試矩陣。另外，寫 conf.d 的 Python 工具以 PyYAML 讀寫、會丟註解，conf.d 以外的 YAML 又由 PyYAML 模仿 kubectl、Alertmanager 這些別的讀者。
 
 問題的根源是「兩個解析器各讀一次，又要求結果一模一樣」。唯一不需要證明兩邊相等的做法，是只留一個解析器。
 
