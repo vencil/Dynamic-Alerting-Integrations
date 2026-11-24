@@ -93,7 +93,7 @@ Run with --apply to move them. (1 files will be moved)
     legacy-db.yaml
 ```
 
-`--apply` 把整份計畫當成一批交給 da-guard 判定：任何一筆搬不成（目的地沒有讀者會讀、已存在、搬完會讓整棵樹變差），一個檔都不搬、結束碼 2。樹在 git 工作目錄裡時，每個來源都要是 git 追蹤的檔案，搬完後 index 的效果與 `git mv` 相同。`--dry-run` 不改任何檔，可以放進 PR 檢查。
+`--apply` 把整份計畫當成一批交給 da-guard 判定：任何一筆搬不成（目的地沒有讀者會讀、已存在、搬完會讓整棵樹變差），一個檔都不搬、結束碼 2。樹在 git 工作目錄裡、且找得到 `git` 時，每個來源都要是 git 追蹤的檔案，搬完後 index 的效果與 `git mv` 相同；檔案搬完但 index 更新失敗時結束碼 2，訊息列出補記 index 的指令（重跑不會補上）。找不到 `git` 時照樣搬檔，不檢查是否受追蹤、也不更新 index，最後一行寫明沒有記進 git。`--dry-run` 不改任何檔，可以放進 PR 檢查。
 
 ## 背景
 

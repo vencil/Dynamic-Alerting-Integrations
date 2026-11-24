@@ -88,7 +88,7 @@ Run with --apply to move them. (1 files will be moved)
     legacy-db.yaml
 ```
 
-`--apply` hands the whole plan to da-guard as one batch: if any move does not hold (a destination no reader reads, one that already exists, a tree the move would make worse), no file is moved and the exit code is 2. When the tree is in a git working tree, every source must be a file git tracks, and after the move the index looks as it would after `git mv`. `--dry-run` changes no file, so it can go into a PR check.
+`--apply` hands the whole plan to da-guard as one batch: if any move does not hold (a destination no reader reads, one that already exists, a tree the move would make worse), no file is moved and the exit code is 2. When the tree is in a git working tree and `git` can be found, every source must be a file git tracks, and after the move the index looks as it would after `git mv`; if the files are moved but the index update fails, the exit code is 2 and the message lists the commands that record the moves (rerunning does not). When `git` cannot be found, the files are moved without checking that they are tracked or updating the index, and the last line says they were not recorded in git. `--dry-run` changes no file, so it can go into a PR check.
 
 ## Context
 
