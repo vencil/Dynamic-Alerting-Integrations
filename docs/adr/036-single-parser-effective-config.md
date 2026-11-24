@@ -249,7 +249,7 @@ tenant-api pod
 - **哪些寫入要送驗**：凡是會改變檔案內容的寫入都送驗，包括只改閾值的；不由 Go 判斷「有沒有改到路由」。
 - **錯誤回應**：列出產生器回報的 finding，與被寫入檔有關的排在前面，並標出哪些在寫入前就存在。這只影響訊息，不影響判定。
 - **批次**：一次請求、一次 commit、全有全無。整批套用後整棵樹通過才寫入，否則整批拒收；同步與非同步批次規則相同。每個批次在獨立的暫存 git worktree 裡套用、判定、commit，再推進分支 ref、更新服務中的工作目錄；推進到一半中斷時，下次啟動或寫入前把這批路徑重設成分支上的內容。讀者不會看到從未 commit 的內容。
-- **批次 patch 的合併（`PUT …/custom-alerts` 同）**：由 Go 讀出檔案、套用變更、再寫回，合併後的內容一定送驗。合併要符合一條不變式，否則以 `TENANT_CONFIG_NOT_LOADABLE`（`config_error` 為 `not_round_trippable`）拒收：把原檔與合併結果都解析成 yaml.v3 的節點樹，這次編輯取代的部分以外，每個節點寫出來都要相同（種類、style、tag、純量原文、anchor 與別名所指的節點）。字元相同，對任何讀取端意思都相同，所以這條判準與讀取端無關。批次 patch 寫出的值一律是字串、用雙引號，避免任何讀取端把它讀成時間、數字或布林；批次不能寫 `_custom_alerts`（回 400，要改用 PUT）。`PUT …/custom-alerts` 寫出的字串同樣用雙引號，但含換行、而且寫成 literal block（`|`）讀回仍是原字串的寫成 literal block，讓 diff 看得到逐行內容；數字與布林照型別寫出。
+- **批次 patch 的合併（`PUT …/custom-alerts` 同）**：由 Go 讀出檔案、套用變更、再寫回，合併後的內容一定送驗。合併要符合一條不變式，否則以 `TENANT_CONFIG_NOT_LOADABLE`（`config_error` 為 `not_round_trippable`）拒收：把原檔與合併結果都解析成 yaml.v3 的節點樹，這次編輯取代的部分以外，每個節點寫出來都要相同（種類、style、tag、純量原文、anchor 與別名所指的節點）。字元相同，對任何讀取端意思都相同，所以這條判準與讀取端無關。批次 patch 寫出的值一律是字串、用雙引號，避免任何讀取端把它讀成時間、數字或布林；批次不能寫 `_custom_alerts`（回 400，要改用 `PUT /api/v1/tenants/{id}` 或 `PUT …/custom-alerts`）。`PUT …/custom-alerts` 寫出的字串同樣用雙引號，但含換行、而且寫成 literal block（`|`）讀回仍是原字串的寫成 literal block，讓 diff 看得到逐行內容；數字與布林照型別寫出。
   - 錯誤訊息只在呼叫者自己租戶的 block 裡寫出第一個差異的路徑，其他位置只說「另一處」：一份檔可能有多個租戶。解碼失敗時回固定文字，parser 的原文只寫進 server log。
   - `PUT …/custom-alerts` 以 409 拒收；批次裡是那一筆的 code，整批回 422。
   - 這條不變式另由離線差分測試（`components/tenant-api/internal/handler/batch_patch_diff_test.go`）對照產生器自己的讀法：一邊是 Go 合併後交給產生器讀，另一邊是產生器讀原檔再套同一個 patch，同一個檔裡的其他租戶也要比。
