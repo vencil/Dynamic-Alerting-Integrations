@@ -4,7 +4,8 @@
  * SCOPE DISCLAIMER (Day 5 retrospective review, 2026-04-16):
  *   This is SMOKE coverage, not comprehensive E2E. It proves:
  *     - the tool loads without 404 / JS error
- *     - the first visible contract (role cards, Start-Here badge) renders
+ *     - the first visible contract (role cards) renders, and the Start-Here
+ *       badge after role + goal selection
  *     - TRK-104-style absolute hrefs don't leak
  *     - 0 Critical and 0 non-Critical axe violations
  *   It does NOT cover:
@@ -17,7 +18,7 @@
  *   - Page title matches expected pattern
  *   - Role selector renders (wizard is role-pick-first)
  *   - No TRK-104-style hardcoded portal-absolute hrefs leak in
- *   - axe-core WCAG 2.1 AA: 0 Critical violations
+ *   - axe-core WCAG 2 A/AA: 0 violations
  *
  * Uses the shared portal-tool-smoke helpers so new specs stay concise.
  */
@@ -61,9 +62,9 @@ test.describe('Getting Started Wizard @critical', () => {
   test('Start-Here badge is visible after role + goal selection', async ({ page }) => {
     await loadPortalTool(page, 'wizard');
 
-    // v2.7.0 calibration (§8.11.4): wizard.jsx:364 renders the badge as plain
-    // text inside `<span className="... bg-amber-200">START HERE</span>` —
-    // no role="status" / aria-label is applied. The badge only becomes
+    // wizard.jsx renders the badge as plain text inside a token-styled
+    // `<span>` (warning-soft background) — no role="status" / aria-label is
+    // applied. The badge only becomes
     // visible at step 2 (after role + goal selection).
     //
     // Adding `role="status"` is out of scope for this regression guard — it

@@ -27,7 +27,7 @@ updated_at: 2026-11-24
 
 - 不用寫死的 Tailwind 色票類別（`bg-blue-600`、`text-slate-700` 這類），也不用 Tailwind 的 `dark:` 變體。深色主題由 token 在 `[data-theme="dark"]` 下換值處理，見 [ADR-015](015-data-theme-single-track-dark-mode.md)。
 - 只遷關鍵元素、其他留著色票的做法不採用：每支工具都是整支改寫。
-- 一時找不到對應語意 token 的狀態色（例如「已完成」的綠、「優先」的琥珀）可以暫留 Tailwind 類別，但要在 JSX 註解寫明原因，作為之後補 token 時的待辦清單。
+- 一時找不到對應語意 token 的狀態色（例如「已完成」的綠、「優先」的琥珀）可以暫留 Tailwind 類別，但要在 JSX 註解寫明原因，作為之後補 token 時的待辦清單。單支工具暫留超過 20 處，視為改寫不徹底，需要 review；這條靠 review，沒有機制檢查。
 
 `tools/portal/src/getting-started/wizard.jsx`（入門精靈）是第一支照這個做法改完的工具，也是後續工具的範本。它現在不含任何寫死的 Tailwind 色票類別；當初暫留的狀態色已改用語意 token（`--da-color-success`、`--da-color-warning`、`--da-color-semantic-other` 等）。
 
@@ -76,7 +76,7 @@ wizard 是入門的門面，拿它當「新寫法」的示範價值最高，所�
 
 - **className 變長。** 每個顏色類別從 `bg-blue-600` 變成 `bg-[color:var(--da-color-accent)]`，可讀性下降。
 - **token 定義有缺陷時，影響面跟著放大。** 所有工具都吃同一組 token，一對對比不足的 token 會同時出現在每個用到它的地方。實例：`--da-color-tag-bg` 底配 `--da-color-muted` 字曾經對比不足，每個用到這一對的地方都一起不及格；這是 token 定義層的問題，現在的定義在淺色與深色主題下都已達 WCAG AA，但它示範了風險的形狀。修 token 的好處也一樣放大：改一處，所有工具一起修好。
-- **沒有針對 token 配對的對比驗收。** 目前對比是逐支工具在畫面上量：`tests/e2e/wizard.spec.ts` 以 axe-core（自動無障礙檢查）跑 WCAG 2 A／AA 規則，任何違規都會讓測試失敗。但它只量精靈的第一步、預設主題；後面的步驟與深色主題沒有量到。另外 `design-token-usage` lint 會擋新增的「把飽和的 `--da-color-error`／`--da-color-warning` 當文字色」寫法。
+- **沒有針對 token 配對的對比驗收。** 目前對比是逐支工具在畫面上量：`tests/e2e/wizard.spec.ts` 以 axe-core（自動無障礙檢查）跑 WCAG 2 A／AA 規則，任何違規都會讓測試失敗。但它只量精靈的第一步、預設主題；後面的步驟與深色主題沒有量到。實例：精靈在選完角色與目標後才出現的「START HERE」徽章，以飽和的 `--da-color-warning` 當文字色、壓在 `--da-color-warning-soft` 上，淺色主題下依 token 值計算對比約 2.07:1（AA 要 4.5:1），axe 量不到那一步，而 lint 只看新增的行，也沒有擋到它。另外 `design-token-usage` lint 會擋新增的「把飽和的 `--da-color-error`／`--da-color-warning` 當文字色」寫法。
 - **機械強制只涵蓋一部分。** pre-commit 的 `design-token-usage`（只看本次 diff 新增的行）會擋新增的寫死 hex 色碼與新增的 `slate-*` 類別（規則見 [dev-rules S1](../internal/dev-rules.md)）；其他色票（`blue-*`、`emerald-*`、`amber-*`、`red-*`、`gray-*` 等）沒有 lint 擋，靠 review。仍有不少早期工具含寫死的色票類別，屬於尚未遷移的存量。
 - **拼錯的 token 名不會被攔。** `var(--da-color-…)` 指向不存在的 token 時，那個顏色在畫面上就是沒有套用，不會報錯。檢查未定義 token 的 `undefined-tokens-check` 目前只掃 `docs/` 底下的檔案，而 JSX 原始碼在 `tools/portal/src/`，所以 JSX 裡的拼錯不在它的範圍內。
 

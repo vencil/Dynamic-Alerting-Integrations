@@ -19,7 +19,7 @@ updated_at: 2026-11-24
 
 ✅ **Accepted**（v2.7.0，2026-04-16）
 
-2026-05-13 修訂：JSX 原始碼搬到 `tools/portal/src/`，驗收的掃描路徑隨之更新。
+2026-05-13 修訂：JSX 原始碼搬到 `tools/portal/src/`。
 
 2026-11-24 修訂：改寫為現行行為。決策不變。
 
@@ -32,6 +32,10 @@ Portal 的 JSX 工具只有一套 dark mode 機制：`<html>` 上的 `data-theme
 1. JSX 不使用 `dark:` 前綴。
 2. 顏色寫成引用 token 的 Tailwind arbitrary value（方括號裡直接寫 CSS 值的 class，例如 `bg-[color:var(--da-color-surface)]`）；遷移舊元件時，原本的 `dark:xxx` 直接刪掉，不改寫成別的東西。
 3. 切換主題就是改 `<html data-theme="…">`，元件本身不判斷目前是深色還是淺色。
+4. Tailwind 設定不開 `darkMode`。
+5. loader 切換主題時只設 `data-theme`，不加 class `dark`。
+
+現行 loader 尚未符合第 4、5 條，見「已知限制」。
 
 ### 範例：同一個 class，跟著 `data-theme` 換色
 
@@ -85,8 +89,8 @@ Portal 的 JSX 工具只有一套 dark mode 機制：`<html>` 上的 `data-theme
 
 ### 已知限制
 
-- **沒有 token 的顏色不會換色。** Tailwind 內建調色盤的 class（例如 `bg-red-500 text-white`）不經過 token，深色主題下仍是同一個顏色。這類 class 目前在 `tools/portal/src/` 的 JSX 裡仍大量存在，例如狀態色、步驟完成色。本決策只解決「有 token 的畫面上兩套機制並存」，不解決「顏色根本沒進 token」；後者另案追蹤。`design-token-usage` lint 只抓 hex 色碼、style 裡的 px 數值與錯誤／警告 token 當前景色，不抓這類調色盤 class。
-- **loader 仍保留 class `dark`。** 決策原本要求 loader 只設 `data-theme`、拿掉 Tailwind 的 `darkMode` 設定；現行的 `jsx-loader.html` 沒有這樣做：它設定 `tailwind.config = { darkMode: 'class' }`，切到深色時同時加上 class `dark` 與 `data-theme="dark"`，因為 loader 自己的外框樣式（返回連結、主題按鈕、載入動畫）是用 `html.dark` 選擇器寫的。
+- **沒有 token 的顏色不會換色。** Tailwind 內建調色盤的 class（例如 `bg-red-500 text-white`）不經過 token，深色主題下仍是同一個顏色。這類 class 目前在 `tools/portal/src/` 的 JSX 裡仍大量存在，例如狀態色、步驟完成色。本決策只解決「有 token 的畫面上兩套機制並存」，不解決「顏色根本沒進 token」；後者另案追蹤。`design-token-usage` lint 只看新增的行，抓 hex 色碼、style 裡的 px 數值、錯誤／警告 token 當前景色與 `slate-*` class，其他調色盤 class 不抓。
+- **loader 尚未符合第 4、5 條。** 現行的 `jsx-loader.html` 設定 `tailwind.config = { darkMode: 'class' }`，切到深色時同時加上 class `dark` 與 `data-theme="dark"`，因為 loader 自己的外框樣式（返回連結、主題按鈕、載入動畫）是用 `html.dark` 選擇器寫的。
 
   ```html {.quote src="docs/assets/jsx-loader.html"}
       document.documentElement.classList.toggle('dark', isDark);
@@ -94,7 +98,7 @@ Portal 的 JSX 工具只有一套 dark mode 機制：`<html>` 上的 `data-theme
   ```
 
   對 JSX 工具沒有影響，因為 JSX 裡沒有 `dark:` 變體。但這也代表：有人在 JSX 重新寫進 `dark:`，畫面上會照樣生效，不會露出問題。
-- **「不准寫 `dark:`」沒有機制守。** 決策時預定補一支 pre-commit lint，至今沒有實作；目前靠 review。要確認現況，在 repo 根目錄跑：
+- **「不准寫 `dark:`」沒有機制守。** 目前沒有 lint 擋 `dark:`，靠 review。要確認現況，在 repo 根目錄跑：
 
   ```bash
   grep -rnE '\bdark:[a-z]' tools/portal/src --include='*.jsx'
