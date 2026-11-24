@@ -34,37 +34,37 @@ Three tenants have thresholds 80, 95 and 80; the median, 80, goes in `_defaults.
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  mysql_connections: 80
+  mysql_connection_usage_percent: 80
 
 # conf.d/db-a.yaml
 tenants:
   db-a:
-    mysql_connections: "80"
+    mysql_connection_usage_percent: "80"
 
 # conf.d/db-b.yaml
 tenants:
   db-b:
-    mysql_connections: "95"
+    mysql_connection_usage_percent: "95"
 
 # conf.d/db-c.yaml
 tenants:
   db-c: {}
 ```
 
-`da-guard served-values --config-dir conf.d` gives `mysql_connections` 80 for `db-a`, 95 for `db-b` and 80 for `db-c`: `db-c` inherits 80 from `_defaults.yaml`, and `db-a` gets 80 whether its line is deleted or not. Thresholds in a tenant file are written as strings per the schema; the exporter reads them as numbers.
+`da-guard served-values --config-dir conf.d` gives `mysql_connection_usage_percent` 80 for `db-a`, 95 for `db-b` and 80 for `db-c`: `db-c` inherits 80 from `_defaults.yaml`, and `db-a` gets 80 whether its line is deleted or not. Thresholds in a tenant file are written as strings per the schema; the exporter reads them as numbers.
 
 ### What enforces the rule
 
 da-guard's `redundant_override` check: when a key in a tenant file has the same value the tenant would get with the key deleted, it reports a warning. The comparison is against this tenant's own inheritance: every `_defaults.yaml` along its directory chain, and the `_profile` the tenant binds (where the profile sets a value, the profile's value is what counts).
 
-⚠️ It compares the values as YAML reads them, so the types must match. In the example above the root writes the number `80` and `db-a` the string `"80"`, and da-guard reports no finding; that is the usual way to write them, so a redundant threshold override is usually not caught. Only with the root line written as `mysql_connections: "80"` (the exporter still reads it as 80) does `da-guard --config-dir conf.d` name `db-a` (exit code 0; summary and scanned-file list omitted):
+⚠️ It compares the values as YAML reads them, so the types must match. In the example above the root writes the number `80` and `db-a` the string `"80"`, and da-guard reports no finding; that is the usual way to write them, so a redundant threshold override is usually not caught. Only with the root line written as `mysql_connection_usage_percent: "80"` (the exporter still reads it as 80) does `da-guard --config-dir conf.d` name `db-a` (exit code 0; summary and scanned-file list omitted):
 
 ```text
 ### Warnings (informational)
 
 | Tenant | Field | Kind | Message |
 |--------|-------|------|---------|
-| db-a | mysql_connections | redundant_override | tenant "db-a" overrides "mysql_connections" with the same value as the new defaults; remove the override and rely on inheritance |
+| db-a | mysql_connection_usage_percent | redundant_override | tenant "db-a" overrides "mysql_connection_usage_percent" with the same value as the new defaults; remove the override and rely on inheritance |
 ```
 
 - A warning does not affect the exit code (0); with `--warn-as-error` the exit code is 1. Held by `TestRun_RedundantOverride_SurfacesAsWarning` and `TestRun_RedundantOverride_WithWarnAsError_ExitsOne` in `cmd/da-guard/main_test.go`.
@@ -88,7 +88,7 @@ This ADR picks option 3 and supplies the rule. It is a cross-component conventio
 - **Only single values are compared.** A mapping is flattened and each leaf compared; lists are not compared, and identical contents are not reported (`TestCheckRedundantOverrides_SkipsStructuredValues` in `internal/guard/guard_test.go`).
 - **Keys a subdirectory `_defaults.yaml` cannot set are not judged.** The exporter does not apply `_`-prefixed keys (for example `_silent_mode`) from a subdirectory `_defaults.yaml` (ADR-017 decision 4), so the tenant's own line is the value in effect; such an override is not redundant and da-guard does not report it (`TestGuard_RedundantOverrideSkipsRefusedSubtreeKey` in `cmd/da-guard/subtree_reserved_test.go`).
 - **A tenant can only override a declared threshold.** When a tenant file sets a threshold key that no `_defaults.yaml` declares, `/metrics` does not serve it, and da-guard reports no finding for it. What counts as declared (root directory, built-in layer, `optional_overrides:`) is in ADR-017 decisions 3, 4 and 11.
-- **To switch off an inherited threshold, write `"disable"`, not `null`.** `null` in a tenant file is the same as not writing the key at that level; the tenant still gets the value from above (ADR-017 decision 4).
+- **To switch off an inherited threshold, write `"disable"`, not `null`.** `null` in a tenant file is the same as not writing the key at that level; the tenant still gets the value from above (ADR-017 decision 4), and `check_confd_schema.py` refuses a `null` in a tenant file.
 - **A shared value placed in a subdirectory does not reach production under the standard deployment.** The flat assembly customers deploy with carries only the top-level files of conf.d, so a subdirectory `_defaults.yaml` never reaches the live exporter (ADR-016, "Consequences and known limits"). Until that is resolved, a shared value must be in the root `_defaults.yaml` to take effect in production.
 - **No tool generates this shape from a rule set.** Customer rules are imported per tenant with `da-tools migrate`; bulk import has not shipped and is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226).
 

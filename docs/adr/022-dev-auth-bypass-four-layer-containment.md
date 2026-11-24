@@ -136,7 +136,7 @@ tenant-api 自己不做登入。它信任同一個 pod 裡 oauth2-proxy 經 Unix
 ## 考慮過的替代方案
 
 - **在 portal 端用 nginx 注入 header。** 要在 portal 容器掛一份 nginx 設定檔；Windows／WSL2 的單檔 bind mount 容易出現 `invalid mount config` 或檔案鎖定，本機試用的 Windows 使用者一定會踩到。由 tenant-api 自己處理旁路，就不必掛任何檔案。
-- **第 2 層改成「只綁 loopback」。** 本機試用裡呼叫 tenant-api 的是另一個容器（經 compose 網路，不是 loopback），只綁 loopback 會讓旁路服務不了它唯一的用途。看得見的警示不與 compose 衝突，還補上了第 3 層只擋 Kubernetes 留下的缺口。
+- **第 2 層改成「只綁 loopback」。** API 走的是 Unix socket，由 oauth2-proxy 容器經共用 volume 連進來；TCP 埠只開 `/health`、`/ready`、`/metrics`，把 TCP 綁到 loopback 圍堵不了任何東西。看得見的警示不與 compose 衝突，還補上了第 3 層只擋 Kubernetes 留下的缺口。
 - **完整繞過 RBAC。** 等於給全權；只補身分時，即使旗標被開啟，也只拿到注入群組在 `_rbac.yaml` 的權限。
 
 ## 實作位置與守住它的測試

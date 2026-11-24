@@ -39,37 +39,37 @@ updated_at: 2026-11-24
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  mysql_connections: 80
+  mysql_connection_usage_percent: 80
 
 # conf.d/db-a.yaml
 tenants:
   db-a:
-    mysql_connections: "80"
+    mysql_connection_usage_percent: "80"
 
 # conf.d/db-b.yaml
 tenants:
   db-b:
-    mysql_connections: "95"
+    mysql_connection_usage_percent: "95"
 
 # conf.d/db-c.yaml
 tenants:
   db-c: {}
 ```
 
-`da-guard served-values --config-dir conf.d` 對 `mysql_connections` 給 `db-a` 80、`db-b` 95、`db-c` 80：`db-c` 從 `_defaults.yaml` 繼承到 80，`db-a` 那一行刪不刪都是 80。租戶檔的閾值依 schema 寫成字串，exporter 讀成數字。
+`da-guard served-values --config-dir conf.d` 對 `mysql_connection_usage_percent` 給 `db-a` 80、`db-b` 95、`db-c` 80：`db-c` 從 `_defaults.yaml` 繼承到 80，`db-a` 那一行刪不刪都是 80。租戶檔的閾值依 schema 寫成字串，exporter 讀成數字。
 
 ### 誰在守這條規則
 
 da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租戶刪掉它之後會拿到的值相同時，報一筆 warning。比對的對象是這個租戶自己的繼承結果：目錄鏈上每一層的 `_defaults.yaml`，以及租戶綁定的 `_profile`（profile 給了值，就以 profile 的值為準）。
 
-⚠️ 比對的是 YAML 讀出來的值，型別要相同。上例根目錄寫數字 `80`、`db-a` 寫字串 `"80"`，da-guard 不報任何 finding；這正是一般的寫法，所以多餘的閾值覆寫通常抓不到。把根目錄那行寫成 `mysql_connections: "80"`（exporter 一樣讀成 80），`da-guard --config-dir conf.d` 才指出 `db-a`（結束碼 0；Summary 與掃描清單省略）：
+⚠️ 比對的是 YAML 讀出來的值，型別要相同。上例根目錄寫數字 `80`、`db-a` 寫字串 `"80"`，da-guard 不報任何 finding；這正是一般的寫法，所以多餘的閾值覆寫通常抓不到。把根目錄那行寫成 `mysql_connection_usage_percent: "80"`（exporter 一樣讀成 80），`da-guard --config-dir conf.d` 才指出 `db-a`（結束碼 0；Summary 與掃描清單省略）：
 
 ```text
 ### Warnings (informational)
 
 | Tenant | Field | Kind | Message |
 |--------|-------|------|---------|
-| db-a | mysql_connections | redundant_override | tenant "db-a" overrides "mysql_connections" with the same value as the new defaults; remove the override and rely on inheritance |
+| db-a | mysql_connection_usage_percent | redundant_override | tenant "db-a" overrides "mysql_connection_usage_percent" with the same value as the new defaults; remove the override and rely on inheritance |
 ```
 
 - warning 不影響結束碼（0）；加 `--warn-as-error` 時結束碼 1。由 `cmd/da-guard/main_test.go` 的 `TestRun_RedundantOverride_SurfacesAsWarning` 與 `TestRun_RedundantOverride_WithWarnAsError_ExitsOne` 守住。
@@ -93,7 +93,7 @@ da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租�
 - **只比對單一值。** mapping 會攤平到每個葉節點逐一比對；list 不比對，內容相同也不報（`internal/guard/guard_test.go` 的 `TestCheckRedundantOverrides_SkipsStructuredValues`）。
 - **子目錄 `_defaults.yaml` 不生效的鍵不判。** 子目錄 `_defaults.yaml` 裡 `_` 開頭的鍵（例如 `_silent_mode`），exporter 不套用（ADR-017 決策 4），租戶自己那一行才是生效的值；這種覆寫不算多餘，da-guard 也不報（`cmd/da-guard/subtree_reserved_test.go` 的 `TestGuard_RedundantOverrideSkipsRefusedSubtreeKey`）。
 - **租戶只能覆寫有宣告的閾值。** 租戶檔寫了一個 `_defaults.yaml` 沒宣告的閾值鍵，`/metrics` 不送它，而 da-guard 對此不報任何 finding。哪些算已宣告（根目錄、內建層、`optional_overrides:`）見 ADR-017 決策 3、4、11。
-- **要關掉繼承來的閾值，寫 `"disable"`，不要寫 `null`。** 租戶檔寫 `null` 等於這一層沒寫，仍拿到上層的值（ADR-017 決策 4）。
+- **要關掉繼承來的閾值，寫 `"disable"`，不要寫 `null`。** 租戶檔寫 `null` 等於這一層沒寫，仍拿到上層的值（ADR-017 決策 4）；而且 `check_confd_schema.py` 會擋下租戶檔裡的 `null`。
 - **共通值放在子目錄時，標準部署送不到線上。** 客戶部署用的扁平組裝只帶 conf.d 頂層的檔，子目錄的 `_defaults.yaml` 到不了線上的 exporter（ADR-016「後果與已知限制」）。在那個問題解決前，共通值要放在根目錄 `_defaults.yaml` 才會在線上生效。
 - **沒有工具從規則集自動產生這種形狀。** 導入客戶規則目前用逐租戶的 `da-tools migrate`；批次導入尚未出貨，追蹤在 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
 
