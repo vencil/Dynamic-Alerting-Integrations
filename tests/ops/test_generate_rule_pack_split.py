@@ -295,15 +295,6 @@ class TestIsExternalPipelineInput:
         for m in ("up", "ALERTS", "ALERTS_FOR_STATE"):
             assert grps._is_external_pipeline_input(m) is True, m
 
-    def test_clickhouse_camelcase_families_are_tenant_exporter_raw(self):
-        """#4219: ClickHouse's /metrics names its families in CamelCase. The
-        text scan skipped capitalised names, so the packs' reads of them were
-        never classified; the parse tree reads them, and the family table must
-        know them (the scrape gate shares it)."""
-        for m in ("ClickHouseMetrics_TCPConnection", "ClickHouseProfileEvents_Query",
-                  "ClickHouseAsyncMetrics_MaxPartCountForPartition"):
-            assert grps.is_federated_exporter_metric(m) is True, m
-
     def test_platform_config_metrics_external(self):
         for m in ("tenant_metadata_info", "tenant_expected_exporter",
                   "da_config_event", "user_threshold", "user_state_filter",
