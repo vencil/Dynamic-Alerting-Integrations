@@ -8,204 +8,111 @@ lang: en
 
 # ADR-035: Single Source for the Legal Tenant-ID Character Set
 
-> **Language / 語言：** [中文](./035-tenant-id-single-source.md) | **English (Current)**
+> **Language / 語言：** **English (Current)** | [中文](./035-tenant-id-single-source.md)
 
 ## Status
 
-✅ **Accepted** (drafted 2026-10-03, approved by the owner 2026-10-03).
+✅ **Accepted** (2026-10-03, approved by the owner).
 
-- The decisions were settled by the owner in [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655); two of them were settled after the external review.
-- The external review was carried out adversarially by a different model, and its conclusions have been merged into this document.
-- The owner has approved this document. Three revisions were made at approval time: former open question 1 (the tenant-api read and delete paths) is resolved, another DNS-1123 copy, in `init_project.py`, is now listed, and `definitions.tenantId` gains a `description`.
-- 2026-11-05 revision: `operator_generate.py` and `migrate_to_operator.py` no longer read tenants or produce objects carrying a tenant label ([ADR-008](008-operator-native-integration-path.en.md)) and are removed from the list of callers; the 63-character limit is unchanged, for the reason given under the open question below.
-- Revised 2026-10-16: where Go reads the rule now describes the current code (`Valid` in `pkg/tenantid`); the "Current state" section is the snapshot taken when this was drafted and is left as it was.
+Revised 2026-11-05: `operator_generate.py` and `migrate_to_operator.py` no longer read tenants ([ADR-008](008-operator-native-integration-path.en.md)) and are removed from the list of readers; the 63-character limit is unchanged.
 
-## Summary
-
-**Problem**
-
-- The repo holds four mutually inconsistent rules for the legal tenant-id character set, spread across Python, JS, and the #2633 transitional rule.
-- The exporter, the tenant-api read path, and `scaffold_tenant` barely check at all.
-
-**Decision**
-
-1. The final rule is **DNS-1123 label**.
-2. The rule is **written once**, in the tenant-config schema. Python reads it at runtime; Go and the portal read the same JSON copy generated from the schema.
-3. **Block outright, everywhere**: every generation mode exits non-zero on an illegal id and emits no config.
-4. The exporter loads as usual and only prints a WARN.
-
-This ADR only defines the rule; the implementation goes in a separate PR.
-
-## Problem
-
-### Current state (main `ecae7115`)
-
-| Location | Rule |
-|---|---|
-| `operator_generate.py:54`, `migrate_to_operator.py:49` | DNS-1123 label (`fullmatch`) |
-| portal `operator-setup-wizard/utils/generators.js:26` | DNS-1123 shape, but **no 63-character limit** |
-| `_validate_tenant_name` in `init_project.py` | DNS-1123 label (`fullmatch` plus `len <= 63`; same rule as the first row, but another hand-written copy) |
-| `alert_quality.py:65` | `^[a-zA-Z0-9_-]+$` |
-| Generators, da-guard, tenant-api write path (#2633 transitional rule; `_lib_validation.py:98`, `routingpolicy/tenantid.go`) | Rejects the empty string and anything not matching `^[A-Za-z0-9_-]+$` |
-| tenant-api read path `ValidateTenantID` (`handler/sanitize.go:14`) | Only rejects path separators, `..`, non-base names, and reserved file names |
-| `scaffold_tenant.py --tenant` | No validation; the id is used directly as the key and the file name |
-| exporter (`ParseTenantFile` in `config_file.go`) | Only requires valid UTF-8; otherwise the whole file is rejected |
-| JSON Schema (`check_confd_schema`) | No constraint on the keys of `tenants` |
-
-### Why we cannot stop at the transitional rule
-
-- **Operator mode needs DNS-1123.** Operator mode puts the id into K8s object names (`da-tenant-{id}`, `da-{id}-{receiver_type}`). Object names must follow the DNS subdomain rule: lowercase alphanumerics, `-`, `.`, with no uppercase or underscores. So operator mode needs a separate DNS-1123 rule, and the same id ends up legal in config-driven mode but illegal in operator mode.
-- **Multiple rules keep multiplying.** The original question in #2341 was exactly "which one is authoritative".
-
-### Measurements
-
-- Across git-tracked `*.yaml` / `*.yml` files in the repo, the `tenants:` keys contain 33 distinct ids, all DNS-1123 compliant, the longest being 21 characters.
-- Another 3 keys come from CRD schema structure (`k8s/crd/thresholdconfig-crd.yaml`) and are not tenant ids.
-- The ids customers actually use cannot be measured; this is the biggest unknown in this decision, see "Failure modes".
+Revised 2026-11-24: rewritten to describe current behavior; the decisions are numbered 1–4.
 
 ## Decision
 
-### D1: The final rule is DNS-1123 label
+1. **The rule is a DNS-1123 label**: lowercase letters, digits and `-`, 1–63 characters, starting and ending with a letter or digit (the pattern is in section 1).
+2. **The rule is written once**, as `definitions.tenantId` in the tenant-config schema. Python reads it at run time; Go and the portal read JSON copies generated from it.
+3. **The route generator exits non-zero on an invalid id in every mode, and outputs no configuration.**
+4. **The exporter loads the tenant as usual and only logs a WARN.**
+
+### Example: one invalid id
+
+```yaml {.confd .expect-invalid}
+# conf.d/Team_A.yaml
+tenants:
+  Team_A:
+    mysql_connection_usage_percent: "70"
+    _routing:
+      receiver:
+        type: webhook
+        url: "https://hooks.example.com/a"
+```
+
+The output of `generate_alertmanager_routes.py --config-dir conf.d --output-alertmanager --dry-run` (exit code 1; `--validate` gives the same):
+
+```text
+Config files: 1 read, 0 skipped
+FAIL: 1 invalid tenant id(s) — nothing was generated, written or applied; rename the tenant(s):
+  Team_A.yaml: tenant id 'Team_A' is not a valid tenant id (Tenant id (ADR-035): a DNS-1123 label — 1-63 characters of lowercase letters, digits and '-', starting and ending with a letter or digit.) — no route, receiver or inhibit rule is rendered for it
+```
+
+The sentence in parentheses is the schema's `definitions.tenantId.description`; the error messages of the generator, da-guard and tenant-api all quote it instead of describing the rule themselves. Renamed to `team-a`, the tenant gets its configuration.
+
+## Background
+
+Before this decision the repository had four tenant-id rules that disagreed: a DNS-1123 label (hand-written once in the operator generator and again in `init_project.py`), the portal's DNS-1123 shape without the 63-character limit, `alert_quality.py`'s `^[a-zA-Z0-9_-]+$`, and the interim rule the generator, da-guard and tenant-api's write path shared (refusing only an empty string and characters outside `^[A-Za-z0-9_-]+$`). The exporter, tenant-api's read path and `scaffold_tenant.py` checked almost nothing, and the JSON schema did not constrain the keys of `tenants`.
+
+Why DNS-1123:
+
+- **The id ends up in Kubernetes object names and labels.** Object names accept only lowercase letters, digits, `-` and `.`; with the interim rule, an id valid in config-driven mode is invalid in a K8s object.
+- **It is a subset of the interim rule**, so it only tightens, and it matches Kubernetes namespace naming.
+- **Every id in the repository already complies.** At drafting time the tracked YAML held 33 distinct ids under `tenants:`, all DNS-1123 labels, the longest 21 characters. What customers actually use cannot be measured; see "Consequences and known limits".
+
+## The decisions in detail
+
+### 1. The rule is a DNS-1123 label
 
 ```text
 ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
 ```
 
-Lowercase alphanumerics and `-`, length 1–63, must start and end with an alphanumeric.
+- An id with uppercase letters, underscores or more than 63 characters must be renamed. The metric's `tenant` label value then changes and history is not continuous.
+- An all-digit id (for example `123`) is valid, but unquoted in YAML it parses as an integer key, which the schema check refuses as "not a string"; quote it.
+- The 63-character limit does not subtract a prefix: the id itself is used in file names, ConfigMap keys and label values.
 
-- **What we gain**
-  - Operator mode and config-driven mode share one rule.
-  - The new rule is a subset of the transitional rule and only tightens, consistent with the #2633 design of "only tighten, never loosen back".
-  - Consistent with K8s namespace naming.
-- **What we give up**
-  - Ids containing uppercase letters, underscores, or longer than 63 characters must be renamed.
-  - After a rename the metric `tenant` label value changes, so historical data is discontinuous.
-- **All-numeric ids** (e.g. `123`) are legal under DNS-1123, but unquoted in YAML they parse as integer keys, which `check_confd_schema` rejects as "not a string". Such ids must therefore be quoted, and the migration docs must say so.
+### 2. The rule is written once, in the tenant-config schema
 
-### D2: Write the rule once, in the tenant-config schema
+- **The rule**: `definitions.tenantId` in `docs/schemas/tenant-config.schema.json` (`type: string` and `pattern`); `properties.tenants` references it through `propertyNames`, so the schema check checks every tenant key. There is no separate `maxLength`: the pattern already bounds the length, and writing it twice would only give two errors for one violation. The `description` is the one-sentence rule for people, shipped with the copies.
+- **Python**: `_lib_validation.is_valid_tenant_id` reads this pattern at run time; the da-tools image ships the schema. If the schema cannot be read, it fails closed. `alert_quality.py`, `init_project.py` and `scaffold_tenant.py` all call it instead of keeping their own regex.
+- **Go and the portal**: a Go binary cannot read the repository's `docs/` at run time, so it reads a generated copy. `scripts/tools/dx/gen_tenant_id_json.py` extracts `definitions.tenantId` from the schema and writes `components/threshold-exporter/app/pkg/tenantid/tenant_id.json` (read with `go:embed`; `Valid` in `pkg/tenantid` is what the exporter, da-guard and tenant-api's write path call) and the portal's `_common/data/tenant-id.json`. The pre-commit hook `tenant-id-json-check` requires both copies to equal a fresh regeneration.
+- **Pattern dialect**: only the subset on which ECMA-262, Python `re` and Go RE2 agree (character classes, `{m,n}`, `^`, `$`) — no lookaround, backreferences or Unicode classes. Matching is always a full match: Python uses `re.fullmatch` (its `$` accepts a trailing `\n`), Go anchors with `^…$`.
 
-**The rule itself**
+### 3. The generator exits non-zero in every mode
 
-- Add `definitions.tenantId` (`type: string`, `pattern`) to `docs/schemas/tenant-config.schema.json`.
-- Add `propertyNames: {"$ref": "#/definitions/tenantId"}` to `properties.tenants`.
-- The schema is draft-07, which supports `propertyNames`, so `check_confd_schema` starts checking without any code change. The external review tested this on a copy of the schema: `Team_A` returns rc 1; the repo's conf.d returns rc 0.
-- No separate `maxLength`. The pattern already bounds the length; stating it twice would only produce two errors per violation.
-- `definitions.tenantId` also carries an English `description` that explains the rule in plain words. It ships inside the generated JSON copies; the error messages of the generators, da-guard, and tenant-api cite this text instead of each describing the rule on their own. The portal UI keeps its own localized hint text.
+The generator, da-guard, tenant-api's write path, the schema, the portal, `scaffold_tenant` and `init_project` all judge with DNS-1123. On an invalid id the generator exits non-zero and outputs no configuration in every mode: plain generation, `--dry-run`, `--apply`, `--output-configmap`, `--validate` and `--strict`.
 
-**Python**
+The generator's usual convention for other problems is "log a WARN, skip the item, succeed, and fail only under `--validate`". This is an exception: skipping a route loses no alert, skipping a tenant does. Its alerts fall to the root route's receiver, and the root receiver the repository ships by default is empty, so they are silently dropped. The generator also logs a WARN when the root receiver has no integration.
 
-- `_lib_validation.is_valid_tenant_id` reads this pattern at runtime, reusing the `_find_tenant_schema()` lookup: inside the da-tools image it reads the flat layout; inside the repo it walks up to the project root.
-- build.sh's `REPO_DATA_FILES` already ships this schema, and `check_build_completeness` already lists it as a required file.
-- If the schema cannot be read, fail closed, following the #2180 receiver URL pattern.
-- The following tools drop their own regex and call this function instead: `alert_quality.py`, `init_project.py` (`_validate_tenant_name`); `scaffold_tenant.py`, which did no validation before, also calls it. (`operator_generate.py` and `migrate_to_operator.py` were on this list then; they no longer read tenants.)
+tenant-api applies the rule on every write path: the enforcement point is `gitops.guardTenantID`, covering PUT, batch writes, group batch writes, custom-alerts, the federation subset and dry-runs; the handler's `ValidateWritableTenantID` returns an early 400. Read paths are not affected: the rule is not put into `confd.IsAddressableTenantID`, which read paths also call. tenant-api has no endpoint to delete or rename a tenant — renames happen in git — so the rule never blocks a rename.
 
-**Go and the portal**
+### 4. The exporter loads the tenant and logs a WARN
 
-A Go binary cannot read the repo's `docs/` at runtime, so we use "generated copy + drift guard", the same approach as `recipe-status.json`:
+The exporter does not refuse a tenant with an invalid id; on each reload it logs one WARN per invalid id, quoting the rule's `description`. No metric and no alert are added. Enforcement sits in CI and on the write side; one invalid id does not make that tenant's threshold metrics disappear.
 
-- A generator script extracts `definitions.tenantId` from the schema and writes two JSON files:
-  - `components/threshold-exporter/app/pkg/tenantid/tenant_id.json`
-  - the corresponding data file in the portal
-- Go reads it via `go:embed` (`Valid` in `pkg/tenantid`), which the exporter, da-guard and the tenant-api write path all call. tenant-api references it through the existing `replace github.com/vencil/threshold-exporter => ../threshold-exporter/app`. tenant-api's Dockerfile copies that whole module, and `.dockerignore` does not exclude `*.json`.
-- The portal's `validateTenantName` switches to reading its data file and drops its own regex.
-- Add a drift check to pre-commit: both copies must equal a fresh regeneration.
+## Consequences and known limits
 
-**Why not the receiverspec pattern**
+- **A deployment using uppercase or underscore ids turns red in CI and deployment after upgrading the image.** The generator outputs no new configuration, the live Alertmanager configuration stays as it was and alerts follow it, so none are lost; tenant-api refuses writes to that tenant; the exporter keeps emitting metrics and logs a WARN. As long as one id is invalid, configuration updates for every tenant are blocked until it is renamed. `da-tools validate-config` lists every invalid id.
+- **The cost of a rename**: the metric's `tenant` label value changes and history is not continuous; Alertmanager silences and inhibit rules must follow.
+- **The schema path judges a trailing `\n` inconsistently.** JSON Schema's `pattern` has search semantics: Python jsonschema lets a key with a trailing `\n` pass, an editor (ECMAScript's `$`) refuses it. The generator, da-guard and tenant-api's write validation all refuse such a key after decoding, so the difference is accepted; tenant-api's read validation is looser. The parity matrix's `tenant_ids` table pins it with a case that runs jsonschema directly.
+- **Someone changes the schema without regenerating the copies**, and Go, the portal and Python disagree: refused by `tenant-id-json-check`.
+- **The schema file missing from the da-tools image** makes the Python side fail closed and stops `generate-routes`; `check_build_completeness` guards the shipped file list.
 
-The receiverspec pattern hand-copies constants on the Go side and then compares them against the schema in a test; the receiver-type list of `pkg/receiverspec` and `TestKnown_MatchesSchema` work this way. It saves the generator script, but has two problems:
+## Alternatives considered
 
-- The rule text is still hand-copied on the Go side, which contradicts the decision of "one data file, read by both languages".
-- The portal has no Go test to lean on, so a third copy would remain.
-
-**Pattern dialect**
-
-- The pattern may only use the subset whose semantics agree across ECMA-262, Python `re`, and Go RE2: character classes, `{m,n}`, `^`, `$`; no lookaround, backreferences, or Unicode classes.
-- The external review tested this: the rule gives identical verdicts in all three for `abc`, `abc\n`, and `é`.
-- Match semantics differ by path:
-  - `is_valid_tenant_id`: uses `re.fullmatch`, because Python's `$` swallows a trailing `\n`.
-  - Go: anchored with `^…$`; RE2's `$` does not swallow `\n`.
-  - JSON Schema's `pattern` has **search** semantics, and `$` behaves differently per validator: `check_confd_schema` (Python jsonschema) lets a key with a trailing `\n` through (tested with jsonschema 4.26: `{"abc\n": 1}` returns 0 errors); the editor path, yaml-language-server, uses ECMAScript's `$` and rejects it (`new RegExp(pattern).test("abc\n")` is false).
-- A key with a trailing `\n` comes from a YAML block scalar or from the `\n` escape in a double-quoted scalar (`"abc\n": 1`). Under this ADR, the generators, da-guard, and tenant-api write validation all reject such decoded keys, so we accept this difference on the schema path; tenant-api read validation stays broader, see "Resolved questions".
-- The `tenant_ids` table in the parity matrix gets a case that runs jsonschema directly, to pin this difference down.
-
-- **What we gain**: there is only one copy of the rule text, and all four readers get the rule from it: the generators (Python), da-guard and tenant-api (Go), the portal, and the schema checker.
-- **What we give up**
-  - One more generator script and one more drift guard.
-  - Python depends on this schema file at runtime. That dependency already exists (#2180).
-
-### D3: Block outright, everywhere — every generation mode exits non-zero
-
-Once the new rule ships, every reader switches to the DNS-1123 verdict at the same time: generators, da-guard, the tenant-api write path, the schema, the portal, `scaffold_tenant`, and `init_project`.
-
-In tenant-api the new rule applies to **every write path**; for the scope and the enforcement point see "Resolved questions".
-
-When a generator hits an illegal id, it **exits non-zero and emits no config in every mode**, including plain generation, `--dry-run`, `--apply`, `--output-configmap`, `--validate`, and `--strict`.
-
-**This is an exception to the wave-2 1A rule.** The 1A rule is "print a WARN and skip the item; render still returns rc 0, and only `--validate` returns rc 1". The reason for the exception is in the first row of "Failure modes": skipping a tenant silently makes its alerts disappear, whereas skipping a route has no such consequence.
-
-- **What we gain**
-  - We never deploy an Alertmanager config that is "missing a tenant". The deploy job turns red and the live config stays untouched.
-  - Ids caught by the #2633 transitional rule (empty string, containing spaces) also switch to a non-zero exit instead of being silently skipped.
-- **What we give up**
-  - A single illegal id blocks config updates for all tenants until it is renamed.
-  - Customers using uppercase or underscore ids will see CI and deploys turn red after upgrading the image.
-
-### D4: The exporter loads as usual and prints a WARN
-
-The exporter does not reject tenants with illegal ids; on every reload it prints one WARN per illegal id. No new metric and no new alert.
-
-- **What we gain**: the exporter is a runtime component, so gatekeeping is concentrated in CI and the write side; one illegal id does not make that tenant's threshold metrics disappear.
-- **What we give up**: while D3 is blocking the deploy, the exporter still emits metrics for the illegal id, while the live Alertmanager config is still the old one. Alerts in this window go through the old config, so none are lost.
-
-## Failure modes and guardrails
-
-| Scenario | Outcome | Guardrail |
-|---|---|---|
-| A customer already uses ids like `Team_A` and upgrades to the new image | The generator exits non-zero in every mode and emits no config; tenant-api refuses writes to that tenant; the exporter keeps emitting metrics and prints a WARN; the live Alertmanager config stays on the old version, so no alerts are lost | Release notes and the changelog mark this as **breaking** with rename steps; `da-tools validate-config` lists every illegal id |
-| **If D3 blocked only under `--validate`** (rejected by this ADR) | The generator skips that tenant and render returns rc 0, deploying a config missing that tenant; its alerts fall to the root route's receiver, and the repo-shipped `default` is an empty receiver (`k8s/03-monitoring/configmap-alertmanager.yaml:107`, the built-in base in `_grar_render.py`), which amounts to silently dropping them | This is exactly why D3 became "every mode exits non-zero" |
-| Rename | The metric `tenant` label value changes and history is discontinuous; Alertmanager silences and inhibits must be updated too; all-numeric ids must be quoted | Covered in the migration docs |
-| The schema file is missing from the da-tools image | Python fails closed and `generate-routes` stops | build.sh's `REPO_DATA_FILES` already ships the file, and `check_build_completeness` guards it |
-| Someone changes the schema without regenerating the copies | Go, the portal, and Python disagree in their verdicts | The pre-commit drift guard |
-
-## Alternatives considered and rejected
-
-| Option | Reason for rejection |
+| Alternative | Why not |
 |---|---|
-| Keep the transitional rule `^[A-Za-z0-9_-]+$` and add a length limit | Operator mode would still need a separate DNS-1123 rule |
-| Two tiers: the transitional rule at the core, with operator mode additionally requiring DNS-1123 | The same id would be legal in one mode and illegal in another, and two tiers must be maintained |
-| A permissive rule, e.g. Mimir / Loki allow `!-_.*'()` with length 150 | Still does not fit into K8s object names; `.` and `*` would appear in receiver names, file names, and URLs |
-| Staged rollout: WARN first, block in the next minor version | The owner chose to block outright, so the rule is consistent across all readers from day one |
-| Block outright, but fail only under `--validate` (keeping 1A) | Deploy paths without `--validate` would silently drop that tenant's alerts (see the second row of "Failure modes") |
-| One copy per language, pinned only by parity; or the receiverspec pattern | More than one copy of the rule text, and the portal cannot be included |
-| The exporter skips tenants with illegal ids and adds a counter and an alert | Needs a new mechanism; failing closed would make that tenant's metrics disappear |
-| The exporter rejects the whole file (reusing parse failure) | Other tenants in the same file would be dropped along with it |
-| Leave the portal out and only flag it as a known inconsistency | The JS rule would keep drifting, and it already lacks the 63-character limit today |
+| Keep the interim rule `^[A-Za-z0-9_-]+$` and add a length limit | Does not fit K8s object names; a second DNS-1123 rule would still be needed |
+| Two tiers: the interim rule at the core, DNS-1123 required when going into K8s | One id valid in one mode and invalid in another; two tiers to maintain |
+| A loose rule (for example Mimir/Loki's `!-_.*'()`, length 150) | Also does not fit K8s object names; `.` and `*` would appear in receiver names, file names and URLs |
+| Staged rollout: WARN first, block in the next minor version | The owner chose to block at once, so the rule is the same for every reader from day one |
+| Block, but fail only under `--validate` | A deployment path without `--validate` would silently drop that tenant's alerts |
+| One copy per language pinned only by a parity test; or a Go constant copied by hand and compared against the schema by a test | More than one copy of the rule text; the portal has no Go test and would keep a third copy |
+| The exporter skips tenants with invalid ids and adds a counter and an alert | A new mechanism; that tenant's metrics would disappear |
+| The exporter refuses the whole file | The other tenants in the same file would be dropped too |
+| Leave the portal out and mark it as a known inconsistency | The JS copy would keep drifting |
 
-## Resolved questions
+## Related
 
-- **Whether the tenant-api read and delete paths should apply the new rule.** Only the write paths apply it; the read paths are unchanged. Confirmed at approval time:
-  - tenant-api has no route that deletes or renames a tenant; renames always happen in git, so the new rule does not block a rename migration.
-  - The new rule applies to every write path. The enforcement point is `gitops.guardTenantID` (`components/tenant-api/internal/gitops/writer.go`), which covers PUT, batch writes, group batch writes, custom-alerts, the federation subset, and dry-run.
-  - The handlers keep `ValidateWritableTenantID` to return 400 early.
-  - The rule is **not** put into `confd.IsAddressableTenantID`, because the read paths call it too.
-- **Whether the 63-character limit should subtract the prefix.** It should not. When this was decided, what operator mode wrote into K8s labels was the **bare id** (`metadata.labels: {"tenant": id}`); only object names (limit 253) and Alertmanager receiver names (no 63 limit) carried the prefix. Operator mode no longer produces those objects (ADR-008); the limit stays at the DNS-1123 label's 63, since the id is still used in file names and ConfigMap keys.
-
-## Open questions
-
-1. **Whether to WARN when the root receiver is empty** (out of scope, but related). When the generator detects that the base config's root receiver has no integration, it could print a WARN reminding that unrouted alerts will be silently dropped. This is not part of the tenant-id rule and is tracked in [#2660](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2660).
-
-## Places to update during implementation
-
-- The `invalid_tenant_id` row in `docs/cli-reference{,.en}.md`, which currently says "uppercase is allowed".
-- Passages mentioning uppercase ids in `docs/integration/gitops-deployment*.md`, `byo-alertmanager-integration.md`, and `tenant-federation.md`; check each one.
-- `_validate_tenant_name` in `scripts/tools/ops/init_project.py`: drop the hand-written regex and length check and call `_lib_validation` instead.
-- tenant-api's `gitops.guardTenantID`: add the new rule; leave `confd.IsAddressableTenantID` unchanged.
-- The WARN text in `_grar_parse.py` and `_grar_validate.invalid_tenant_id_text`, which currently says "letters, digits, '_' and '-' only".
-- The `tenant_ids` table in `tests/shared/routing_policy_parity_matrix.json`: move cases such as `UPPER`, `Mixed_Case-1`, `_x`, `-x`, `x_`, and 64 characters to invalid, and update the description text.
-- Tests such as `components/tenant-api/internal/handler/tenant_id_write_test.go`, `tests/ops/test_tenant_name_rfc1123.py`, and `pkg/tenantid/tenantid_test.go`.
-
-## References
-
-- [#2341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2341), [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655), [#2633](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/2633) (transitional rule)
-- [#2180](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2180) (precedent for writing the pattern in the schema and having Python read it at runtime)
-- `scripts/tools/dx/gen_recipe_contract.py` (precedent for generating a copy consumed by both Go and the portal, with a drift guard)
+- [ADR-008](008-operator-native-integration-path.en.md) — withdrawal of the operator path
+- [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655) — discussion and decision
+- `scripts/tools/dx/gen_recipe_contract.py` — the same precedent: a generated copy read by Go and the portal, with a drift guard

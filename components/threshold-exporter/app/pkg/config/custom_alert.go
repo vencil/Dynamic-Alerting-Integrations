@@ -216,7 +216,7 @@ var (
 	}()
 )
 
-// sloMinEventsDefault (ADR-031 OQ-A): the fast-window bad-event absolute floor
+// sloMinEventsDefault (ADR-031 §1, the `min_events` default): the fast-window bad-event absolute floor
 // when min_events is omitted. The default IS materialised into the slug
 // (`minev10`) so a later default change can never silently re-slug existing
 // shapes.

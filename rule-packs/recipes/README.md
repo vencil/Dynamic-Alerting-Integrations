@@ -64,7 +64,7 @@ tenants:
 
 ### latency / freshness 型 SLI：instrumentation 先行（recipe 支援 deferred）
 
-v1 的 `slo_burn_rate` 只接 availability／error-ratio 型（兩個 counter 的比率）。latency 與 freshness 型的 **recipe 支援是 defer-with-trigger**（首個客戶需求觸發，見 [ADR-031 §Deferred](../../docs/adr/031-slo-burn-rate-recipe.md#deferred附-trigger)），但 instrumentation 可以現在就鋪——等 recipe 到位時資料已在：
+v1 的 `slo_burn_rate` 只接 availability／error-ratio 型（兩個 counter 的比率）。latency 與 freshness 型的 **recipe 支援是 defer-with-trigger**（首個客戶需求觸發，見 [ADR-031 §延後的項目](../../docs/adr/031-slo-burn-rate-recipe.md#延後的項目)），但 instrumentation 可以現在就鋪——等 recipe 到位時資料已在：
 
 - **latency 型（如「95% 請求 < 300ms」）**：宣告介面的 `selectors` 同時套用分子分母，histogram 的 `le` 會污染分母——正解不是等 recipe 吃 histogram，而是**在源頭產出 counter 對**：instrument 一個 `*_slow_requests_total`（超過門檻的請求數）counter，與既有 `*_requests_total` 配對。**這其實是今天就能用的 workaround**：把「慢」定義成「壞事件」，availability 型宣告（`metric: *_slow_requests_total` / `denominator_metric: *_requests_total`、`objective: "95"`）現在就能算 latency SLO 的 burn rate——代價是門檻（300ms）燒死在 instrumentation、改門檻要改 code。
 - **freshness 型（如「資料不超過 N 分鐘未更新」）**：本質是 timestamp 差值、非 counter 比率。鋪法三選一：K8s 內 batch job 完成時寫 completion-timestamp gauge 到 node-exporter **textfile collector**（job 寫 `.prom` 檔）；無常駐 exporter 的短命 job 用 **Pushgateway**；log-only 系統用 **Vector `log_to_metric`** transform 從完成 log 派生 gauge。**誠實邊界：completion-timestamp gauge 今天接不上任何 recipe**——「太舊」語意需要 `time() - gauge > N` 的時間差運算，recipe 宣告介面沒有它（這正是 freshness 型被 deferred 的原因；epoch timestamp 對靜態閾值恆真或恆假＝死告警）。過渡期要告警，得由平台側 raw rule 承接 `time() - gauge > N`，或改鋪「持續刷新的 age gauge」（值＝現在−完成時刻，需常駐程序計算）再配 `threshold` recipe。先鋪 timestamp gauge 的價值在於**資料先落 TSDB**——未來 freshness recipe 會直接消費同一 gauge。

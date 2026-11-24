@@ -55,7 +55,7 @@ def _collect_data(config_dir: str) -> dict:
     """Scan config-dir and collect profiles, policies, tenant IDs, and refs.
 
     #2326: the WHOLE tree, as the route generator reads it since the
-    hierarchical routing plane (ADR-007 "Amendment 2026-09-28" / ADR-017 Decision 9):
+    hierarchical routing plane (ADR-007 §Scope in a hierarchical conf.d / ADR-017 Decision 9):
     profiles and policies may sit in a subdirectory and are scoped to it, a
     tenant may live at any depth. File names are relative to the root (a root
     file keeps its bare name).

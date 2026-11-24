@@ -8,7 +8,7 @@ runtime (``_lib_validation.duration_rule``) and Go calls ``model.ParseDuration``
 itself; the portal bundle cannot read the repo's ``docs/`` at runtime, so this
 script DERIVES one JSON copy for it (imported by
 ``_common/validation/yaml-parser.js``). Same shape as gen_tenant_id_json.py
-(ADR-035 D2): one authored source, a derived copy, a drift gate.
+(ADR-035 §2): one authored source, a derived copy, a drift gate.
 
     python gen_am_duration_json.py            # write the copy
     python gen_am_duration_json.py --check    # exit 1 if the committed copy drifted

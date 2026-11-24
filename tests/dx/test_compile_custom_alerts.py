@@ -667,7 +667,7 @@ def test_forecast_raw_mode_threshold_not_bounded_by_band(tmp_path):
 # save, and refusing to compile a served entry would silence a live alert.
 
 
-# --- 10b. slo_burn_rate recipe (ADR-031, #1092 Phase 0) ----------------------
+# --- 10b. slo_burn_rate recipe (ADR-031, #1092 stage 0) ----------------------
 _SLO_DECL = ('{recipe: slo_burn_rate, name: co_avail, metric: co_errors_total, '
              'denominator_metric: co_requests_total, objective: "99.9"}')
 
@@ -702,7 +702,7 @@ def test_slo_duplicate_same_shape_is_the_exporters_duplicate(tmp_path):
 
 
 def test_slo_rule_count_ledger(tmp_path):
-    # ADR-031 §2 implementation checklist: the per-shape rule ledger. emit_shape
+    # ADR-031 §2 / Consequences (about 12 rules per shape): the per-shape rule ledger. emit_shape
     # yields 9 recording (1 threshold + 4 SLI ratio windows + 2 bad-event windows
     # + 2 per-severity cores) + 2 alerts = 11; build_pack adds 1 custom_recipe_info
     # → 12 rules total for one slo shape (plus the global silent sentinel).
@@ -796,7 +796,7 @@ def test_slo_alert_labels_metric_group_and_slo_burn(tmp_path):
     assert {a["labels"]["severity"] for a in alerts} == {"critical", "warning"}
     for a in alerts:
         # Severity Dedup inhibit needs metric_group on BOTH severities; slo_burn
-        # is the storm-fan-out discriminator (ADR-031 §2, OQ-B de-prefixed).
+        # is the storm-fan-out discriminator (ADR-031 §2).
         assert a["labels"]["metric_group"] == "slo_{{ $labels.name }}"
         assert a["labels"]["slo_burn"] == "true"
         assert a["labels"]["component"] == "custom"

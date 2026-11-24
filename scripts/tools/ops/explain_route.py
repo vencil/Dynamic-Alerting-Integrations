@@ -1061,7 +1061,7 @@ def trace_alert_routing(
     assembled = False
     # The generator refuses these trees before building anything (unreadable
     # tenant file #1460, duplicate tenant #2315, routing-tree error #2326,
-    # invalid tenant id ADR-035 D3, field type #2906): same judgment, same
+    # invalid tenant id ADR-035 §3, field type #2906): same judgment, same
     # words, same order.
     refusal_rc, refusal = tree_refusal(
         parsed.get("files_read", 0),
@@ -1481,7 +1481,7 @@ def main(argv: list[str] | None = None) -> int | Report:
                   file=sys.stderr)
         # #2341 R8: a tenant id generate-routes renders nothing for (it is
         # not in all_tenants, so it is not explained below either) — and,
-        # ADR-035 D3, refuses the whole tree for, in every mode.
+        # ADR-035 §3, refuses the whole tree for, in every mode.
         id_files = parsed.get("invalid_tenant_id_files", {})
         for tenant in sorted(set(parsed.get("invalid_tenant_ids", [])), key=str):
             print(f"  WARN: {safe_label(invalid_tenant_id_text(tenant, id_files.get(tenant, ())))} — "

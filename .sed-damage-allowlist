@@ -291,3 +291,6 @@ helm/threshold-exporter/values.yaml
 components/threshold-exporter/config/conf.d/_defaults.yaml
 try-local/seed/conf.d/_defaults.yaml
 tests/lint/test_check_threshold_reachability.py
+# #2789: ADR-007 rewritten to the ADR writing rules; the version history, pseudo-code and duplicated rationale left (to 48% of before).
+docs/adr/007-cross-domain-routing-profiles.md
+docs/adr/007-cross-domain-routing-profiles.en.md
