@@ -89,7 +89,9 @@ Advanced users can also declare them directly under `_custom_alerts` in `conf.d/
 > **Three footguns to know**:
 > 1. Your metric **must carry a `tenant` label** (platform rules join `on(tenant)`), or the rule **silently never fires** — multi-tenant scrapes usually inject it via relabel.
 > 2. The `absence` recipe **fires immediately** for a metric that **never appeared** (the safety guard isn't shipped yet); on first onboarding, make the metric appear at least once.
-> 3. `threshold` / `rate` aggregate with `max`/`sum by(tenant)`, which **drops sub-labels** like `device` / `instance` (the alert says "the worst one", not which one).
+> 3. `threshold` / `rate` aggregate with `max`/`sum` into one value per tenant (one per cluster when the tenant spans several clusters), which **drops sub-labels** like `device` / `instance` (the alert says "the worst one", not which one).
+
+> **When your tenant spans several clusters**: each cluster is computed and compared against the threshold on its own, and the alert carries `da_cluster` to say which cluster it is. Recipes that sum or divide — `rate`, `ratio`, `slo_burn_rate` — therefore **no longer combine the clusters** (behaviour change: a case where only the clusters added together exceed the threshold no longer alerts). `absence` is the one exception: the metric counts as present when any cluster has it. Thresholds are still one set for the whole tenant. See [ADR-006 "One tenant in several clusters"](../adr/006-tenant-mapping-topologies.en.md).
 
 ### Setting Up Alert Notification Routing
 

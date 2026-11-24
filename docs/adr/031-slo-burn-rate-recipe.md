@@ -55,18 +55,20 @@ tenants:
 編譯器產生的形狀（節錄自 recipe 的契約說明）：
 
 ```text {.quote src="rule-packs/recipes/slo_burn_rate.yaml"}
-  custom:metric:<id>:<win> = sum by(tenant)(rate(<bad><sel>[<win>]))
-                             / (sum by(tenant)(rate(<total><sel>[<win>])) > 0)
+  custom:metric:<id>:<win> = sum by(tenant,da_cluster)(rate(<bad><sel>[<win>]))
+                             / (sum by(tenant,da_cluster)(rate(<total><sel>[<win>])) > 0)
                              # <win> ∈ 1h / 5m / 6h / 30m (fixed recipe semantics)
-  custom:bad:<id>:<win>    = sum by(tenant)(increase(<bad><sel>[<win>]))   # 5m / 30m
+  custom:bad:<id>:<win>    = sum by(tenant,da_cluster)(increase(<bad><sel>[<win>]))   # 5m / 30m
 # ...
-  custom:<id>:critical:core =  (ratio:1h > thr_crit) and on(tenant)
-                               (ratio:5m > thr_crit) and on(tenant)
+  custom:<id>:critical:core =  (ratio:1h > thr_crit) and on(tenant, da_cluster)
+                               (ratio:5m > thr_crit) and on(tenant, da_cluster)
                                (bad:5m  > <min_events>)          # fast burn
-  custom:<id>:warning:core  =  (ratio:6h > thr_warn) and on(tenant)
-                               (ratio:30m > thr_warn) and on(tenant)
+  custom:<id>:warning:core  =  (ratio:6h > thr_warn) and on(tenant, da_cluster)
+                               (ratio:30m > thr_warn) and on(tenant, da_cluster)
                                (bad:30m > <min_events>*6)        # slow burn
 ```
+
+同一個租戶在多個叢集時，比值與壞事件數逐叢集計算，三個條件要在同一個叢集同時成立；`da_cluster` 是叢集身分的 label，見 [ADR-006](./006-tenant-mapping-topologies.md)。序列沒有這個 label 時（單一 Prometheus）與 `by(tenant)`／`on(tenant)` 相同。
 
 以 `objective: "99.9"`、`slo_period: 30d` 為例：exporter 送出 `thr_crit = 14.4 × 0.001 = 0.0144`、`thr_warn = 6 × 0.001 = 0.006`，兩者都是 `user_threshold{severity}` 序列。
 

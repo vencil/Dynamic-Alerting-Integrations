@@ -55,6 +55,10 @@ type compileCustomAlertsDoc struct {
 	// Groups: the pack's `groups:` list, in pack order.
 	Groups any `json:"groups"`
 	Shapes int `json:"shapes"`
+	// Declarations: {recorded name: comment text} — the comment the
+	// serialiser writes directly above that rule
+	// (config.CustomAlertPack.Declarations).
+	Declarations map[string]string `json:"declarations"`
 	// NotCompiled: entries the exporter does not serve (rejected,
 	// duplicate) — no rule, and the caller names each.
 	NotCompiled []notCompiledEntry `json:"not_compiled"`
@@ -120,15 +124,16 @@ func runCompileCustomAlerts(args []string, stdout, errOut io.Writer) int {
 	}
 
 	doc := compileCustomAlertsDoc{
-		Schema:      compileCustomAlertsSchema,
-		ConfigHash:  configHashField(rep.TreeIdentity),
-		Groups:      []any{},
-		NotCompiled: []notCompiledEntry{},
-		BlockErrors: map[string]string{},
-		Lifecycle:   []lifecycleUse{},
-		ParseFailed: rep.ParseFailed,
-		Skipped:     make([]skippedFile, 0, len(rep.NoTenant)),
-		Unreadable:  unreadableEntries(rep.Unreadable),
+		Schema:       compileCustomAlertsSchema,
+		ConfigHash:   configHashField(rep.TreeIdentity),
+		Groups:       []any{},
+		Declarations: map[string]string{},
+		NotCompiled:  []notCompiledEntry{},
+		BlockErrors:  map[string]string{},
+		Lifecycle:    []lifecycleUse{},
+		ParseFailed:  rep.ParseFailed,
+		Skipped:      make([]skippedFile, 0, len(rep.NoTenant)),
+		Unreadable:   unreadableEntries(rep.Unreadable),
 	}
 	if doc.ParseFailed == nil {
 		doc.ParseFailed = []string{}
@@ -182,6 +187,9 @@ func runCompileCustomAlerts(args []string, stdout, errOut io.Writer) int {
 			return fail(err)
 		}
 		doc.Groups, doc.Shapes = pack.Groups, pack.Shapes
+		for name, text := range pack.Declarations {
+			doc.Declarations[name] = text
+		}
 		if doc.Groups == nil || reflect.ValueOf(pack.Groups).Len() == 0 {
 			doc.Groups = []any{}
 		}

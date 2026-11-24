@@ -302,7 +302,8 @@
     "recipe_id",
     "name",
     "mode",
-    "le"
+    "le",
+    "da_cluster"
   ],
   "patterns": {
     "name": "^[a-z][a-z0-9_]*$",

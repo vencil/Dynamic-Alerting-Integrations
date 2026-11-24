@@ -13,10 +13,17 @@ params:
   mode:      {required: false, default: "page", enum: ["page", "silent"]}
   for:       {required: false, default: "1m", enum: ["0s", "1m", "5m", "15m", "30m", "1h"], desc: "pending duration before firing (enum-bounded, TRK-326)"}
 emitted_shape: |
-  sum by(tenant,version)(rate(<metric><selectors>[<window>])) {op} on(tenant[,version])
+  sum by(tenant,version,da_cluster)(rate(<metric><selectors>[<window>])) {op} on(tenant[,version])
     group_left(name, mode) custom:threshold:<recipe_id>{severity=<sev>}
-  NB: `sum by(tenant,version)` (keep-list) — never bare sum() (would strip the
-  tenant join key → silent-forever alert).
+  NB: `sum by(tenant,version,da_cluster)` (keep-list) — never bare sum() (would
+  strip the tenant join key → silent-forever alert).
+  Per cluster (ADR-006 "one tenant in several clusters"): where the tenant's
+  series carry `da_cluster` — a Prometheus that holds several clusters' data —
+  each cluster is aggregated and compared on its own and the alert carries its
+  `da_cluster`; series without the label group exactly as `by(tenant[,version])`.
+  The threshold is one per tenant and applies to every cluster.
+  ⚠️ So the sum is each cluster's own: a tenant in two clusters at 40/s each is
+  compared as 40 and 40, not as 80.
 example:
   recipe: rate
   name: http_5xx_spike

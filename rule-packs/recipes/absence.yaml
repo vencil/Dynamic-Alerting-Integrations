@@ -17,6 +17,13 @@ emitted_shape: |
   Self-scoped: only tenants that DECLARED the recipe (i.e. have the
   user_threshold{recipe_id} series) are candidates → scope cannot leak to
   undeclared tenants. `op`/`threshold` numeric comparison does not apply.
+  TENANT-WIDE on purpose, unlike every other recipe (ADR-006 "one tenant in
+  several clusters", contract 6): the recipe declares no clusters to expect the
+  metric in, so present in at least ONE of the tenant's clusters counts as
+  present — a cluster where it is missing is not reported while another still
+  reports it. The compiled pack says so above the rule
+  (`# da_cluster: tenant-wide by-drops-cluster (tenant) — …`), and the alert
+  carries no cluster of its own.
 caveat: |
   A metric that NEVER appeared (e.g. a typo) fires immediately — this is by
   design; the phantom-metric fail-fast guard (discovery-catalog preflight) lands

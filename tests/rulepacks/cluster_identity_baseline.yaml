@@ -1,10 +1,11 @@
-# Rules that do not yet keep `da_cluster` (#4097, ADR-006 "one tenant in several
+# Rules that do not keep `da_cluster` (#4097, ADR-006 "one tenant in several
 # clusters"). Managed by scripts/tools/lint/check_cluster_identity.py — a two-way
 # ratchet: a finding not listed here fails, and so does a listed finding that is gone.
+# The list is meant to be EMPTY: every shipped rule keeps the cluster, or says in
+# the comment block directly above it that it reads the tenant's clusters together
+# (`# da_cluster: tenant-wide <kind> (<labels>) — <why>`; the lint's docstring names
+# the rules that do). So a new finding is not added here: give the rule the label,
+# or declare it where it is. An entry is debt to remove, never an exemption.
 # Regenerate with `python3 scripts/tools/lint/check_cluster_identity.py --generate`
-# (needs da-read: `make da-read-build`). Being listed is tracked debt, not an
-# exemption; #4097 ends with this list empty.
-findings:
-  rule-pack-custom-alerts.yaml:
-  - 'custom-alerts-normalization / custom:metric:rate__mysql_global_status_slow_queries__gt__w5m__for1m: by-drops-cluster (tenant,version)'
-  - 'custom-alerts-normalization / custom:metric:threshold__mysql_global_status_threads_connected__gt__w5m__for1m: by-drops-cluster (tenant,version)'
+# (needs da-read: `make da-read-build`).
+findings: {}

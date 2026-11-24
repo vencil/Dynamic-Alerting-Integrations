@@ -243,6 +243,7 @@ tenants:
 - 選用 `selectors:`（精確）/ `selectors_re:`（regex）加 label 過濾；保留 label（`tenant` / `severity` / `__name__` 等）不可用。
 - 輸出為 `user_threshold{component="custom", …}`；解析失敗的項目會被丟棄並計入 `da_custom_alert_parse_errors`（fail-loud）。
 - 每租戶有 recipe 數量上限（成本護欄；`slo_burn_rate` 一條宣告展開 critical+warning 兩個 severity、計 2）。
+- 租戶跨多個叢集時，每個 recipe 逐叢集計算與比對，告警帶 `da_cluster`：`rate`、`ratio`、`slo_burn_rate` 的加總與比值只用各叢集自己的序列，不跨叢集合算。`absence` 例外，任一個叢集有該指標就算存在。閾值是整個租戶一組（[ADR-006](../../docs/adr/006-tenant-mapping-topologies.md)）。
 
 > 用 portal 的 Recipe Builder 可用表單產生上面這段 YAML，不必手寫（`slo_burn_rate` 表單精靈規劃中，目前走 YAML）。完整 recipe 參數與生命週期見 [架構與設計](../../docs/architecture-and-design.md)、[ADR-024](../../docs/adr/024-version-aware-threshold-via-dimensional-label.md) 及 [ADR-031](../../docs/adr/031-slo-burn-rate-recipe.md)（slo_burn_rate）。
 

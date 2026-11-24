@@ -12,7 +12,7 @@
         },
         {
           "record": "custom:metric:threshold__qd__gt__w5m__for1m",
-          "expr": "label_replace(max by(tenant, version) (qd), \"version\", \"default\", \"version\", \"^$\")"
+          "expr": "label_replace(max by(tenant, version, da_cluster) (qd), \"version\", \"default\", \"version\", \"^$\")"
         },
         {
           "record": "custom:threshold__qd__gt__w5m__for1m:warning:core",
@@ -84,6 +84,7 @@
     }
   ],
   "shapes": 1,
+  "declarations": {},
   "not_compiled": [],
   "block_errors": {},
   "lifecycle": [],
