@@ -519,7 +519,7 @@ class TestPrometheusEnvFallback:
                 pass
             return SimpleNamespace(plans=[], ungoverned=[],
                                    not_applicable=[], force_manual=[], inherited=[],
-                                   not_measured=[])
+                                   not_measured=[], held_by_cluster=[])
 
         monkeypatch.setattr(tg.recommend, "run_analysis", fake_run_analysis)
         monkeypatch.setattr(tg, "run", fake_run)

@@ -4,20 +4,26 @@
 門檻一個租戶只有一個值（契約 3），告警逐叢集觸發。先前把各叢集的樣本倒在一
 起算百分位數，那個數字不描述任何一個叢集。這裡釘住：
 
-  - 每個叢集各算各的，建議取「不讓任何叢集多響」的那個：上界 key 取最高，
-    下界 key 取最低的 floor
-  - 有叢集要人工審查、或沒有值可建議時，整個 key 跟著它
-  - 信心等級取最弱的叢集
-  - 同一個叢集兩列不相加、送人工審查
+  - 每個叢集各算各的；候選值取自「有建議值」的叢集裡不讓任何叢集多響的那個
+    （上界 key 取最高，下界 key 取最低的 floor）
+  - 候選值再拿到**每一個**叢集自己的樣本上重放：沒有建議值的叢集（閒置的 DR
+    備援、全是 NaN、在 margin 內）不會單憑「沒有建議值」擋住整個 key，只有
+    它的樣本會——上界 key 抬到蓋住那些樣本，下界 key 不給建議
+  - 有叢集要人工審查時整個 key 跟著它；信心等級取有樣本的叢集裡最弱的
+  - 同一個叢集兩列（沒去重的 HA pair）不相加：算沒量成（query_error）
+  - 沒有任何路徑會把多列的樣本當成一條序列
   - 只有一列時結果與先前相同，JSON 沒有新欄位
 """
 
+import re
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+import threshold_govern as tg  # noqa: E402
 import threshold_recommend as tr  # noqa: E402
 from _lib_cluster_identity import CLUSTER_IDENTITY_LABEL  # noqa: E402
 
@@ -27,11 +33,12 @@ _LOWER_MAP = {"hit_ratio": {"scope": "tenant", "direction": "<",
                             "observed_series": "tenant:db2_bufferpool_hit_ratio:min",
                             "recommendation_mode": "percentile-lower"}}
 _START = 1_700_000_000.0
+_UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 
 
-def _row(cluster, pairs):
+def _row(cluster, pairs, **extra):
     """Prometheus 回的一列；`cluster=None` 是沒有 da_cluster label 的列。"""
-    metric = {"tenant": "t-x"}
+    metric = {"tenant": "t-x", **extra}
     if cluster is not None:
         metric[CLUSTER_IDENTITY_LABEL] = cluster
     return {"metric": metric, "values": [[ts, str(v)] for ts, v in pairs]}
@@ -42,13 +49,18 @@ def _flat(values, step=100.0):
     return [(_START + i * step, float(v)) for i, v in enumerate(values)]
 
 
-def _floor(floor, days=9, pts_per_day=200):
-    """每天的 P5 落在 `floor` 的樣本（同 test_threshold_recommend._floor_samples）。"""
+def _floor(floor, days=9, pts_per_day=200, hi=None):
+    """每天的 P5 落在 `floor` 的樣本（同 test_threshold_recommend._floor_samples）：
+    每天一成的點在 `floor`，其餘在 `hi`（預設 floor + 0.02）。"""
     base = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    hi, step = min(0.9999, floor + 0.02), 86400 // pts_per_day
+    hi, step = (min(0.9999, floor + 0.02) if hi is None else hi), 86400 // pts_per_day
     return [((base + timedelta(days=d, seconds=i * step)).timestamp(),
              floor if i < pts_per_day * 0.10 else hi)
             for d in range(days) for i in range(pts_per_day)]
+
+
+def _nan(n=500):
+    return [(_START + i, "NaN") for i in range(n)]
 
 
 def _analyze(rows, config, observed_map):
@@ -61,6 +73,7 @@ def _analyze(rows, config, observed_map):
 # 現值 50。east 恆為 10；west 九成 40、一成 90（P95 = 90，高於現值 → 放寬到 P99 = 90）。
 _EAST = _flat([10] * 1000)
 _WEST = _flat([40] * 900 + [90] * 100)
+_IDLE = _flat([0] * 1000)
 
 
 class TestUpperBound:
@@ -73,15 +86,17 @@ class TestUpperBound:
         assert isinstance(rec, tr.ClusteredKeyRecommendation)
         assert (rec.recommended, rec.delta_pct, rec.conservative_cluster) == (90, 80.0, "west")
         assert (rec.p50, rec.p95, rec.p99, rec.sample_count) == (40.0, 90.0, 90.0, 1000)
-        assert rec.confidence == tr.CONFIDENCE_HIGH
+        assert (rec.confidence, rec.held_by_cluster, rec.direction) == ("HIGH", "", ">")
         assert rec.reason == ('relaxed to P99 (increase 80.0%) '
                               '[da_cluster="west" of 2 clusters: highest value]')
         assert rec.clusters == [
-            {"da_cluster": "east", "sample_count": 1000, "p50": 10.0, "p95": 10.0, "p99": 10.0,
+            {"da_cluster": "east", "measured": True, "sample_count": 1000,
+             "p50": 10.0, "p95": 10.0, "p99": 10.0,
              "recommended": 25, "delta_pct": -50.0, "confidence": "HIGH", "force_manual": False,
-             "reason": ("tighten floored at 25 above P95 10 (decrease 50.0%): one round tightens at most 50% "
-                        "(half of current, rounded up, is 25)")},
-            {"da_cluster": "west", "sample_count": 1000, "p50": 40.0, "p95": 90.0, "p99": 90.0,
+             "reason": ("tighten floored at 25 above P95 10 (decrease 50.0%): one round "
+                        "tightens at most 50% (half of current, rounded up, is 25)")},
+            {"da_cluster": "west", "measured": True, "sample_count": 1000,
+             "p50": 40.0, "p95": 90.0, "p99": 90.0,
              "recommended": 90, "delta_pct": 80.0, "confidence": "HIGH", "force_manual": False,
              "reason": "relaxed to P99 (increase 80.0%)"},
         ]
@@ -99,16 +114,6 @@ class TestUpperBound:
                           {"connections": 80}, _UPPER_MAP)
         assert (rec.recommended, rec.conservative_cluster) == (60, "west")
         assert [c["recommended"] for c in rec.clusters] == [40, 60]
-
-    def test_a_cluster_with_no_value_leaves_the_key_without_one(self):
-        """east 整段為 0（P95 非正，引擎不給建議）：不變更是唯一對它安全的答案。"""
-        report, rec = _analyze([_row("east", _flat([0] * 1000)), _row("west", _WEST)],
-                               {"connections": 50}, _UPPER_MAP)
-        assert rec.recommended is None and not rec.force_manual
-        assert rec.conservative_cluster == "east"
-        assert rec.reason.endswith('[da_cluster="east" of 2 clusters: has no value to recommend]')
-        assert [c["recommended"] for c in rec.clusters] == [None, 90]
-        assert report.recommended_changes == 0
 
     def test_confidence_is_the_weakest_clusters(self):
         """west 只有 150 點（MEDIUM）：被採用的是 east 的值，信心仍是 MEDIUM。"""
@@ -131,14 +136,104 @@ class TestUpperBound:
             '[da_cluster="east" of 2 clusters: needs manual review]')
 
 
+class TestAClusterWithNoRecommendationOfItsOwn:
+    """閒置的 DR 備援是租戶同時在兩個叢集最常見的原因。它沒有建議值（P95 ≤ 0、
+    或全是 NaN），但不能因此讓忙的那個叢集永遠拿不到建議——只有它的**樣本**
+    能擋：候選值在它身上重放，多響一步都不行。"""
+
+    def test_idle_standby_does_not_block_a_relax(self):
+        """dr 恆為 0（P95 非正，引擎不給建議），prod 要放寬到 90：90 ≥ 現值 50，
+        在任何叢集都不會多響 → 採用 90。"""
+        report, rec = _analyze([_row("dr", _IDLE), _row("prod", _WEST)],
+                               {"connections": 50}, _UPPER_MAP)
+        assert (rec.recommended, rec.delta_pct, rec.conservative_cluster) == (90, 80.0, "prod")
+        assert (rec.held_by_cluster, rec.confidence) == ("", "HIGH")
+        dr = rec.clusters[0]
+        assert (dr["da_cluster"], dr["recommended"], dr["sample_count"]) == ("dr", None, 1000)
+        assert dr["reason"] == "P95 is non-positive (max in window 0) — no recommendation"
+        assert report.recommended_changes == 1
+
+    def test_idle_standby_does_not_block_a_tighten(self):
+        """現值 100，prod 恆為 20：引擎的建議是 50（一輪最多收一半）。dr 恆為 0，
+        沒有任何樣本落在 (50, 100] → 採用 50。"""
+        report, rec = _analyze([_row("dr", _IDLE), _row("prod", _flat([20] * 1000))],
+                               {"connections": 100}, _UPPER_MAP)
+        assert (rec.recommended, rec.delta_pct, rec.held_by_cluster) == (50, -50.0, "")
+        assert rec.reason.endswith('[da_cluster="prod" of 2 clusters: highest value]')
+        assert report.recommended_changes == 1
+
+    def test_a_drill_on_the_standby_raises_the_candidate(self):
+        """dr 97% 的時間是 0、演練時到 80（P95 = 0，仍然沒有建議值）；prod 的建議
+        是 50。50 會讓 dr 的 30 個點（80 > 50，而 80 ≤ 現值 100）開始響 → 抬到
+        dr 在現值以下的最大值向上取整：80，即 −20%。"""
+        drill = _flat([0] * 970 + [80] * 30)
+        report, rec = _analyze([_row("dr", drill), _row("prod", _flat([20] * 1000))],
+                               {"connections": 100}, _UPPER_MAP)
+        assert (rec.recommended, rec.delta_pct) == (80, -20.0)
+        assert (rec.conservative_cluster, rec.held_by_cluster) == ("prod", "dr")
+        assert rec.reason == (
+            'tighten to 50 held at 80 (decrease 20.0%): da_cluster="dr" has values up to 80 '
+            'at or below current — no new firing '
+            '[da_cluster="prod" of 2 clusters: highest value]')
+        assert [c["recommended"] for c in rec.clusters] == [None, 50]   # 各叢集自己的不變
+        assert report.recommended_changes == 1
+
+    def test_a_drill_fraction_is_rounded_up_in_currents_precision(self):
+        """演練峰值 79.2、現值是整數 100 → 向上取整到 80（不是 79）。"""
+        drill = _flat([0] * 970 + [79.2] * 30)
+        _, rec = _analyze([_row("dr", drill), _row("prod", _flat([20] * 1000))],
+                          {"connections": 100}, _UPPER_MAP)
+        assert (rec.recommended, rec.delta_pct, rec.held_by_cluster) == (80, -20.0, "dr")
+
+    def test_a_drill_at_current_means_no_change(self):
+        """演練峰值就是現值 100：抬到 100，等於現值 → 不變更，原因點名 dr。"""
+        drill = _flat([0] * 970 + [100] * 30)
+        report, rec = _analyze([_row("dr", drill), _row("prod", _flat([20] * 1000))],
+                               {"connections": 100}, _UPPER_MAP)
+        assert (rec.recommended, rec.delta_pct, rec.held_by_cluster) == (100, 0.0, "dr")
+        assert rec.reason.startswith(
+            'within 5% margin, no change needed: tighten to 50 held at 100; da_cluster="dr" '
+            'has values up to 100 at or below current — no new firing')
+        assert not tr._exportable(rec) and report.recommended_changes == 0
+
+    def test_a_drill_above_current_does_not_hold_the_tighten(self):
+        """演練峰值 150 高於現值：現值下本來就會響，不是「多響」→ 照採用 50。"""
+        drill = _flat([0] * 970 + [150] * 30)
+        _, rec = _analyze([_row("dr", drill), _row("prod", _flat([20] * 1000))],
+                          {"connections": 100}, _UPPER_MAP)
+        assert (rec.recommended, rec.held_by_cluster) == (50, "")
+
+    def test_a_cluster_with_only_nan_is_listed_and_does_not_block(self):
+        """閒置叢集的比率序列常是 0/0 = NaN：列在 clusters 裡（與 backtest 一致），
+        不擋建議、也不把信心拉成 LOW。"""
+        report, rec = _analyze([_row("dr", _nan()), _row("prod", _WEST)],
+                               {"connections": 50}, _UPPER_MAP)
+        assert (rec.recommended, rec.confidence, rec.conservative_cluster) == (90, "HIGH", "prod")
+        assert rec.clusters[0] == {
+            "da_cluster": "dr", "measured": True, "sample_count": 0,
+            "p50": None, "p95": None, "p99": None, "recommended": None, "delta_pct": None,
+            "confidence": "LOW", "force_manual": False, "reason": "no data points found"}
+        assert report.recommended_changes == 1
+
+    def test_no_cluster_with_a_value_leaves_the_key_without_one(self):
+        report, rec = _analyze([_row("a", _nan()), _row("b", _IDLE)],
+                               {"connections": 50}, _UPPER_MAP)
+        assert rec.recommended is None and not rec.force_manual and not rec.query_error
+        assert rec.conservative_cluster == "b"          # 有樣本的那個叢集的原因
+        assert rec.reason == ('P95 is non-positive (max in window 0) — no recommendation '
+                              '[da_cluster="b" of 2 clusters: no cluster has a value to recommend]')
+        assert report.recommended_changes == 0
+
+
 class TestLowerBound:
     def test_the_lowest_floor_is_taken(self):
         """現值 0.95：east 的 P5 是 0.97，west 是 0.98。floor 抬到 0.98 會讓
-        east 開始響；取最低的 0.97。"""
+        east 開始響；取最低的 0.97（miss-rate 0.05 → 0.03，−40%）。"""
         report, rec = _analyze([_row("east", _floor(0.97)), _row("west", _floor(0.98))],
                                {"hit_ratio": "0.95"}, _LOWER_MAP)
         assert rec.recommended == pytest.approx(0.97, abs=1e-9)
-        assert rec.conservative_cluster == "east"
+        assert (rec.delta_pct, rec.conservative_cluster, rec.held_by_cluster) == (-40.0, "east", "")
+        assert rec.direction == "<"
         assert [c["recommended"] for c in rec.clusters] == [
             pytest.approx(0.97, abs=1e-9), pytest.approx(0.98, abs=1e-9)]
         assert rec.reason.endswith('[da_cluster="east" of 2 clusters: lowest floor]')
@@ -155,12 +250,39 @@ class TestLowerBound:
             '[da_cluster="west" of 2 clusters: needs manual review]')
         assert not tr._exportable(rec) and report.recommended_changes == 0
 
-    def test_a_cluster_within_margin_means_no_change(self):
-        """west 在 margin 內（不需要變更）：不因 east 可以收緊就動。"""
-        _, rec = _analyze([_row("east", _floor(0.97)), _row("west", _floor(0.9520))],
-                          {"hit_ratio": "0.95"}, _LOWER_MAP)
-        assert rec.recommended is None and not rec.force_manual
-        assert rec.conservative_cluster == "west"
+    def test_samples_between_current_and_the_candidate_mean_no_recommendation(self):
+        """現值 0.90，prod 的 P5 是 0.97（候選 floor 0.97）。另一個叢集 `mixed`
+        的 P5 是 0.905（在 margin 內，自己沒有建議值），它 1800 個樣本全在
+        [0.90, 0.97)：floor 抬到 0.97 它會整段開始響 → 不給建議，點名 mixed。"""
+        report, rec = _analyze([_row("mixed", _floor(0.905)), _row("prod", _floor(0.97))],
+                               {"hit_ratio": "0.90"}, _LOWER_MAP)
+        assert rec.recommended is None and rec.delta_pct is None and not rec.force_manual
+        assert (rec.conservative_cluster, rec.held_by_cluster) == ("prod", "mixed")
+        assert rec.reason == (
+            'no recommendation: a floor of 0.97 would start firing in da_cluster="mixed" '
+            '(1800 of its samples are at or above current and below it) '
+            '[da_cluster="prod" of 2 clusters: lowest floor]')
+        assert [c["recommended"] for c in rec.clusters] == [None, pytest.approx(0.97, abs=1e-9)]
+        assert not tr._exportable(rec) and report.recommended_changes == 0
+
+    def test_a_cluster_with_only_nan_does_not_block_a_floor(self):
+        report, rec = _analyze([_row("dr", _nan()), _row("prod", _floor(0.97))],
+                               {"hit_ratio": "0.90"}, _LOWER_MAP)
+        assert rec.recommended == pytest.approx(0.97, abs=1e-9)
+        assert (rec.held_by_cluster, rec.clusters[0]["reason"]) == ("", "no data points found")
+        assert report.recommended_changes == 1
+
+    def test_a_standby_reporting_zero_is_manual_review_and_says_so(self):
+        """下界序列恆為 0 的備援：引擎的原話是「check units」，那不是真的。
+        仍是人工審查（force_manual 優先），但原因寫實情。"""
+        _, rec = _analyze([_row("dr", _floor(0.0, hi=0.0)), _row("prod", _floor(0.97))],
+                          {"hit_ratio": "0.90"}, _LOWER_MAP)
+        assert rec.force_manual and rec.recommended is None
+        assert rec.conservative_cluster == "dr"
+        assert rec.guardrail_reason == (
+            "every sample is 0 (an idle cluster?) — no floor can be learned from it; "
+            'manual review [da_cluster="dr" of 2 clusters: needs manual review]')
+        assert "check units" not in rec.reason and "check units" not in rec.clusters[0]["reason"]
 
 
 class TestRowsTheLabelDoesNotTellApart:
@@ -171,26 +293,83 @@ class TestRowsTheLabelDoesNotTellApart:
         assert (rec.recommended, rec.conservative_cluster) == (90, "")
         assert rec.reason.endswith("[no da_cluster of 2 clusters: highest value]")
 
-    @pytest.mark.parametrize("rows,named", [
-        ([_row("west", _EAST), _row("west", _WEST)], '2 series with da_cluster="west"'),
-        ([_row(None, _EAST), _row(None, _WEST)], "2 series without a da_cluster label"),
-    ], ids=["one-cluster-twice", "unlabelled-twice"])
-    def test_two_rows_of_one_cluster_go_to_manual_review(self, rows, named):
-        """不相加：沒有百分位數、沒有建議值，送人工審查並寫明原因。"""
+    _DEDUP = ("— not one series, and never added up; query a deduplicated endpoint "
+              "(one series per cluster)")
+
+    @pytest.mark.parametrize("rows,why", [
+        ([_row("west", _EAST, replica="a"), _row("west", _WEST, replica="b")],
+         'da_cluster="west": 2 series that differ only in replica '),
+        ([_row(None, _EAST, replica="a"), _row(None, _WEST, replica="b")],
+         "no da_cluster: 2 series that differ only in replica "),
+    ], ids=["ha-pair", "unlabelled-ha-pair"])
+    def test_two_rows_of_one_cluster_are_not_measured(self, rows, why):
+        """沒去重的 HA pair：不相加、沒有百分位數；與查詢沒被回答同一類結果
+        （`query_error` → 報告 partial、結束碼 2），不是「不需要變更」。"""
         report, rec = _analyze(rows, {"connections": 50}, _UPPER_MAP)
-        assert rec.force_manual and rec.recommended is None
+        assert rec.query_error == why + self._DEDUP
+        assert rec.reason == "not measured: " + rec.query_error
+        assert rec.recommended is None and not rec.force_manual
         assert (rec.p95, rec.sample_count) == (None, 0)
-        assert named in rec.guardrail_reason and named in rec.reason
-        assert rec.queried and rec.promql
+        assert [(c["measured"], c["sample_count"]) for c in rec.clusters] == [(False, 0)]
+        assert tr.query_error_count([report]) == 1
+        doc = tr.json_document([report])
+        assert (doc["status"], doc["reason"]) == ("partial", "prometheus_query_error")
+        assert tg.collect_not_measured([report])[0].error == rec.query_error
+
+    def test_a_measurable_cluster_beside_it_is_still_listed(self):
+        """prod 量得到、dr 重複：整個 key 沒量成（不從剩下的叢集給建議），prod
+        自己的數字照列。"""
+        report, rec = _analyze([_row("dr", _IDLE, replica="a"), _row("dr", _IDLE, replica="b"),
+                                _row("prod", _WEST)], {"connections": 50}, _UPPER_MAP)
+        assert rec.query_error and rec.recommended is None
+        dr, prod = rec.clusters
+        assert (dr["measured"], dr["reason"]) == (
+            False, "not measured: 2 series that differ only in replica " + self._DEDUP)
+        assert (prod["measured"], prod["recommended"], prod["sample_count"]) == (True, 90, 1000)
         assert report.recommended_changes == 0
 
-    def test_a_row_without_finite_samples_is_no_series(self):
-        """只有 NaN 的列不算一條序列：剩下那一列照單一序列處理。"""
-        nan_row = {"metric": {"tenant": "t-x"},
-                   "values": [[_START + i, "NaN"] for i in range(5)]}
-        _, rec = _analyze([_row(None, _WEST), nan_row], {"connections": 50}, _UPPER_MAP)
+    def test_a_nan_row_does_not_hide_a_second_row_of_its_cluster(self):
+        """dr 一列全是 NaN、一列有值：仍是同一個叢集的兩列，不能只看有值的那列。"""
+        _, rec = _analyze([_row("dr", _nan(), replica="a"), _row("dr", _IDLE, replica="b"),
+                           _row("prod", _WEST)], {"connections": 50}, _UPPER_MAP)
+        assert 'da_cluster="dr": 2 series that differ only in replica' in rec.query_error
+
+    def test_a_histogram_only_row_is_no_series(self):
+        """沒有 float 樣本的列（native histogram）不算一條序列，照舊略過。"""
+        histogram = {"metric": {"tenant": "t-x"}, "histograms": [[_START, {"count": "3"}]]}
+        _, rec = _analyze([_row(None, _WEST), histogram], {"connections": 50}, _UPPER_MAP)
         assert type(rec) is tr.KeyRecommendation
         assert (rec.recommended, rec.reason) == (90, "relaxed to P99 (increase 80.0%)")
+
+
+class TestNoPathPoolsRows:
+    """沒有「把每一列的樣本當成一條」的後備：查詢函式只回逐列的結果，
+    一個扁平的 (ts, value) list 不會被當成一條序列讀進去。"""
+
+    def test_there_is_no_function_returning_every_rows_samples(self):
+        assert not hasattr(tr, "query_prometheus_range_ts")
+        assert not hasattr(tr, "SeriesSamples")
+
+    def test_rows_come_back_one_by_one_with_their_labels(self):
+        rows = [_row("east", [(1.0, 1), (2.0, 2)]), _row("west", [(1.0, 3)]),
+                _row("idle", [(1.0, "NaN")]),
+                {"metric": {"tenant": "t-x"}, "histograms": [[1.0, {"count": "3"}]]}]
+        with patch("threshold_recommend.prometheus_instant", return_value=rows):
+            got = tr.query_prometheus_range_rows("http://prom:9090", "q")
+        assert [(m.get(CLUSTER_IDENTITY_LABEL), pairs) for m, pairs in got] == [
+            ("east", [(1.0, 1.0), (2.0, 2.0)]), ("west", [(1.0, 3.0)]), ("idle", [])]
+
+    @pytest.mark.parametrize("answer", [
+        list(_EAST) + list(_WEST),                      # 兩個叢集的樣本倒在一起
+        [[(1.0, 1.0)], [(2.0, 2.0)]],                    # 沒有 label 的列
+    ], ids=["flat-pairs", "rows-without-labels"])
+    def test_a_flat_list_of_samples_is_refused_not_measured_as_one_series(self, answer):
+        with patch("threshold_recommend.query_prometheus_range_rows", return_value=answer):
+            rec = tr.analyze_tenant("t-x", {"connections": 50}, prometheus_url="http://p:9090",
+                                    observed_map=_UPPER_MAP).keys[0]
+        assert rec.force_manual and rec.recommended is None
+        assert (rec.p95, rec.sample_count) == (None, 0)
+        assert "a series must be (labels, samples)" in rec.reason
 
 
 class TestOneRowIsWhatItWas:
@@ -198,10 +377,11 @@ class TestOneRowIsWhatItWas:
     def test_one_row_is_a_plain_recommendation(self, cluster):
         """一列（有沒有 da_cluster 都一樣）＝把同一批樣本直接交給引擎。"""
         _, rec = _analyze([_row(cluster, _WEST)], {"connections": 50}, _UPPER_MAP)
-        with patch("threshold_recommend.query_prometheus_range_ts", return_value=list(_WEST)):
-            plain = tr.analyze_tenant("t-x", {"connections": 50},
-                                      prometheus_url="http://prom:9090",
-                                      observed_map=_UPPER_MAP).keys[0]
+        plain = tr.recommend_threshold(
+            key="connections", current_value=50,
+            pcts=tr.compute_percentiles([v for _, v in _WEST]),
+            sample_count=1000, min_samples=100, values=[v for _, v in _WEST])
+        plain.promql, plain.queried = rec.promql, True
         assert type(rec) is tr.KeyRecommendation
         assert asdict(rec) == asdict(plain)
         assert rec.reason == "relaxed to P99 (increase 80.0%)"
@@ -209,16 +389,13 @@ class TestOneRowIsWhatItWas:
     def test_json_has_no_cluster_field_for_one_row(self):
         report, _ = _analyze([_row("west", _WEST)], {"connections": 50}, _UPPER_MAP)
         key = tr.json_document([report])["tenants"][0]["keys"][0]
-        assert "clusters" not in key and "conservative_cluster" not in key
+        assert not {"clusters", "conservative_cluster", "held_by_cluster", "direction"} & set(key)
 
-    def test_the_samples_are_still_one_list(self):
-        """`query_prometheus_range_ts` 仍回所有列的 (ts, value)，另帶逐列的樣本。"""
-        rows = [_row("east", [(1.0, 1), (2.0, 2)]), _row("west", [(1.0, 3)])]
-        with patch("threshold_recommend.prometheus_instant", return_value=rows):
-            got = tr.query_prometheus_range_ts("http://prom:9090", "q")
-        assert got == [(1.0, 1.0), (2.0, 2.0), (1.0, 3.0)]
-        assert [(m[CLUSTER_IDENTITY_LABEL], pairs) for m, pairs in got.rows] == [
-            ("east", [(1.0, 1.0), (2.0, 2.0)]), ("west", [(1.0, 3.0)])]
+    @pytest.mark.parametrize("rows", [[], [_row("west", _nan())]], ids=["no-row", "only-nan"])
+    def test_no_finite_sample_is_no_data(self, rows):
+        _, rec = _analyze(rows, {"connections": 50}, _UPPER_MAP)
+        assert type(rec) is tr.KeyRecommendation
+        assert (rec.reason, rec.sample_count, rec.confidence) == ("no data points found", 0, "LOW")
 
 
 class TestReports:
@@ -237,14 +414,110 @@ class TestReports:
     def test_markdown_lists_each_cluster_in_the_row(self):
         md = tr.format_markdown_report([self._report()])
         row = next(line for line in md.splitlines() if line.startswith("| connections"))
-        assert row.endswith(f"<br>per cluster: {self._EAST_LINE}; {self._WEST_LINE} |")
+        east, west = (line.replace("da_cluster", "da\\_cluster")
+                      for line in (self._EAST_LINE, self._WEST_LINE))
+        assert row.endswith(f"<br>per cluster: {east}; {west} |")
+        assert ('relaxed to P99 (increase 80.0%) '
+                '\\[da\\_cluster="west" of 2 clusters: highest value\\]<br>') in row
+
+    def test_a_lower_bound_line_says_p5_floor_and_miss_rate(self):
+        """下界 key 的數字是 P5 floor 與 miss-rate 的變化，不是 P95 與值的變化。"""
+        report, _ = _analyze([_row("east", _floor(0.97)), _row("west", _floor(0.98))],
+                             {"hit_ratio": "0.95"}, _LOWER_MAP)
+        text = tr.format_text_report([report])
+        assert ('    └─ da_cluster="east": P5 floor 0.9700, recommend 0.97, delta -40.0% miss, '
+                'HIGH, 1800 samples') in text
+        assert ('    └─ da_cluster="west": P5 floor 0.9800, recommend 0.98, delta -60.0% miss, '
+                'HIGH, 1800 samples') in text
+        assert "P95" not in "".join(tr._cluster_lines(report.keys[0]))
+
+    def test_a_cluster_without_a_value_shows_its_reason(self):
+        report, _ = _analyze([_row("dr", _nan()), _row("prod", _WEST)],
+                             {"connections": 50}, _UPPER_MAP)
+        assert ('    └─ da_cluster="dr": P95 —, recommend —, delta —, LOW, 0 samples '
+                '(no data points found)') in tr.format_text_report([report])
 
     def test_json_carries_clusters(self):
         key = tr.json_document([self._report()])["tenants"][0]["keys"][0]
         assert key["conservative_cluster"] == "west" and key["recommended"] == 90
+        assert (key["held_by_cluster"], key["direction"]) == ("", ">")
         assert [c["da_cluster"] for c in key["clusters"]] == ["east", "west"]
 
     def test_export_patch_writes_the_conservative_value(self):
         patch_text = tr.format_export_patch([self._report()])
         assert '    connections: "90"   # was 50' in patch_text
         assert '[da_cluster="west" of 2 clusters: highest value]' in patch_text
+
+    def test_a_cluster_name_cannot_break_any_report(self):
+        """叢集名稱來自 Prometheus：`|`、反引號、HTML、換行都不得變成標記——
+        Reason 欄的主原因與逐叢集那一段都一樣；patch 的註解仍是一行。"""
+        evil = "a|b`c<b>d\n  x: 1"
+        report, rec = _analyze([_row(evil, _WEST), _row("west", _EAST)],
+                               {"connections": 50}, _UPPER_MAP)
+        assert rec.conservative_cluster == evil
+        md = tr.format_markdown_report([report])
+        row = next(line for line in md.splitlines() if line.startswith("| connections"))
+        shown = 'da\\_cluster="a\\|b\\`c\\<b\\>d?  x: 1"'
+        assert f"\\[{shown} of 2 clusters: highest value\\]<br>per cluster: {shown}: P95" in row
+        assert len(_UNESCAPED_PIPE.findall(row)) == 8          # 仍是七欄的一列
+        assert "<b>" not in row and "`" not in row.replace("\\`", "")
+        assert len(md.splitlines()) == 7                       # 表格仍只有一列資料
+        patch_text = tr.format_export_patch([report])
+        assert [line for line in patch_text.splitlines()
+                if not line.startswith(("#", " ", "tenants:"))] == []
+        assert "\n  x: 1" not in patch_text
+
+
+class TestGovernanceSeesAHeldKey:
+    """被某個叢集擋下的 key 不能從治理迴圈裡消失：export-patch 的註解與
+    threshold-govern 的報告都要帶原因。"""
+
+    def _held(self):
+        return _analyze([_row("mixed", _floor(0.905)), _row("prod", _floor(0.97))],
+                        {"hit_ratio": "0.90"}, _LOWER_MAP)[0]
+
+    _WHY = ('no recommendation: a floor of 0.97 would start firing in da_cluster="mixed" '
+            '(1800 of its samples are at or above current and below it) '
+            '[da_cluster="prod" of 2 clusters: lowest floor]')
+
+    def test_export_patch_names_it_as_a_comment(self):
+        assert f"# [t-x] (skipped) hit_ratio: {self._WHY}" in tr.format_export_patch([self._held()])
+
+    def test_govern_lists_it_with_its_reason(self):
+        report = self._held()
+        assert tg.build_governance_plan([report], 20.0) == []
+        held = tg.collect_cluster_held([report], 20.0)
+        assert held == [tg.ClusterHeldKey("t-x", "hit_ratio", "mixed", self._WHY)]
+        with patch.object(tg, "_LANG", "en"):
+            text = tg.format_text_report([], held_by_cluster=held)
+        assert ("⚠ 1 threshold(s) held back by one cluster, not in the plan "
+                "(several clusters — #1200; reason per line):\n"
+                f"    t-x / hit_ratio: {self._WHY}") in text
+        doc = tg.json_document([], held_by_cluster=held)
+        assert doc["held_by_cluster"] == [{"tenant": "t-x", "key": "hit_ratio",
+                                           "cluster": "mixed", "reason": self._WHY}]
+        assert doc["summary"]["held_by_cluster"] == 1
+
+    def test_a_held_value_that_is_still_actionable_is_in_the_plan_only(self):
+        """演練把 50 抬到 80（−20%）：仍過 20% 的門檻 → 進計畫（帶原因），不重複列。"""
+        report, _ = _analyze([_row("dr", _flat([0] * 970 + [80] * 30)),
+                              _row("prod", _flat([20] * 1000))], {"connections": 100}, _UPPER_MAP)
+        (plan,) = tg.build_governance_plan([report], 20.0)
+        assert (plan.changes[0].recommended, plan.changes[0].delta_pct) == (80, -20.0)
+        assert 'da_cluster="dr" has values up to 80' in plan.changes[0].reason
+        assert tg.collect_cluster_held([report], 20.0) == []
+        # 門檻調到 30%：−20% 進不了計畫 → 列為被擋下，不消失。
+        assert tg.build_governance_plan([report], 30.0) == []
+        assert [h.cluster for h in tg.collect_cluster_held([report], 30.0)] == ["dr"]
+
+    def test_a_run_with_no_held_key_has_the_document_it_had(self):
+        doc = tg.json_document([])
+        assert "held_by_cluster" not in doc and "held_by_cluster" not in doc["summary"]
+
+    def test_run_collects_held_keys(self, monkeypatch):
+        report = self._held()
+        monkeypatch.setattr(tg.recommend, "run_analysis", lambda *a, **k: [report])
+        result = tg.run(SimpleNamespace(config_dir="x", prometheus="http://prom:9090",
+                                        tenant=None, lookback="7d", min_samples=100,
+                                        min_delta_pct=20.0))
+        assert [h.key for h in result.held_by_cluster] == ["hit_ratio"]

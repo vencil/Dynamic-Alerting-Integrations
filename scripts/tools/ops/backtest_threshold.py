@@ -66,7 +66,7 @@ from _lib_python import YamlFileError  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
 from _lib_cluster_identity import (  # noqa: E402  (#1200: one replay per cluster)
-    cluster_text, repeated_clusters, rows_by_cluster)
+    cluster_text, markdown_text, repeated_rows, rows_by_cluster)
 import _lib_parse_tree  # noqa: E402  (#3206 the shared conf.d refusal)
 import _lib_input  # noqa: E402  (#3902 the two trees are declared inputs)
 import _lib_parse_cache  # noqa: E402  (#3902 their one judgement)
@@ -1132,37 +1132,61 @@ _RISK_RANK = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 def _worst_cluster(replays):
     """#1200: the `(cluster, replay)` a change's own numbers are taken from,
     among its analyzed clusters — the highest risk; between equal risks the
-    one whose count of firing steps changes most, then the first by name.
-    None when no cluster was analyzed."""
+    one where the largest share of its own time steps changes between firing
+    and not (a share, so a long series does not outrank a short one by
+    length), then the first by name. None when no cluster was analyzed."""
     analyzed = [(c, r) for c, r in replays if r["status"] == "analyzed"]
     if not analyzed:
         return None
     return max(analyzed, key=lambda cr: (
         _RISK_RANK[cr[1]["risk"]],
-        abs(cr[1]["new_breach_count"] - cr[1]["old_breach_count"])))
+        abs(cr[1]["new_breach_count"] - cr[1]["old_breach_count"]) / cr[1]["data_points"]))
 
 
 def _per_cluster(change, groups, direction, query):
-    """#1200: the result of a change whose series has one row in each of
-    several clusters (`groups`: `rows_by_cluster`, one row a group). Every
-    cluster is replayed on its own and listed in `clusters`; the change's
-    own numbers are the worst cluster's (`_worst_cluster`), so they are time
-    steps of one series, and the message names that cluster. With no
-    cluster analyzed the change is `no_data`, as the first cluster reads."""
-    replays = [(cluster, _replay(rows[0].get("values", []), change, direction, query))
-               for cluster, rows in groups.items()]
-    worst = _worst_cluster(replays)
+    """#1200: the result of a change whose series answered more than one row
+    (`groups`: `rows_by_cluster`). Every cluster is replayed on its own and
+    listed in `clusters`; the change's own numbers are the worst cluster's
+    (`_worst_cluster`), so they are time steps of one series, and the
+    message names that cluster. With no cluster analyzed the change is
+    `no_data`, as the first cluster reads.
+
+    A cluster that answered more than one row (`repeated_rows`: an HA pair
+    read without deduplication, say) was queried and could not be measured:
+    its entry is `query_error`, and so is the change — the status of a
+    change not measured, which ends the run at exit 2 (#3059). "Could not
+    measure" is never a pass, and the clusters that were measured are still
+    listed, each with its own replay."""
+    repeated = repeated_rows(groups)
+    replays = [
+        (cluster, {"status": "query_error", "risk": "UNKNOWN", "query": query,
+                   "message": safe_label(repeated[cluster])}
+         if cluster in repeated
+         else _replay(rows[0].get("values", []), change, direction, query))
+        for cluster, rows in groups.items()]
     result = {
         "tenant": change["tenant"],
         "metric": change["metric"],
         "old_value": change["old_value"],
         "new_value": change["new_value"],
-        **(worst[1] if worst else replays[0][1]),
     }
-    if worst:
+    worst = _worst_cluster(replays)
+    if repeated:
+        result.update({
+            "status": "query_error",
+            "risk": "UNKNOWN",
+            "query": query,
+            "message": "Not measured: " + "; ".join(
+                f"{safe_label(cluster_text(c))}: {r['message']}"
+                for c, r in replays if r["status"] == "query_error"),
+        })
+    elif worst:
+        result.update(worst[1])
         result["message"] += (f" [{safe_label(cluster_text(worst[0]))}, the worst of "
                               f"{len(replays)} clusters]")
         result["worst_cluster"] = worst[0]
+    else:
+        result.update(replays[0][1])
     result["clusters"] = [
         {"da_cluster": cluster, **{k: v for k, v in replay.items() if k != "query"}}
         for cluster, replay in replays]
@@ -1184,8 +1208,9 @@ def backtest_change(prom_url, change, lookback_seconds):
     replay) and its own numbers — `risk`, `data_points`, the breach counts,
     `impact_*` — are those of ONE cluster, the worst (`_worst_cluster`,
     named in `worst_cluster` and in the message): time steps of one series.
-    An answer with one row has neither field. Rows the `da_cluster` label
-    does not tell apart are `not_backtested`, with the query asked.
+    An answer with one row has neither field. A cluster whose rows the
+    `da_cluster` label does not tell apart was not measured: `query_error`
+    (`_per_cluster`).
     """
     metric = change["metric"]
     tenant = change["tenant"]
@@ -1222,15 +1247,12 @@ def backtest_change(prom_url, change, lookback_seconds):
         }
     # #1200: one replay per cluster. Rows the label does not tell apart (two
     # of one cluster, or several without the label) are not one series, and
-    # adding them up is the defect this refuses: not backtested, named.
+    # adding them up is the defect this refuses: not measured, named.
     # A row with no float sample (a native-histogram row has `histograms` and
     # no `values`) is no series of the alert's: skipped, as it always was.
     rows = [row for row in rows if row.get("values")]
     groups = rows_by_cluster(rows)
-    repeated = repeated_clusters(groups)
-    if repeated:
-        return {**_not_backtested(change, repeated), "query": query}
-    if len(groups) > 1:
+    if len(rows) > 1:
         return _per_cluster(change, groups, direction, query)
     values = rows[0].get("values", []) if rows else []
     return {
@@ -1328,6 +1350,8 @@ def _served_by(change, shown):
 def _cluster_summary(entry):
     """#1200: one cluster's replay in a few words — its risk and how many of
     its own time steps fire under the old and the new threshold."""
+    if entry["status"] == "query_error":
+        return f"not measured ({entry['message']})"
     if entry["status"] != "analyzed":
         return f"{entry['risk']} ({entry['message']})"
     return (f"{entry['risk']} ({entry['old_breach_count']} -> {entry['new_breach_count']} "
@@ -1438,9 +1462,11 @@ def generate_markdown(report):
         message = c["message"].replace("|", "\\|")
         if c.get("clusters"):
             # #1200: every cluster's own replay; the row is the worst one's.
-            message += "<br>per cluster: " + "; ".join(
-                f"{_code_cell(cluster_text(e['da_cluster']))} "
-                f"{_markdown_cell(_cluster_summary(e))}" for e in c["clusters"])
+            # A cluster's name (and a label name) is not ours: `markdown_text`
+            # is the one escaping for every text that carries one.
+            message = markdown_text(c["message"]) + "<br>per cluster: " + "; ".join(
+                markdown_text(f"{cluster_text(e['da_cluster'])}: {_cluster_summary(e)}")
+                for e in c["clusters"])
         served_by = _served_by(c, _code_cell)
         lines.append(f"| {c['risk']} | {_markdown_cell(c['tenant'])} | "
                      f"{_code_cell(c['metric'])}{window}{served_by} | "

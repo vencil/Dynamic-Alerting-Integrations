@@ -15,6 +15,7 @@ without becoming a tool that can use HTTP.
 """
 from __future__ import annotations
 
+import unicodedata
 from typing import Any
 
 #: ADR-006: the external label that says which cluster a Prometheus is in.
@@ -184,7 +185,7 @@ def rows_by_cluster(rows: "list[dict[str, Any]]") -> "dict[str, list[dict[str, A
     ADR-006 (#1200): a `tenant:*` recording rule has one series per (tenant,
     cluster) and its alert fires per cluster, so the samples of two groups
     are never one series. Nothing is merged here: a group holding more than
-    one row (`repeated_clusters`) is two series the label does not tell
+    one row (`repeated_rows`) is two series the label does not tell
     apart, and what that means is the caller's to say — never to add up."""
     groups: "dict[str, list[dict[str, Any]]]" = {}
     for row in rows:
@@ -194,17 +195,50 @@ def rows_by_cluster(rows: "list[dict[str, Any]]") -> "dict[str, list[dict[str, A
     return {cluster: groups[cluster] for cluster in sorted(groups)}
 
 
-def repeated_clusters(groups: "dict[str, list[Any]]") -> "str | None":
-    """Why *groups* (`rows_by_cluster`) cannot be read one series per
-    cluster, or None: the groups holding more than one row, named."""
-    repeated = [
-        (f'{len(rows)} series with {CLUSTER_IDENTITY_LABEL}="{cluster}"' if cluster
-         else f"{len(rows)} series without a {CLUSTER_IDENTITY_LABEL} label")
-        for cluster, rows in groups.items() if len(rows) > 1]
-    if not repeated:
-        return None
-    return ("; ".join(repeated) + " — one series per cluster is expected, and they are "
-            "not added up")
+def repeated_rows(groups: "dict[str, list[dict[str, Any]]]") -> "dict[str, str]":
+    """``{cluster: why}`` for every group of *groups* (`rows_by_cluster`)
+    that holds more than one row — series the `da_cluster` label does not
+    tell apart, so the cluster cannot be read as one series. Typically an
+    HA pair read without deduplication (the rows differ in `replica`), not
+    several clusters. *why* names the labels the rows differ in and what to
+    do; it is never a reason to add the rows up or to pick one."""
+    out: "dict[str, str]" = {}
+    for cluster, rows in groups.items():
+        if len(rows) < 2:
+            continue
+        metrics = [row.get("metric") if isinstance(row.get("metric"), dict) else {}
+                   for row in rows]
+        names = sorted({name for metric in metrics for name in metric})
+        differ = [name for name in names
+                  if len({repr(metric.get(name)) for metric in metrics}) > 1]
+        how = ("that differ only in " + ", ".join(differ) if differ
+               else "with identical labels")
+        out[cluster] = (f"{len(rows)} series {how} — not one series, and never added up; "
+                        "query a deduplicated endpoint (one series per cluster)")
+    return out
+
+
+#: The characters `markdown_text` escapes: the ones that start markup inside
+#: a line of GitHub-flavoured Markdown (a table cell among them).
+_MARKDOWN_ACTIVE = "\\`*_[]<>|~&#"
+
+
+def markdown_text(text: str) -> str:
+    """*text* as literal text inside one line of Markdown — the one escaping
+    for anything that carries a cluster name (a label value, set outside
+    this repo) into a Markdown report: a control character, a line break
+    among them, becomes ``?``, and every character that starts markup (a
+    table's ``|``, a code span's backtick, an HTML tag's ``<``, emphasis, a
+    link, an entity) is backslash-escaped, so it renders as itself."""
+    out = []
+    for ch in text:
+        if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp"):
+            out.append("?")
+        elif ch in _MARKDOWN_ACTIVE:
+            out.append("\\" + ch)
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def cluster_text(cluster: str) -> str:

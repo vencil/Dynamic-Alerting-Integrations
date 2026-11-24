@@ -377,18 +377,46 @@ def test_rows_by_cluster():
     assert lib.rows_by_cluster([]) == {}
 
 
+_DEDUP = ("— not one series, and never added up; query a deduplicated endpoint "
+          "(one series per cluster)")
+
+
+def _m(**labels):
+    return {"metric": labels, "values": [[1, "1"]]}
+
+
 @pytest.mark.parametrize("groups, expected", [
-    ({}, None),
-    ({"": [1], "east": [1], "west": [1]}, None),
-    ({"east": [1], "west": [1, 2]},
-     '2 series with da_cluster="west" — one series per cluster is expected, and they are '
-     "not added up"),
-    ({"": [1, 2, 3], "west": [1, 2]},
-     '3 series without a da_cluster label; 2 series with da_cluster="west" — one series per '
-     "cluster is expected, and they are not added up"),
+    ({}, {}),
+    ({"": [_m()], "east": [_m(da_cluster="east")], "west": [_m(da_cluster="west")]}, {}),
+    # an HA pair read without deduplication: the rows differ in `replica`
+    ({"east": [_m(da_cluster="east")],
+      "west": [_m(da_cluster="west", replica="a"), _m(da_cluster="west", replica="b")]},
+     {"west": "2 series that differ only in replica " + _DEDUP}),
+    # a label one row has and the other does not is a difference too
+    ({"": [_m(pod="x", replica="a"), _m(replica="b"), _m(replica="b")]},
+     {"": "3 series that differ only in pod, replica " + _DEDUP}),
+    ({"west": [_m(da_cluster="west"), _m(da_cluster="west")]},
+     {"west": "2 series with identical labels " + _DEDUP}),
+    ({"west": [{"values": []}, {"metric": None}]},          # no `metric` at all
+     {"west": "2 series with identical labels " + _DEDUP}),
 ])
-def test_repeated_clusters(groups, expected):
-    assert lib.repeated_clusters(groups) == expected
+def test_repeated_rows(groups, expected):
+    assert lib.repeated_rows(groups) == expected
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("edge-1", "edge-1"),
+    ('da_cluster="west"', 'da\\_cluster="west"'),
+    ("a|b", "a\\|b"),                                 # a table cell's separator
+    ("a`b`", "a\\`b\\`"),                             # a code span
+    ("<b>x</b>&amp;", "\\<b\\>x\\</b\\>\\&amp;"),       # HTML and an entity
+    ("*a* _b_ [c](d) ~e~ # f", "\\*a\\* \\_b\\_ \\[c\\](d) \\~e\\~ \\# f"),
+    ("a\\|b", "a\\\\\\|b"),                              # an escape already there
+    ("a\nb\rc\x1b[31m\u2028d\u200be", "a?b?c?\\[31m?d?e"),  # line breaks and controls
+    ("叢集-東", "叢集-東"),
+])
+def test_markdown_text(text, expected):
+    assert lib.markdown_text(text) == expected
 
 
 def test_cluster_text():

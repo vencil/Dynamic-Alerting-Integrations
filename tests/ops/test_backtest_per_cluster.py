@@ -8,26 +8,29 @@ rule pack 把 `tenant:*` 逐 (tenant, da_cluster) 記錄，告警逐叢集觸發
   - 票上的三個數字例子（確切數字）
   - 兩個叢集同時超標不會加倍
   - 有 label 與沒 label 的列各自成組
-  - 同一個叢集兩列（或多列都沒 label）不重放、也不相加
+  - 同一個叢集兩列（或多列都沒 label，例如沒去重的 HA pair）不相加，算
+    「查了但量不到」：query_error、結束碼 2，量得到的叢集照列
   - 只有一列時，結果與先前逐欄相同
 """
 
 import json
+import re
 
 import pytest
 
 import backtest_threshold as bt  # noqa: E402
 from _lib_cluster_identity import CLUSTER_IDENTITY_LABEL  # noqa: E402
-from _lib_exitcodes import emit_result  # noqa: E402
+from _lib_exitcodes import CallerError, emit_result, exit_on_crash  # noqa: E402
 
 _KEY = "mysql_connection_usage_percent"          # 告警比 `>`
 _SERIES = "tenant:mysql_connection_usage:percent"
 _QUERY = _SERIES + '{tenant="t-x"}'
+_UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 
 
-def _row(cluster, vals):
+def _row(cluster, vals, **extra):
     """一個叢集的一列；`cluster=None` 是沒有 da_cluster label 的列。"""
-    metric = {"__name__": _SERIES, "tenant": "t-x"}
+    metric = {"__name__": _SERIES, "tenant": "t-x", **extra}
     if cluster is not None:
         metric[CLUSTER_IDENTITY_LABEL] = cluster
     return {"metric": metric, "values": [(i, str(v)) for i, v in enumerate(vals)]}
@@ -113,6 +116,14 @@ class TestWorstCluster:
                                     _row("west", [90] * 40 + [50] * 60)], "80", None)
         assert (r["risk"], r["worst_cluster"], r["old_breach_count"]) == ("MEDIUM", "west", 40)
 
+    def test_equal_risk_compares_shares_not_step_counts(self, monkeypatch):
+        """序列長度不同時比的是「自己步數的幾成」：120/1000（12%）不該贏過
+        50/100（50%），雖然 120 步比 50 步多。"""
+        r = _backtest(monkeypatch, [_row("long", [90] * 120 + [50] * 880),
+                                    _row("short", [90] * 50 + [50] * 50)], None, "80")
+        assert [c["risk"] for c in r["clusters"]] == ["HIGH", "HIGH"]
+        assert (r["worst_cluster"], r["data_points"], r["new_breach_count"]) == ("short", 100, 50)
+
     def test_lower_bound_key_is_replayed_per_cluster_too(self, monkeypatch):
         """`<` 的告警：方向照 observed-map，逐叢集。"""
         r = _backtest(monkeypatch, [_row("east", [99.5] * 100), _row("west", [90] * 100)],
@@ -146,25 +157,40 @@ class TestRowsTheLabelDoesNotTellApart:
         assert (r["worst_cluster"], r["data_points"], r["new_breach_count"]) == ("", 100, 15)
         assert r["message"].endswith("[no da_cluster, the worst of 2 clusters]")
 
-    @pytest.mark.parametrize("rows,named", [
-        ([_row("west", _EAST_QUIET), _row("west", _WEST_15)],
-         '2 series with da_cluster="west"'),
-        ([_row(None, _EAST_QUIET), _row(None, _WEST_15)],
-         "2 series without a da_cluster label"),
-        ([_row("east", _EAST_QUIET), _row("west", _EAST_QUIET), _row("west", _WEST_15)],
-         '2 series with da_cluster="west"'),
-        ([_row("", _EAST_QUIET), _row(None, _WEST_15)],       # 空值與沒有 label 相同
-         "2 series without a da_cluster label"),
-    ], ids=["one-cluster-twice", "unlabelled-twice", "beside-a-good-cluster", "empty-label"])
-    def test_two_rows_of_one_cluster_are_not_backtested(self, monkeypatch, rows, named):
-        """租戶 recording rule 不該有這種列：不重放、不相加，照既有的
-        `not_backtested` 路徑報出原因。"""
+    _DEDUP = ("— not one series, and never added up; query a deduplicated endpoint "
+              "(one series per cluster)")
+
+    @pytest.mark.parametrize("rows,message", [
+        ([_row("west", _WEST_15, replica="a"), _row("west", _WEST_15, replica="b")],
+         'Not measured: da_cluster="west": 2 series that differ only in replica '),
+        ([_row(None, _WEST_15, replica="a"), _row(None, _WEST_15, replica="b")],
+         "Not measured: no da_cluster: 2 series that differ only in replica "),
+        ([_row("", _EAST_QUIET, pod="x"), _row(None, _WEST_15, replica="b")],   # 空值＝沒有 label
+         "Not measured: no da_cluster: 2 series that differ only in da_cluster, pod, replica "),
+        ([_row("west", _WEST_15), _row("west", _WEST_15)],
+         'Not measured: da_cluster="west": 2 series with identical labels '),
+    ], ids=["ha-pair", "unlabelled-ha-pair", "empty-label", "identical"])
+    def test_two_rows_of_one_cluster_are_not_measured(self, monkeypatch, rows, message):
+        """沒去重的 HA pair 不是多叢集：先前串起來算（這裡是 HIGH、結束碼 1）；
+        現在不相加，也不能當成通過——與查詢失敗同一類結果（結束碼 2）。"""
         r = _backtest(monkeypatch, rows, None, "80")
-        assert (r["status"], r["risk"]) == ("not_backtested", "UNKNOWN")
-        assert named in r["message"] and r["message"].startswith("Not backtested: ")
-        assert r["backtest"] == "skipped: " + r["message"].removeprefix("Not backtested: ")
-        assert r["query"] == _QUERY
-        assert "data_points" not in r and "clusters" not in r
+        assert (r["status"], r["risk"], r["query"]) == ("query_error", "UNKNOWN", _QUERY)
+        assert r["message"] == message + self._DEDUP
+        assert "data_points" not in r and "worst_cluster" not in r
+        assert [c["status"] for c in r["clusters"]] == ["query_error"]
+
+    def test_a_measurable_cluster_beside_it_is_still_reported(self, monkeypatch):
+        """west 量得到（HIGH），east 重複：整筆是量不到，west 的重放照列。"""
+        r = _backtest(monkeypatch, [_row("west", _WEST_15), _row("east", _EAST_QUIET, replica="a"),
+                                    _row("east", _EAST_QUIET, replica="b")], None, "80")
+        assert (r["status"], r["risk"]) == ("query_error", "UNKNOWN")
+        assert r["message"] == ('Not measured: da_cluster="east": 2 series that differ only in '
+                                "replica " + self._DEDUP)
+        east, west = r["clusters"]
+        assert east == {"da_cluster": "east", "status": "query_error", "risk": "UNKNOWN",
+                        "message": "2 series that differ only in replica " + self._DEDUP}
+        assert (west["status"], west["risk"], west["new_breach_count"], west["data_points"]) == (
+            "analyzed", "HIGH", 15, 100)
 
     def test_a_row_without_float_samples_is_no_series(self, monkeypatch):
         """native histogram 列沒有 `values`：照舊略過，不算第二條序列。"""
@@ -210,7 +236,11 @@ class TestReports:
                  "--new-value", "80", "--prometheus", "http://prom:9090",
                  "--markdown-output", str(md), *flags)
         with pytest.raises(SystemExit) as ei:
-            raise SystemExit(emit_result(bt.main()))
+            try:
+                result = bt.main()
+            except CallerError as exc:   # #3617：run() 的結束方式
+                exit_on_crash(exc)
+            raise SystemExit(emit_result(result))
         return ei.value.code, capsys.readouterr().out, md.read_text(encoding="utf-8")
 
     _TWO = [_row("east", _EAST_QUIET), _row("west", _WEST_15)]
@@ -230,9 +260,11 @@ class TestReports:
             self, monkeypatch, capsys, cli_argv, tmp_path):
         _, _, md = self._cli(monkeypatch, capsys, cli_argv, tmp_path, self._TWO)
         row = next(line for line in md.splitlines() if line.startswith("| HIGH"))
-        assert ('<br>per cluster: `da_cluster="east"` LOW (0 -> 0 of 100 points fire); '
-                '`da_cluster="west"` HIGH (0 -> 15 of 100 points fire) |') in row
-        assert row.count(" | ") == 6          # 仍是七欄的一列
+        assert ('| Metric newly enabled — 15/100 points would fire '
+                '\\[da\\_cluster="west", the worst of 2 clusters\\]'
+                '<br>per cluster: da\\_cluster="east": LOW (0 -\\> 0 of 100 points fire); '
+                'da\\_cluster="west": HIGH (0 -\\> 15 of 100 points fire) |') in row
+        assert len(_UNESCAPED_PIPE.findall(row)) == 8          # 仍是七欄的一列
 
     def test_json_carries_clusters(self, monkeypatch, capsys, cli_argv, tmp_path):
         rc, out, _ = self._cli(monkeypatch, capsys, cli_argv, tmp_path, self._TWO, "--json")
@@ -249,19 +281,42 @@ class TestReports:
         assert rc == 1                         # 15/100，本來就是 HIGH
         assert "da_cluster" not in out.replace(_QUERY, "") and "per cluster" not in md
 
-    def test_duplicate_rows_are_reported_as_not_backtested(
+    def test_duplicate_rows_end_the_run_at_rc_2(
             self, monkeypatch, capsys, cli_argv, tmp_path):
+        """量不到不是通過：結束碼 2（先前串起來是 HIGH、結束碼 1）。"""
         rc, out, md = self._cli(monkeypatch, capsys, cli_argv, tmp_path,
-                                [_row("west", _EAST_QUIET), _row("west", _WEST_15)])
-        assert rc == 0
-        assert 'Not backtested: 1 (2 series with da_cluster="west"' in out
-        assert "[UNKNOWN]" in out and "| UNKNOWN |" in md
+                                [_row("west", _WEST_15, replica="a"),
+                                 _row("west", _WEST_15, replica="b")])
+        assert rc == 2
+        assert "Query error: 1" in out and "[UNKNOWN]" in out
+        assert 'Not measured: da_cluster="west": 2 series that differ only in replica' in out
+        assert "| UNKNOWN |" in md and "1 change(s) not measured" in md
+
+    def test_could_not_measure_outranks_a_high_cluster(
+            self, monkeypatch, capsys, cli_argv, tmp_path):
+        """west 自己是 HIGH（結束碼 1），east 重複：結束碼是 2，west 仍列出。"""
+        rows = [_row("west", _WEST_15), _row("east", _EAST_QUIET, replica="a"),
+                _row("east", _EAST_QUIET, replica="b")]
+        rc, out, md = self._cli(monkeypatch, capsys, cli_argv, tmp_path, rows)
+        assert rc == 2
+        assert 'da_cluster="west": HIGH (0 -> 15 of 100 points fire)' in out
+        assert 'da_cluster="east": not measured (2 series that differ only in replica' in out
+        assert 'da\\_cluster="west": HIGH (0 -\\> 15 of 100 points fire)' in md
+        rc, out, _ = self._cli(monkeypatch, capsys, cli_argv, tmp_path, rows, "--json")
+        # #3617：唯一的一筆變更沒量成，--json 沒有答案可印（stdout 為空）。
+        assert (rc, out) == (2, "")
 
     def test_a_cluster_name_cannot_break_the_markdown_row(
             self, monkeypatch, capsys, cli_argv, tmp_path):
-        """叢集名稱來自 Prometheus：`|` 與換行不得拆開表格列。"""
-        rows = [_row("a|b\nc", _EAST_QUIET), _row("west", _WEST_15)]
+        """叢集名稱來自 Prometheus：`|`、反引號、HTML、換行都不得變成標記——
+        訊息本身與逐叢集那一段都一樣（名稱在最糟的叢集上，兩處都會出現）。"""
+        evil = "a|b`c<b>d\ne"
+        rows = [_row(evil, _WEST_15), _row("west", _EAST_QUIET)]
         _, out, md = self._cli(monkeypatch, capsys, cli_argv, tmp_path, rows)
         row = next(line for line in md.splitlines() if line.startswith("| HIGH"))
-        assert "a\\|b?c" in row and row.count(" | ") == 6
-        assert 'da_cluster="a|b?c": LOW' in out
+        shown = 'da\\_cluster="a\\|b\\`c\\<b\\>d?e"'
+        assert f"\\[{shown}, the worst of 2 clusters\\]" in row
+        assert f"<br>per cluster: {shown}: HIGH" in row
+        assert len(_UNESCAPED_PIPE.findall(row)) == 8
+        assert "`c" not in row.replace("\\`", "") and "<b>" not in row
+        assert 'da_cluster="a|b`c<b>d?e": HIGH' in out
