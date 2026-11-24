@@ -86,6 +86,10 @@ class OutputWriteError(OSError):
             detail = f"{detail} (errno {self.errno})"
         if self.flag:
             hint = f"check the value given to {self.flag}"
+        elif self.action == "read":
+            # #3981 (review): a file read before it is rewritten — "output
+            # path … unwritable" would send the operator the wrong way.
+            hint = "internal path, this is a bug or an unreadable workspace"
         else:
             hint = "internal output path, this is a bug or an unwritable workspace"
         return f"cannot {self.action} {self.path}: {detail} — {hint}"
