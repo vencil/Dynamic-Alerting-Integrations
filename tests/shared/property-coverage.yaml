@@ -264,6 +264,13 @@ modules:
       _malformed: "Message templating for QueryError"
       QueryError.error_line: "Message templating (stderr / envelope line); exact text pinned in tests/shared/test_query_error.py"
 
+  scripts/tools/_lib_cluster_identity.py:
+    covered: []
+    excluded:
+      external_labels: "#4097 line reader of global.external_labels in Prometheus' own rendering of its config (moved from federation_check); every shape (own mapping only, a key elsewhere in the file, empty value, none) pinned by example in tests/ops/test_federation_check.py::TestCheckEdge and tests/ops/test_byo_check.py::TestJudgeClusterIdentity"
+      config_external_labels: "#4097 two-key lookup in a parsed config (no global → None, else the mapping or {}); each case pinned through da-read in tests/ops/test_onboard_platform.py::TestClusterIdentity and tests/lint/test_check_scrape_reachability.py"
+      cluster_identity: "#4097 one-key lookup (a non-blank string or None) shared by federation_check, byo_check, onboard_platform and check_scrape_reachability; absent / empty / set pinned by example in each tool's tests"
+
   scripts/tools/_lib_godispatch.py:
     # Note: members of this module are class methods on
     # GoBinaryDispatcher, so the manifest uses dotted Class.method

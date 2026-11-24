@@ -1468,3 +1468,154 @@ class TestStep1PrimaryError:
     def test_no_note_when_the_primary_answers(self):
         checks = TestAnswersReadByTheLib()._prometheus(lambda q: _vector("1"))
         assert "primary query failed" not in checks["step1_tenant_label"]["detail"]
+
+
+# ---------------------------------------------------------------------------
+# #4097: the running Prometheus says which cluster it is in (ADR-006 contract
+# 1 and 7) — `global.external_labels.da_cluster`, read by the one reader.
+# ---------------------------------------------------------------------------
+_CONFIG_SET = ("global:\n  scrape_interval: 15s\n  external_labels:\n    da_cluster: cluster-a\n"
+               "scrape_configs: []\n")
+_CONFIG_OTHER_LABELS = "global:\n  external_labels:\n    env: prod\n"
+_CONFIG_NO_EXTERNAL_LABELS = "global:\n  scrape_interval: 15s\n"
+_CONFIG_EMPTY_VALUE = "global:\n  external_labels:\n    da_cluster: \"\"\n"
+#: `da_cluster` written on a scrape job is not the external label.
+_CONFIG_ELSEWHERE = ("global:\n  external_labels:\n    env: prod\nscrape_configs:\n"
+                     "  - job_name: tenant-exporters\n    relabel_configs:\n"
+                     "      - target_label: da_cluster\n        replacement: cluster-a\n")
+
+
+def _config_answer(text):
+    return {"status": "success", "data": {"yaml": text}}, None
+
+
+class TestJudgeClusterIdentity:
+    def test_set_passes_and_shows_the_value(self):
+        assert bc._judge_cluster_identity(_CONFIG_SET, None) == {
+            "check": "cluster_identity",
+            "status": "pass",
+            "detail": "external_labels.da_cluster = cluster-a",
+        }
+
+    @pytest.mark.parametrize("config", [
+        _CONFIG_OTHER_LABELS, _CONFIG_NO_EXTERNAL_LABELS, _CONFIG_EMPTY_VALUE, _CONFIG_ELSEWHERE, "",
+    ], ids=["other-labels", "no-external-labels", "empty-value", "elsewhere-in-the-file", "empty-config"])
+    def test_no_value_fails_and_says_what_to_add_and_where(self, config):
+        c = bc._judge_cluster_identity(config, None)
+        assert c == {
+            "check": "cluster_identity",
+            "status": "fail",
+            "detail": "external_labels.da_cluster is not set — add it under "
+                      "global.external_labels with this cluster's id (ADR-006)",
+        }
+        assert "caller_error" not in c  # measured, missing: exit 1, not 2
+
+    def test_not_read_is_a_caller_error_that_says_so(self):
+        c = bc._judge_cluster_identity(None, "HTTP 503")
+        assert (c["check"], c["status"], c["caller_error"]) == ("cluster_identity", "fail", True)
+        assert c["detail"] == ("Config not read (/api/v1/status/config): HTTP 503 — "
+                               "external_labels.da_cluster could not be checked")
+
+    def test_the_wording_is_federation_checks(self):
+        """One wording, one reader: what `federation-check edge` says."""
+        import federation_check as fc
+        import _lib_cluster_identity as lib
+        assert bc._judge_cluster_identity("", None)["detail"] == lib.CLUSTER_IDENTITY_UNSET
+        assert bc.external_labels is fc.external_labels is lib.external_labels
+        assert bc.cluster_identity is fc.cluster_identity is lib.cluster_identity
+        assert bc.CLUSTER_IDENTITY_LABEL == fc.CLUSTER_IDENTITY_LABEL == "da_cluster"
+
+    def test_the_reader_is_the_one_the_judge_calls(self, monkeypatch):
+        """A private copy of the reader in byo_check would not see this."""
+        seen = []
+        monkeypatch.setattr(bc, "external_labels", lambda text: seen.append(text) or {"da_cluster": "x"})
+        assert bc._judge_cluster_identity(_CONFIG_OTHER_LABELS, None)["detail"].endswith("= x")
+        assert seen == [_CONFIG_OTHER_LABELS]
+
+
+class TestClusterIdentityInTheRun:
+    """check_prometheus reads `/api/v1/status/config` and the result is in the
+    report, right after reachability; main()'s exit code follows it."""
+
+    @staticmethod
+    def _get(config_answer):
+        import urllib.parse as up
+
+        def _get(url, **_kw):
+            if "/api/v1/status/config" in url:
+                return config_answer
+            if "/api/v1/rules" in url:
+                return {"status": "success", "data": {"groups": [
+                    {"name": "mariadb-alerts", "rules": [{"name": "r", "lastError": ""}]}]}}, None
+            q = up.parse_qs(up.urlsplit(url).query).get("query", [""])[0]
+            # no disk / IOPS recipe declared, no MariaDB: those steps skip
+            if "kubelet_volume_stats" in q or "container_fs" in q or "mysql_global" in q:
+                return _vector()
+            return {"status": "success", "data": {"resultType": "vector", "result": [
+                {"metric": {"tenant": "t1"}, "value": [1, "1"]}]}}, None
+        return _get
+
+    def _checks(self, config_answer):
+        with patch("urllib.request.urlopen", return_value=_healthy()):
+            with _patch_http(self._get(config_answer)):
+                return bc.check_prometheus(_args())
+
+    def _main(self, config_answer, capsys):
+        import json
+        with patch("urllib.request.urlopen", return_value=_healthy()):
+            with _patch_http(self._get(config_answer)):
+                with patch("sys.argv", ["byo_check.py", "prometheus", "--json"]):
+                    rc = _exit_code(bc.main)
+        out = capsys.readouterr().out
+        return rc, (json.loads(out) if out else None)
+
+    def test_it_is_the_second_check_and_asks_the_config_endpoint(self):
+        seen = []
+        get = self._get(_config_answer(_CONFIG_SET))
+
+        def spy(url, **kw):
+            seen.append(url)
+            return get(url, **kw)
+        with patch("urllib.request.urlopen", return_value=_healthy()):
+            with _patch_http(spy):
+                checks = bc.check_prometheus(_args())
+        assert [c["check"] for c in checks][:3] == [
+            "prometheus_reachable", "cluster_identity", "step1_tenant_label"]
+        assert "http://localhost:9090/api/v1/status/config" in seen
+
+    def test_set_is_a_pass_and_the_run_exits_0(self, capsys):
+        rc, doc = self._main(_config_answer(_CONFIG_SET), capsys)
+        by = {c["check"]: c for c in doc["sections"][0]["checks"]}
+        assert by["cluster_identity"] == {
+            "check": "cluster_identity", "status": "pass",
+            "detail": "external_labels.da_cluster = cluster-a"}
+        failed = [c for c in by.values() if c["status"] == "fail"]
+        assert (rc, doc["status"], failed) == (0, "pass", [])
+
+    @pytest.mark.parametrize("config", [_CONFIG_OTHER_LABELS, _CONFIG_NO_EXTERNAL_LABELS,
+                                        _CONFIG_EMPTY_VALUE, _CONFIG_ELSEWHERE],
+                             ids=["other-labels", "no-external-labels", "empty-value", "elsewhere"])
+    def test_missing_is_the_only_failure_and_the_run_exits_1(self, config, capsys):
+        rc, doc = self._main(_config_answer(config), capsys)
+        failed = [c for c in doc["sections"][0]["checks"] if c["status"] == "fail"]
+        assert [c["check"] for c in failed] == ["cluster_identity"]
+        assert "is not set" in failed[0]["detail"] and "caller_error" not in failed[0]
+        assert (rc, doc["status"]) == (1, "fail")
+
+    @pytest.mark.parametrize("answer", [
+        (None, "HTTP 503"),
+        ({"status": "error", "error": "bad_data"}, None),
+        ({"status": "success", "data": None}, None),
+        ({"status": "success", "data": {"yaml": 5}}, None),
+        ([], None),
+    ], ids=["transport", "status-error", "data-null", "yaml-int", "list-body"])
+    def test_config_not_read_is_a_caller_error_never_a_pass_or_a_gap(self, answer, capsys):
+        by = {c["check"]: c for c in self._checks(answer)}
+        c = by["cluster_identity"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True), c
+        assert c["detail"].startswith("Config not read (/api/v1/status/config): "), c
+        assert "could not be checked" in c["detail"] and "is not set" not in c["detail"], c
+        # … the later steps still ran
+        assert by["step1_tenant_label"]["status"] == "pass"
+        rc, doc = self._main(answer, capsys)
+        assert rc == 2

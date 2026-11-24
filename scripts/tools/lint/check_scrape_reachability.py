@@ -167,6 +167,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_validation import i18n_text  # noqa: E402
 import _lib_metric_sources  # noqa: E402  (the family table, #1595 D1b)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: prometheus.yml / manifests as their consumers read them)
+import _lib_cluster_identity  # noqa: E402  (the one reading of a Prometheus' cluster identity, #4097)
 # The repo's one content-based rule-tree scanner. Same directory, zero
 # import cost — see collect_rule_trees for why this file no longer globs.
 from _rule_tree import _rule_containers  # noqa: E402
@@ -463,10 +464,11 @@ def load_repo_jobs() -> list[dict]:
     return parse_scrape_jobs(load_repo_prometheus_text())
 
 
-#: ADR-006: the label that says which cluster a Prometheus is in. The rule
-#: side's reading of it is check_cluster_identity.CLUSTER_LABEL — one
-#: spelling, pinned equal by tests/lint/test_check_scrape_reachability.py.
-CLUSTER_LABEL = "da_cluster"
+#: ADR-006: the label that says which cluster a Prometheus is in — the
+#: tools' one spelling and one judgement (`_lib_cluster_identity`, #4097). The rule
+#: side's reading of it is check_cluster_identity.CLUSTER_LABEL, pinned equal
+#: by tests/lint/test_check_scrape_reachability.py.
+CLUSTER_LABEL = _lib_cluster_identity.CLUSTER_IDENTITY_LABEL
 
 
 def cluster_identity(prom_yaml_text: str) -> list[str]:
@@ -486,8 +488,7 @@ def cluster_identity(prom_yaml_text: str) -> list[str]:
     label those jobs' series; one value per Prometheus cannot say that.
     """
     prom = _lib_consumer_read.prometheus_config(prom_yaml_text)
-    value = ((prom.get("global") or {}).get("external_labels") or {}).get(CLUSTER_LABEL)
-    if isinstance(value, str) and value.strip():
+    if _lib_cluster_identity.cluster_identity(_lib_cluster_identity.config_external_labels(prom)):
         return []
     return [f"CLUSTER-IDENTITY: `global.external_labels.{CLUSTER_LABEL}` is not set — add it with "
             "this cluster's id (a single cluster sets one fixed value too). The rule packs "

@@ -254,6 +254,7 @@ lang: zh
 ## 共用函式庫
 
 - `scripts/tools/_lib_atomic_write.py`：Atomic write helper shared by the regen tools (Trap #60, #2082, #2128).
+- `scripts/tools/_lib_cluster_identity.py`：Which cluster a Prometheus says it is in — `global.external_labels.da_cluster`.
 - `scripts/tools/_lib_compat.py`：Cross-platform compatibility helpers for Dynamic Alerting CLI tools.
 - `scripts/tools/_lib_confd.py`：Single answer to "what is in a conf.d/ directory".
 - `scripts/tools/_lib_confedit.py`：a Python tool's change to conf.d files, made by Go (ADR-036 §2).

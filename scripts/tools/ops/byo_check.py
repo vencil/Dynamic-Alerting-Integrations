@@ -37,7 +37,12 @@ from _lib_python import probe_health, add_prometheus_arg, prometheus_url, url_ty
 # a missing one or an advisory.
 from _lib_prometheus import (  # noqa: E402
     QueryError, alertmanager_alerts, alertmanager_silences, alertmanager_status,
-    collapse_replicas, instant_or_error, prometheus_rules, vector_count, vector_sample)
+    collapse_replicas, instant_or_error, prometheus_rules, prometheus_status_config,
+    vector_count, vector_sample)
+# #4097: the one reading of the running config's cluster identity
+# (federation_check's — no second reader here).
+from _lib_cluster_identity import (  # noqa: E402
+    CLUSTER_IDENTITY_LABEL, CLUSTER_IDENTITY_UNSET, cluster_identity, external_labels)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 # #1132 structural check is the SINGLE implementation in _grar_validate.py (the
@@ -104,6 +109,38 @@ def _judge_reachable(err):
         "status": "fail",
         "caller_error": True,  # #452/#737: transport failure = caller-error (exit 2)
         "detail": f"Cannot reach Prometheus: {str(err)[:60]}",
+    }
+
+
+def _judge_cluster_identity(config_yaml, err):
+    """Judge `cluster_identity` (ADR-006 contract 1 and 7, #4097): the running
+    Prometheus says which cluster it is in — `global.external_labels.da_cluster`
+    — a single cluster too.
+
+    `config_yaml` is the loaded config as `/api/v1/status/config` prints it,
+    `err` why it was not read (then `config_yaml` is None). Not read is a
+    caller error, as a query not answered is: "could not measure" never reads
+    as "measured, missing", and never as a pass.
+    """
+    if err:
+        return {
+            "check": "cluster_identity",
+            "status": "fail",
+            "caller_error": True,
+            "detail": f"Config not read (/api/v1/status/config): {str(err)[:60]} — "
+                      f"external_labels.{CLUSTER_IDENTITY_LABEL} could not be checked",
+        }
+    identity = cluster_identity(external_labels(config_yaml))
+    if identity:
+        return {
+            "check": "cluster_identity",
+            "status": "pass",
+            "detail": f"external_labels.{CLUSTER_IDENTITY_LABEL} = {identity}",
+        }
+    return {
+        "check": "cluster_identity",
+        "status": "fail",
+        "detail": CLUSTER_IDENTITY_UNSET,
     }
 
 
@@ -476,6 +513,14 @@ def check_prometheus(args):
     checks.append(_judge_reachable(reach_err))
     if reach_err is not None:
         return checks  # No point continuing if Prometheus is down
+
+    # Cluster identity: the running config's external labels, before the
+    # steps (it is a fact about this Prometheus, not about a tenant's data).
+    try:
+        config_yaml, config_err = prometheus_status_config(prom_url), None
+    except QueryError as exc:
+        config_yaml, config_err = None, str(exc)
+    checks.append(_judge_cluster_identity(config_yaml, config_err))
 
     # Step 1: tenant label injection (fallback query stays here in the orchestrator)
     results, err = query_prometheus(

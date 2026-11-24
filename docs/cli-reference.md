@@ -863,7 +863,7 @@ da-tools byo-check <target> [options]
 
 | Target | 檢查 |
 |--------|------|
-| `prometheus` | 連線健康、tenant label injection（Step 1）、threshold-exporter scrape（Step 2）、Rule Pack 載入（Step 3）、Recording rules 產出、vector matching |
+| `prometheus` | 連線健康、叢集身分（`cluster_identity`：這台 Prometheus 載入的設定裡 `global.external_labels.da_cluster` 有值，[ADR-006](adr/006-tenant-mapping-topologies.md)；沒有值就失敗，設定讀不到是呼叫端錯誤）、tenant label injection（Step 1）、threshold-exporter scrape（Step 2）、Rule Pack 載入（Step 3）、Recording rules 產出、vector matching |
 | `alertmanager` | 連線就緒、tenant routing、inhibit_rules、active alerts、silences |
 
 **範例**
@@ -879,7 +879,7 @@ da-tools byo-check all --json
 | 代碼 | 說明 |
 |------|------|
 | `0` | 所有檢查通過 |
-| `1` | 一項或多項檢查失敗 |
+| `1` | 一項或多項檢查失敗。⚠️ **行為變更**（[#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)）：`prometheus` 多了 `cluster_identity` 一項，沒設 `global.external_labels.da_cluster` 的 Prometheus 先前通過，現在是 `1` |
 | `2` | 呼叫端錯誤：Prometheus 或 Alertmanager 連不上、query／rules／status API 呼叫失敗、回應格式不對或計數不是有限數字（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1），或 argparse 拒絕的參數。每一步的查詢都算：Step 3b、E2E 的查詢失敗先前不產生檢查項；Step 4／5 的後續查詢失敗先前是 warn；Alertmanager 的 alerts／silences 讀不到先前是 warn，alerts 回應不是陣列時還判 pass；Step 3 的 rules 回 `status: error` 或缺 `groups` 先前被報成「沒有 rule group」、結束碼 1；Alertmanager 的 status 缺 `config` 或 `config.original`（AM v2 API 必填）、`config` 為 null 或不是物件、`original` 不是字串、body 不是物件時先前被報成「沒有 tenant 路由」（warn、結束碼 0）（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
 
 ---
@@ -2699,8 +2699,10 @@ da-tools onboard [--alertmanager-config <FILE>] [--rule-files <PATH>...] \
 | `.onboard/conf.d/<tenant>.yaml` | Phase 1 | 可併入 `conf.d/<tenant>.yaml` 的路由片段 |
 | `phase2-rules/migration-plan.csv` | Phase 2 | 每條告警規則的 metric、閾值、運算子、建議聚合方式與可否自動轉換（`perfect`／`complex`／`unparseable`） |
 | `.onboard/conf.d/_defaults.yaml` | Phase 2 | 由規則閾值推得、可併入 `conf.d/_defaults.yaml` 的預設值建議。值寫成數字（exporter 把 `defaults:` 的每個值當數字讀，讀不了就拒收那個 key，#3250）；不是數字的閾值不放進 `defaults:`，以註解列出。⚠️ `complex` 規則的閾值也在裡面，合併前要和 `migration-plan.csv` 逐條對過；規則全部 `unparseable` 時不寫這個檔 |
-| `.onboard/scrape-analysis.yaml`、`.onboard/<job>-relabel-suggestion.yaml` | Phase 3 | 各 job 有無租戶對映，以及建議的 `relabel_configs` |
+| `.onboard/scrape-analysis.yaml`、`.onboard/<job>-relabel-suggestion.yaml` | Phase 3 | 各 job 有無租戶對映，以及建議的 `relabel_configs`。`scrape-analysis.yaml` 的 `summary.cluster_identity` 是叢集身分的判定（見下） |
 | `onboard-hints.json` | Phase 1（加上 Phase 2 推得的 DB 類型） | 租戶清單、路由提示，以及 DB 類型——⚠️ Phase 2 推得的每一種 DB 類型都掛到**每一個**租戶上（所有租戶共用同一份聯集），`scaffold --from-onboard` 因此會替每個租戶開同一組 pack；Phase 1 沒找到任何租戶 route、或帶 `--dry-run`／`--json` 時不寫 |
+
+**叢集身分**（[#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)，[ADR-006](adr/006-tenant-mapping-topologies.md)）：Phase 3 用同一份解析結果判定 `--scrape-config` 有沒有設 `global.external_labels.da_cluster`，結果有三種，各自印在 stderr、寫進 `scrape-analysis.yaml` 與 `--json` 報告的 `phases.phase3.summary.cluster_identity`（`status`、`value`、`detail`），有寫 `onboard-hints.json` 時也在它的 `cluster_identity`：`set`（有值，`value` 是叢集 ID）；`missing`（檔案有 `global` 區段但 `da_cluster` 沒有值，要補上）；`unknown`（檔案沒有 `global` 區段，例如只有 `scrape_configs` 的片段，從這個檔看不出來，請用 `da-tools byo-check prometheus --prometheus <url>` 檢查實際那台 Prometheus）。`missing` 與 `unknown` 都不改變結束碼，和「job 沒有租戶對映」一樣是報告裡的發現。檔案沒有任何 `scrape_configs` 時 Phase 3 不產出結果，判定只印在 stderr。建議的 `relabel_configs` 不寫 `da_cluster`：它來自 external label，不是 relabel。
 
 YAML 產物都在點開頭的目錄裡（[#4014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4014)）：`.onboard/conf.d/` 是一棵草稿 conf.d（可用 `validate-config --config-dir <輸出目錄>/.onboard/conf.d` 整棵驗），`.onboard/` 放其他 YAML。conf.d 的讀取端都不讀點開頭的目錄，所以 `--output-dir` 指到服務中的 conf.d 時，草稿租戶不會被服務。`.onboard/conf.d/` 裡已經有這次不寫的租戶檔（例如上一次執行的租戶）、而這次有跑 Phase 1 時以 `2` 結束，什麼都不寫；只跑 Phase 2／3 的執行不寫租戶，留著先前的租戶照常寫入（分 phase 跑同一個輸出目錄）。這次要建的目錄（`.onboard/`、`.onboard/conf.d/`、這次有跑的 phase 的 CSV 目錄）已存在但不是目錄時同樣以 `2` 結束。
 

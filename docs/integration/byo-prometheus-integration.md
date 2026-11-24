@@ -134,7 +134,7 @@ relabel_configs:
 >     da_cluster: cluster-a   # 這個叢集的 ID；單一叢集也要設，值固定即可
 > ```
 >
-> prometheus-operator 寫在 Prometheus CR 的 `spec.externalLabels`。Prometheus 會把 external label 加在送往 Alertmanager 的告警、`/federate` 與 remote write 上，所以告警與中央 Prometheus 都分得出叢集。上線後用 `da-tools federation-check edge --prometheus <url>` 檢查這一行有沒有設。租戶若要逐叢集宣告預期的 exporter（`_expected_exporters: [mariadb@cluster-a, mariadb@cluster-b]`），`@` 後面寫的就是這個值；逐叢集的缺席判定在收了各叢集資料的中央 Prometheus 上才成立（[ADR-006](../adr/006-tenant-mapping-topologies.md) 的已知限制）。中央 Prometheus 若**同時**自己直接抓租戶 exporter，`global.external_labels.da_cluster` 不會加在它本地抓到的序列上（external label 只在資料送出去時才加），要在那個抓取 job 上自己寫 `da_cluster`（`static_configs` 的 `labels` 或 `relabel_configs`）；否則那份沒有 `da_cluster` 的存在序列會讓該租戶這一種所宣告的每個叢集都算存在，缺席的叢集不會告警。只經 federation 收資料的部署不用改，沿用邊緣叢集的 external label。
+> prometheus-operator 寫在 Prometheus CR 的 `spec.externalLabels`。Prometheus 會把 external label 加在送往 Alertmanager 的告警、`/federate` 與 remote write 上，所以告警與中央 Prometheus 都分得出叢集。上線後用 `da-tools byo-check prometheus --prometheus <url>`（或 `da-tools federation-check edge --prometheus <url>`）檢查這一行有沒有設：兩者都讀實際那台 Prometheus 載入的設定，`external_labels.da_cluster` 沒有值就失敗。租戶若要逐叢集宣告預期的 exporter（`_expected_exporters: [mariadb@cluster-a, mariadb@cluster-b]`），`@` 後面寫的就是這個值；逐叢集的缺席判定在收了各叢集資料的中央 Prometheus 上才成立（[ADR-006](../adr/006-tenant-mapping-topologies.md) 的已知限制）。中央 Prometheus 若**同時**自己直接抓租戶 exporter，`global.external_labels.da_cluster` 不會加在它本地抓到的序列上（external label 只在資料送出去時才加），要在那個抓取 job 上自己寫 `da_cluster`（`static_configs` 的 `labels` 或 `relabel_configs`）；否則那份沒有 `da_cluster` 的存在序列會讓該租戶這一種所宣告的每個叢集都算存在，缺席的叢集不會告警。只經 federation 收資料的部署不用改，沿用邊緣叢集的 external label。
 
 ### 驗證
 
@@ -343,7 +343,9 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090 --json
 ```
 
-工具自動檢查：tenant 標籤注入 → threshold-exporter scrape → user_threshold metrics → Rule Pack 載入 → recording rules 輸出 → 向量匹配 → MariaDB 的 `max_connections`。所有項目均通過後顯示 `PASS`。
+工具自動檢查：叢集身分（`external_labels.da_cluster`）→ tenant 標籤注入 → threshold-exporter scrape → user_threshold metrics → Rule Pack 載入 → recording rules 輸出 → 向量匹配 → MariaDB 的 `max_connections`。所有項目均通過後顯示 `PASS`。
+
+第一項 `cluster_identity` 讀這台 Prometheus 實際載入的設定（`/api/v1/status/config`）：`global.external_labels.da_cluster` 有值就通過並顯示那個值；沒有值就失敗（結束碼 `1`），訊息寫出要加在哪裡，單一叢集也一樣（見步驟 1 的「叢集身分」）。設定讀不到（端點錯誤、回應格式不對）時這一項同樣列為失敗，訊息寫的是「讀不到」而不是「沒設」，結束碼是 `2`。
 
 最後一項只在有 `mysql_global_status_threads_connected` 時檢查（沒有就 skip）：MariaDB 連線使用率是 `threads_connected ÷ max_connections`，分母 `mysql_global_variables_max_connections` 來自 mysqld_exporter 的 `global_variables` collector（預設開啟，`--collect.global_variables`）。缺這個指標或讀到 0 的 instance 會從比值裡消失，它的 `MariaDBHighConnections`／`Critical` 永遠不會響，所以這項列為 warn 並點名 collector。
 
