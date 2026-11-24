@@ -9,7 +9,7 @@ dependencies: [
 ---
 
 /**
- * Design Token Migration (ADR-014 / DEC-A)
+ * Design Token Migration (ADR-014 Option A)
  * ==========================================
  * This component uses design tokens via arbitrary Tailwind values (--da-color-*)
  * instead of hardcoded Tailwind color palette classes. This ensures consistency

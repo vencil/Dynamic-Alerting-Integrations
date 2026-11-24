@@ -9,118 +9,103 @@ tracking_kind: adr
 status: accepted
 domain: tools
 created_at: 2026-04-27
-updated_at: 2026-11-22
+updated_at: 2026-11-24
 ---
 # ADR-018: Profile-as-Directory-Default
 
 > **Language / 語言：** **中文 (Current)** | [English](./018-profile-as-directory-default.en.md)
 
-> v2.8.0 客戶導入管線之 Profile Builder。
-> 與 [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.md)（目錄分層）+ [ADR-017](017-defaults-yaml-inheritance-dual-hash.md)（繼承語意）為一組。
-
 ## 狀態
 
-🟢 **Accepted**（v2.8.0, 2026-04-27）— Profile Builder 的 PromRule→threshold translator 與 emission 隨 v2.8.0 出貨。
+🟢 **Accepted**（v2.8.0，2026-04-27）。與 [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.md)（目錄分層）、[ADR-017](017-defaults-yaml-inheritance-dual-hash.md)（`_defaults.yaml` 的繼承語意）為一組。
 
-### 修訂（2026-11-22）：Profile Builder 已退役
+2026-11-22 修訂：最初實作這條規則的 Profile Builder（把相似告警規則分群、替每群寫出 `_defaults.yaml` 與租戶覆寫檔的 Go library）已從程式碼刪除，它從未接到任何 CLI（[#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228)）。規則本身仍然有效。
 
-Profile Builder（translator 與 emission）與原本要呼叫它的批次 PR 工具，已於 2026-11-22 一併從程式碼刪除，沒有過渡期（[#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228)）。退役的理由：它從未接到任何 CLI，也沒有任何呼叫者；而一個租戶在兩個 cluster 都偏離中位數時，emission 會在兩個目錄各寫一份該租戶的檔，da-guard 以重複租戶拒收整棵樹。
-
-退役的決定與討論見 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211)。
-
-客戶規則的批次導入預計改走 `da-tools migrate`（migrate-rule），由它產出 `_custom_alerts` recipe；這部分尚未出貨，進度見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
-
-本 ADR 的 default-vs-override 邊界仍然有效：手動整理或其他工具產出的 conf.d 樹照樣適用，da-guard 的 redundant-override 檢查也照它判。下文描述 Profile Builder 的段落與「實作位置」所列的檔案，記錄的是退役前的設計，那些檔案已不存在。
-
-## 背景
-
-Profile Builder 把客戶的 PromRule corpus 聚成「結構相似」的 cluster。每組 cluster 預期落到 conf.d 樹，問題是**怎麼落**：
-
-1. **每個 tenant 一份完整 tenant.yaml** — N 個結構相似的 rule 變 N 份檔案，繼承關係靠 `_defaults.yaml` 但每個 tenant 還是把所有 key 重複寫一遍。GitOps 反模式。
-2. **完全寫進 `_defaults.yaml` 不寫 tenant.yaml** — 失去 per-tenant 微調能力。
-3. **共通 default 在 `_defaults.yaml`，只有 tenant 真正不同的值寫 `<id>.yaml` override** — ADR-017 deepMerge 已經支援這種 sparse override，問題是「default 取什麼值？哪些 tenant 算『真正不同』？」沒有明確規則就會被經手人各自詮釋。
-
-Profile Builder 同時 ship translator（從 PromRule expr 取 threshold scalar）與 emission（把 cluster 的決策寫成 conf.d 樹）。Translator 的 heuristic 細節是 internal package 範疇（見 `internal/profile/translate.go` package header）；但「emission 形狀是什麼」是跨組件決策，影響 batch PR pipeline 的 directory placement、redundant-override guard、release packaging — 屬於 ADR 範疇。
+2026-11-24 修訂：改寫為現行行為。決策不變。
 
 ## 決策
 
-### Profile-as-Directory-Default
+**一群租戶共用的閾值寫在它們共同上層目錄的 `_defaults.yaml`；租戶檔只寫「與它繼承到的值不同」的鍵。**
 
-**Cluster 的「共通閾值」放 `_defaults.yaml`；只有「真的不一樣」的 tenant 才寫 `<id>.yaml` override。**
+1. **共通值放 `_defaults.yaml` 的 `defaults:` 底下。** 這個值沿目錄鏈往下繼承到每個租戶（繼承語意見 ADR-017）。
+2. **與繼承值相同就不寫。** 租戶的值等於它繼承到的值時，租戶檔不寫這個鍵；只有真的不同才寫。這樣租戶檔裡的每一行都是一個刻意的偏離，審查的人不必猜它是要釘住這個值、還是忘了刪的舊行。
+3. **每個租戶仍有自己的租戶檔。** 租戶是由租戶檔宣告的：沒有檔，就沒有這個租戶。沒有任何鍵要覆寫的租戶寫成空 mapping（下例的 `db-c`）。
+4. **default 取這群租戶的中位數，不取平均。** 一個離群的租戶不會把 default 拉偏。這是給整理 `conf.d/` 的人的準則，目前沒有工具替你算，也沒有檢查守它。
 
-具體規則（emit_translated.go 實作；translator package header 有 metric_key / median 等 heuristic 細節）：
+### 範例
 
-- `_defaults.yaml` 的 `defaults: {<metric_key>: <threshold>}` 用 cluster 的 **median**（不用 mean，避免單一 outlier 拉高/拉低）
-- 每個 member 的 threshold 等於 default → **不寫 tenant 檔**（依賴 ADR-017 inheritance）
-- 每個 member 的 threshold 不等於 default → 寫 `<id>.yaml`，內容**只含**這個 metric_key 的 override 字串值
-
-範例輸入（3 個 PromRule，閾值 80 / 80 / 95）：
+三個租戶的閾值分別是 80、95、80，中位數 80 寫進 `_defaults.yaml`。`db-b` 只寫它不同的那個值，`db-c` 什麼都不覆寫；`db-a` 多寫了一行與 default 相同的值，照本規則應刪掉：
 
 ```yaml
-# _defaults.yaml （cluster median = 80）
+# conf.d/_defaults.yaml
 defaults:
   mysql_connection_usage_percent: 80
 
-# tenant-c.yaml （只有 c 偏離 default）
+# conf.d/db-a.yaml
 tenants:
-  tenant-c:
+  db-a:
+    mysql_connection_usage_percent: "80"
+
+# conf.d/db-b.yaml
+tenants:
+  db-b:
     mysql_connection_usage_percent: "95"
+
+# conf.d/db-c.yaml
+tenants:
+  db-c: {}
 ```
 
-tenant-a 和 tenant-b 沒有檔案（runtime deepMerge 從 `_defaults` 拿 80）。
+`da-guard served-values --config-dir conf.d` 對 `mysql_connection_usage_percent` 給 `db-a` 80、`db-b` 95、`db-c` 80：`db-c` 從 `_defaults.yaml` 繼承到 80，`db-a` 那一行刪不刪都是 80。租戶檔的閾值依 schema 寫成字串，exporter 讀成數字。
 
-### 為什麼這條 principle 值得 ADR
+### 誰在守這條規則
 
-- **跨組件**：Profile Builder emission shape、batch PR pipeline 的 directory placement、release packaging、redundant-override guard 全部要遵循這個 default-vs-override 邊界。任一處詮釋不一致就會出現 GitOps 異味（重複的 override / 不該被 default 蓋過的值被蓋過）。
-- **客戶可見**：客戶看到的 conf.d/ 形狀直接由這條原則決定。
-- **長期穩定**：translator heuristic 可能隨客戶 corpus 演進，但「default vs override 邊界」幾年內不該動。
+da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租戶刪掉它之後會拿到的值相同時，報一筆 warning。比對的對象是這個租戶自己的繼承結果：目錄鏈上每一層的 `_defaults.yaml`，以及租戶綁定的 `_profile`（profile 給了值，就以 profile 的值為準）。
 
-Translator 內部演算法（metric_key 5-step ladder、majority vote、median 抗 outlier、operator handling、status fallback）屬實作細節，已寫進 `components/threshold-exporter/app/internal/profile/translate.go` package header。本 ADR 不重複，避免雙寫漂移。
+⚠️ 比對的是 YAML 讀出來的值，型別要相同。上例根目錄寫數字 `80`、`db-a` 寫字串 `"80"`，da-guard 不報任何 finding；這正是一般的寫法，所以多餘的閾值覆寫通常抓不到。把根目錄那行寫成 `mysql_connection_usage_percent: "80"`（exporter 一樣讀成 80），`da-guard --config-dir conf.d` 才指出 `db-a`（結束碼 0；Summary 與掃描清單省略）：
 
-## 已知 non-goals（不在本 ADR 範疇內）
+```text
+### Warnings (informational)
 
-| Non-goal | 為什麼 | 規劃處 |
-|---|---|---|
-| Profile Builder 自動推斷 directory placement（哪個 cluster 落 L1 / L2 / L3）| 這是 batch PR pipeline 的職責，需要看整批 corpus 跨 domain/region 分布 | batch PR pipeline |
-| 翻譯 dimensional / regex labels（`{queue=~"q.*"}`）的 emission | 需要表達式重寫 + label expansion，跨組件 | batch PR pipeline dimensional support |
-| 客戶 PromRule expression 自動改寫成 `> on(tenant) user_threshold{}` 形式 | Rule rewrite 是另一條 toolkit，與 conf.d emission 解耦 | batch PR pipeline / 客戶手動 |
-| Severity-tier 兩階翻譯（`metric_key_critical` 從 cluster 同時推 warning + critical）| Cluster 語意上是同一階；兩階拆開要從「PromRule pair」角度重新 cluster | 後續 fuzzier matcher / 客戶手動 |
+| Tenant | Field | Kind | Message |
+|--------|-------|------|---------|
+| db-a | mysql_connection_usage_percent | redundant_override | tenant "db-a" overrides "mysql_connection_usage_percent" with the same value as the new defaults; remove the override and rely on inheritance |
+```
 
-## 互動效應
+- warning 不影響結束碼（0）；加 `--warn-as-error` 時結束碼 1。由 `cmd/da-guard/main_test.go` 的 `TestRun_RedundantOverride_SurfacesAsWarning` 與 `TestRun_RedundantOverride_WithWarnAsError_ExitsOne` 守住。
+- 不同子目錄的租戶各自比對自己那條鏈：`TestRun_RedundantOverride_HonorsCascadingDefaults`。
+- 綁了 `_profile` 的租戶比對 profile 的值：`cmd/da-guard/profile_guard_test.go` 的 `TestGuard_RedundantOverrideFollowsTheProfile`。
 
-### 與 ADR-017（deepMerge）
+## 背景
 
-本 ADR emission 完全依賴 ADR-017 的：
+一群結構相似的租戶落到 `conf.d/` 時，有三種寫法：
 
-- **null-as-delete**：tenant 想 explicit override 為 0 仍可（emission 用顯式數值，不踩 null）。⚠️ **#1339 更正**：閾值 key 的 `null` 已**不再**是退出繼承的手段（與漏打不可分辨，schema 會擋），請改用 `"disable"`；`null` 的退出語意只保留給 `_routing` 的四個欄位
-- **map deep-merge**：每個 tenant 檔只列**該 tenant 與 default 不同**的 key，runtime ResolveAt 自動 fallback 到 `_defaults`
-- **scalar override**：tenant 字串值（如 `"95"`）覆蓋 default 數值，runtime 用 strconv 在 ResolveAt 時轉回 float
+1. **每個租戶一份完整的租戶檔**：N 個租戶就把同樣的鍵重複寫 N 次。改一個共通值要改 N 個檔，而且看不出哪些值是刻意不同的。
+2. **全部寫進 `_defaults.yaml`，租戶檔不寫閾值**：失去逐租戶微調的能力。
+3. **共通值寫在 `_defaults.yaml`，只有不同的租戶寫覆寫**：ADR-017 的合併規則本來就支援這種稀疏覆寫（租戶檔只列部分鍵，其餘從上層補齊）。缺的是規則：default 取什麼值、哪些租戶算「真的不同」。沒有明確的規則，每個經手人會各自詮釋。
 
-### 與 ADR-016（目錄分層）
+本 ADR 選第 3 種並補上規則。它是跨元件的約定：產生 `conf.d/` 的工具、審查 PR 的人、da-guard 的多餘覆寫檢查都照同一條邊界判斷；客戶看到的 `conf.d/` 形狀也由它決定。
 
-emission 的 `<RootPrefix>/<ProposalDir>/` 對應 ADR-016 的 directory level。**Caller**（設計上是 batch PR pipeline；目前沒有任何呼叫者）決定 `ProposalDirs[i]` 落在 L1 / L2 / L3 哪一層。**Profile Builder 不做目錄推斷**；那是 batch PR pipeline 的工作。
+## 後果與已知限制
 
-### 與 Dangling Defaults Guard
+- **多餘的覆寫只是警告，不擋 merge。** 執行時它無害，只是讓租戶檔變長、讓意圖變模糊。要擋就在 CI 加 `--warn-as-error`。
+- **比對區分型別。** 租戶寫字串、default 寫數字時（一般的寫法），值相同也不報，見「誰在守這條規則」。
+- **只比對單一值。** mapping 會攤平到每個葉節點逐一比對；list 不比對，內容相同也不報（`internal/guard/guard_test.go` 的 `TestCheckRedundantOverrides_SkipsStructuredValues`）。
+- **子目錄 `_defaults.yaml` 不生效的鍵不判。** 子目錄 `_defaults.yaml` 裡 `_` 開頭的鍵（例如 `_silent_mode`），exporter 不套用（ADR-017 決策 4），租戶自己那一行才是生效的值；這種覆寫不算多餘，da-guard 也不報（`cmd/da-guard/subtree_reserved_test.go` 的 `TestGuard_RedundantOverrideSkipsRefusedSubtreeKey`）。
+- **租戶只能覆寫有宣告的閾值。** 租戶檔寫了一個 `_defaults.yaml` 沒宣告的閾值鍵，`/metrics` 不送它，而 da-guard 對此不報任何 finding。哪些算已宣告（根目錄、內建層、`optional_overrides:`）見 ADR-017 決策 3、4、11。
+- **要關掉繼承來的閾值，寫 `"disable"`，不要寫 `null`。** 租戶檔寫 `null` 等於這一層沒寫，仍拿到上層的值（ADR-017 決策 4）；而且 `check_confd_schema.py` 會擋下租戶檔裡寫成 `null` 的閾值。
+- **共通值放在子目錄時，標準部署送不到線上。** 客戶部署用的扁平組裝只帶 conf.d 頂層的檔，子目錄的 `_defaults.yaml` 到不了線上的 exporter（ADR-016「後果與已知限制」）。在那個問題解決前，共通值要放在根目錄 `_defaults.yaml` 才會在線上生效。
+- **沒有工具從規則集自動產生這種形狀。** 導入客戶規則目前用逐租戶的 `da-tools migrate`；批次導入尚未出貨，追蹤在 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
 
-Emission 直接吃 ADR-017 deepMerge 形狀後，Dangling Defaults Guard 自然套用：
+## 考慮過的替代方案
 
-- Schema validation：metric_key 必填欄位驗證
-- Cardinality guard：predicted-metric-count 包含 emission 的所有 metric_key
-- Redundant-override warn：tenant override 與 `_defaults` median 相同 → guard 提示移除（其實這條是 Profile-as-Directory-Default 的「事後檢查」防線）
+- **每個租戶寫完整的租戶檔**：見「背景」第 1 種。重複，而且刻意的偏離淹沒在重複的值裡。
+- **只用 `_defaults.yaml`**：見「背景」第 2 種。無法逐租戶微調。
+- **default 取平均**：一個離群值就會把 default 拉偏，讓原本與多數一致的租戶也得寫覆寫。
 
-Emission ship 後客戶 PR 自動跑 Guard 的 GH Actions wrapper 校驗，閉環。
+## 相關
 
-## 實作位置
-
-| 檔案 | 角色 |
-|---|---|
-| `internal/profile/translate.go` | Translator + heuristic 細節（metric_key ladder / cluster aggregation / median / operator handling）— package header 有完整 inline doc |
-| `internal/profile/emit.go` | `EmissionInput.Translate` 旗標 + dispatch 到 `emitTranslatedProposal`；conf.d-shape 模板實作 |
-| `internal/profile/translate_test.go` | 表格測試覆蓋 translator + cluster 聚合（`-race -count=2` 穩定）|
-
-（這些檔案原本在 `components/threshold-exporter/app/` 下，已隨 Profile Builder 退役刪除，見上方「修訂」。）
-
-## 變更紀錄
-
-- v2.8.0：本 ADR 與 PromRule→threshold translator + emit dispatch 一起 ship。
-- v2.8.0 review：用戶反饋「ADR 必要性？」後，將原本的 translator heuristic 細節移到 `translate.go` package header；本 ADR 收斂為「跨組件 design principle」單一範疇，避免雙寫漂移。
+- [ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略](016-conf-d-directory-hierarchy-mixed-mode.md)
+- [ADR-017: `_defaults.yaml` 多層繼承與雙雜湊熱重載](017-defaults-yaml-inheritance-dual-hash.md)
+- [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211) — Profile Builder 退役的討論
+- 實作位置：`components/threshold-exporter/app/internal/guard/redundant.go`（`redundant_override` 檢查）

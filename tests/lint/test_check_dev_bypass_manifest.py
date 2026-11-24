@@ -1,7 +1,7 @@
 """Self-test for check_dev_bypass_manifest.py (ADR-022 Layer 4).
 
 Verifies the deploy-time guard flags the tenant-api dev-auth-bypass switch in
-helm/k8s/operator manifests, allows comment mentions, and ignores other dirs.
+helm/k8s manifests, allows comment mentions, and ignores other dirs.
 """
 
 from __future__ import annotations

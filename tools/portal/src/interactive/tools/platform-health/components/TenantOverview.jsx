@@ -5,7 +5,7 @@ purpose: |
   rule-pack pills, metrics, firing-alert badge, last-update). Extracted
   from platform-health.jsx (da-portal ROI refactor Wave 5b).
 
-  Design-token migration (ADR-014 / DEC-A): Tailwind palette classes →
+  Design-token migration (ADR-014 Option A): Tailwind palette classes →
   `--da-color-*` arbitrary values (threshold-heatmap pattern). State
   badges by visual intent: normal → success, maintenance → warning,
   silent → tag (neutral pill; tag-bg/tag-fg map cleanly to the old
