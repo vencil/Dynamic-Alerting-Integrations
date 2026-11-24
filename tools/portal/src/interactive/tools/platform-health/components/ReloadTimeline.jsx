@@ -5,7 +5,7 @@ purpose: |
   description and timestamp per row. Extracted from platform-health.jsx
   (da-portal ROI refactor Wave 5b).
 
-  Design-token migration (ADR-014 / DEC-A): Tailwind palette classes →
+  Design-token migration (ADR-014 Option A): Tailwind palette classes →
   `--da-color-*` arbitrary values (threshold-heatmap pattern). Event-type
   tints: reload → accent (blue), update → success (green), alert →
   warning (yellow), state → semantic-other border (purple).

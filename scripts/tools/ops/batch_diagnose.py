@@ -48,6 +48,7 @@ from diagnose import check as diagnose_check  # noqa: E402
 from diagnose import TenantNotFoundError, chain_for, load_chain_source  # noqa: E402  (#1525)
 from diagnose import query_prometheus  # noqa: E402
 from diagnose import exit_code as diagnose_exit_code  # noqa: E402  (#2493)
+from diagnose import issue_clusters  # noqa: E402  (#1200)
 from _lib_kubectl import KubectlError, kubectl_get  # noqa: E402  (#3349)
 from diagnose import CommandTimeoutError, DEADLINE_GRACE_S  # noqa: E402  (#2968)
 from diagnose import deadline as diagnose_deadline  # noqa: E402  (#2968)
@@ -303,6 +304,14 @@ def generate_report(results, prom_url):
                 recommendations.append(
                     f"{tenant}: Check pod status — kubectl get pods -n {tenant}"
                 )
+            elif issue_clusters(issue):
+                # #1200: the issue names its clusters; kubectl without a
+                # context asks the current one, which may be the healthy one.
+                recommendations.extend(
+                    f"{tenant}: Check exporter in cluster {cluster} — run against that "
+                    f"cluster's kubectl context: kubectl --context <{cluster}> logs "
+                    f"-n {tenant} deploy/mariadb -c exporter --tail=20"
+                    for cluster in issue_clusters(issue))
             elif "Exporter" in issue or "DOWN" in issue:
                 recommendations.append(
                     f"{tenant}: Check exporter — kubectl logs -n {tenant} deploy/mariadb -c exporter --tail=20"
@@ -316,6 +325,18 @@ def generate_report(results, prom_url):
     report["recommendations"] = recommendations
 
     return report
+
+
+POD_CHECK_NOTE = ("      note: Pod check covered only the current kubectl context "
+                  "and found no Pod there (not counted as an issue)")
+
+
+def _print_pod_note(data):
+    """#1200: diagnose does not count "no Pod in the current context" as an
+    issue for a tenant in several clusters (its `pod_check.note`); the text
+    report says so under the tenant, or it would read as a Pod that was seen."""
+    if (data.get("pod_check") or {}).get("note"):
+        print(POD_CHECK_NOTE)
 
 
 def print_text_report(report):
@@ -348,6 +369,7 @@ def print_text_report(report):
                 elapsed = data.get("elapsed_seconds", "?")
                 suffix = f" [{mode}]" if mode != "normal" else ""
                 print(f"    + {name}{suffix}  ({elapsed}s)")
+                _print_pod_note(data)
         print()
 
     # Tenants whose Pod / exporter checks were skipped
@@ -366,6 +388,7 @@ def print_text_report(report):
             if data.get("status") not in ("healthy", "unchecked"):
                 issue_list = data.get("issues", [])
                 print(f"    - {name}: {', '.join(issue_list)}")
+                _print_pod_note(data)
         print()
 
     # Recommendations

@@ -12,7 +12,7 @@ lang: en
 
 > **Audience**: the **Operator / SRE who deploys and runs this platform**. This is the setup-and-operations contract that lets "Prometheus / Alertmanager dying" be noticed from the outside — you need an out-of-cluster monitoring point, the configuration below, and discipline about the silence/inhibit no-go zones.
 >
-> Design rationale: [ADR-025 Alerting-Plane Self-Liveness](../adr/025-alerting-plane-self-liveness.en.md) (D1 heartbeat / D2 air-gapped passive probe / D3 HA boundary). For tenant-alert receiver / Secret / inhibit configuration, see the [Operator Alertmanager Integration Guide](operator-alertmanager-integration.en.md).
+> Design rationale: [ADR-025 Alerting-Plane Self-Liveness](../adr/025-alerting-plane-self-liveness.en.md) (decision 1 heartbeat / decision 2 air-gapped passive probe / decision 3 HA boundary). For tenant-alert receiver / Secret / inhibit configuration, see the [Operator Alertmanager Integration Guide](operator-alertmanager-integration.en.md).
 
 ## What it solves
 

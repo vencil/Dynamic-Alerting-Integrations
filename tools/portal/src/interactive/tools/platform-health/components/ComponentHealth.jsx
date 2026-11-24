@@ -6,7 +6,7 @@ purpose: |
   key/value detail list. Extracted from platform-health.jsx (da-portal
   ROI refactor Wave 5b).
 
-  Design-token migration (ADR-014 / DEC-A): Tailwind palette classes →
+  Design-token migration (ADR-014 Option A): Tailwind palette classes →
   `--da-color-*` arbitrary values (threshold-heatmap pattern). Status
   badge: healthy → success, degraded → warning, else → error, each on a
   `-soft` background. Badge TEXT uses the AA-verified `-warning-text` /

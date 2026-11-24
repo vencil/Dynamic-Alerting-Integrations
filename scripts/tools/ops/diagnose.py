@@ -47,6 +47,8 @@ from _lib_paths import require_dir  # noqa: E402  (#3276 / #3392)
 import _lib_input  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_metric_sources import TENANT_EXPORTER_JOB  # noqa: E402  (#3720)
+# ADR-006 (#1200): the label that says which cluster a series came from.
+from _lib_cluster_identity import CLUSTER_IDENTITY_LABEL  # noqa: E402
 from _lib_kubectl import KubectlError, kubectl_list, kubectl_logs  # noqa: E402  (#3349)
 # #2526 / #2547: the tenant's resolution is threshold-exporter's own
 # (`da-guard effective`); see resolve_inheritance_chain.
@@ -197,9 +199,30 @@ def mariadb_logs(tenant: str) -> str:
 # batch-diagnose reported all of them as errors (issue 1513, 本輪決策 N2).
 MARIADB_KIND = "mariadb"
 PROMETHEUS_FAILURE = "Prometheus query failed"
+# The label of `tenant_expected_exporter` that carries the cluster of a
+# `kind@cluster` entry, and the metric whose presence means a mariadb exporter
+# answers — TenantExporterAbsent's own (_lib_exporter_presence, which the
+# da-tools image does not ship; tests/ops/test_diagnose_per_cluster.py holds
+# both equal to it).
+EXPECTED_CLUSTER_LABEL = "expected_cluster"
+MARIADB_PRESENCE_METRIC = "mysql_up"
+EXPORTER_DOWN = f"Exporter reports DOWN ({MARIADB_PRESENCE_METRIC}!=1)"
+# The exporter issues that name clusters (see issue_clusters).
+EXPORTER_DOWN_IN = "Exporter reports DOWN in "
+EXPORTER_ABSENT_IN = "Exporter absent in "
+# The job matcher of the health query — the whole matcher the alert's presence
+# selectors carry (_lib_exporter_presence.JOB_SELECTOR; held equal by the same
+# test file).
+EXPORTER_JOB_MATCHER = f'job="{TENANT_EXPORTER_JOB}"'
+# What the Pod check can see: kubectl's current context, one cluster.
+POD_CHECK_SCOPE = "current kubectl context only"
+POD_NOT_FOUND_ELSEWHERE = (
+    "no MariaDB Pod in the current kubectl context; the tenant's other clusters "
+    "were not looked at, so this is not reported as an issue")
 
 
-def tenant_expected_kind(tenant: str, prom_url: str) -> tuple[str | None, str | None]:
+def tenant_expected_kind(tenant: str, prom_url: str,
+                         declared: set[str] | None = None) -> tuple[str | None, str | None]:
     """Return (kind, error) from `tenant_expected_exporter{tenant=...}`'s
     `pack` label.
 
@@ -214,16 +237,102 @@ def tenant_expected_kind(tenant: str, prom_url: str) -> tuple[str | None, str | 
     #4097: a kind declared per cluster (`mariadb@east`, `mariadb@west`) is
     one series per cluster, each with the same `pack` and the cluster in
     `expected_cluster`; the kind is `pack` either way, named once.
+
+    *declared*, when given, receives where the tenant declares MariaDB (#1200):
+    each `expected_cluster` of a `mariadb@cluster` row, and "" for a row with
+    none (the kind alone: one cluster answering is enough). An out-parameter
+    so the return stays the pair every caller and test double already has.
     """
     results, err = query_prometheus(prom_url, f'tenant_expected_exporter{{tenant="{tenant}"}}')
     if err:
         return None, err
+    if declared is not None:
+        declared.update(item.get("metric", {}).get(EXPECTED_CLUSTER_LABEL) or ""
+                        for item in results or []
+                        if item.get("metric", {}).get("pack") == MARIADB_KIND)
     kinds = sorted({item.get("metric", {}).get("pack") for item in results or []} - {None, ""})
     if not kinds:
         return None, None
     if MARIADB_KIND in kinds:
         return MARIADB_KIND, None
     return ",".join(kinds), None
+
+
+def exporter_states(rows: list[dict]) -> dict[str, bool]:
+    """cluster → "every exporter there reports mysql_up 1", from the rows of
+    the per-cluster health query; the key "" is the row with no `da_cluster`
+    (a Prometheus that scraped the exporters itself cannot say which cluster
+    it is in)."""
+    states: dict[str, bool] = {}
+    for row in rows or []:
+        cluster = (row.get("metric") or {}).get(CLUSTER_IDENTITY_LABEL) or ""
+        up = row.get("value", [None, None])[1] == "1"
+        states[cluster] = states.get(cluster, True) and up
+    return states
+
+
+def exporter_issues(states: dict[str, bool], declared: set[str]) -> list[str]:
+    """The issues of the exporter check, judged as TenantExporterAbsent judges
+    presence (rule-pack-liveness; _lib_exporter_presence.absent_expr) — for
+    MariaDB only, the one kind this tool checks:
+
+    * declared for a cluster (`mariadb@east`): absent there unless a
+      `mysql_up` row carries that `da_cluster`, or one carries NO `da_cluster`
+      — such a row counts as present for every declared cluster;
+    * declared alone (or *declared* names no cluster): a row from any cluster
+      is presence, and none at all is the DOWN verdict this tool always gave.
+
+    A row that is there with a value other than 1 is DOWN, named by its
+    cluster when it has one.
+    """
+    named = sorted(declared - {""})
+    issues = []
+    if "" in states:
+        if not states[""]:
+            issues.append(EXPORTER_DOWN)
+    elif not states and ("" in declared or not named):
+        issues.append(EXPORTER_DOWN)
+    down = sorted(c for c, up in states.items() if c and not up)
+    if down:
+        issues.append(f"{EXPORTER_DOWN_IN}{', '.join(down)} "
+                      f"({MARIADB_PRESENCE_METRIC}!=1)")
+    if "" not in states:
+        issues.extend(f"{EXPORTER_ABSENT_IN}{c}" for c in named if c not in states)
+    return issues
+
+
+def issue_clusters(issue: str) -> list[str]:
+    """The clusters an exporter issue of exporter_issues names; [] for any
+    other issue. batch-diagnose's suggestion for such an issue has to point
+    at those clusters, not at kubectl's current context."""
+    if issue.startswith(EXPORTER_ABSENT_IN):
+        return [issue[len(EXPORTER_ABSENT_IN):]]
+    if issue.startswith(EXPORTER_DOWN_IN):
+        return issue[len(EXPORTER_DOWN_IN):].rsplit(" (", 1)[0].split(", ")
+    return []
+
+
+def exporter_clusters(states: dict[str, bool], declared: set[str]) -> list[dict] | None:
+    """The per-cluster detail of the document, or None when there is nothing
+    per cluster to say (rows from at most one cluster and no `kind@cluster`
+    declaration). One entry per cluster seen or declared, `cluster` null for
+    the row with no `da_cluster`; `state` is `up`, `down`, `absent`, or
+    `unlabelled` — a declared cluster with no row of its own that the
+    unlabelled row counts as present for."""
+    named = declared - {""}
+    if not named and len(states) <= 1:
+        return None
+    detail = []
+    if "" in states:
+        detail.append({"cluster": None, "declared": False,
+                       "state": "up" if states[""] else "down"})
+    for cluster in sorted((set(states) | named) - {""}):
+        if cluster in states:
+            state = "up" if states[cluster] else "down"
+        else:
+            state = "unlabelled" if "" in states else "absent"
+        detail.append({"cluster": cluster, "declared": cluster in named, "state": state})
+    return detail
 
 
 def exit_code(result: dict) -> int:
@@ -592,7 +701,8 @@ def _check(tenant: str, prom_url: str, *, base: Path | None, chain: dict | None)
     skipped = []
 
     # 0. 資料庫類型：Pod 與 exporter 兩項只為 MariaDB 寫（本輪決策 N2）
-    kind, kind_err = tenant_expected_kind(tenant, prom_url)
+    declared: set[str] = set()   # where MariaDB is declared; see tenant_expected_kind
+    kind, kind_err = tenant_expected_kind(tenant, prom_url, declared)
     if kind_err:
         errors.append(f"{PROMETHEUS_FAILURE} ({prom_url})")
         reason = "expected exporters unknown: the Prometheus query for tenant_expected_exporter failed"
@@ -607,32 +717,55 @@ def _check(tenant: str, prom_url: str, *, base: Path | None, chain: dict | None)
         skipped = [{"check": "pod", "reason": reason},
                    {"check": "exporter", "reason": reason}]
 
+    per_cluster = None   # the document's `exporter_clusters`
+    pod_check = None     # the document's `pod_check`
     if is_mariadb:
-        # 1. 檢查 Pod 狀態
+        # 1. 檢查 Pod 狀態（判讀在 exporter 查詢之後：要先知道租戶是否跨叢集）
         pod_status = pod_phase(tenant)
-        if not pod_status:
-            errors.append("Pod not found")
-        elif pod_status != "Running":
-            errors.append(f"Pod status is {pod_status}")
 
         # 2. 檢查 Exporter (透過 Prometheus API)
+        states = None
         try:
             # By `tenant`, not `instance`: since #3680 the tenant-exporters job
             # keeps the real instance (<pod IP>:<port>), one series per pod —
             # healthy when every pod is (`min`), and the job is the one name
-            # the rule packs select (#3720).
+            # the rule packs select (#3720). And by cluster (ADR-006, #1200):
+            # `min by(tenant)` let one cluster's 1 stand for a cluster with no
+            # series at all, and named no cluster for a 0. A Prometheus that
+            # scraped the exporters itself has no `da_cluster` on them: one
+            # row, as before.
             up_results, up_err = query_prometheus(
-                prom_url, f'min by(tenant) (mysql_up{{job="{TENANT_EXPORTER_JOB}",tenant="{tenant}"}})')
+                prom_url, f'min by(tenant, {CLUSTER_IDENTITY_LABEL}) '
+                          f'({MARIADB_PRESENCE_METRIC}{{{EXPORTER_JOB_MATCHER},tenant="{tenant}"}})')
             if up_err:
-                errors.append(f"{PROMETHEUS_FAILURE} ({prom_url})")
-            elif up_results:
-                val = up_results[0].get("value", [None, None])[1]
-                if val != "1":
-                    errors.append("Exporter reports DOWN (mysql_up!=1)")
+                exporter_found = [f"{PROMETHEUS_FAILURE} ({prom_url})"]
             else:
-                errors.append("Exporter reports DOWN (mysql_up!=1)")
+                states = exporter_states(up_results)
+                exporter_found = []
         except Exception:
-            errors.append("Metrics check failed")
+            states, exporter_found = None, ["Metrics check failed"]
+        if states is not None:
+            exporter_found = exporter_issues(states, declared)
+            per_cluster = exporter_clusters(states, declared)
+
+        # The Pod check asks kubectl's current context — one cluster. For a
+        # tenant demonstrably in several (two or more clusters declared, or
+        # rows carrying two or more `da_cluster` values) the document says
+        # so, and "no Pod here" is not a finding about the tenant: the other
+        # clusters were never asked. ⛔ Not for one declared cluster, one
+        # labelled row or the unlabelled row: nothing there says the tenant
+        # is anywhere else, and a missing Pod stays the issue it was.
+        several = len(declared - {""}) > 1 or len(set(states or {}) - {""}) > 1
+        if several:
+            pod_check = {"scope": POD_CHECK_SCOPE, "phase": pod_status}
+        if not pod_status:
+            if several:
+                pod_check["note"] = POD_NOT_FOUND_ELSEWHERE
+            else:
+                errors.append("Pod not found")
+        elif pod_status != "Running":
+            errors.append(f"Pod status is {pod_status}")
+        errors.extend(exporter_found)
 
     # 3. 查詢運營模式 (Silent Mode / Maintenance)
     # #3133: a mode query not answered is not "normal" — the mode is unknown
@@ -712,6 +845,12 @@ def _check(tenant: str, prom_url: str, *, base: Path | None, chain: dict | None)
             result["inheritance_chain"] = _format_chain_summary(inheritance)
         if skipped:
             result["skipped"] = skipped
+    # #1200: only for a tenant in several clusters — otherwise the document
+    # is what it was.
+    if pod_check:
+        result["pod_check"] = pod_check
+    if per_cluster:
+        result["exporter_clusters"] = per_cluster
     return result
 
 

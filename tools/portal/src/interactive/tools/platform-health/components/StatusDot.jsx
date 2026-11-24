@@ -4,7 +4,7 @@ purpose: |
   Small colored dot indicating a component / tenant status. Extracted
   from platform-health.jsx (da-portal ROI refactor Wave 5b).
 
-  Design-token migration (ADR-014 / DEC-A): hardcoded Tailwind palette
+  Design-token migration (ADR-014 Option A): hardcoded Tailwind palette
   classes replaced with arbitrary-value `--da-color-*` references, per
   the threshold-heatmap.jsx pattern. Semantic mapping by VISUAL intent:
   healthy/normal → success (green), degraded/maintenance → warning

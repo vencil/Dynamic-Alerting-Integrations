@@ -10,97 +10,129 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./012-colorblind-hotfix-structured-severity-return.md)
 
-> This ADR preserves the decision context so the same pattern can be generalized
-> to other color-dependent tools (platform-demo mode badges, health dashboard tier badges, etc.).
-
 ## Status
 
-✅ **Accepted** (v2.7.0, 2026-04-16) — hotfix landed; subsequent runtime WCAG verification CI-gated.
+✅ **Accepted** (v2.7.0, 2026-04-16)
 
-## Background
-
-### Defect in Original Implementation
-
-In the `threshold-heatmap.jsx` v2.6.0 implementation, cell severity was expressed through a three-color palette
-(green-200 / yellow-200 / orange-200 / red-500). This violated **WCAG 1.4.1 Use of Color**: information was conveyed
-only through color, making it impossible for users with red-green color blindness to distinguish "medium" from "anomalous" values.
-
-### Why Hotfix Rather Than Full Migration
-
-1. Full palette-to-token migration (87 tailwind palette → 0) requires ~3 hours and would block the broader v2.7.0 design-token migration schedule
-2. WCAG 1.4.1 is a legal compliance risk (AA requirement), so we prioritize **remedying semantics** while **deferring color token migration**
-3. After the hotfix lands, threshold-heatmap's formal token migration remained a v2.7.0 closure task
-
-## Decision Drivers
-
-- Must simultaneously satisfy both "visual symbols" and "screen reader" accessibility channels
-- A single callsite (cell render) must be able to retrieve color class / symbol / tier label in one call, avoiding 3 parallel if-else trees
-- Future tools (platform-demo badges) can directly re-import this helper
+Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged.
 
 ## Decision
 
-Extract the cell severity determination logic into a `getCellSeverity(value, stats)` function that **returns a structured object**:
+**Each threshold-heatmap cell expresses its severity through three channels at once: color, a Unicode symbol, and a text label for screen readers.** All three are decided by one function, `getCellSeverity`, which returns a structured object, instead of three parallel if-else trees on the render side.
 
-```jsx
-function getCellSeverity(value, stats) {
-  if (value > stats.p95) {
+[WCAG 1.4.1 "Use of Color"](https://www.w3.org/WAI/WCAG21/Understanding/use-of-color.html) (Level A) requires that information not be conveyed by color alone. The symbol lets colorblind users tell the tiers apart on screen; the text label lets screen readers announce the tier; color is reinforcement only.
+
+### Example: cell value → tier, symbol, announced text
+
+`getCellSeverity(value, min, max, percentile95)` first checks whether the value is above P95 (the 95th percentile of all cell values); otherwise it tiers by the value's ratio within min–max, and returns `{ colorClass, symbol, tier }`:
+
+```jsx {.quote src="tools/portal/src/interactive/tools/threshold-heatmap.jsx"}
+function getCellSeverity(value, min, max, percentile95) {
+  if (value === null || value === undefined) {
+    return { colorClass: 'bg-[color:var(--da-color-surface)]', symbol: '', tier: 'none' };
+  }
+
+  // Flag outliers first (>P95)
+  if (value > percentile95) {
     return {
-      colorClass: 'bg-red-500 text-white',
-      symbol: '❌',
+      colorClass: 'bg-[color:var(--da-color-error)] text-[color:var(--da-color-card-bg)] font-bold',
+      symbol: '\u274C', // ❌
       tier: 'outlier',
-      ariaLabel: t('Outlier', 'Outlier'),
     };
   }
-  if (value > stats.mean + stats.stddev * 2) {
-    return { colorClass: 'bg-orange-200 text-orange-900', symbol: '⚠⚠', tier: 'high', ariaLabel: t('High', 'High') };
-  }
-  if (value > stats.mean) {
-    return { colorClass: 'bg-yellow-200 text-yellow-900', symbol: '⚠', tier: 'medium', ariaLabel: t('Medium', 'Medium') };
-  }
-  return { colorClass: 'bg-green-200 text-green-900', symbol: '✓', tier: 'low', ariaLabel: t('Low', 'Low') };
-}
+
+  const ratio = max === min ? 0 : (value - min) / (max - min);
+
+  if (ratio < 0.33) {
+// ...
 ```
 
-### Rendering Side
+Running the function with min = 10, max = 90, P95 = 80, together with `tierLabel(tier)`, which turns `tier` into Chinese/English text, gives:
 
-- cell outer: `<td aria-label={ariaLabel} className={colorClass}>`
-- cell inner: `<span aria-hidden="true">{symbol}</span>{value}`
+| Cell value | Ratio | `tier` | Symbol | Announced tier text |
+|---|---|---|---|---|
+| 20 | 0.125 | `low` | ✓ | 低 / Low |
+| 45 | 0.44 | `medium` | ⚠ | 中 / Medium |
+| 70 | 0.75 | `high` | ⚠⚠ | 高 / High |
+| 85 | — | `outlier` | ❌ | 異常值 / Outlier |
+| no data | — | `none` | (none) | (none) |
 
-This design ensures:
-- **Screen readers** announce the `ariaLabel` ("Outlier 45.2"), preventing double-announcement of the symbol
-- **Colorblind users** see a Unicode symbol instead of relying solely on color
-- **Sighted users** see familiar traffic-light colors + symbol redundancy
+The render side puts the text label on the `<td>` and hides the symbol with `aria-hidden="true"`, so screen readers announce the label only and do not read the symbol as well:
 
-## Rejected Alternatives
+```jsx {.quote src="tools/portal/src/interactive/tools/threshold-heatmap.jsx"}
+                        const { colorClass, symbol, tier } = getCellSeverity(
+                          value, stats.min, stats.max, stats.p95
+                        );
+                        const valueText = value ? value.toFixed(0) : '—';
+                        const tierText = tierLabel(tier);
+                        const ariaLabel = value
+                          ? `${tenant} ${metric}: ${value.toFixed(2)}${tierText ? ', ' + tierText : ''}`
+                          : `${tenant} ${metric}: ${t('無資料', 'no data')}`;
+// ...
+                            aria-label={ariaLabel}
+                            role="gridcell"
+                          >
+                            {symbol && (
+                              <span aria-hidden="true" className="mr-1 opacity-90">{symbol}</span>
+                            )}
+                            {valueText}
+```
 
-| Option | Rejection Reason |
+So a cell with value 70 shows `⚠⚠70` on screen, and a screen reader announces "`<tenant> <metric>: 70.00, High`" (「高」 in the Chinese UI).
+
+min, max and P95 are computed over **all** cells on screen together (the selected tenants × every metric of the selected Rule Packs), not per metric; the tool shows sample data generated from Rule Pack defaults plus random variance.
+
+## Background
+
+In v2.6.0, threshold-heatmap expressed severity only through cell background color (green / yellow / orange / red). That violated WCAG 1.4.1: users with red-green color blindness could not tell "medium" from "outlier", and screen-reader users got no tier information at all.
+
+The fix was deliberately split in two: first remedy the semantics (add symbols and text labels), and move colors to design tokens later as separate work, because the latter was much larger in scope while the former was a Level A compliance gap. The token migration has since been completed; the decision in this ADR is unaffected.
+
+Requirements at design time:
+
+- Both the visual (symbol) and screen-reader (text) channels must be served.
+- The render side gets color, symbol and tier in one call, without maintaining three parallel decision trees.
+- Symbols and colors are decoupled, so the symbols can later be swapped (for example ▲ ● ■) without touching colors.
+
+## Consequences and Known Limitations
+
+### What we get
+
+- Every cell with a value has a non-color representation of its tier: the on-screen symbol and the announced tier text.
+- The "symbol + text, never color alone" pattern has been extended elsewhere, each with its own test:
+  - Grafana dashboard `k8s/03-monitoring/fleet-threshold-distribution.json`, its sample-adequacy and Outliers panels; `tests/dx/test_fleet_threshold_dashboard.py` checks that every color tier has a symbol.
+  - Grafana dashboard `k8s/03-monitoring/federation-revocation-dashboard.json`, its stat panels; `tests/dx/test_federation_revocation_dashboard.py` makes the same check.
+  - The portal's `recipe-builder.jsx` shows its verdicts as a shape glyph (`aria-hidden`) + word + color.
+- What was extended is the pattern, not the function: `getCellSeverity` is not exported and is currently used only inside `threshold-heatmap.jsx`.
+
+### Acceptance and its tests
+
+- `colorblind-safe severity symbols are rendered (ADR-012)` in `tests/e2e/threshold-heatmap.spec.ts`: after the tool loads, at least one severity symbol (✓ / ⚠ / ❌) must be on screen. It checks only that symbols exist, not the mapping from value to tier; the legend itself contains ✓, so it passes even if no cell renders a symbol.
+- The same spec's smoke check runs axe-core's WCAG 2 A / AA rules: zero Critical violations, at most one non-Critical violation tolerated.
+- These e2e tests run on every PR in `Smoke Tests (Chromium)`.
+- The tier boundaries of `getCellSeverity` have no unit test.
+
+### Known limitations
+
+1. **Some cells have insufficient text contrast in the light theme.** Computed from the token values in `docs/assets/design-tokens.css`: the text of medium and high cells (`--da-color-warning` on `--da-color-warning-soft`) is about 2.1:1, and outlier cells (white on `--da-color-error`) about 3.8:1, both below the 4.5:1 AA requires for normal text. The same file already has `--da-color-warning-text` designed for this (annotated 6.1:1), which the cells do not use yet. In the dark theme the same pairs are about 9.0:1 and 5.3:1 (low cells are above 5:1 in both themes). The e2e axe check runs only the default theme and does not cover the dark theme.
+2. **Medium and high share the same background** (both the warning token); they are told apart only by the symbols ⚠ and ⚠⚠ and by the announced text.
+3. **The legend and the actual tiers disagree.** The legend says "High (66–85%)", but cells with a ratio of 0.85 or more that are not above P95 are also `high`.
+4. **A cell whose value is 0 displays inconsistently.** The render side tests `value ? … : …` for "has data", so 0 shows as `—` and is announced as "no data", yet `getCellSeverity` still treats it as a value and draws a ✓; 0 is also skipped when computing min / max / P95.
+5. **A new call site must uphold two things itself**: put the symbol in an element with `aria-hidden="true"`, and put the tier text where it will be announced. Without the former, a screen reader reads ⚠⚠ as "warning sign" twice; without the latter, the screen reader gets no tier.
+
+## Alternatives Considered
+
+| Option | Why not chosen |
 |---|---|
-| Add `aria-label` only, no symbol | Colorblind users cannot distinguish on screen |
-| Add symbol only, no `aria-label` | Screen readers announce "Warning Sign Warning Sign" (⚠⚠ dual-character) — poor UX |
-| Use CSS `::before` to insert symbol | Some screen readers don't announce ::before content; CSS pseudo-elements cannot follow React state |
-| Use shapes (square / triangle / circle) | Requires SVG or icon library; will break during future theming |
-
-## Consequences
-
-### Positive
-
-- WCAG 1.4.1 **semantic compliance** achieved (hotfix level; runtime verification CI-gated)
-- `getCellSeverity` helper reusable across other severity-badge tools
-- Symbols and colors decoupled, can be swapped independently (e.g., use ▲ ● ■ instead)
-
-### Negative / Risks
-
-1. **Cross-platform font inconsistency**: ⚠⚠ width varies between Windows Consolas and macOS SF Mono, causing table misalignment. **Mitigation**: During formal token migration, fix monospace font stack or switch to fixed-width Unicode blocks.
-2. **Screen reader announcement of `⚠⚠`**: NVDA / VoiceOver announces "Warning Sign Warning Sign". **Mitigation**: This hotfix relies on `ariaLabel` to override, but future callsites placing symbols directly will need reminding.
-3. **Dark mode contrast unverified**: Hotfix uses Tailwind palette (not migrated to tokens), which may fail contrast checks under `[data-theme="dark"]`. **Mitigation**: Sync contrast calculations during formal token migration.
-
-### Further Tracking
-
-- Runtime WCAG validation CI gate (live since v2.7.0)
-- threshold-heatmap palette → token formal migration (v2.7.0 closure)
+| Add `aria-label` only, no symbol | Colorblind users still cannot tell the tiers apart on screen |
+| Add symbol only, no `aria-label` | Screen readers read the symbol literally (⚠⚠ as "warning sign" twice) and cannot announce the tier name |
+| Insert the symbol with CSS `::before` | Some screen readers do not announce `::before` content; CSS pseudo-elements also cannot follow React state directly |
+| Use shapes (square / triangle / circle) | Needs SVG or an icon library, and theming then has to handle the shapes' colors separately |
 
 ## Related
 
-- WCAG 2.1 — Success Criterion 1.4.1 Use of Color (Level A)
-- `tools/portal/src/interactive/tools/threshold-heatmap.jsx`
-- [ADR-015: `[data-theme]` Single-track Dark Mode](015-data-theme-single-track-dark-mode.en.md) — prerequisite for downstream dark-mode contrast verification
+- [WCAG 2.1 — Understanding 1.4.1 Use of Color](https://www.w3.org/WAI/WCAG21/Understanding/use-of-color.html)
+- Implementation: `tools/portal/src/interactive/tools/threshold-heatmap.jsx` (`getCellSeverity`, `tierLabel`)
+- Tests: `tests/e2e/threshold-heatmap.spec.ts`
+- [ADR-014: wizard.jsx design token migration](014-wizard-arbitrary-value-token-migration.en.md) — the migration approach for the tokens the cell colors use
+- [ADR-015: `[data-theme]` Single-track Dark Mode](015-data-theme-single-track-dark-mode.en.md) — how the dark theme is switched

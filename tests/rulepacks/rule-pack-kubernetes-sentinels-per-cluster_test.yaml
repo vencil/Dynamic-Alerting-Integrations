@@ -62,7 +62,7 @@
 #       instance / prometheus_replica) → one alert per cluster, da_cluster only.
 #
 # The premise both rules rest on, and what happens when it is broken (ADR-006
-# "known limits"): the two recordings of one cluster carry the same da_cluster.
+# "Known limitations of one tenant in several clusters"): the two recordings of one cluster carry the same da_cluster.
 #   XD1 ⚠ LIMITATION: running pods labelled east, volume-stats with no
 #       da_cluster → fires for east although the tenant is fine (main: silent).
 #   XD2 ⚠ LIMITATION: one cluster reached twice — a federated path (east) and

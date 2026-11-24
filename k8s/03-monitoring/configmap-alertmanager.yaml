@@ -24,7 +24,7 @@ data:
       repeat_interval: 12h
       receiver: "default"
       routes:
-        # ── ADR-025 D1 / #838: Watchdog liveness (MUST be routes[0]) ─────
+        # ── ADR-025 §1 / #838: Watchdog liveness (MUST be routes[0]) ─────
         # The always-firing Watchdog alert (configmap-rules-platform.yaml) ships
         # to an operator-supplied EXTERNAL dead-man's-switch on a fixed cadence.
         # This MUST be the FIRST route (highest priority) so no broader earlier
@@ -109,7 +109,7 @@ data:
         # 測試環境 — 空 receiver，只記 log 不發通知
         # (移除 localhost:5001 webhook 避免 Connection refused 噪音)
       - name: "watchdog-heartbeat"
-        # ADR-025 D1 / #838: ships the always-firing Watchdog beat to an EXTERNAL
+        # ADR-025 §1 / #838: ships the always-firing Watchdog beat to an EXTERNAL
         # dead-man's-switch. The DMS webhook URL embeds a token/UUID → it is a
         # SECRET and MUST NOT be inlined here (would trip secret-scan L1/L2 and
         # leak). url_file points at a mounted Secret (secret-watchdog-heartbeat.yaml

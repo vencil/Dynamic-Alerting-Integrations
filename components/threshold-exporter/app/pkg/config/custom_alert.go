@@ -658,7 +658,8 @@ func recipeShape(spec CustomAlertSpec) (customAlertShape, error) {
 		// ADR-031: the burn windows (1h/5m fast, 6h/30m slow) are FIXED recipe
 		// semantics — no window (a stray authored `window` is ignored, like
 		// forecast). `objective` replaces `threshold`; objective/slo_period are
-		// validated here (ADR-029 dual-side duty) but never enter the slug.
+		// validated here (ADR-029: tenant input is validated before it reaches
+		// the served thresholds or the rules) but never enter the slug.
 		if err := validateSloObjective(spec.Objective); err != nil {
 			return sh, err
 		}

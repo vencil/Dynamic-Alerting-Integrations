@@ -1,5 +1,5 @@
-// Package confedit is the one writer of conf.d (ADR-036 §2 "寫 conf.d：Go 是唯一
-// 的寫者", §4 "批次 patch 的合併"): edits on a file's yaml.v3 node tree, the
+// Package confedit is the one writer of conf.d (ADR-036 §2 "寫 conf.d 檔：只有 Go
+// 一個寫者", §4 "批次 patch 的合併"): edits on a file's yaml.v3 node tree, the
 // re-encode, and the invariant every such write is held to — outside what
 // the edit replaces, the result is the same written YAML as the file it
 // replaces.
