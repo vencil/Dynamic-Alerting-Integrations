@@ -75,15 +75,25 @@ class TestParsePrometheusText:
 class TestDetectDbType:
     def test_postgres(self):
         raw = "pg_stat_user_tables_n_tup_ins 1234\n"
-        assert dim.detect_db_type(raw) == "pg"
+        assert dim.detect_db_type(raw) == "postgresql"
 
     def test_oracle(self):
         raw = "oracledb_tablespace_used 100\n"
-        assert dim.detect_db_type(raw) == "oracledb"
+        assert dim.detect_db_type(raw) == "oracle"
 
     def test_mysql(self):
         raw = "mysql_global_status_threads_connected 5\n"
-        assert dim.detect_db_type(raw) == "mysql"
+        assert dim.detect_db_type(raw) == "mariadb"
+
+    def test_clickhouse_camelcase(self):
+        # #4270: ClickHouse's /metrics names are CamelCase.
+        raw = "# TYPE ClickHouseMetrics_TCPConnection gauge\nClickHouseMetrics_TCPConnection 3\n"
+        assert dim.detect_db_type(raw) == "clickhouse"
+
+    def test_a_prefix_inside_another_name_is_not_a_match(self):
+        # #4270: the hand list matched substrings (`es_` in `nodes_total`).
+        raw = 'kube_nodes_total{x="pg_up"} 1\n'
+        assert dim.detect_db_type(raw) == "unknown"
 
     def test_unknown(self):
         raw = "custom_metric_value 42\n"

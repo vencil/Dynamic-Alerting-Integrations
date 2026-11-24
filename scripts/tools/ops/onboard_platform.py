@@ -75,7 +75,6 @@ from _lib_python import (  # noqa: E402
     output_dir_type,
     write_operator_output_or_die,
     RECEIVER_TYPES,
-    METRIC_PREFIX_DB_MAP,
 )
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
@@ -92,7 +91,7 @@ _OUTPUT_FLAG = "-o/--output-dir"
 # The `<base>_critical` suffix, from the module that owns it for every other
 # `_defaults.yaml` producer (#1218). Re-spelling the literal here is how this
 # file came to route the critical tier into the wrong section in the first place.
-from _registry_lib import CRITICAL_SUFFIX  # noqa: E402
+from _registry_lib import CRITICAL_SUFFIX, pack_of_metric  # noqa: E402
 
 # Conditionally import migrate_rule AST functions
 try:
@@ -1606,15 +1605,14 @@ def _build_onboard_hints(phase1_results, phase2_results, phase3_results):
             # Candidates come from extract_threshold_candidates(): the metric
             # is `metric_key` (None when unparseable). Reading "alert"/"record"
             # here — keys a candidate never has — left db_types always empty
-            # (issue 1381). Prefix match: a substring test would let "es_"
-            # hit e.g. "node_bytes_total".
-            metric = (c.get("metric_key") or "").lower()
-            for prefix, db_type in METRIC_PREFIX_DB_MAP.items():
-                if metric.startswith(prefix):
-                    # Associate with all known tenants
-                    for t in hints["tenants"]:
-                        hints["db_types"].setdefault(t, set()).add(db_type)
-                    break
+            # (issue 1381). The kind is the exporter kind whose registry
+            # `metric_prefixes` the metric is under (#4270), case aside.
+            db_type = pack_of_metric(c.get("metric_key") or "", ignore_case=True,
+                                     kinds_only=True)
+            if db_type:
+                # Associate with all known tenants
+                for t in hints["tenants"]:
+                    hints["db_types"].setdefault(t, set()).add(db_type)
 
         # Convert sets to lists for JSON serialization
         for t in hints["db_types"]:

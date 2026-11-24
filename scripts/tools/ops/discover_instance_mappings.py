@@ -56,6 +56,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, encode_json)
 from _lib_io import write_operator_output_or_die  # noqa: E402  (#3107 ③b)
 from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③b)
+import _registry_lib  # noqa: E402  (#4270: a metric's kind, from the registry's metric_prefixes)
 
 _LANG = detect_cli_lang()
 
@@ -81,20 +82,6 @@ PARTITION_LABEL_CANDIDATES: list[str] = [
     "container_name",  # Generic
 ]
 
-# Metric name prefixes that hint at database-level metrics
-DB_METRIC_PREFIXES: list[str] = [
-    "oracle_", "oracledb_",
-    "pg_", "postgres_",
-    "mysql_", "mysqld_",
-    "mongodb_", "mongo_",
-    "redis_",
-    "mssql_",
-    "db2_",
-    "clickhouse_",
-    "kafka_", "kafka_topic_",
-    "rabbitmq_",
-    "elasticsearch_", "es_",
-]
 
 
 def parse_prometheus_text(raw: str) -> dict[str, set[str]]:
@@ -129,11 +116,18 @@ def parse_prometheus_text(raw: str) -> dict[str, set[str]]:
 
 
 def detect_db_type(raw: str) -> str:
-    """Heuristically detect database type from metric names."""
-    line_sample = raw[:8000].lower()
-    for prefix in DB_METRIC_PREFIXES:
-        if prefix in line_sample:
-            return prefix.rstrip('_')
+    """The exporter kind of the first sample whose metric name is under a
+    kind's registry `metric_prefixes` (#4270: a hand list here matched
+    substrings and wrote ClickHouse as `clickhouse_`), case aside; "unknown"
+    when none is."""
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name = re.split(r"[{\s]", line, maxsplit=1)[0]
+        kind = _registry_lib.pack_of_metric(name, ignore_case=True, kinds_only=True)
+        if kind:
+            return kind
     return "unknown"
 
 

@@ -285,6 +285,9 @@ def build_registry_doc(
             # The selectors whose presence means the pack's exporter answers
             # (#4097): a pack that has them is an `_expected_exporters` kind.
             packs[pack_name]["presence"] = list(pack["presence"])
+        if pack.get("metric_prefixes"):
+            # The exporter's metric namespace (#4270).
+            packs[pack_name]["metric_prefixes"] = list(pack["metric_prefixes"])
         if "undeclared_notice" in pack:
             packs[pack_name]["undeclared_notice"] = pack["undeclared_notice"]
         for key, info in (pack.get(THRESHOLDS) or {}).items():
@@ -775,7 +778,7 @@ def arming_notes_zh(entry: dict) -> list[str]:
 
 #: Per-pack fields of scaffold's RULE_PACKS that come from the registry.
 _PACK_FIELDS = ("display", "exporter", "default_on", "rule_pack_file", "queries",
-                "presence", "undeclared_notice")
+                "presence", "metric_prefixes", "undeclared_notice")
 #: Per-key fields of scaffold's RULE_PACKS that come from the registry.
 _KEY_FIELDS = ("value", "unit", "desc", "metric_class", "dimensions",
                "value_counterexample")
@@ -789,7 +792,8 @@ _RULE_PACKS_MODULE_HEADER = (
     '"""GENERATED from rule-packs/threshold-registry.yaml — DO NOT EDIT.\n'
     "\n"
     "The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its\n"
-    "display/exporter/default_on/rule_pack_file(/queries/presence/undeclared_notice)\n"
+    "display/exporter/default_on/rule_pack_file(/queries/presence/metric_prefixes/\n"
+    "undeclared_notice)\n"
     "and its `thresholds` (registry key order), BUILTIN_DEFAULT_KEYS: the keys the\n"
     "readers build in with a platform value (`arming: default`, the same derivation\n"
     "as builtin_defaults_gen.go, #3832), and EXPECTED_EXPORTER_KINDS: the packs with\n"
@@ -1153,6 +1157,53 @@ def undeclared_notice_kinds(doc: dict) -> list[str]:
     packs = doc.get("packs") or {}
     return [k for k in pack_presence(doc)
             if packs[k].get("undeclared_notice") is not False]
+
+
+def generated_packs() -> dict:
+    """THRESHOLD_PACKS of the generated module (``_rule_packs_generated``):
+    the registry's packs where no repo tree is (the da-tools image ships the
+    module beside this file, not the YAML)."""
+    if _THIS_DIR not in sys.path:
+        sys.path.insert(0, _THIS_DIR)
+    import _rule_packs_generated  # noqa: PLC0415  (a data module beside this file)
+    return _rule_packs_generated.THRESHOLD_PACKS
+
+
+def pack_metric_prefixes(packs: "dict | None" = None) -> "dict[str, tuple[str, ...]]":
+    """⛔ THE one answer to "whose exporter emits metrics named like this"
+    (#4270): pack -> its `metric_prefixes`, every pack that declares them, in
+    the registry's order. *packs* defaults to ``generated_packs()``."""
+    packs = generated_packs() if packs is None else packs
+    return {str(name): tuple(meta["metric_prefixes"]) for name, meta in packs.items()
+            if isinstance(meta, dict) and meta.get("metric_prefixes")}
+
+
+def tenant_exporter_prefixes(packs: "dict | None" = None) -> "tuple[str, ...]":
+    """The prefixes of every exporter KIND's metrics (a pack with `presence:`):
+    what the scrape gate and the split validator take as a tenant exporter's
+    metric. A pack without presence (kubernetes: cAdvisor and
+    kube-state-metrics, scraped by the platform) is not one."""
+    packs = generated_packs() if packs is None else packs
+    return tuple(p for name, prefixes in pack_metric_prefixes(packs).items()
+                 if packs[name].get("presence") for p in prefixes)
+
+
+def pack_of_metric(metric: str, packs: "dict | None" = None, *,
+                   ignore_case: bool = False, kinds_only: bool = False) -> "str | None":
+    """The pack whose `metric_prefixes` *metric* is under, or None.
+    *ignore_case* for the onboarding heuristics, which read a customer's
+    metric names as they were written; *kinds_only* to answer with an
+    exporter kind (a pack with `presence:`) only. Prefixes do not overlap
+    (pinned by tests/rulepacks/test_exporter_metric_prefixes.py), so the
+    answer is one."""
+    packs = generated_packs() if packs is None else packs
+    name = metric.lower() if ignore_case else metric
+    for pack, prefixes in pack_metric_prefixes(packs).items():
+        if kinds_only and not packs[pack].get("presence"):
+            continue
+        if name.startswith(tuple(p.lower() if ignore_case else p for p in prefixes)):
+            return pack
+    return None
 
 
 def presence_problems(doc: dict) -> list[str]:

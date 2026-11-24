@@ -87,6 +87,7 @@ except ImportError:
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error, partial_answer)
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
+import _registry_lib  # noqa: E402  (#4270: the exporter kinds' metric prefixes)
 
 
 # ─ I18n Fallback ────────────────────────────────────────────────────────
@@ -235,7 +236,7 @@ def extract_recording_outputs(rules: List[Dict[str, Any]]) -> Set[str]:
 #     `tenant`) IS tenant-labeled → federated → legal on central. This covers the
 #     DB liveness / topology family every pack's *Down / *ExporterAbsent /
 #     *NoPrimary alert depends on: bare `up`, and the db-exporter raws
-#     (mysql_/mongodb_/pg_/redis_/oracledb_/kafka_/clickhouse_/rabbitmq_ …) —
+#     (the exporter kinds' `metric_prefixes` in the threshold registry) —
 #     INCLUDING each family's own liveness gauge (`mysql_up`, `pg_up`, …), which
 #     is admitted by its family prefix like every other raw of that family, NOT
 #     by its name ending in `_up` (TRK-353; see _is_external_pipeline_input).
@@ -271,11 +272,10 @@ _PLATFORM_CONFIG_PREFIXES = ("user_",)
 # Deliberately EXCLUDES kube_/kubelet_ (namespace-labeled → not federated). A new
 # per-tenant exporter that reads raw on central would be added here; a new
 # kube_/kubelet_ on central is a bug caught by KNOWN_CENTRAL_RAW_EXEMPTIONS.
-_FEDERATED_EXPORTER_PREFIXES = (
-    "mysql_", "mongodb_", "pg_", "redis_", "oracledb_",
-    "kafka_", "clickhouse_", "rabbitmq_", "db2_", "elasticsearch_",
-    "jvm_", "nginx_",
-)
+# Read from the registry's `metric_prefixes` of every exporter kind (#4270):
+# a hand copy here wrote ClickHouse as `clickhouse_`, which no ClickHouse
+# metric is named.
+_FEDERATED_EXPORTER_PREFIXES = _registry_lib.tenant_exporter_prefixes()
 
 
 # query-exporter's built-in metrics (#3833): served by every query-exporter a

@@ -26,6 +26,13 @@
 # tenant-config schema 的 enum、liveness 規則的 presence 運算式
 # （scripts/tools/_lib_exporter_presence.py --write）都由這裡生成或被雙向測試釘住。
 # kubernetes 沒有（不是租戶自己跑的 exporter）。
+# packs.<pack>.metric_prefixes（#4270）：這個 pack 的 exporter 的指標命名空間（名稱前綴）。
+# 帶 presence 的 pack 必寫；它們的聯集就是「租戶 exporter 的指標」（scrape gate 與 split
+# 驗證器共用的判定），onboarding 的啟發式工具也從這裡推 pack。ClickHouse 寫 `ClickHouse`：
+# 伺服器內建的 /metrics 以 ClickHouseMetrics_／ClickHouseProfileEvents_／ClickHouseAsyncMetrics_
+# 等命名（src/Server/PrometheusMetricsWriter.cpp）。雙向由 tests/rulepacks/
+# test_exporter_metric_prefixes.py 釘住：pack 的規則讀到的原始指標都落在自家前綴內，宣告的
+# 每個前綴也都有自家規則或 presence 讀到。
 # packs.<pack>.undeclared_notice: false：TenantExporterUndeclared 不點名這個 kind
 # （jvm：很多應用順帶吐 jvm_*，不代表租戶打算跑一支 JVM exporter）；仍然可以宣告，
 # 宣告了 TenantExporterAbsent 就照管。只能寫 false，只能寫在帶 presence 的 pack 上。
@@ -90,11 +97,13 @@ packs:
     exporter: cAdvisor + kube-state-metrics
     default_on: true
     rule_pack_file: rule-packs/rule-pack-kubernetes.yaml
+    metric_prefixes: [container_, kube_, kubelet_]
   postgresql:
     display: PostgreSQL (postgres_exporter)
     exporter: prometheus-community/postgres_exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-postgresql.yaml
+    metric_prefixes: [pg_]
     presence:
       - pg_up
   mariadb:
@@ -102,6 +111,7 @@ packs:
     exporter: prom/mysqld-exporter or Percona
     default_on: true
     rule_pack_file: rule-packs/rule-pack-mariadb.yaml
+    metric_prefixes: [mysql_]
     presence:
       - mysql_up
   redis:
@@ -109,6 +119,7 @@ packs:
     exporter: oliver006/redis_exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-redis.yaml
+    metric_prefixes: [redis_]
     presence:
       - redis_up
   mongodb:
@@ -116,6 +127,7 @@ packs:
     exporter: percona/mongodb_exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-mongodb.yaml
+    metric_prefixes: [mongodb_]
     presence:
       - mongodb_up
   elasticsearch:
@@ -123,6 +135,7 @@ packs:
     exporter: justwatchcom/elasticsearch_exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-elasticsearch.yaml
+    metric_prefixes: [elasticsearch_]
     presence:
       - elasticsearch_exporter_build_info
   oracle:
@@ -130,6 +143,7 @@ packs:
     exporter: albertodonato/query-exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-oracle.yaml
+    metric_prefixes: [oracledb_]
     queries: rule-packs/exporters/oracle.yaml
     presence:
       - 'query_interval{query="oracle_liveness"}'
@@ -138,6 +152,7 @@ packs:
     exporter: albertodonato/query-exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-db2.yaml
+    metric_prefixes: [db2_]
     queries: rule-packs/exporters/db2.yaml
     presence:
       - 'query_interval{query="db2_liveness"}'
@@ -146,6 +161,7 @@ packs:
     exporter: ClickHouse built-in Prometheus endpoint
     default_on: false
     rule_pack_file: rule-packs/rule-pack-clickhouse.yaml
+    metric_prefixes: [ClickHouse]
     presence:
       - ClickHouseMetrics_TCPConnection
   kafka:
@@ -153,6 +169,7 @@ packs:
     exporter: danielqsj/kafka-exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-kafka.yaml
+    metric_prefixes: [kafka_]
     presence:
       - kafka_brokers
   rabbitmq:
@@ -160,6 +177,7 @@ packs:
     exporter: kbudde/rabbitmq_exporter or built-in Prometheus plugin
     default_on: false
     rule_pack_file: rule-packs/rule-pack-rabbitmq.yaml
+    metric_prefixes: [rabbitmq_]
     presence:
       - rabbitmq_up
       - rabbitmq_identity_info
@@ -168,6 +186,7 @@ packs:
     exporter: prometheus/jmx_exporter or Spring Boot Actuator
     default_on: false
     rule_pack_file: rule-packs/rule-pack-jvm.yaml
+    metric_prefixes: [jvm_]
     presence:
       - jvm_memory_used_bytes
       - jvm_memory_bytes_used
@@ -177,6 +196,7 @@ packs:
     exporter: nginxinc/nginx-prometheus-exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-nginx.yaml
+    metric_prefixes: [nginx_]
     presence:
       - nginx_up
 keys:
