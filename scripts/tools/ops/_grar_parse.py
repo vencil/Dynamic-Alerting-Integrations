@@ -1164,7 +1164,7 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         print(f"ERROR: {config_dir_problem.message}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # #2326 (ADR-016 "Amendment 2026-09-28", ADR-017 Decision 9): this reader walks the WHOLE
+    # #2326 (ADR-016 §Decision item 3, ADR-017 Decision 9): this reader walks the WHOLE
     # tree, with the walker every other reader of the threshold plane uses
     # (`list_config_tree`: hidden directories pruned, directory symlinks
     # reported). Until #2326 it was flat — a tenant in a subdirectory got no

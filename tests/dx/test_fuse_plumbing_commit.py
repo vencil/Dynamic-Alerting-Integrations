@@ -543,3 +543,106 @@ def test_plumbing_reads_the_branch_before_it_makes_the_commit(tmp_path: Path, mo
     (repo / "f.txt").write_text("x\n", encoding="utf-8")
     assert mod.main(["--force-plumbing", "-m", "test: x", "f.txt"]) == 0
     assert seen.index("symbolic-ref") < seen.index("commit-tree")
+
+
+# ── #4231: `git commit` streams git's and the hooks' output to stderr ──────
+# It runs every pre-commit hook for up to COMMIT_TIMEOUT_S; captured, the
+# terminal stayed silent all that time and a passing run showed nothing.
+
+def test_a_passing_hooks_output_is_shown(tmp_path: Path) -> None:
+    repo = _init_tmp_repo(tmp_path)
+    _hook(repo, "#!/bin/sh\necho 'hook: lint ran' >&2\necho 'hook: on stdout'\nexit 0\n")
+    proc = _auto(repo)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr.count("hook: lint ran") == 1, proc.stderr
+    assert proc.stderr.count("hook: on stdout") == 1, proc.stderr
+    # git's own summary line goes to stderr too: stdout is the tool's line.
+    assert proc.stdout.splitlines() == [proc.stdout.strip()], proc.stdout
+    assert proc.stdout.startswith("committed: "), proc.stdout
+
+
+def test_a_failing_hooks_output_is_shown_once_above_the_error(tmp_path: Path) -> None:
+    repo = _init_tmp_repo(tmp_path)
+    _hook(repo, "#!/bin/sh\necho 'lint: forbidden content' >&2\nexit 1\n")
+    proc = _auto(repo)
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.count("forbidden content") == 1, proc.stderr
+    assert proc.stderr.index("forbidden content") < proc.stderr.index("error: "), proc.stderr
+    assert "the output above says which" in proc.stderr, proc.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="select() on a pipe is POSIX")
+def test_the_hooks_output_shows_while_the_hook_still_runs(tmp_path: Path) -> None:
+    """The hook prints, then waits for a file this test creates only once it
+    has read that line: captured output would arrive only after the hook
+    gave up waiting and exited."""
+    import select
+    import time
+    repo = _init_tmp_repo(tmp_path)
+    go = tmp_path / "go"
+    _hook(repo, "#!/bin/sh\necho 'hook: started' >&2\n"
+                f"i=0; while [ ! -e '{go}' ]; do sleep 0.05; i=$((i+1)); "
+                "[ $i -gt 200 ] && exit 3; done\nexit 0\n")
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    proc = subprocess.Popen(  # subprocess-timeout: ignore — bounded by the deadline and wait() below
+        [sys.executable, str(_SCRIPT), "--auto", "-m", "test: x", "f.txt"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=repo)
+    seen, early = b"", False
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([proc.stderr], [], [], 0.2)
+        if ready:
+            chunk = os.read(proc.stderr.fileno(), 4096)
+            if not chunk:
+                break
+            seen += chunk
+        if b"hook: started" in seen:
+            early = proc.poll() is None
+            go.touch()
+            break
+    out, err = proc.communicate(timeout=60)
+    assert early, (seen + err).decode("utf-8", "replace")
+    assert proc.returncode == 0, (seen + err).decode("utf-8", "replace")
+
+
+def test_a_closed_stderr_still_commits_and_says_so(tmp_path: Path) -> None:
+    """#4231 review: with `2>&-` fd 2 is a read-only null device; git handed
+    that fd fails its own writes and ends 128 after the commit landed — and
+    a hook that checks its own stderr write fails the commit outright."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    _hook(repo, "#!/bin/sh\necho 'hook: ran' >&2 || exit 5\nexit 0\n")
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    proc = subprocess.run(  # subprocess-timeout: ignore
+        ["sh", "-c", f'exec "{sys.executable}" "{_SCRIPT}" --auto -m "test: x" f.txt 2>&-'],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=repo)
+    assert proc.returncode == 0, proc.stdout
+    assert proc.stdout.startswith("committed: "), proc.stdout
+    assert _head(repo) != before
+
+
+def test_a_git_failure_after_the_ref_moved_is_a_landed_commit(tmp_path: Path, monkeypatch, capsys) -> None:
+    """#4231 review: git can end non-zero after the commit landed (a write to
+    a stderr whose reader left). HEAD moved: 0 with a warning, never "no
+    commit", which a retry would turn into a second commit."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    _hook(repo, "#!/bin/sh\nexit 0\n")
+    mod = _load_module()
+    real = mod._run
+
+    def commit_then_fail(cmd, **kw):
+        out = real(cmd, **kw)
+        if cmd[:2] == ["git", "commit"]:
+            raise mod.CommandFailed(128, "cmd failed (128): git commit")
+        return out
+
+    monkeypatch.setattr(mod, "_run", commit_then_fail)
+    monkeypatch.chdir(repo)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    assert mod.main(["--auto", "-m", "test: x", "f.txt"]) == 0
+    captured = capsys.readouterr()
+    after = _head(repo)
+    assert after != before
+    assert "the commit landed" in captured.err and after in captured.err, captured.err
+    assert captured.out.startswith(f"committed: {after}"), captured.out

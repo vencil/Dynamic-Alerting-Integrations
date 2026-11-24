@@ -186,16 +186,17 @@ class _StdoutSink(io.TextIOBase):
     def writable(self) -> bool:
         return True
 
-    #: #4055: whether a write or flush through this sink failed — the one
-    #: case in which what stdout still buffers is dropped.
-    failed = False
+    #: #4055: the OSError a write or flush through this sink raised, or None
+    #: — the one case in which what stdout still buffers is dropped. #4230:
+    #: the exception itself, so that only IT is reported as the output's.
+    failed: Optional[OSError] = None
     _closing = False
 
     def write(self, s: str) -> int:  # type: ignore[override]
         try:
             return sys.stdout.write(s)
-        except OSError:
-            self.failed = True
+        except OSError as exc:
+            self.failed = exc
             raise
 
     def flush(self) -> None:
@@ -203,8 +204,8 @@ class _StdoutSink(io.TextIOBase):
             return
         try:
             sys.stdout.flush()
-        except OSError:
-            self.failed = True
+        except OSError as exc:
+            self.failed = exc
             raise
 
     def close(self) -> None:
@@ -213,6 +214,53 @@ class _StdoutSink(io.TextIOBase):
         stdout that failed would print an "Exception ignored" traceback."""
         self._closing = True
         super().close()
+
+
+class _OperatorBuffer(io.BufferedWriter):
+    """The buffer under an operator output file's text handle: it keeps the
+    OSError a write or flush through it raised (#4230) — the same
+    bookkeeping as :attr:`_StdoutSink.failed`, so that only the output's own
+    failure is reported as the output path's. At this layer it sees the text
+    handle's writes and flushes and a caller's ``fh.buffer`` ones alike; a
+    write straight to ``fh.fileno()`` is not seen."""
+
+    failed: Optional[OSError] = None
+
+    def write(self, b) -> int:  # type: ignore[override]
+        try:
+            return super().write(b)
+        except OSError as exc:
+            self.failed = exc
+            raise
+
+    def flush(self) -> None:
+        try:
+            super().flush()
+        except OSError as exc:
+            self.failed = exc
+            raise
+
+
+def _operator_text(fd: int) -> io.TextIOWrapper:
+    """``io.open(fd, "w", encoding="utf-8", newline="\\n")`` over an
+    :class:`_OperatorBuffer`: the same buffer size (``st_blksize``), line
+    buffering on a terminal, and ``mode``."""
+    # io.open, not io.FileIO: the raw write sink stays one the sink gates
+    # (tests/shared/test_raw_write_sinks_are_listed.py) can see.
+    raw = io.open(fd, "wb", buffering=0, closefd=True)
+    try:
+        size = io.DEFAULT_BUFFER_SIZE
+        with contextlib.suppress(OSError, AttributeError):
+            blksize = os.fstat(fd).st_blksize
+            if blksize > 1:
+                size = blksize
+        fh = io.TextIOWrapper(_OperatorBuffer(raw, size), encoding="utf-8",
+                              newline="\n", line_buffering=raw.isatty())
+        fh.mode = "w"  # type: ignore[misc]
+        return fh
+    except BaseException:
+        raw.close()
+        raise
 
 
 _O_OPERATOR = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
@@ -277,10 +325,18 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
       not reach through a symlink — created now or already there (V15).
       *nofollow*: a symlink at *path* is refused (O_NOFOLLOW), never written
       through (#1560: a file that holds credential values).
-    * any ``OSError`` ⇒ :class:`OutputWriteError` naming *path* and *flag*.
+    * an ``OSError`` of opening *path*, or of a write or flush through the
+      yielded handle ⇒ :class:`OutputWriteError` naming *path* and *flag*.
+      Any other ``OSError`` the ``with`` body raises (reading another file,
+      say) propagates as it is: it is not the output path's fault (#4230).
       A write into a regular file that raises leaves it empty, not a prefix
       (a process killed mid-write can still leave one).
     """
+    # #4230: False until the handle is open — an OSError before that is the
+    # open's. After it, only the OSError the handle itself raised is the
+    # output's (``own``); any other one is the body's and propagates as it is.
+    opened = False
+    own: Optional[OSError] = None
     try:
         try:
             pre = os.stat(path) if path != STDOUT_PATH else None
@@ -289,10 +345,12 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
         if path == STDOUT_PATH or _is_our_stdout(pre):
             claim_stdout(flag or path)
             sink = _StdoutSink()
+            opened = True
             try:
                 yield sink
                 sink.flush()
             except OSError:
+                own = sink.failed
                 # #4055: stdout itself failed and the caller reports it in its
                 # own line; drop what stdout still buffers, so the last flush
                 # at exit does not fail again and print a second one. Another
@@ -304,11 +362,15 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
                 sink.close()
             return
         fd, regular = _kernel_open_operator_output(path, mode, append, nofollow)
-        fh = io.open(fd, "w", encoding="utf-8", newline="\n", closefd=True)
+        fh = _operator_text(fd)
+        opened = True
         try:
             yield fh
             fh.flush()
         except BaseException:
+            # Read before the cleanup below: its own flush failing must not
+            # turn the body's error into the output's.
+            own = fh.buffer.failed
             if regular and not append:
                 with contextlib.suppress(OSError, ValueError):
                     fh.flush()
@@ -321,6 +383,8 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
     except OutputWriteError:
         raise
     except OSError as exc:
+        if opened and exc is not own:
+            raise  # the body's own OSError, not the output path's (#4230)
         raise OutputWriteError(path, exc, flag=flag) from exc
 
 

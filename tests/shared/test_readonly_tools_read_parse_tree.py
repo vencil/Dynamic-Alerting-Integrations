@@ -399,13 +399,14 @@ def _pm_main(monkeypatch, d):
 
 def test_path_metadata_reads_the_yaml_v3_way(tmp_path, monkeypatch, capsys):
     """`environment: yes` is "yes" and disagrees with `prod/` (PyYAML: True,
-    not a string, so no finding)."""
-    assert _pm_main(monkeypatch, _write(tmp_path, _PM)) == 0
+    not a string, so no finding). Under --ci the finding is exit 1 (ADR-016:
+    _metadata is the one source, a contradicting path fails)."""
+    assert _pm_main(monkeypatch, _write(tmp_path, _PM)) == 1
     assert "field=environment path=prod metadata=yes" in capsys.readouterr().out
 
 
 def test_path_metadata_parses_no_yaml(tmp_path, monkeypatch, no_yaml_parse):
-    assert _pm_main(monkeypatch, _write(tmp_path, _PM)) == 0
+    assert _pm_main(monkeypatch, _write(tmp_path, _PM)) == 1
 
 
 def test_path_metadata_names_an_unreadable_file(tmp_path, monkeypatch, capsys):

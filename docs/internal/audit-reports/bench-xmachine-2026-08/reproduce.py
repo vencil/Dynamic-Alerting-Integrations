@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproduce every number quoted in ADR-032 §證據 4 from the committed CSVs.
+"""Reproduce every number quoted in ADR-032 §證據 3 from the committed CSVs.
 
     python3 docs/internal/audit-reports/bench-xmachine-2026-08/reproduce.py
 

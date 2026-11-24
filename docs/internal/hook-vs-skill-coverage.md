@@ -93,7 +93,7 @@ lang: zh
 | `iac-helm-sast-check` | Container SAST L2：Helm template | 改 helm/ 後（CI 硬閘） |
 | `k8s-manifests-sast-check` | Container SAST L4：raw k8s manifest | 改 k8s/ 後（CI 硬閘） |
 | `schema-check` | Go→JSON Schema drift | 改 Go struct / schema 後 |
-| `path-metadata-consistency-check` | path/metadata 一致（warn） | 移檔後 |
+| `path-metadata-consistency-check` | 目錄路徑與 `_metadata` 不得矛盾（擋） | 移檔後 |
 | `orphan-doc-check` | 孤兒文件偵測 | 新增/刪文件後 |
 | `playwright-e2e` | Portal E2E smoke | 改 portal 後 |
 

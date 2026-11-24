@@ -33,9 +33,9 @@ New here? Pick based on your needs:
 | ADR | Title | Status | Version |
 |-----|------|------|------|
 | ADR-001 | [Severity Dedup via Inhibit Rules](./001-severity-dedup-via-inhibit.en.md) | ✅ Accepted | v1.0.0 |
-| ADR-002 | [OCI Registry over ChartMuseum](./002-oci-registry-over-chartmuseum.en.md) | ✅ Accepted | v1.12.0 |
+| ADR-002 | [OCI Registry over ChartMuseum](./002-oci-registry-over-chartmuseum.en.md) | ✅ Accepted | — |
 | ADR-003 | [Sentinel Alert Pattern](./003-sentinel-alert-pattern.en.md) | ✅ Accepted | v1.0.0 |
-| ADR-004 | [Federation Architecture — Central Exporter First](./004-federation-central-exporter-first.en.md) | ✅ Accepted | v1.12.0 |
+| ADR-004 | [Federation Architecture — Central Exporter First](./004-federation-central-exporter-first.en.md) | ✅ Accepted | v2.3.0 |
 | ADR-005 | [Projected Volume for Rule Packs](./005-projected-volume-for-rule-packs.en.md) | ✅ Accepted | v1.0.0 |
 | ADR-006 | [Tenant Mapping Topologies (1:1, N:1, 1:N)](./006-tenant-mapping-topologies.en.md) | ✅ Accepted | v2.1.0 |
 | ADR-007 | [Cross-Domain Routing Profiles and Domain Policies](./007-cross-domain-routing-profiles.en.md) | ✅ Accepted | v2.1.0 |
