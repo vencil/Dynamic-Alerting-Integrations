@@ -211,7 +211,7 @@ def _schema_tenant_key_errors(tid: str) -> list:
 
 
 def test_schema_property_names_follow_the_table() -> None:
-    """ADR-035 D2: `check_confd_schema` judges tenant keys through the
+    """ADR-035 §2: `check_confd_schema` judges tenant keys through the
     schema's `propertyNames` with JSON Schema SEARCH semantics. It agrees with
     the decoded-key readers on both columns, and lets `schema_search_accepts`
     through (Python's `$` matches before a trailing newline) — the gap the ADR

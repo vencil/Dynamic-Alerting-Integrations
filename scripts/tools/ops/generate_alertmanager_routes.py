@@ -202,7 +202,7 @@ from _grar_validate import is_receiver_name_collision  # noqa: E402
 # #2315: the duplicate-tenant refusal, shared with validate-config's
 # tenant_uniqueness row through `_lib_confd.tenant_declarations`.
 from _grar_validate import duplicate_tenant_errors  # noqa: E402
-# ADR-035 D3: the invalid-tenant-id refusal cites the rule's own words.
+# ADR-035 §3: the invalid-tenant-id refusal cites the rule's own words.
 from _grar_validate import invalid_tenant_id_text, tenant_id_field  # noqa: E402
 # #1533: a degraded probe set that cannot vouch for an operator-supplied
 # tenant-triggered inhibit rule (rc 2), and the --validate summary line.
@@ -752,7 +752,7 @@ def routing_tree_errors_refusal(
 
 def _refuse_invalid_tenant_ids(tree: TenantTree,
                                sink: list | None = None) -> None:
-    """ADR-035 D3: a declared tenant id the rule refuses — refused in EVERY mode.
+    """ADR-035 §3: a declared tenant id the rule refuses — refused in EVERY mode.
 
     Render, --dry-run, --apply, --output-configmap, --validate, with or
     without --strict: rc 1 and nothing written or applied. ⛔ Deliberately
@@ -774,7 +774,7 @@ def _refuse_invalid_tenant_ids(tree: TenantTree,
 
 def invalid_tenant_ids_refusal(invalid_ids: list[str],
                                files: "dict[str, list[str]] | None" = None) -> list[str]:
-    """The stderr lines of the ADR-035 D3 refusal; [] = not refused.
+    """The stderr lines of the ADR-035 §3 refusal; [] = not refused.
 
     The judgment `_refuse_invalid_tenant_ids` acts on, as data (see
     `unreadable_tenant_files_refusal`). *files*: id → the tenant files
@@ -847,7 +847,7 @@ def tree_refusal(files_read: int, tenant_file_errors: list[tuple[str, str]],
 
     ``(EXIT_OK, [])`` = not refused. The order is `main()`'s — unreadable
     tenant file (#1460, rc 1), duplicate tenant (#2315, rc 1), routing-tree
-    error (#2326, rc 2), invalid tenant id (ADR-035 D3, rc 1), field type
+    error (#2326, rc 2), invalid tenant id (ADR-035 §3, rc 1), field type
     (#2906, rc 1) — and `main()` exits on the first refusal, so only that
     one's lines and rc.
     *routing_tree_problems* is every routing-tree finding; only the blocking
@@ -2058,7 +2058,7 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
     if not has_routing and not has_dedup and not enforced_routing:
         # #2341: "nothing to render" can be the result of refusing every
         # tenant (an unreadable `_routing`; an invalid tenant id is refused
-        # above, ADR-035 D3): those lines are blocking here as everywhere else — `--validate` and
+        # above, ADR-035 §3): those lines are blocking here as everywhere else — `--validate` and
         # `--strict` fail on them, render mode prints them and exits 0.
         for w in schema_warnings + credential_lines:
             print(safe_label(w), file=sys.stderr)

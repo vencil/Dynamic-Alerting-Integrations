@@ -1,4 +1,4 @@
-"""ADR-035 D3（#2341 R8 之後）：tenant id 不合法時，產生器整棵樹拒收。
+"""ADR-035 §3（#2341 R8 之後）：tenant id 不合法時，產生器整棵樹拒收。
 
 判定函式 `_lib_validation.is_valid_tenant_id`（Go：tenantid.Valid）
 讀 schema 的 `definitions.tenantId`（DNS-1123 label），由

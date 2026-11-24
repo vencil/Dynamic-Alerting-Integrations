@@ -98,7 +98,7 @@ lang: en
 | `gen_agent_adapters.py` | Generate the per-vendor agent adapters from the neutral .agents/ SSOT (TRK-361). |
 | `gen_am_duration_json.py` | Generate am-duration.json from the tenant-config schema (#2711). |
 | `gen_recipe_contract.py` | Generate the recipe copies from the one contract. |
-| `gen_tenant_id_json.py` | Generate tenant-id.json from the tenant-config schema (ADR-035 D2). |
+| `gen_tenant_id_json.py` | Generate tenant-id.json from the tenant-config schema (ADR-035 §2). |
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
 | `generate_byo_rulepack_table.py` | BYO Prometheus 規則包表產生器（#1267） |
 | `generate_changelog.py` | Generate CHANGELOG draft entries from conventional commits. |
