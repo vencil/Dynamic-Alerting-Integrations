@@ -5,7 +5,7 @@
  *   This is SMOKE coverage, not comprehensive E2E. It proves:
  *     - the tool loads without 404 / JS error
  *     - the first visible contract (role cards) renders, and the Start-Here
- *       badge after role + goal selection
+ *       badge appears after role + goal selection
  *     - TRK-104-style absolute hrefs don't leak
  *     - 0 Critical and 0 non-Critical axe violations
  *   It does NOT cover:
@@ -64,8 +64,8 @@ test.describe('Getting Started Wizard @critical', () => {
 
     // wizard.jsx renders the badge as plain text inside a token-styled
     // `<span>` (warning-soft background) — no role="status" / aria-label is
-    // applied. The badge only becomes
-    // visible at step 2 (after role + goal selection).
+    // applied. The badge only becomes visible at step 2 (after role + goal
+    // selection).
     //
     // Adding `role="status"` is out of scope for this regression guard — it
     // would be a behaviour change. We match on the canonical uppercase text

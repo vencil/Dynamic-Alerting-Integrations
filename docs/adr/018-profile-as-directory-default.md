@@ -93,7 +93,7 @@ da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租�
 - **只比對單一值。** mapping 會攤平到每個葉節點逐一比對；list 不比對，內容相同也不報（`internal/guard/guard_test.go` 的 `TestCheckRedundantOverrides_SkipsStructuredValues`）。
 - **子目錄 `_defaults.yaml` 不生效的鍵不判。** 子目錄 `_defaults.yaml` 裡 `_` 開頭的鍵（例如 `_silent_mode`），exporter 不套用（ADR-017 決策 4），租戶自己那一行才是生效的值；這種覆寫不算多餘，da-guard 也不報（`cmd/da-guard/subtree_reserved_test.go` 的 `TestGuard_RedundantOverrideSkipsRefusedSubtreeKey`）。
 - **租戶只能覆寫有宣告的閾值。** 租戶檔寫了一個 `_defaults.yaml` 沒宣告的閾值鍵，`/metrics` 不送它，而 da-guard 對此不報任何 finding。哪些算已宣告（根目錄、內建層、`optional_overrides:`）見 ADR-017 決策 3、4、11。
-- **要關掉繼承來的閾值，寫 `"disable"`，不要寫 `null`。** 租戶檔寫 `null` 等於這一層沒寫，仍拿到上層的值（ADR-017 決策 4）；而且 `check_confd_schema.py` 會擋下租戶檔裡的 `null`。
+- **要關掉繼承來的閾值，寫 `"disable"`，不要寫 `null`。** 租戶檔寫 `null` 等於這一層沒寫，仍拿到上層的值（ADR-017 決策 4）；而且 `check_confd_schema.py` 會擋下租戶檔裡寫成 `null` 的閾值。
 - **共通值放在子目錄時，標準部署送不到線上。** 客戶部署用的扁平組裝只帶 conf.d 頂層的檔，子目錄的 `_defaults.yaml` 到不了線上的 exporter（ADR-016「後果與已知限制」）。在那個問題解決前，共通值要放在根目錄 `_defaults.yaml` 才會在線上生效。
 - **沒有工具從規則集自動產生這種形狀。** 導入客戶規則目前用逐租戶的 `da-tools migrate`；批次導入尚未出貨，追蹤在 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
 
