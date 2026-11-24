@@ -2220,7 +2220,10 @@ class TestTheGateIsStillSelected:
     """
 
     _ONLY_RE = r"--only[= \t]+((?:[A-Za-z0-9_,]|,\s*\\\s*\n\s*|\\\s*\n\s*)+)"
-    _CALLERS = ["Makefile", ".github/workflows/docs-ci.yaml"]
+    # The automatic `--only` callers. docs-ci's `drift-checks` was one until
+    # #4224 removed it as a duplicate of `make lint-docs` (CI: `Lint
+    # Documentation`); the Makefile list is now the only one.
+    _CALLERS = ["Makefile"]
     _GATE = "cli_default_drift"
 
     @classmethod

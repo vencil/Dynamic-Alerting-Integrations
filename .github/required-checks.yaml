@@ -60,8 +60,6 @@ required:
   - {name: Check Documentation Front Matter, kind: job}
   - {name: Check Documentation Coverage, kind: job}
   - {name: MkDocs Build Verification, kind: job}
-  - {name: Documentation Line Count Monitor, kind: job}
-  - {name: Drift Detection (validate_all.py), kind: job}
   - {name: Lint, kind: job}
   - {name: Lint Rule Packs, kind: job}
   - {name: Lint Documentation, kind: job}
@@ -79,6 +77,9 @@ required:
   # failed」的訊息結束，不會讀成檢查失敗。`pending`：job 合進 main 並回報過一次後，
   # owner 到設定加上它，再把這個旗標拿掉（見檔頭「改法」）。
   - {name: Exporter Queries Runtime (DB2), kind: job, pending: true}
+  # #4224：docs-ci 的文件檢查併成一個 job。`pending`：job 合進 main 並回報過一次後，
+  # owner 到設定加上它、移除被併進來的六個舊名稱，再拿掉這個旗標（見檔頭「改法」）。
+  - {name: Documentation Checks, kind: job, pending: true}
 
 # 刻意「紅了也不擋 merge」的檢查，附理由。這些理由以前寫在各 workflow 的註解裡，
 # 以「某日量測：不是 required」的形式存在，設定一變就過期；搬到這裡之後，測試保證
