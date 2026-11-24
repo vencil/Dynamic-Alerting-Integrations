@@ -64,14 +64,18 @@ def count_list_items(content: str) -> int:
 
 def _read(path: Path) -> str:
     """The include's text; a FIFO (or other non-regular file) named like an
-    include would block the read, and an unreadable one would end in the
-    crash handler: both are one line at rc 2 (#3981)."""
+    include would block the read, and an unreadable (or non-UTF-8) one would
+    end in the crash handler: both are one line at rc 2 (#3981). Every
+    non-regular file is refused, a device such as /dev/null included."""
     if is_special_file(path):
         raise OutputWriteError(path, OSError(None, "not a regular file"), action="read")
     try:
         return path.read_text(encoding="utf-8")
     except OSError as exc:
         raise OutputWriteError(path, exc, action="read") from exc
+    except UnicodeDecodeError as exc:  # a ValueError: the crash handler's, before
+        raise OutputWriteError(path, OSError(None, f"not UTF-8 ({exc.reason})"),
+                               action="read") from exc
 
 
 def compare_pair(zh_path: Path, en_path: Path) -> list:
@@ -189,7 +193,7 @@ def main() -> int:
     # include that cannot be read leaves the others unwritten. (No target is
     # judged ahead: a stub is made only where `en_path.exists()` is False, a
     # path `check_repo_artifact` has nothing to refuse in.)
-    stubs: list[tuple[Path, str]] = []
+    stubs: list[tuple[Path, Path, str]] = []
 
     for zh_path in zh_files:
         en_name = zh_path.stem + ".en.md"
@@ -201,7 +205,7 @@ def main() -> int:
         if not en_path.exists():
             missing_en += 1
             if args.fix:
-                stubs.append((en_path, _en_stub_text(zh_path)))
+                stubs.append((en_path, zh_path, _en_stub_text(zh_path)))
                 fixed += 1
                 continue
 
@@ -213,9 +217,9 @@ def main() -> int:
         elif args.verbose:
             print(f"✅ {zh_path.name} ↔ {en_name}: in sync")
 
-    for en_path, text in stubs:
+    for en_path, zh_path, text in stubs:
         write_repo_artifact(en_path, text)
-        print(f"  🔧 Created {en_path.name}")
+        print(f"  🔧 Created {en_path.name} from {zh_path.name}")
 
     # Summary
     print(f"\n{'─' * 40}")
