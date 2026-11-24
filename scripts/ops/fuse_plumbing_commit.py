@@ -36,8 +36,9 @@ Exit codes
       SHA or the branch cannot be read afterwards in time, still 0, said
   2 — no commit: the normal path's `git commit` failed (a hook failed — a
       finding or a hook that could not run, which git and pre-commit both end
-      at 1 and the tool cannot tell apart — or nothing to commit; read the
-      output it passes through), the pre-commit hook is not installed or
+      at 1 and the tool cannot tell apart — or nothing to commit; read
+      git's and the hooks' output above the error, which streams to stderr
+      as it runs, #4231), the pre-commit hook is not installed or
       cannot start pre-commit, not in a repo, a file or the message missing, a
       git plumbing step failed, or commit-tree succeeded but the ref write
       failed (new SHA in stderr for recovery), or a git step did not finish in
@@ -102,24 +103,36 @@ class CommandTimedOut(RuntimeError):
     killed. A RuntimeError, so the run ends at 2 with one named line."""
 
 
+#: #4231: where a streamed command's stdout and stderr go — both to this
+#: process's fd 2, so they show as they are written and this tool's own
+#: stdout keeps only its `committed:` line.
+_STREAMED = {"stdout": 2, "stderr": 2}
+_CAPTURED = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+
+
 def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = True,
-         timeout: float | None = None, group: bool = False) -> str:
+         timeout: float | None = None, group: bool = False,
+         stream: bool = False) -> str:
     """Run cmd, return stripped stdout; raise on non-zero if check=True.
     *timeout*: seconds (STEP_TIMEOUT_S when not given); past it the command
     is killed and CommandTimedOut raised. *group*: run it as its own process
-    group and stop the whole group (see COMMIT_TIMEOUT_S)."""
+    group and stop the whole group (see COMMIT_TIMEOUT_S). *stream*: do not
+    capture — its output goes to stderr as it is written (#4231: a `git
+    commit` runs every hook, for up to COMMIT_TIMEOUT_S) and is not repeated
+    in the error; the return value is then ``""``."""
     merged_env = os.environ.copy()
     if env:
         merged_env.update(env)
     limit = STEP_TIMEOUT_S if timeout is None else timeout
+    streams = _STREAMED if stream else _CAPTURED
     try:
         if group and os.name == "posix":
-            result = _run_group(cmd, merged_env, limit)
+            result = _run_group(cmd, merged_env, limit, streams)
         else:
             result = subprocess.run(
                 cmd,
                 env=merged_env,
-                capture_output=True,
+                **streams,
                 text=True, encoding="utf-8", errors="replace",
                 check=False,
                 timeout=limit,
@@ -128,20 +141,25 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = Tru
         raise CommandTimedOut(
             f"`{' '.join(cmd)}` did not finish within {limit:g}s and was stopped") from None
     if check and result.returncode != 0:
+        if stream:
+            raise CommandFailed(
+                result.returncode,
+                f"cmd failed ({result.returncode}): {' '.join(cmd)} — its output is above")
         raise CommandFailed(
             result.returncode,
             f"cmd failed ({result.returncode}): {' '.join(cmd)}\n"
             f"stderr: {result.stderr.strip()}"
             + (f"\nstdout: {result.stdout.strip()}" if result.stdout.strip() else "")
         )
-    return result.stdout.strip()
+    return (result.stdout or "").strip()
 
 
-def _run_group(cmd: list[str], env: dict[str, str], limit: float) -> subprocess.CompletedProcess:
+def _run_group(cmd: list[str], env: dict[str, str], limit: float,
+               streams: dict) -> subprocess.CompletedProcess:
     """``subprocess.run`` for a command that starts children (git's hooks):
     its own session, so a timeout — or Ctrl-C here, which the new session
     no longer passes on — stops all of them (`_stop_group`)."""
-    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    proc = subprocess.Popen(cmd, env=env, **streams,
                             text=True, encoding="utf-8", errors="replace",
                             start_new_session=True)
     try:
@@ -365,14 +383,14 @@ def normal_commit(
     if amend:
         cmd = ["git", "commit", "--amend", "-m", message]
     try:
-        _run(cmd, timeout=COMMIT_TIMEOUT_S, group=True)
+        _run(cmd, timeout=COMMIT_TIMEOUT_S, group=True, stream=True)
     except CommandTimedOut as exc:
         raise RuntimeError(
             f"{exc}: whether the commit landed is unknown (a hook may still be "
             "running); check with `git log -1` before committing again") from exc
     except CommandFailed as exc:
         raise RuntimeError(
-            f"{exc}\n`git commit` failed (rc {exc.returncode}): a hook failed — "
+            f"`git commit` failed (rc {exc.returncode}): a hook failed — "
             "a finding, or a check that could not run — or there was nothing to "
             "commit; the output above says which") from exc
     try:
