@@ -350,3 +350,47 @@ def test_cluster_identity(labels, expected):
 ])
 def test_config_external_labels(config, expected):
     assert lib.config_external_labels(config) == expected
+
+
+# ── #1200: a query answer, one group of rows per cluster ──────────────
+
+def _r(tag, metric="absent"):
+    row = {"values": [[1, tag]]}
+    if metric != "absent":
+        row["metric"] = metric
+    return row
+
+
+def test_rows_by_cluster():
+    """Sorted by cluster; a row with no `da_cluster` — no `metric`, no label,
+    an empty one, one that is not a string — is in the group ``""``; rows of
+    one group keep their order and nothing is merged."""
+    west1, east, bare, west2 = (_r("w1", {"da_cluster": "west"}), _r("e", {"da_cluster": "east"}),
+                                _r("b", {"tenant": "t"}), _r("w2", {"da_cluster": "west"}))
+    empty, none, absent, number = (_r("x", {"da_cluster": ""}), _r("n", None), _r("a"),
+                                   _r("5", {"da_cluster": 5}))
+    groups = lib.rows_by_cluster([west1, east, bare, west2, empty, none, absent, number])
+    assert list(groups) == ["", "east", "west"]
+    assert groups["west"] == [west1, west2]
+    assert groups["east"] == [east]
+    assert groups[""] == [bare, empty, none, absent, number]
+    assert lib.rows_by_cluster([]) == {}
+
+
+@pytest.mark.parametrize("groups, expected", [
+    ({}, None),
+    ({"": [1], "east": [1], "west": [1]}, None),
+    ({"east": [1], "west": [1, 2]},
+     '2 series with da_cluster="west" — one series per cluster is expected, and they are '
+     "not added up"),
+    ({"": [1, 2, 3], "west": [1, 2]},
+     '3 series without a da_cluster label; 2 series with da_cluster="west" — one series per '
+     "cluster is expected, and they are not added up"),
+])
+def test_repeated_clusters(groups, expected):
+    assert lib.repeated_clusters(groups) == expected
+
+
+def test_cluster_text():
+    assert lib.cluster_text("west") == 'da_cluster="west"'
+    assert lib.cluster_text("") == "no da_cluster"

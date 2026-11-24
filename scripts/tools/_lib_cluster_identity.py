@@ -6,6 +6,10 @@ without it — `federation-check edge` and `byo-check prometheus` (the running
 config, as `/api/v1/status/config` prints it), `onboard` (a config file,
 already parsed by Prometheus' own loader) and the repo's scrape-config lint.
 
+Also the one split of a query answer by that label (`rows_by_cluster`): the
+rule packs record a tenant's series once per cluster, so a tool that replays
+or measures one must do it cluster by cluster (ADR-006, #1200).
+
 Standard library only, and no I/O: a tool that reads a file imports this
 without becoming a tool that can use HTTP.
 """
@@ -168,3 +172,42 @@ def cluster_identity(labels: "dict[str, Any] | None") -> "str | None":
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def rows_by_cluster(rows: "list[dict[str, Any]]") -> "dict[str, list[dict[str, Any]]]":
+    """The rows of a Prometheus query answer (`data.result`), grouped by
+    their `da_cluster` label: ``{cluster: [row, ...]}``, the clusters in
+    sorted order. A row whose `metric` has no `da_cluster` — or an empty one,
+    which is the same thing to Prometheus — is in the group ``""``, a group
+    of its own beside the named clusters.
+
+    ADR-006 (#1200): a `tenant:*` recording rule has one series per (tenant,
+    cluster) and its alert fires per cluster, so the samples of two groups
+    are never one series. Nothing is merged here: a group holding more than
+    one row (`repeated_clusters`) is two series the label does not tell
+    apart, and what that means is the caller's to say — never to add up."""
+    groups: "dict[str, list[dict[str, Any]]]" = {}
+    for row in rows:
+        metric = row.get("metric") if isinstance(row, dict) else None
+        value = metric.get(CLUSTER_IDENTITY_LABEL) if isinstance(metric, dict) else None
+        groups.setdefault(value if isinstance(value, str) else "", []).append(row)
+    return {cluster: groups[cluster] for cluster in sorted(groups)}
+
+
+def repeated_clusters(groups: "dict[str, list[Any]]") -> "str | None":
+    """Why *groups* (`rows_by_cluster`) cannot be read one series per
+    cluster, or None: the groups holding more than one row, named."""
+    repeated = [
+        (f'{len(rows)} series with {CLUSTER_IDENTITY_LABEL}="{cluster}"' if cluster
+         else f"{len(rows)} series without a {CLUSTER_IDENTITY_LABEL} label")
+        for cluster, rows in groups.items() if len(rows) > 1]
+    if not repeated:
+        return None
+    return ("; ".join(repeated) + " — one series per cluster is expected, and they are "
+            "not added up")
+
+
+def cluster_text(cluster: str) -> str:
+    """A `rows_by_cluster` group as a report names it."""
+    return (f'{CLUSTER_IDENTITY_LABEL}="{cluster}"' if cluster
+            else f"no {CLUSTER_IDENTITY_LABEL}")

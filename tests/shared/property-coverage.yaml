@@ -276,6 +276,9 @@ modules:
       _scalar: "#4097 unquote of a one-line yaml value; pinned by tests/shared/test_lib_cluster_identity.py::TestKeys::test_quoted_values_lose_their_quotes"
       config_external_labels: "#4097 two-key lookup in a parsed config (no global → None, else the mapping or {}); table in tests/shared/test_lib_cluster_identity.py::test_config_external_labels, and through da-read in tests/ops/test_onboard_platform.py::TestClusterIdentity"
       cluster_identity: "#4097 one-key lookup (a non-blank string or None) shared by federation_check, byo_check, onboard_platform and check_scrape_reachability; table in tests/shared/test_lib_cluster_identity.py::test_cluster_identity"
+      rows_by_cluster: "#1200 grouping of a query answer's rows by their da_cluster label (absent / empty / not a string = the group \"\"), sorted, nothing merged; table in tests/shared/test_lib_cluster_identity.py::test_rows_by_cluster, and through both tools in tests/ops/test_backtest_per_cluster.py and tests/ops/test_threshold_recommend_per_cluster.py"
+      repeated_clusters: "#1200 message naming the groups that hold more than one row (None when none does); table in tests/shared/test_lib_cluster_identity.py::test_repeated_clusters, exact texts through backtest in tests/ops/test_backtest_per_cluster.py::TestRowsTheLabelDoesNotTellApart"
+      cluster_text: "#1200 two-branch templating of a group's name for a report; pinned by tests/shared/test_lib_cluster_identity.py::test_cluster_text"
 
   scripts/tools/_lib_godispatch.py:
     # Note: members of this module are class methods on

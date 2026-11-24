@@ -752,7 +752,17 @@ python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
 
 ⚠️ **Breaking**：先前新啟用且會觸發的列寫出裸 `Infinity`（不是合法 JSON，嚴格解析器整份拒收），開始觸發的列寫字串 `"Inf"`，其餘為 `0`／`0.0`／`-100.0`，同一欄混了三種型別，`-100` 也同時代表「停用」與「不再觸發」。沒有 `impact_kind` 這個欄位。`-o` 與 `--json` 由同一個編碼器寫出，內容逐位元組相同。
 
-觸發比例的分母是回看期間的全部樣本點，NaN 也算在內：NaN 那段時間告警不會響，比例代表的是「佔整段回看時間多少」。每筆 `analyzed`／`no_data` 結果帶 `query` 欄位，即實際送出的 PromQL；文字報告在訊息下一行印 `query: ...`，Markdown 表格多一欄 `Query`（`not_backtested` 沒有查詢，該欄為 `—`）。
+觸發比例的分母是回看期間的全部樣本點，NaN 也算在內：NaN 那段時間告警不會響，比例代表的是「佔整段回看時間多少」。每筆 `analyzed`／`no_data` 結果帶 `query` 欄位，即實際送出的 PromQL；文字報告在訊息下一行印 `query: ...`，Markdown 表格多一欄 `Query`（`not_backtested` 沒有查詢，該欄為 `—`；唯一的例外是下一段「同一個叢集回了不只一列」，它查過，帶 `query`）。
+
+**多個叢集：逐叢集重放，整體取最糟的叢集**（[#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200)，[ADR-006](adr/006-tenant-mapping-topologies.md)）：rule pack 把 `tenant:*` 逐（租戶，`da_cluster`）記錄，告警也逐叢集觸發。查詢的 Prometheus 上有同一個租戶在多個叢集的資料時，`<series>{tenant="…"}` 每個叢集回一列，每一列各自重放，不同叢集的樣本不相加：
+
+- 該筆結果多一個 `clusters` 陣列，每個叢集一筆（依叢集名稱排序）：`da_cluster`、`status`，`analyzed` 的再帶 `risk`、`data_points`、`old_breach_count`、`new_breach_count`、`impact_pct`、`impact_kind`、`message`；樣本全是 NaN 的叢集是 `status: no_data`、`risk: UNKNOWN`，只帶 `message`。沒有 `da_cluster` label（或值為空）的列自成一組，`da_cluster` 為空字串，報告寫 `no da_cluster`。
+- 該筆結果頂層的 `risk`、`data_points`、`old_breach_count`、`new_breach_count`、`impact_pct`、`impact_kind` 是**其中一個叢集**的數字——最糟的那個，`worst_cluster` 寫出它的名稱，`message` 結尾註明 `[da_cluster="…", the worst of N clusters]`。所以 `data_points` 與觸發點數是一條序列的時間步數，不是各叢集加總。最糟的定義：風險最高（HIGH > MEDIUM > LOW）；同級取新舊觸發點數差距最大的；再相同取名稱排序第一個。結束碼與 `risk_summary` 照這個頂層風險算。沒有任何叢集有可用資料時整筆是 `no_data`，仍帶 `clusters`。
+- 文字報告在該筆下方逐叢集印一行（`da_cluster="west": HIGH (0 -> 15 of 100 points fire)`），Markdown 在 Impact 欄接上 `per cluster: …`。
+- 只回一列時（不論有沒有 `da_cluster` label）沒有 `clusters` 與 `worst_cluster`，文字、Markdown、JSON 與結束碼都和先前相同。
+- 同一個叢集回了不只一列，或不只一列沒有 `da_cluster` label：`da_cluster` 分不開這些列，它們不是同一條序列，工具不相加也不挑一列，該筆標為 `not_backtested`，理由如 `2 series with da_cluster="west" — one series per cluster is expected, and they are not added up`。租戶的 recording rule 不該出現這種列，請查 Prometheus 上是否有兩個來源沒設、或設了相同的 `da_cluster`。沒有 float 樣本的列（只有 native histogram）不算一列，照舊略過。
+
+⚠️ **數字會變**：在匯集多個叢集資料的 Prometheus 上，先前各列樣本被串成一條——分母是各叢集步數的總和，同時超標的步數被重複計算，只有一個叢集會響的變更被其他叢集稀釋（例如 100 步裡 west 有 15 步超標、east 沒有：先前是 `15/200`、MEDIUM、結束碼 `0`，現在是 `15/100`、HIGH、結束碼 `1`）。只有一個叢集的 Prometheus 不受影響。
 
 查不到任何資料，或查到的樣本全是 NaN，該變更都標為 `no_data`（風險 `UNKNOWN`，不影響結束碼），前者訊息為 `No historical data found in Prometheus`，後者為 `Only NaN samples in lookback window`（[#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963)；先前全 NaN 會被報成已分析）。只查一次，所以沒有別的查詢可換。`+Inf`／`-Inf` 是真實樣本，照常比較。
 
@@ -3416,6 +3426,8 @@ da-tools threshold-recommend --generate-observed-map
 > - **`needs_review`**（未分類）：不在任何 allowlist 的 `<` key，fail-loud 待人工分類。
 >
 > mode 權威由 drift-guard 把關：手編 map 對非 allowlist key 冒充 `percentile-lower` / `not-applicable` 是 CI 硬錯。**下界 delta 為 miss-rate**，export-patch / 治理表格以 `+X% miss` 標示，避免誤讀方向。此外估計量發散閘（pooled-P5 的 miss-rate ≥ 1.5× daily-median-P5）會擋下「週期低谷坐在現值之上」的假自動收緊（否則每週對低谷誤鳴）——交人工。
+>
+> **多個叢集：逐叢集計算，取最保守的建議**（[#1200](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1200)，[ADR-006](adr/006-tenant-mapping-topologies.md)）：門檻一個租戶只有一個值，告警逐叢集觸發。查詢回了不只一個叢集的列時，百分位數與建議值每個叢集各算一次（不同叢集的樣本不倒在一起），整個 key 的建議依序為：① 有叢集被判 `force_manual` → 整個 key 人工審查；② 否則有叢集沒有建議值（within-margin、P95 ≤ 0、樣本不足）→ 不給建議值；③ 否則取「不會讓任何叢集多響」的那個——上界（`>`）key 取**最高**的建議值，下界（`<`）key 取**最低**的 floor。這與兩個引擎本來的安全方向一致（上界收緊不低於不新增觸發的下限、放寬向上取整；下界取較低的估計、向下取整、不自動放寬）。該 key 的 `p50`／`p95`／`p99`／`sample_count`／`recommended`／`delta_pct` 是被採用那個叢集自己的數字，reason 結尾註明 `[da_cluster="…" of N clusters: highest value]`（或 `lowest floor`／`has no value to recommend`／`needs manual review`）；`confidence` 取所有叢集裡最弱的（被降級時 reason 註明來自哪個叢集）。JSON 多兩個欄位：`conservative_cluster`（被採用的叢集）與 `clusters`（每個叢集一筆：`da_cluster`、`sample_count`、`p50`、`p95`、`p99`、`recommended`、`delta_pct`、`confidence`、`force_manual`、`reason`）；文字報告逐叢集多一行，Markdown 在 Reason 欄接上 `per cluster: …`。只回一列時（不論有沒有 `da_cluster` label）沒有這兩個欄位，輸出與先前相同。同一個叢集回了不只一列（或不只一列沒有 label）時不相加，該 key 標 `force_manual`，原因寫明。⚠️ 代價：一個長期閒置的叢集（P95 ≤ 0）會讓該 key 一直沒有建議值。⚠️ **數字會變**：在匯集多個叢集資料的 Prometheus 上，先前的百分位數是各叢集樣本混在一起算的。
 >
 > **下界 lookback 指引**：percentile-lower key 需 **≥5 完整 UTC 日**；預設 `--lookback 7d` 排除兩端 partial 後僅約 6 完整日、邊際薄且對 scrape gap 脆弱，**建議下界 key 用 `--lookback 14d`**（不足 5 完整日時引擎 `force_manual` fail-loud，不出垃圾）。
 
