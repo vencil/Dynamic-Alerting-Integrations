@@ -1,8 +1,8 @@
 # promtool unit test — Custom Alerts (#741), P99 LATENCY recipe.
 # Run: promtool test rules tests/rulepacks/rule-pack-custom-alerts-p99_test.yaml
 #
-# histogram_quantile(0.99, sum by(le,tenant,version)(rate(<m>_bucket[5m]))).
-# Proves the by(le,tenant,version) keep-list preserves both the bucket (le)
+# histogram_quantile(0.99, sum by(le,tenant,version,da_cluster)(rate(<m>_bucket[5m]))).
+# Proves the by(le,tenant,version,da_cluster) keep-list preserves both the bucket (le)
 # dimension and the tenant join key, and the quantile crosses the threshold.
 rule_files:
   - rule-pack-custom-alerts.yaml

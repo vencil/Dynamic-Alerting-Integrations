@@ -14,8 +14,16 @@ package config
 //
 // Invariants:
 //   - vectorised on(tenant[,version]) — no per-tenant fan-out (O(M))
+//   - per cluster (ADR-006 "one tenant in several clusters"): every metric-side
+//     aggregation keeps `da_cluster` (clusterLabel) and every pairing of two
+//     metric-side operands matches on it, so two clusters of one tenant are
+//     neither merged nor paired with each other. Thresholds and maintenance
+//     are one per tenant and stay joined on(tenant[,version]) group_left.
+//     Series without the label (a single Prometheus) group exactly as before.
+//     The one exception is absence, which is tenant-wide and says so
+//     (absenceTenantWide).
 //   - the version graceful-join is emitted unconditionally (absent version is safe)
-//   - aggregation uses an explicit by(tenant[,version]) keep-list (never bare sum())
+//   - aggregation uses an explicit by(tenant[,version], da_cluster) keep-list (never bare sum())
 //   - `name` rides group_left(name, mode) so on-call sees the tenant's title
 //   - the alertname is the static shape slug; humans read the `name` label
 //   - ratio guards division by zero with `(denominator > 0)` → empty vector, no +Inf
@@ -102,10 +110,15 @@ type TenantCustomAlerts struct {
 }
 
 // CustomAlertPack is the compiled rule pack: Groups in pack order, and the
-// shape count. Groups marshals to the pack's `groups:` list.
+// shape count. Groups marshals to the pack's `groups:` list. Declarations is
+// {recorded name: comment text} — the comment the serialiser writes directly
+// above that rule (a rule file has no field for it): today only the
+// `da_cluster: tenant-wide …` declaration of an absence core
+// (absenceTenantWide), read by scripts/tools/lint/check_cluster_identity.py.
 type CustomAlertPack struct {
-	Groups []orderedMap
-	Shapes int
+	Groups       []orderedMap
+	Shapes       int
+	Declarations map[string]string
 }
 
 // compiledStatuses: the entries a rule is compiled for — served, and switched
@@ -152,6 +165,7 @@ func CompileCustomAlertPack(tenants []TenantCustomAlerts) (CustomAlertPack, erro
 	sort.Strings(ids)
 
 	var recording, alerts, info []any
+	declarations := map[string]string{}
 	for _, id := range ids {
 		sevs := make([]string, 0, len(severities[id]))
 		for s := range severities[id] {
@@ -159,6 +173,11 @@ func CompileCustomAlertPack(tenants []TenantCustomAlerts) (CustomAlertPack, erro
 		}
 		sort.Strings(sevs)
 		rec, alr := emitShape(id, shapes[id], sevs)
+		if shapes[id].Recipe == "absence" {
+			for _, sev := range sevs {
+				declarations[coreName(id, sev)] = absenceTenantWide
+			}
+		}
 		recording = append(recording, rec...)
 		alerts = append(alerts, alr...)
 		// D1 (ADR-024 §8): a static lifecycle-info series per shape, so SRE can
@@ -189,7 +208,7 @@ func CompileCustomAlertPack(tenants []TenantCustomAlerts) (CustomAlertPack, erro
 	if err := assertTemplateSafe(groups); err != nil {
 		return CustomAlertPack{}, err
 	}
-	return CustomAlertPack{Groups: groups, Shapes: len(ids)}, nil
+	return CustomAlertPack{Groups: groups, Shapes: len(ids), Declarations: declarations}, nil
 }
 
 // silentSentinel is the SINGLE global (tenant-agnostic) silent-mode sentinel
@@ -277,17 +296,45 @@ func normVersion(expr string) string {
 	return `label_replace(` + expr + `, "version", "default", "version", "^$")`
 }
 
-// gbSuffix is ", l1, l2" for the bounded group_by dimensions (or ""),
-// appended inside a by() label list so the metric-side aggregation keeps each
-// dimension (per-PVC disk fill: fire if ANY PVC crosses; ADR-024 §Addendum).
-// The threshold record and the on()/group_left join keys are unchanged: the
-// extra dimension rides the many side of the join to the alert label.
+// clusterLabel is the platform's cluster identity (ADR-006 "one tenant in
+// several clusters"): the external label of the Prometheus a series came
+// through, present only where two clusters' series meet.
+const clusterLabel = "da_cluster"
+
+// gbSuffix is ", da_cluster, l1, l2": the cluster identity and the bounded
+// group_by dimensions, appended inside a by() label list so the metric-side
+// aggregation is per cluster and keeps each dimension (per-PVC disk fill: fire
+// if ANY PVC crosses; ADR-024 §Addendum). A group_by that names the cluster
+// label itself is not written twice. The threshold record and the
+// on()/group_left join keys are unchanged: the thresholds are one per tenant,
+// and the cluster and the extra dimensions ride the many side of the join to
+// the alert label.
 func gbSuffix(gb []string) string {
 	var b strings.Builder
+	b.WriteString(", " + clusterLabel)
 	for _, g := range gb {
+		if g == clusterLabel {
+			continue
+		}
 		b.WriteString(", " + g)
 	}
 	return b.String()
+}
+
+// absenceTenantWide is the declaration an absence core carries in the pack
+// (CustomAlertPack.Declarations): "the metric is missing" is asked of all the
+// tenant's clusters together — a tenant declares no clusters to expect it in,
+// so present in at least one cluster counts as present (ADR-006 contract 6).
+// The text is the form scripts/tools/lint/check_cluster_identity.py reads
+// (`# da_cluster: tenant-wide <kind> (<labels>) — <why>`), naming the one
+// grouping of the core that drops the cluster.
+const absenceTenantWide = "da_cluster: tenant-wide by-drops-cluster (tenant) — " +
+	"an absence recipe declares no clusters to expect the metric in, so present in " +
+	"at least one of the tenant's clusters counts as present (ADR-006 contract 6)"
+
+// coreName is the per-severity core record of a shape.
+func coreName(id, sev string) string {
+	return "custom:" + id + ":" + sev + ":core"
 }
 
 // escapeSelectorValue escapes a selector value for a PromQL double-quoted
@@ -437,10 +484,12 @@ func sloTier(sev string) (long, short string, factor int, err error) {
 }
 
 // sloBurnRecords (ADR-031 §2): the SLI error ratio per burn window and the
-// absolute bad-event count per short window. No maintenance `unless` —
-// measurement is never suppressed (guardrail #4), only the core is.
+// absolute bad-event count per short window, each per cluster (numerator and
+// denominator alike, so a ratio is one cluster's own). No maintenance `unless`
+// — measurement is never suppressed (guardrail #4), only the core is.
 func sloBurnRecords(id string, sh customAlertShape, sel string) []any {
 	var out []any
+	g := gbSuffix(sh.GroupBy) // slo takes no group_by: the cluster alone
 	var long, short []string
 	for _, t := range contract.SloBurnRate.Tiers {
 		long = append(long, t.Long)
@@ -452,13 +501,13 @@ func sloBurnRecords(id string, sh customAlertShape, sel string) []any {
 		ratioWins = append(ratioWins, long[i], short[i])
 	}
 	for _, w := range ratioWins {
-		inner := "sum by(tenant) (rate(" + sh.Metric + sel + "[" + w + "]))\n" +
+		inner := "sum by(tenant" + g + ") (rate(" + sh.Metric + sel + "[" + w + "]))\n" +
 			"  /\n" +
-			"(sum by(tenant) (rate(" + sh.Denominator + sel + "[" + w + "])) > 0)"
+			"(sum by(tenant" + g + ") (rate(" + sh.Denominator + sel + "[" + w + "])) > 0)"
 		out = append(out, record("custom:metric:"+id+":"+w, normVersion(inner)))
 	}
 	for _, w := range short {
-		out = append(out, record("custom:bad:"+id+":"+w, normVersion("sum by(tenant) (increase("+sh.Metric+sel+"["+w+"]))")))
+		out = append(out, record("custom:bad:"+id+":"+w, normVersion("sum by(tenant"+g+") (increase("+sh.Metric+sel+"["+w+"]))")))
 	}
 	return out
 }
@@ -496,7 +545,9 @@ func metadataAnnotation(label string) string {
 // sloCoreRecord (ADR-031 §2): the multi-window AND — long and short ratio
 // above the exporter-resolved threshold, and the bad-event floor (min_events ×
 // the tier factor, a compile-time literal). Only the long-window gate carries
-// group_left(name, mode); `and on(tenant)` keeps left-hand labels.
+// group_left(name, mode); `and on(tenant, da_cluster)` keeps left-hand labels
+// and pairs the three operands within ONE cluster — on(tenant) alone would let
+// one cluster's long window fire with another cluster's short window.
 func sloCoreRecord(id, sev string, minEvents int) (orderedMap, error) {
 	long, short, factor, err := sloTier(sev)
 	if err != nil {
@@ -505,7 +556,11 @@ func sloCoreRecord(id, sev string, minEvents int) (orderedMap, error) {
 	thr := `custom:threshold:` + id + `{severity="` + sev + `"}`
 	thrDefault := `custom:threshold:` + id + `{version="default", severity="` + sev + `"}`
 	gate := func(win string, carry bool) string {
-		gl := ""
+		// Both gates are many-to-one: a tenant's clusters are several series
+		// against its one threshold row, so the short gate needs group_left
+		// too (bare: it carries no label over) — without it Prometheus
+		// refuses the match as soon as a second cluster reports.
+		gl := " group_left"
 		if carry {
 			gl = " group_left(name, mode)"
 		}
@@ -527,30 +582,32 @@ func sloCoreRecord(id, sev string, minEvents int) (orderedMap, error) {
 			"  )\n" +
 			")"
 	}
+	pair := "and on(tenant, " + clusterLabel + ")\n"
 	expr := gate(long, true) + "\n" +
-		"and on(tenant)\n" +
+		pair +
 		gate(short, false) + "\n" +
-		"and on(tenant)\n" +
+		pair +
 		"(custom:bad:" + id + ":" + short + " > " + strconv.Itoa(minEvents*factor) + ")\n" +
 		maintenanceTail
-	return record("custom:"+id+":"+sev+":core", expr), nil
+	return record(coreName(id, sev), expr), nil
 }
 
 // eqCoreRecord is the `==` any-match core (#810 + #819): equality has no
 // meaningful aggregate (max masks a matching replica), so the RAW per-series
 // metric is compared to the per-tenant threshold FIRST, then existence is
-// aggregated. The raw metric is inlined (no per-pod recording rule).
+// aggregated — per cluster, so the alert says which cluster matched. The raw
+// metric is inlined (no per-pod recording rule).
 func eqCoreRecord(id, sev, metric, sel string) orderedMap {
 	raw := normVersion(metric + sel)
 	thr := `custom:threshold:` + id + `{severity="` + sev + `"}`
 	core := "(\n" +
-		"  max by(tenant, version, name, mode) (\n" +
+		"  max by(tenant, version, " + clusterLabel + ", name, mode) (\n" +
 		"    " + raw + "\n" +
 		"    == on(tenant, version) group_left(name, mode)\n" +
 		"      " + thr + "\n" +
 		"  )\n" +
 		"  or\n" +
-		"  max by(tenant, version, name, mode) (\n" +
+		"  max by(tenant, version, " + clusterLabel + ", name, mode) (\n" +
 		"    (\n" +
 		"      " + raw + "\n" +
 		"      unless on(tenant, version)\n" +
@@ -560,7 +617,7 @@ func eqCoreRecord(id, sev, metric, sel string) orderedMap {
 		"      custom:threshold:" + id + `{version="default", severity="` + sev + `"}` + "\n" +
 		"  )\n" +
 		")"
-	return record("custom:"+id+":"+sev+":core", core+"\n"+maintenanceTail)
+	return record(coreName(id, sev), core+"\n"+maintenanceTail)
 }
 
 func coreRecord(id string, sh customAlertShape, sev, sel string) orderedMap {
@@ -570,6 +627,8 @@ func coreRecord(id string, sh customAlertShape, sev, sel string) orderedMap {
 	thr := `custom:threshold:` + id + `{severity="` + sev + `"}`
 	var core string
 	if sh.Recipe == "absence" {
+		// Tenant-wide on purpose (absenceTenantWide): count by(tenant), not
+		// by(tenant, da_cluster).
 		core = "(\n" +
 			"  " + thr + "\n" +
 			"  unless on(tenant)\n" +
@@ -594,7 +653,7 @@ func coreRecord(id string, sh customAlertShape, sev, sel string) orderedMap {
 			"  )\n" +
 			")"
 	}
-	return record("custom:"+id+":"+sev+":core", core+"\n"+maintenanceTail)
+	return record(coreName(id, sev), core+"\n"+maintenanceTail)
 }
 
 // metadataLabels are the tenant_metadata_info labels an alert shows as

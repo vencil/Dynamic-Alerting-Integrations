@@ -318,7 +318,10 @@ func TestCompileCustomAlertPack_MaintenanceLabelMatchesTheRule(t *testing.T) {
 // selectorItems refuses. The keys are read off the compiled rules, not
 // listed by hand, so a new recipe that aggregates by a new label turns this
 // red until the contract reserves it. group_by values are excluded: the
-// tenant chose them, and pinning one is a plain filter.
+// tenant chose them, and pinning one is a plain filter. So is the cluster
+// label (clusterLabel): every recipe keeps it so that two clusters stay
+// apart, and a selector pinning it selects one cluster's series whole — the
+// aggregation and the pairing still see every series of that cluster.
 func TestCompiledAggregationKeysOnTenantMetricsAreReserved(t *testing.T) {
 	specs := []string{
 		`- {recipe: threshold, name: a, metric: m_thr, op: ">", window: 5m, threshold: "1"}`,
@@ -399,8 +402,152 @@ func TestCompiledAggregationKeysOnTenantMetricsAreReserved(t *testing.T) {
 		t.Fatalf("found %d records and %d aggregation keys; the walk read nothing", records, len(keys))
 	}
 	for l, rec := range keys {
-		if !reserved[l] && !tenantChosen[l] {
+		if !reserved[l] && !tenantChosen[l] && l != clusterLabel {
 			t.Errorf("%s aggregates a tenant metric by %q, which is not in recipe_contract.json reserved_labels: a tenant selector could pin it", rec, l)
+		}
+	}
+}
+
+// ADR-006 "one tenant in several clusters": every metric-side aggregation
+// keeps da_cluster, and every pairing of two metric-side operands matches on
+// it — the exact text per recipe, so dropping the label from one recipe's
+// grouping (or from one side of a ratio) fails here by name. The threshold
+// joins stay on(tenant[, version]): thresholds are one per tenant.
+func TestCompiledRulesKeepTheClusterPerRecipe(t *testing.T) {
+	cases := []struct {
+		name, spec, rule string
+		want             []string
+	}{
+		{"threshold", `- {recipe: threshold, name: a, metric: m_thr, op: ">", window: 5m, threshold: "1"}`,
+			"custom:metric:", []string{`max by(tenant, version, da_cluster) (m_thr)`}},
+		{"threshold group_by", `- {recipe: threshold, name: a, metric: m_thr, op: ">", window: 5m, threshold: "1", group_by: [persistentvolumeclaim]}`,
+			"custom:metric:", []string{`max by(tenant, version, da_cluster, persistentvolumeclaim) (m_thr)`}},
+		{"rate", `- {recipe: rate, name: a, metric: m_rate, window: 5m, threshold: "1"}`,
+			"custom:metric:", []string{`sum by(tenant, version, da_cluster) (rate(m_rate[5m]))`}},
+		{"ratio", `- {recipe: ratio, name: a, metric: m_num, denominator_metric: m_den, window: 5m, threshold: "0.1"}`,
+			"custom:metric:", []string{
+				`sum by(tenant, da_cluster) (rate(m_num[5m]))`,
+				`(sum by(tenant, da_cluster) (rate(m_den[5m])) > 0)`}},
+		{"p99_latency", `- {recipe: p99_latency, name: a, metric: m_lat, window: 5m, threshold: "1"}`,
+			"custom:metric:", []string{`sum by(le, tenant, version, da_cluster) (rate(m_lat_bucket[5m]))`}},
+		{"forecast ratio mode", `- {recipe: forecast, name: a, metric: m_avail, horizon: 4h, capacity_metric: m_cap, threshold: "0.1"}`,
+			"custom:fcbase:", []string{
+				`sum by(tenant, da_cluster) (m_avail)`,
+				`(sum by(tenant, da_cluster) (m_cap) > 0)`}},
+		{"forecast raw mode", `- {recipe: forecast, name: a, metric: m_raw, op: "<", horizon: 4h, threshold: "10"}`,
+			"custom:fcbase:", []string{`max by(tenant, version, da_cluster) (m_raw)`}},
+		{"slo ratio window", `- {recipe: slo_burn_rate, name: a, metric: m_err, denominator_metric: m_req, objective: "99.9"}`,
+			"custom:metric:", []string{
+				`sum by(tenant, da_cluster) (rate(m_err[`,
+				`(sum by(tenant, da_cluster) (rate(m_req[`}},
+		{"slo bad events", `- {recipe: slo_burn_rate, name: a, metric: m_err, denominator_metric: m_req, objective: "99.9"}`,
+			"custom:bad:", []string{`sum by(tenant, da_cluster) (increase(m_err[`}},
+		{"equals core", `- {recipe: threshold, name: a, metric: m_eq, op: "==", window: 5m, threshold: "1"}`,
+			":core", []string{`max by(tenant, version, da_cluster, name, mode) (`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := caEntry(t, CustomAlertServed, []string{"warning", "critical"}, tc.spec)
+			p, err := CompileCustomAlertPack([]TenantCustomAlerts{{Tenant: "t", Entries: []CustomAlertEntry{e}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			judged := 0
+			for name, rule := range packRules(t, p) {
+				if rule.get("record") == nil || !strings.Contains(name, tc.rule) ||
+					strings.HasPrefix(name, "custom:threshold:") || strings.HasPrefix(name, "custom_recipe_info") {
+					continue
+				}
+				judged++
+				expr := rule.get("expr").(string)
+				for _, w := range tc.want {
+					if !strings.Contains(expr, w) {
+						t.Errorf("%s lacks %q:\n%s", name, w, expr)
+					}
+				}
+				// Not one grouping of the rule names the tenant without the cluster.
+				for _, flat := range []string{"by(tenant)", "by(tenant, version)", "by(le, tenant, version)", "by(tenant, version, name, mode)"} {
+					if strings.Contains(expr, flat) {
+						t.Errorf("%s still groups %q:\n%s", name, flat, expr)
+					}
+				}
+			}
+			if judged == 0 {
+				t.Fatalf("no %q record in the pack: %v", tc.rule, keys(packRules(t, p)))
+			}
+		})
+	}
+}
+
+// The slo core pairs its three operands within one cluster: the long gate,
+// the short gate and the bad-event floor. on(tenant) alone would let one
+// cluster's long window fire with another cluster's short window.
+func TestSloCorePairsItsWindowsPerCluster(t *testing.T) {
+	e := caEntry(t, CustomAlertServed, []string{"critical", "warning"},
+		`- {recipe: slo_burn_rate, name: a, metric: m_err, denominator_metric: m_req, objective: "99.9"}`)
+	p, err := CompileCustomAlertPack([]TenantCustomAlerts{{Tenant: "t", Entries: []CustomAlertEntry{e}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sev := range []string{"critical", "warning"} {
+		expr := packRules(t, p)[coreName(e.RecipeID, sev)].get("expr").(string)
+		if got := strings.Count(expr, "and on(tenant, da_cluster)\n"); got != 2 {
+			t.Errorf("%s core pairs per cluster %d time(s), want 2:\n%s", sev, got, expr)
+		}
+		if strings.Contains(expr, "and on(tenant)\n") {
+			t.Errorf("%s core still pairs on(tenant) alone:\n%s", sev, expr)
+		}
+		// The threshold join and the maintenance mute stay per tenant; the
+		// short gate is many-to-one as well (a tenant's clusters against its
+		// one threshold row), so it says group_left too.
+		for _, w := range []string{"> on(tenant, version) group_left(name, mode)", "> on(tenant) group_left(name, mode)",
+			"> on(tenant, version) group_left\n", "> on(tenant) group_left\n",
+			"unless on(tenant)\n(user_state_filter"} {
+			if !strings.Contains(expr, w) {
+				t.Errorf("%s core lacks %q:\n%s", sev, w, expr)
+			}
+		}
+	}
+}
+
+// Absence stays tenant-wide (present in any cluster counts) and says so: the
+// pack carries the declaration check_cluster_identity.py reads for exactly
+// the absence cores, and for nothing else.
+func TestAbsenceCoreIsDeclaredTenantWide(t *testing.T) {
+	abs := caEntry(t, CustomAlertServed, []string{"critical"},
+		`- {recipe: absence, name: f, metric: m_abs, window: 5m, threshold: "0:critical"}`)
+	thr := caEntry(t, CustomAlertServed, []string{"warning"}, thrSpec)
+	p, err := CompileCustomAlertPack([]TenantCustomAlerts{{Tenant: "t", Entries: []CustomAlertEntry{abs, thr}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := coreName(abs.RecipeID, "critical")
+	expr := packRules(t, p)[core].get("expr").(string)
+	if !strings.Contains(expr, "unless on(tenant)\n  count by(tenant) (count_over_time(m_abs[5m]) > 0)") {
+		t.Errorf("the absence core is not the tenant-wide one:\n%s", expr)
+	}
+	if len(p.Declarations) != 1 || p.Declarations[core] != absenceTenantWide {
+		t.Errorf("declarations = %v, want only %s", p.Declarations, core)
+	}
+	if !strings.HasPrefix(absenceTenantWide, "da_cluster: tenant-wide by-drops-cluster (tenant) — ") {
+		t.Errorf("the declaration is not the form check_cluster_identity.py reads: %q", absenceTenantWide)
+	}
+}
+
+// A group_by that names the cluster label does not write it twice (the enum
+// does not hold it today).
+func TestGbSuffixWritesTheClusterOnce(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                                 ", da_cluster",
+		"persistentvolumeclaim":            ", da_cluster, persistentvolumeclaim",
+		"da_cluster,persistentvolumeclaim": ", da_cluster, persistentvolumeclaim",
+	} {
+		var gb []string
+		if in != "" {
+			gb = strings.Split(in, ",")
+		}
+		if got := gbSuffix(gb); got != want {
+			t.Errorf("gbSuffix(%v) = %q, want %q", gb, got, want)
 		}
 	}
 }

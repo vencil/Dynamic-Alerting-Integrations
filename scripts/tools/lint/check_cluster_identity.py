@@ -100,7 +100,12 @@ Not judged (say so rather than look covered)
     `group_left (da_cluster)`: only `on (..., da_cluster)` against a flat side
     is reported.
   * rules compiled from a tenant's own recipes at deploy time are not in
-    this tree.
+    this tree: only the pack compiled from this repo's own conf.d is. The
+    compiler writes every recipe per cluster and declares its absence cores
+    tenant-wide in the pack it writes (next section); what holds that for
+    the recipes this repo's conf.d does not use is the compiler's own tests
+    (custom_alert_compile_test.go, tests/dx/test_custom_alerts_promtool.py),
+    not this check.
 
 A `by (...)` / `on (...)` is judged only when it names an identity label
 (tenant, instance, pod, namespace, node): `count(x)` or `sum by (pack)`
@@ -121,14 +126,28 @@ reason, or one the rule no longer has a finding for, is itself a failure, so
 it cannot outlive the grouping it was written for. There is no list of
 exempt rules anywhere else.
 
+Declared today: MariaDBNoPrimary ("the tenant has a writable node somewhere"),
+TenantExporterReplicaDown ("another target of the tenant is up") and, in a
+compiled custom-alert pack, the core of every `absence` recipe ("the metric
+is present in at least one of the tenant's clusters" — a recipe declares no
+clusters to expect it in, ADR-006 contract 6). The last one is written by
+the compiler (custom_alert_compile.go `absenceTenantWide`), since nobody
+edits that pack by hand.
+
 The baseline
 ------------
-The rule packs do not yet carry `da_cluster`; today's findings are listed
-in tests/rulepacks/cluster_identity_baseline.yaml and the check is a
-two-way ratchet on it (as check_vmalert_coverage.py is on its own): a
-finding not listed is a failure, and so is a listed finding that is gone —
-the list must equal the tree. `--generate` rewrites it. #4097 ends with the
-list empty and this ratchet removed.
+tests/rulepacks/cluster_identity_baseline.yaml lists the findings the tree is
+allowed to have, and the check is a two-way ratchet on it (as
+check_vmalert_coverage.py is on its own): a finding not listed is a failure,
+and so is a listed finding that is gone — the list must equal the tree.
+`--generate` rewrites it.
+
+The list is EMPTY, and that is its meaning: every rule of the shipped tree
+either keeps `da_cluster` or declares its tenant-wide read where the rule is.
+A new finding therefore has nowhere to be listed — the rule gets the label,
+or the declaration above. The file stays so that the ratchet keeps one shape
+(and `--generate` on a tree with a finding still shows what it would list);
+an entry in it is debt to remove, never an exemption.
 
 Exit codes: 0 the tree equals the baseline; 1 it does not; 2 could not run.
 """
@@ -576,12 +595,16 @@ def per_target_jobs(root: "Path | None" = None) -> "set[str | None]":
 
 
 _BASELINE_HEADER = """\
-# Rules that do not yet keep `da_cluster` (#4097, ADR-006 "one tenant in several
+# Rules that do not keep `da_cluster` (#4097, ADR-006 "one tenant in several
 # clusters"). Managed by scripts/tools/lint/check_cluster_identity.py — a two-way
 # ratchet: a finding not listed here fails, and so does a listed finding that is gone.
+# The list is meant to be EMPTY: every shipped rule keeps the cluster, or says in
+# the comment block directly above it that it reads the tenant's clusters together
+# (`# da_cluster: tenant-wide <kind> (<labels>) — <why>`; the lint's docstring names
+# the rules that do). So a new finding is not added here: give the rule the label,
+# or declare it where it is. An entry is debt to remove, never an exemption.
 # Regenerate with `python3 scripts/tools/lint/check_cluster_identity.py --generate`
-# (needs da-read: `make da-read-build`). Being listed is tracked debt, not an
-# exemption; #4097 ends with this list empty.
+# (needs da-read: `make da-read-build`).
 """
 
 

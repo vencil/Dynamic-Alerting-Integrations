@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-07-12
-updated_at: 2026-10-21
+updated_at: 2026-11-23
 ---
 # ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯
 
@@ -80,8 +80,9 @@ _custom_alerts:
 ### 2. 編譯輸出（兩段預設檔位）
 
 - Recording：`custom:metric:{rid}:<win>` — SLI error-ratio × 4 窗（1h／5m／6h／30m）+ 壞事件絕對數 × 2 短窗（5m／30m）。
-- Fast-burn core（critical）：`(ratio:1h > thr_crit) and on(tenant) (ratio:5m > thr_crit) and on(tenant) (bad:5m > N_min)`。
-- Slow-burn core（warning）：`(ratio:6h > thr_warn) and on(tenant) (ratio:30m > thr_warn) and on(tenant) (bad:30m > N_min×6)`。
+- Fast-burn core（critical）：`(ratio:1h > thr_crit) and on(tenant, da_cluster) (ratio:5m > thr_crit) and on(tenant, da_cluster) (bad:5m > N_min)`。
+- Slow-burn core（warning）：`(ratio:6h > thr_warn) and on(tenant, da_cluster) (ratio:30m > thr_warn) and on(tenant, da_cluster) (bad:30m > N_min×6)`。
+- 同一個租戶在多個叢集時，比值與壞事件數逐叢集計算（`sum by(tenant, da_cluster)`），三個條件要在同一個叢集同時成立；`da_cluster` 是叢集身分的 label，見 [ADR-006「多叢集同租戶」](./006-tenant-mapping-topologies.md#多叢集同租戶叢集身分與告警粒度)。序列沒有這個 label 時與 `on(tenant)` 相同。
 - **`thr_crit`／`thr_warn` = 既有 `user_threshold{severity}` series**：exporter 在 resolve 期算好倍率×(1−obj) 餵入——**規則端零新表達式類別**，比較 RHS 維持裸 threshold series（現行所有 core 同形）；promtool fixture 落在既有類別。
   - **倍率不 hardcode、由 `slo_period` 動態導出**：常數的真正定義是**預算消耗語意**——fast＝「1h 燒掉 2% 預算」、slow＝「6h 燒掉 5% 預算」；倍率 M＝消耗比 × period ÷ 偵測窗（30d→14.4／6；28d→13.44／5.6）。golden vectors 兩種 period 都涵蓋。
   - **好性質（明寫）**：此案下 `slo_period` 只影響 exporter 算出的**值**、不進規則文本 → **不是 shape 成分**——換 period 不 re-slug、不分岔規則。
