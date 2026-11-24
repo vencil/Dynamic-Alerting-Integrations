@@ -106,7 +106,7 @@ SLO burn-rate 告警（Google SRE Workbook 第 5 章）是「該設多嚴、何�
 
 1. **cap 計 2，覆寫有代價。** 一條宣告固定產生兩條告警，計入租戶自訂告警上限的 2 個名額；tenant-api 寫入檢查、da-guard 與 validate-config 用同一個數。profile 裡的 recipe 是綁定它的租戶共用的 shape，不計入。租戶要不同的 objective 或 `min_events`，得寫自己的 `_custom_alerts`：花掉自己的 2 個名額，而且**整份取代** profile 的清單（profile 裡其他 recipe 要一併照抄）；改 `min_events` 還會多一組約 12 條規則，只改 objective 不會。recipe 文件寫明這一點。
 2. **壞宣告逐條拒收。** exporter 逐條判定，編譯器不為壞宣告產生規則，其餘照常編譯；規則群組上限與 promtool 閘門照舊。
-3. **基礎設施整體故障時的通知風暴：量測不抑制，只抑制通知。** 告警帶 `slo_burn: "true"`，可作為 inhibit 的目標；「整體故障時 SLO 告警該不該靜音」是組織決策，所以平台只把 inhibit pattern 寫進文件（[設定驅動設計](../design/config-driven.md#27-三態運營模式-operational-modes)），不預設出貨。
+3. **基礎設施整體故障時的通知風暴：量測不抑制，只抑制通知。** 告警帶 `slo_burn: "true"`，可作為 inhibit 的目標；「整體故障時 SLO 告警該不該靜音」是組織決策，所以平台只把 inhibit pattern 寫進文件（[設定驅動設計](../design/config-driven.md)的三態運營模式一節），不預設出貨。
 4. **維護窗只抑制告警，不抑制量測。** 告警照 rule pack 慣例在維護期間不觸發；recording 不受影響。
 5. **不擴大租戶的查詢表達力。** 輸入仍是受限參數：metric 名、列舉值、驗證過的數值。objective 永遠不進規則文字；`min_events` 經嚴格整數驗證後才寫成字面值，沒有注入面。所以不觸發 [ADR-029](029-custom-alert-cross-tenant-query-scoping.md) 的跨租戶隔離重評。
 6. **平台不發明量測。** SLI 的來源指標必須已存在。
