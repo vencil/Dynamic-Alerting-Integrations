@@ -652,6 +652,11 @@ class TestAlertCore:
         expr = 'cpu > 80 unless on(tenant) (other_metric or user_state_filter{flag="maintenance"} == 1)'
         assert self._core(expr) == expr
 
+    def test_an_unless_with_an_unnamed_selector_is_kept(self):
+        """#4298 review: `{job="db"}` names no metric, yet it is another exclusion."""
+        expr = 'cpu > 80 unless on(tenant) (user_state_filter{flag="maintenance"} == 1 or {job="db"})'
+        assert self._core(expr) == expr
+
     def test_unwrap_parens(self):
         """剝掉外層括號（含巢狀）。"""
         assert self._core("((cpu > 80))") == "cpu > 80"

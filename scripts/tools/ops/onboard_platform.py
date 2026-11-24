@@ -653,17 +653,25 @@ def classify_rule(rule):
     return "unknown"
 
 
+def _reads_only_user_state_filter(tree):
+    """右邊每一個 selector 都只讀 user_state_filter：無名 selector（``{job="db"}``）
+    也是別的排除條件，不算。"""
+    selectors = [n for n in _lib_consumer_read.shape_nodes(tree) if n["kind"] == "selector"]
+    return bool(selectors) and all(
+        _lib_consumer_read.shape_metric_names(n) == ["user_state_filter"] for n in selectors)
+
+
 def _alert_core(tree):
     """告警運算式語法樹裡要切門檻的那一段：剝掉外層括號與維護模式子句
     （``… unless on(…) (user_state_filter{…} == N)``，右邊只讀 user_state_filter
-    的 ``unless``；右邊還讀別的指標就是另一個排除條件，保留）。在語法樹上剝，不改寫文字（#4215）：子樹的 offset 仍指向
+    的 ``unless``；右邊還讀別的指標或有無名 selector，就是另一個排除條件，保留）。在語法樹上剝，不改寫文字（#4215）：子樹的 offset 仍指向
     原式，換行、註解、label 值裡的括號都不影響。"""
     node = tree
     while True:
         if node["kind"] == "paren":
             node = node["expr"]
         elif (node["kind"] == "binary" and node["op"] == "unless"
-              and _lib_consumer_read.shape_metric_names(node["rhs"]) == ["user_state_filter"]):
+              and _reads_only_user_state_filter(node["rhs"])):
             node = node["lhs"]
         else:
             return node
