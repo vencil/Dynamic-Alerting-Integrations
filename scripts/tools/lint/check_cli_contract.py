@@ -1927,7 +1927,7 @@ def write_baseline(findings: list[Finding], existing: list[BaselineEntry],
     # #3981 (review): an unchanged ledger is not rewritten — only a file that
     # is replaced must pass the entry's checks (it refuses this process's
     # stdin, harmless to leave alone). is_file() is False for a FIFO.
-    if not (path.is_file() and path.read_text(encoding="utf-8") == text):
+    if not (path.is_file() and path.read_bytes() == text.encode("utf-8")):  # bytes: a CRLF copy is rewritten
         write_repo_artifact(path, text)  # the artifact entry
     return len(counts)
 
