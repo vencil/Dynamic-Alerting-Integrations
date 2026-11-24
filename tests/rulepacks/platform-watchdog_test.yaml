@@ -1,5 +1,5 @@
 # promtool behavioural test for the alerting-plane self-liveness alerts
-# (ADR-025 D1 / #838). Validates:
+# (ADR-025 §1 / #838). Validates:
 #   1) Watchdog is ALWAYS firing (expr: vector(1), no `for`, no input needed) —
 #      it fires immediately and stays firing at any later eval. This is the whole
 #      point: a stopped beat (Prometheus/Alertmanager dead) is what the EXTERNAL

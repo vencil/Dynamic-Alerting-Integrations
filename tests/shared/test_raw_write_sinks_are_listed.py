@@ -194,9 +194,6 @@ DEBT: dict[str, dict[str, int]] = {
         "on_pre_build .mkdir [work_dir]": 1,
         "on_pre_build shutil.copy2 [work_dir]": 1,
     },
-    "scripts/ops/add_t_parallel.py": {
-        "process_file .write_text [artifact]": 1,
-    },
     "scripts/ops/bench_synth_tenants.py": {
         "cmd_inject .write_text [operator]": 1,
     },
@@ -219,12 +216,6 @@ DEBT: dict[str, dict[str, int]] = {
         "main .write_text [operator]": 1,
         "merge .mkdir [operator]": 1,
         "merge .open(w) [operator]": 1,
-    },
-    "scripts/ops/route_metrics_through_field.py": {
-        "process_file .write_text [artifact]": 1,
-    },
-    "scripts/ops/use_get_metrics.py": {
-        "process_file .write_text [artifact]": 1,
     },
     "scripts/ops/workflow_path_filter.py": {
         "cmd_assert .write_text [operator]": 1,
@@ -300,10 +291,6 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/lint/check_head_blob_hygiene.py": {
         "_fix_working_copy .write_bytes [artifact]": 1,
     },
-    "scripts/tools/lint/check_includes_sync.py": {
-        "_create_en_stub .write_text [artifact]": 1,
-        "_create_en_stub os.chmod [artifact]": 1,
-    },
     "scripts/tools/lint/fix_file_hygiene.py": {
         "fix_file open(w) [artifact]": 1,
     },
@@ -338,7 +325,7 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 86
+_DEBT_CEILING = 81
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {

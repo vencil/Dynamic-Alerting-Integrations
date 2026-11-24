@@ -119,6 +119,6 @@ exporter 不拒收不合法 id 的租戶，每次 reload 時對每個不合法 i
 
 ## 相關
 
-- [ADR-008](008-operator-native-integration-path.md) —— operator 路徑的取消
+- [ADR-008](008-operator-native-integration-path.md) —— Operator 路徑不產生 AlertmanagerConfig、不另建 operator
 - [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655) —— 本決定的討論與拍板
 - `scripts/tools/dx/gen_recipe_contract.py` —— 同樣「產生副本供 Go 與 portal 讀、搭配漂移守衛」的前例
