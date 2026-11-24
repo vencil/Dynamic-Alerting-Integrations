@@ -95,7 +95,7 @@ FAIL: 2 error(s) found (listed above)
 ### Domain policy
 
 - **判的是解析後的 routing**：主 receiver、`overrides`、`routes` 的 receiver type 都判；`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判、可同時觸發。
-- **`require_critical_escalation`**：租戶至少要有一條 `severity=critical` 的路徑通往 PagerDuty。合規條件是主 receiver 的 type 為 `pagerduty`，或有一條實際產出的 `routes` 條目以 `match` 比對 `severity: critical` 並送往 `pagerduty`。不合規的 finding 是 `critical_escalation_missing`（`--strict` 下擋下）。
+- **`require_critical_escalation`**：租戶至少要有一條 `severity=critical` 的路徑通往 PagerDuty。合規條件是主 receiver 的 type 為 `pagerduty`，或有一條實際產出的 `routes` 條目以 `match` 比對 `severity: critical` 並送往 `pagerduty`。不合規的 finding 是 `critical_escalation_missing`（`--strict` 下擋下）。值必須是布林（未加引號的 `true`／`false`）：寫成 `yes`、`on` 或字串，任何模式都擋下，不會被當成 true。
 - **critical 外漏的 WARN**：合規之後，凡是還收得到 critical 告警、又不是 PagerDuty 的目的地，各報一則 `critical_escalation_leak` WARN，不影響結束碼。判法：把目的地 N 的 `match` 加上 `severity: critical` 當成它會攔下的告警 `C_N`；N 的 `match` 寫了別的 `severity` 就收不到 critical；N 之前若有任何子路由的 `match` 是 `C_N` 的子集，告警先被攔走，也不報。這個判定只在租戶路由子樹內、只針對等值 matcher 時精確：排在租戶路由之前的平台路由（例如 Watchdog、sentinel）沒納入，可能多報；receiver 內容無效、不會產出的子路由仍被當成存在，可能多報或少報。`tests/shared/routing_policy_parity_matrix.json` 的 `escalation` 欄釘住判定結果。
 - **誰判**：只有路由產生器（[ADR-036](036-single-parser-effective-config.md) §9）。da-guard 不判：樹上有 `_domain_policy.yaml` 時列為未判定（結束碼 4），交給產生器。tenant-api 不自己判：每筆寫入由產生器對寫入後的整棵樹判，不合規是 422 `GENERATOR_FINDINGS`（[ADR-036](036-single-parser-effective-config.md) §4），WARN 不擋寫入。因為判的是整棵樹，改了 profile 或 policy 之後，任何經 tenant-api 的寫入都會碰到既有租戶的不合規。CI 以 `generate-routes --validate --strict` 擋下違規。
 
@@ -103,7 +103,7 @@ FAIL: 2 error(s) found (listed above)
 
 在階層式 conf.d（[ADR-016](016-conf-d-directory-hierarchy-mixed-mode.md)）下，路由產生器與 `check_routing_profiles.py` 在每一層都讀 `_routing_profiles.yaml` 與 `_domain_policy.yaml`（`.yml` 亦可）：
 
-- **profile 對所在子樹可見**：租戶解析 `_routing_profile: X` 時，找自己這一層或祖先層定義的 profile。profile 名稱**整棵樹唯一**：同一個名稱定義在兩個檔案是錯誤（根目錄同時有 `.yaml` 與 `.yml` 撞名也算），產生器結束碼 2。
+- **profile 對所在子樹可見**：租戶解析 `_routing_profile: X` 時，找自己這一層或祖先層定義的 profile。profile 名稱**整棵樹唯一**：同一個名稱定義在兩個檔案是錯誤（根目錄同時有 `.yaml` 與 `.yml` 撞名也算），訊息點名兩個檔案，產生器結束碼 2。
 - **policy 只作用於所在子樹**：子樹 policy 的 `tenants:` 點名子樹外的租戶是錯誤（`--strict` 下 ERROR，否則 WARN），訊息與「到處都找不到這個租戶」分開。不同層級的 policy **疊加判定**：租戶必須滿足每一條適用於它的 policy，所以子樹只能收緊。
 - **合併順序不變**：`_routing_defaults` 改由各目錄層組成的鏈提供，`_routing_enforced` 只認根目錄；規格見 [ADR-017 決策 9](017-defaults-yaml-inheritance-dual-hash.md#9-路由設定沿目錄逐層繼承)。tenant-api 只服務根目錄的租戶檔；寫入時的 policy 判定由產生器對整棵樹做。
 

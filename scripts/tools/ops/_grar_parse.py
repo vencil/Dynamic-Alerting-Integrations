@@ -640,7 +640,7 @@ def _record_profiles(fname: str, level: str, profiles: dict,
                 f"routing_profiles.{key_segment(name)}",
                 f"routing profile '{shown_key(name)}' is defined in both {shown_file(first)} and "
                 f"{shown_file(fname)} — a profile name must be unique across the whole "
-                f"conf.d tree (ADR-007 amendment 2026-09-28); rename or "
+                f"conf.d tree (ADR-007 §Scope in a hierarchical conf.d); rename or "
                 f"remove one of them")
             continue
         origin[name] = fname
