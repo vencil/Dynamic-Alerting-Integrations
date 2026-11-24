@@ -32,9 +32,10 @@
 # input skipped the check that would have caught the break. That filter was
 # a hand-kept list too, and it is gone.
 #
-# The required NAMES belong to the `*-gate` jobs at the end of this file
-# (#1398), which always run and fail unless their leg concluded `success`;
-# the legs themselves are named `… — run`.
+# Every job here reports its required name itself (`kind: job` in
+# .github/required-checks.yaml): none has `needs:`, `if:` or a matrix, so
+# none can be skipped, and a one-leg aggregate gate in front of it would only
+# cost one more runner slot and one more wait in the queue (#4224).
 #
 # DEDUP (CI-ROI wave): the former `python-tests` ("Python Tests") and
 # `go-tests` ("Go Tests") jobs of this workflow were strict SUBSETS of
@@ -85,13 +86,20 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same PR cancels this run (runner slots are this repo's
+# CI bottleneck; tests/ops/test_pr_workflow_concurrency.py holds the rule).
+# Any other event groups by run id: it neither cancels nor is replaced.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # (python-tests / go-tests jobs removed — see the DEDUP + OWNER RUNBOOK
   # banner at the top of this file. ci.yml's "Python Tests" and
   # "Go Tests" are the required checks now.)
 
   go-lint:
-    name: Go Lint — run
+    name: Go Lint
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -358,7 +366,7 @@ jobs:
         run: golangci-lint run ./...
 
   validate-config:
-    name: Validate Tenant Config & Routes — run
+    name: Validate Tenant Config & Routes
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -465,7 +473,7 @@ jobs:
             --ci
 
   version-check:
-    name: Version Consistency — run
+    name: Version Consistency
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -495,69 +503,3 @@ jobs:
       - run: python scripts/tools/dx/bump_docs.py --check
       - name: Count consistency (hooks / tools / rule packs / JSX)
         run: python scripts/tools/dx/bump_docs.py --sync-counts --check
-
-  go-lint-gate:
-    name: Go Lint
-    runs-on: ubuntu-24.04
-    permissions: {}
-    needs: [go-lint]
-    # The REQUIRED check (#1398). A job whose dependency failed or was
-    # skipped is itself skipped, and a skipped required check reports
-    # Success — so this job always runs and passes only when `go-lint`
-    # concluded `success` (#3756: no result is forgiven).
-    if: always()
-    steps:
-      - name: Verify go lint succeeded
-        env:
-          RUN_RESULT: ${{ needs.go-lint.result }}
-        run: |
-          echo "go-lint: $RUN_RESULT"
-          if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          echo "::error::go-lint did not succeed (result=$RUN_RESULT)"
-          exit 1
-
-  validate-config-gate:
-    name: Validate Tenant Config & Routes
-    runs-on: ubuntu-24.04
-    permissions: {}
-    needs: [validate-config]
-    # The REQUIRED check (#1398). A job whose dependency failed or was
-    # skipped is itself skipped, and a skipped required check reports
-    # Success — so this job always runs and passes only when `validate-config`
-    # concluded `success` (#3756: no result is forgiven).
-    if: always()
-    steps:
-      - name: Verify tenant config validation succeeded
-        env:
-          RUN_RESULT: ${{ needs.validate-config.result }}
-        run: |
-          echo "validate-config: $RUN_RESULT"
-          if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          echo "::error::validate-config did not succeed (result=$RUN_RESULT)"
-          exit 1
-
-  version-check-gate:
-    name: Version Consistency
-    runs-on: ubuntu-24.04
-    permissions: {}
-    needs: [version-check]
-    # The REQUIRED check (#1398). A job whose dependency failed or was
-    # skipped is itself skipped, and a skipped required check reports
-    # Success — so this job always runs and passes only when `version-check`
-    # concluded `success` (#3756: no result is forgiven).
-    if: always()
-    steps:
-      - name: Verify the version check succeeded
-        env:
-          RUN_RESULT: ${{ needs.version-check.result }}
-        run: |
-          echo "version-check: $RUN_RESULT"
-          if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          echo "::error::version-check did not succeed (result=$RUN_RESULT)"
-          exit 1

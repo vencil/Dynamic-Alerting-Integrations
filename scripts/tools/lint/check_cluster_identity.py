@@ -84,8 +84,18 @@ Not judged (say so rather than look covered)
   * only the FIRST place the label is dropped is reported; fixing an inner
     grouping can surface the one around it.
   * a flat left side: `expected unless on (tenant) count by (tenant, da_cluster) (seen)`
-    is the same hiding as the first point (CustomRecipeDiskInert,
-    VersionAwareThresholdInert) — the left side has no cluster to keep.
+    is the same hiding as the first point — the left side has no cluster to
+    keep, and no shipped rule is written that way any more: the two that were
+    (CustomRecipeDiskInert, VersionAwareThresholdInert) now start from a
+    per-cluster row (the tenant's running pods; the clusters where a tenant
+    that declared a version threshold has pods) and are judged like any other
+    rule. A rule that brings the shape back is still not reported; those two
+    are held by
+    rule-pack-kubernetes-sentinels-per-cluster_test.yaml.
+  * a fleet-wide existence test: `count(x) == 0` / `group(a) unless group(b)`
+    names no identity label, so one cluster's series answering for every
+    cluster is read as the deliberate fleet-wide figure the next paragraph
+    describes (VersionAwareThresholdInert was this one).
   * a per-tenant series compared with NO `on (...)` at all, or pulled in with
     `group_left (da_cluster)`: only `on (..., da_cluster)` against a flat side
     is reported.

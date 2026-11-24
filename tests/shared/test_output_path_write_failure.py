@@ -1635,7 +1635,7 @@ def _coverage_data_file() -> str | None:
 
 def _is_coverage_data(event: dict, path: str) -> bool:
     """A data file the coverage tracer leaves when THIS pytest run measures
-    subprocesses (`pytest --cov`, CI's advisory coverage job): every child
+    subprocesses (`pytest --cov`, CI's Python Tests shards): every child
     writes ``<data file>.<host>.pid<n>.<random>`` beside the parent's — in
     the repository, from inside the tool's process, with no ``scripts/``
     frame on the stack. All three must hold: measurement is on, the path is
@@ -2907,8 +2907,29 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "k8s/03-monitoring/; it takes no path. A refused target is held by "
         "tests/dx/test_generate_rulepack_configmaps.py "
         "(test_a_refused_configmap_leaves_the_others_unwritten).",
+    # #3981, sixth batch.
+    "dx/generate_crd_schemas.py":
+        "rewrites the vendored schemas under docs/schemas/crd/ and their lock, "
+        "named by SOURCES.yaml; it takes no path. A refused target and a later "
+        "source that fails are held by tests/dx/test_generate_crd_schemas.py "
+        "(test_a_refused_target_is_rc2_one_line_and_nothing_is_written, "
+        "test_a_later_failing_source_leaves_the_earlier_one_unwritten).",
+    # #3981, seventh batch: three lints that rewrite their own baseline.
+    "lint/check_cli_contract.py":
+        "`--write-baseline` rewrites docs/internal/cli-contract-baseline.yaml; it "
+        "takes no path. A refused ledger is held by tests/lint/test_check_cli_contract.py "
+        "(test_write_baseline_refuses_a_ledger_that_is_no_regular_file).",
+    "lint/check_percent_render_pinned.py":
+        "`--generate` rewrites tests/rulepacks/percent_render_baseline.yaml; it takes "
+        "no path. A refused baseline is held by "
+        "tests/lint/test_check_percent_render_pinned.py "
+        "(test_a_baseline_that_is_a_fifo_is_rc2_one_line).",
+    "lint/check_vmalert_coverage.py":
+        "`--generate` rewrites tests/rulepacks/vmalert_coverage_baseline.yaml; it takes "
+        "no path. A refused baseline is held by tests/lint/test_check_vmalert_coverage.py "
+        "(test_a_baseline_that_is_a_fifo_is_rc2_one_line).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 18
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 22
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

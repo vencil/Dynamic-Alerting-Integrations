@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""test_check_path_metadata_consistency — A-9 柔性一致性警告測試。
+"""test_check_path_metadata_consistency — 目錄路徑與 _metadata 一致性檢查的測試。
 
 覆蓋：
   1. 路徑推斷正確（domain = 第一層；environment = allowlist 命中）
-  2. _metadata 與 path 不符時發出警告（exit 0）
+  2. _metadata 與 path 不符時列出（不加 --ci exit 0；加 --ci exit 1）
   3. _metadata 缺欄位時不警告
   4. `_*.yaml` 檔案被略過
   5. 扁平配置（無階層路徑）不警告
@@ -235,7 +235,7 @@ class TestCLI:
         assert exit_code == 0
         assert "0 mismatch(es)" in stdout
 
-    def test_warning_still_exits_zero(self, tmp_path, monkeypatch, capsys):
+    def test_report_mode_exits_zero(self, tmp_path, monkeypatch, capsys):
         (tmp_path / ".git").mkdir()
         config_dir = tmp_path / "conf.d"
         _write(
@@ -263,10 +263,27 @@ class TestCLI:
             monkeypatch, capsys, tmp_path,
             "--config-dir", str(config_dir), "--ci",
         )
-        assert exit_code == 0
-        assert ":0: warning: path/metadata mismatch" in stdout
+        # ADR-016: _metadata is the one source; a path contradicting it
+        # fails CI.
+        assert exit_code == 1
+        assert ":0: error: path/metadata mismatch" in stdout
         assert "tenant=t" in stdout
         assert "field=environment" in stdout
+
+    def test_ci_mode_clean_tree_exits_zero(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        (tmp_path / ".git").mkdir()
+        config_dir = tmp_path / "conf.d"
+        _write(
+            config_dir / "db" / "prod" / "t.yaml",
+            _tenant_yaml("t", domain="db", environment="prod"),
+        )
+        exit_code, _, _ = _run_cli(
+            monkeypatch, capsys, tmp_path,
+            "--config-dir", str(config_dir), "--ci",
+        )
+        assert exit_code == 0
 
     def test_missing_config_dir_is_soft(
         self, tmp_path, monkeypatch, capsys
@@ -449,7 +466,7 @@ class TestExtensionSpellingAxis:
                 "--config-dir", str(config_dir), "--ci",
             )
 
-            # Warning-only on a tree it reads; a tree da-guard validation
+            # Findings on a tree it reads are exit 1 under --ci; a tree da-guard validation
             # names a path on is the shared conf.d refusal (#3206): rc 2.
             assert_refused(code, err, ["db-broken" + ext])
             # Name the REASON, not just the filename. The sibling tool has a
@@ -678,14 +695,14 @@ class TestDisplayPath:
     @staticmethod
     def _both_modes(monkeypatch, capsys, root: Path, conf: Path
                     ) -> tuple[list[str], str]:
-        """(`--ci` warning lines, human-mode stdout)."""
+        """(`--ci` error lines, human-mode stdout)."""
         _, ci_out, err = _run_cli(monkeypatch, capsys, root,
                                   "--config-dir", str(conf), "--ci")
         assert "1 mismatch(es)" in err, (ci_out, err)
         _, human, err = _run_cli(monkeypatch, capsys, root,
                                  "--config-dir", str(conf))
         assert "1 mismatch(es)" in err, (human, err)
-        return [ln for ln in ci_out.splitlines() if ":0: warning:" in ln], human
+        return [ln for ln in ci_out.splitlines() if ":0: error:" in ln], human
 
     def test_configmap_mount_shows_the_link_not_the_payload(
         self, tmp_path, monkeypatch, capsys,
@@ -698,7 +715,7 @@ class TestDisplayPath:
 
         ci, human = self._both_modes(monkeypatch, capsys, tmp_path, conf)
         assert ci == [
-            "conf.d/staging/acme.yaml:0: warning: path/metadata mismatch "
+            "conf.d/staging/acme.yaml:0: error: path/metadata mismatch "
             "tenant=acme field=environment path=staging metadata=prod"], ci
         assert "WARN path/metadata mismatch: conf.d/staging/acme.yaml\n" in (
             human), human
@@ -718,7 +735,7 @@ class TestDisplayPath:
 
         ci, human = self._both_modes(monkeypatch, capsys, tmp_path, conf)
         assert len(ci) == 1 and ci[0].startswith(
-            "conf.d/prod/acme.yaml:0: warning:"), ci
+            "conf.d/prod/acme.yaml:0: error:"), ci
         assert "WARN path/metadata mismatch: conf.d/prod/acme.yaml\n" in (
             human), human
         assert "staging/acme.yaml" not in "\n".join(ci) + human
@@ -734,7 +751,7 @@ class TestDisplayPath:
 
         ci, human = self._both_modes(monkeypatch, capsys, tmp_path, conf)
         assert len(ci) == 1 and ci[0].startswith(
-            "conf.d/staging/acme.yaml:0: warning:"), ci
+            "conf.d/staging/acme.yaml:0: error:"), ci
         assert "WARN path/metadata mismatch: conf.d/staging/acme.yaml\n" in (
             human), human
 
@@ -749,7 +766,7 @@ class TestDisplayPath:
         _write(real / "conf.d" / "staging" / "acme.yaml", self.BAD)
         link = tmp_path / "link"
         _symlink_or_skip(link, "real")
-        want = "conf.d/staging/acme.yaml:0: warning:"
+        want = "conf.d/staging/acme.yaml:0: error:"
         human_want = "WARN path/metadata mismatch: conf.d/staging/acme.yaml\n"
 
         # (a) repo root handed back through the link, config dir likewise.

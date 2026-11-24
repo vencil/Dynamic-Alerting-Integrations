@@ -40,6 +40,19 @@ argv a row needs to be live are below (``LIVE``), keyed by the row's id; a
 key that is no row is red. A point must also land where the baseline's did
 (same site, same path), and must fire.
 
+Repeats are not run (#4224). A child process that is handed nothing naming
+the input — no argv element, cwd or environment value is the input or under
+it, and it is not Python — is BLIND to it (the hook records ``blind`` on its
+``subprocess.Popen`` point): removing the input just before a blind child
+starts is the same fault as removing it at the next point. So in each run of
+consecutive blind ``Popen`` points (``blind_blocks``) only the first is
+injected; ``lint --policy`` hands its 82 Go readers stdin and repo paths, and
+was 82 runs of one fault. The conclusion is cross-checked, not trusted: the
+block's last point is injected too and must end the same way as its first.
+⚠️ The cross-check sees a child that reads the input anyway (a path sent on
+stdin) only when that changes how the run ends between the two ends of its
+block.
+
 A row whose run takes no look at its input after the judgement (a file
 `_lib_input.document` read whole) has no point: it passes on being live,
 and its count of points is recorded (``record_property("points", N)``) so
@@ -884,6 +897,38 @@ def same_answer(b0: Run, b1: Run, got: Run) -> bool:
                     for f in b0.files))
 
 
+def _verdict(b0: Run, b1: Run, got: Run, flag: str) -> str:
+    """How an input-mode run ended, as the oracle sorts it."""
+    if same_answer(b0, b1, got):
+        return "the baseline's answer"
+    if named_refusal(b0, got, flag, ["{CASE}/in"]):
+        return "a refusal naming the input"
+    return f"rc {got.rc}, neither"
+
+
+def blind_blocks(points: "list[dict]") -> "list[tuple[int, int]]":
+    """(first, last) point numbers of each maximal run of consecutive
+    ``subprocess.Popen`` points whose child is blind to the input. PURE.
+
+    A blind child (`_fault_injection/sitecustomize.py`: nothing it is handed
+    names the input, and it is not Python) cannot tell the input is gone, so
+    removing the input just before it starts is the same fault as removing
+    it just before the next point: within a block, the injections at
+    first+1..last repeat the one at first. One block of a single point skips
+    nothing."""
+    blocks, start = [], None
+    for i, e in enumerate(points, 1):
+        if e.get("ev") == "subprocess.Popen" and e.get("blind") is True:
+            start = i if start is None else start
+            continue
+        if start is not None:
+            blocks.append((start, i - 1))
+            start = None
+    if start is not None:
+        blocks.append((start, len(points)))
+    return blocks
+
+
 def crashed(run: Run) -> bool:
     text = run.stdout + run.stderr
     return ("Traceback (most recent call last)" in text or CRASH_LINE_PREFIX in text
@@ -963,8 +1008,13 @@ def _gate_row(tmp_path, kind, rid, script, flag, plan, record_property, confd=Fa
         "content — what it reads is not measured (give it content its answer depends on, LIVE)")
     keys0, keys1 = [_key(e) for e in b0.points], [_key(e) for e in b1.points]
     assert keys0 == keys1, f"{rid}: the two baselines look at the input differently"
+    assert [e.get("blind") for e in b0.points] == [e.get("blind") for e in b1.points], (
+        f"{rid}: the two baselines hand their children different paths")
     record_property("points", len(keys0))
-    plans = [(k, "input", "") for k in range(1, len(keys0) + 1)]
+    blocks = blind_blocks(b0.points)
+    repeats = {k for first, last in blocks for k in range(first + 1, last + 1)}
+    record_property("skipped_as_repeats", len(repeats))
+    plans = [(k, "input", "") for k in range(1, len(keys0) + 1) if k not in repeats]
     plans += [(e["k"], "file", "") for e in b0.points
               if e["where"] == "child" and not e["path"].endswith("/in")
               and (tmp_path / "run-0" / e["path"].removeprefix("{CASE}/")).is_file()]
@@ -980,10 +1030,28 @@ def _gate_row(tmp_path, kind, rid, script, flag, plan, record_property, confd=Fa
                          if p.is_file() and not p.is_symlink())
         plans += [(0, "judged-victim", v) for v in victims]
         plans += [(e["k"], "victim", v) for e in b0.points if e["ev"] == "subprocess.Popen"
-                  for v in victims]
+                  and e["k"] not in repeats for v in victims]
     faults = []
+    first_of = {first: last for first, last in blocks if last > first}
     for k, mode, victim in plans:
         got = _run(tmp_path, next(seq), kind, plan, script, "live", k=k, mode=mode, victim=victim)
+        if mode == "input" and k in first_of:
+            # The skip rests on the children of the block being blind. Check
+            # it rather than trust it: the block's LAST point must end the
+            # same way as its first (the same answer, or a refusal naming
+            # the input) — a child that read the input some way it was not
+            # handed (stdin, a file it was pointed at) splits the two.
+            last = first_of[k]
+            other = _run(tmp_path, next(seq), kind, plan, script, "live", k=last)
+            ends = [_verdict(b0, b1, run, flag) for run in (got, other)]
+            if len([e for e in other.points if e["fired"]]) != 1:
+                faults.append(f"{rid}: the cross-check at point {last} did not fire")
+            elif ends[0] != ends[1]:
+                faults.append(
+                    f"{rid}: points {k}..{last} were skipped as repeats (children handed "
+                    f"no path under the input), but removing the input at {k} ends "
+                    f"'{ends[0]}' and at {last} ends '{ends[1]}' — a child in between "
+                    "reads the input after all; its points are not repeats")
         if mode == "judged-victim":
             where = f"{rid}: {victim} removed at the judgement"
             if not any(e.get("fired") for e in got.judged):
@@ -1051,6 +1119,43 @@ def test_every_look_after_the_judgement_is_a_point(tmp_path, look):
     proc, events = _hooked(tmp_path, code, make=make)
     assert proc.returncode == 0, proc.stderr
     assert [e for e in events if e["ev"] != "judged"], events
+
+
+@pytest.mark.parametrize("child, blind", [
+    ("subprocess.run(['true'])", True),                                  # handed nothing
+    ("subprocess.run(['true'], input=b'x')", True),                      # stdin is not seen
+    ("subprocess.run(['true', p])", False),                              # the input
+    ("subprocess.run(['true', p + '/f'])", False),                       # a path under it
+    ("subprocess.run(['true', '--dir=' + p])", False),                   # inside an argument
+    ("subprocess.run(['true', os.path.basename(p)], cwd=os.path.dirname(p))", False),
+    ("subprocess.run(['true'], cwd=p)", False),                          # runs inside it
+    ("subprocess.run(['true'], env={'X': p, 'PATH': os.environ['PATH']})", False),
+    ("subprocess.run([sys.executable, '-c', 'pass'])", False),          # Python looks itself
+], ids=["nothing", "stdin", "argv-input", "argv-under", "argv-embedded", "argv-relative",
+        "cwd-inside", "env", "python-child"])
+def test_a_popen_point_says_whether_its_child_is_blind(tmp_path, child, blind):
+    """`blind` is what lets the gate skip repeats, so every way a child can
+    be handed the input must clear it (#4224)."""
+    code = _JUDGE + "import os, subprocess; p = sys.argv[1]; " + child
+    proc, events = _hooked(tmp_path, code)
+    assert proc.returncode == 0, proc.stderr
+    popen = [e for e in events if e["ev"] == "subprocess.Popen"]
+    assert [e["blind"] for e in popen][:1] == [blind], events
+
+
+@pytest.mark.parametrize("marks, expected", [
+    ("", []),
+    ("b", [(1, 1)]),
+    ("bbb", [(1, 3)]),
+    ("xbbxb", [(2, 3), (5, 5)]),
+    ("bxpb", [(1, 1), (4, 4)]),     # a non-blind Popen ends a block
+    ("xxx", []),
+], ids=["empty", "one", "run", "two-runs", "split-by-popen", "none"])
+def test_blind_blocks_are_maximal_runs_of_blind_popens(marks, expected):
+    ev = {"b": {"ev": "subprocess.Popen", "blind": True},
+          "p": {"ev": "subprocess.Popen", "blind": False},
+          "x": {"ev": "os.stat"}}
+    assert blind_blocks([ev[m] for m in marks]) == expected
 
 
 def test_a_look_before_the_judgement_is_no_point(tmp_path):

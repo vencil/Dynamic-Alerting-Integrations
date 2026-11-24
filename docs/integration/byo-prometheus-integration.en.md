@@ -471,6 +471,8 @@ Even if you skip the byo-check above, the platform has a runtime safety net: whe
 2. the kubelet volume-stats scrape job or `namespace→tenant` relabel is missing (Step A skipped);
 3. the CSI driver does not implement NodeGetVolumeStats (prerequisite unmet).
 
+When one tenant runs in several clusters, this alert is judged per cluster ([ADR-006](../adr/006-tenant-mapping-topologies.en.md), "One tenant in several clusters"): on a Prometheus that holds every cluster's data, it fires once for each cluster where the tenant has a Running pod and no volume-stats, and the alert's `da_cluster` and annotations say which one; "no volume-stats" means either of `kubelet_volume_stats_available_bytes` and `kubelet_volume_stats_capacity_bytes` is missing, so finding one of them is not enough; volume-stats in another cluster do not keep it quiet. Check the three causes above in that cluster.
+
 > **Capability boundary (honest)**: volume-stats reflect the tenant's view of **logical** quota. A thin-provisioned backing pool that is physically full (while `volume_stats` still reports free space and I/O has frozen) is out of scope for this alert and should be defended by the platform SRE via `node_filesystem_*` / CSI controller metrics (the infrastructure view).
 
 ---

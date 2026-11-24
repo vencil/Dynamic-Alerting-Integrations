@@ -18,7 +18,9 @@ Revised 2026-09-28: the routing plane follows the same directory hierarchy as th
 
 Revised 2026-10-16: the route generator is the routing plane's one reader; da-guard no longer has a routing layer of its own.
 
-Revised 2026-11-22: rewritten to describe current behavior; "the directory path provides `_metadata` defaults" is marked as not implemented (see "Consequences and known limits").
+Revised 2026-11-22: rewritten to describe current behavior.
+
+Revised 2026-11-24 (owner decision): "the directory path provides `_metadata` defaults" is withdrawn — `_metadata` is the one source, and CI refuses a directory path that contradicts it; the limit that the hierarchy does not hold in a standard deployment is added.
 
 ## Decision
 
@@ -86,7 +88,7 @@ Run with --apply to move them. (1 files will be moved)
     legacy-db.yaml
 ```
 
-`--apply` hands the whole plan to da-guard as one batch: if any move does not hold (a destination no reader reads, one that already exists, a tree the move would make worse), no file is moved and the exit code is 2. When the tree is in a git working tree, every source must be a file git tracks, and after the move the index looks as it would after `git mv`. `--dry-run` changes no file, so it can go into a PR check.
+`--apply` hands the whole plan to da-guard as one batch: if any move does not hold (a destination no reader reads, one that already exists, a tree the move would make worse), no file is moved and the exit code is 2. When the tree is in a git working tree and `git` can be found, every source must be a file git tracks, and after the move the index looks as it would after `git mv`; if the files are moved but the index update fails, the exit code is 2 and the message lists the commands that record the moves (rerunning does not). When `git` cannot be found, the files are moved without checking that they are tracked or updating the index, and the last line says they were not recorded in git. `--dry-run` changes no file, so it can go into a PR check.
 
 ## Context
 
@@ -96,11 +98,12 @@ A flat layout puts every tenant YAML in one `conf.d/`. Past two hundred tenants:
 2. **Blast radius not visible**: how many tenants a defaults change affects cannot be read from the directory structure, which makes PR review and CI judgment hard.
 3. **Repeated metadata**: every tenant fills in `_metadata.domain/region/environment` by hand, saying what the directory structure already says.
 
-A hierarchical layout solves the first two: the directory is the scope, and a `_defaults.yaml` affects only the tenants under it. For the third, see "Consequences and known limits".
+A hierarchical layout solves the first two: the directory is the scope, and a `_defaults.yaml` affects only the tenants under it. The third is not solved by the hierarchy; see the first item of "Consequences and known limits".
 
 ## Consequences and known limits
 
-- **The directory path does not yet provide `_metadata` defaults.** The original decision: when a tenant lacks `_metadata.domain` and the like, its directory fills them in (level 1 is the domain, level 2 the region, level 3 the environment), and `_metadata` written out takes precedence. In the current behavior threshold-exporter's effective metadata reads only `_metadata`; the directory path plays no part. `check_path_metadata_consistency.py` only warns when the first directory segment disagrees with `domain`, or a segment that is a known environment name disagrees with `environment`, and does not block a commit. So after moving to a hierarchy, `_metadata` is still filled in by hand.
+- **`_metadata` is the one source of domain / region / environment; the directory path supplies no defaults.** Of these, domain and environment feed tenant-api's RBAC scope and can be changed only by an admin restricted on no scope axis ([ADR-027](027-tenant-api-caller-identity.en.md) §7); inferred from the path, anyone able to move a file could change a tenant's authorization scope. And an inferred value would have almost no reader: tenant-api reads only the tenant files at the root, and a standard deployment is flat (next item), so the exporter in the cluster sees no directories. So after moving to a hierarchy, `_metadata` is still filled in by hand; `migrate-conf-d` decides a file's directory from its `_metadata`, the same direction. `check_path_metadata_consistency.py --ci` refuses (exit code 1) a first directory segment that contradicts `domain`, or a segment that is a known environment name and contradicts `environment`, so the layout cannot mislead a reader.
+- **The hierarchy does not hold in a standard deployment.** `configmap-assemble`, the customer's deployment step, assembles flat: only the files at the top of conf.d go into the ConfigMap, so tenants in subdirectories and subdirectory `_defaults.yaml` files never reach the exporter in the cluster, and assembly only logs a WARN ([GitOps deployment](../integration/gitops-deployment.en.md) §3). CI's tools and the route generator read the whole tree, the exporter in the cluster reads one flat level, and the two get different results for the same tenant — a tenant in a subdirectory does not exist in the cluster at all. Tracked in [#4266](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4266).
 - **Metrics carry no path.** Directory depth does not change any metric label; `tenant` is still the one tenant key, and moving a file does not change any series.
 - **Routing keys in a subdirectory `_defaults.yaml` are not read.** `_routing*` written in the `defaults:` block of a subdirectory `_defaults.yaml` is consumed by nothing; the route generator names it (`routing_in_unread_location`) and refuses it under `--validate`.
 
@@ -108,7 +111,7 @@ A hierarchical layout solves the first two: the directory is the scope, and a `_
 
 | Reader | Hierarchical `conf.d/` |
 |:--|:--|
-| threshold-exporter (emitted metrics and `/effective`) | ✅ recursive, full inheritance |
+| threshold-exporter (emitted metrics and `/effective`) | ✅ recursive, full inheritance (of the tree it reads; a standard deployment sends it one flat level, see above) |
 | `validate_config.py` | ✅ recursive |
 | route generator (`generate_alertmanager_routes.py`) | ✅ reads the whole tree's tenants and routing layers |
 | da-guard | does not judge routing: routing content in the tree is listed as undetermined (exit code 4) and left to the route generator ([ADR-036](036-single-parser-effective-config.en.md) §9) |

@@ -1064,7 +1064,7 @@ repos:
         # until the next .py commit.
 
       - id: path-metadata-consistency-check
-        name: Path/metadata consistency (warning-only)
+        name: Path/metadata consistency (_metadata is the source; a contradicting path fails)
         # #2906: the tree is read through `da-guard parse-tree` (with_da_guard.sh).
         entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_path_metadata_consistency.py --ci
         language: system

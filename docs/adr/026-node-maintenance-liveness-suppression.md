@@ -77,7 +77,7 @@ threshold-exporter 因此對這個租戶輸出 `user_state_filter{filter="mainte
 | 租戶自訂告警 | 看宣告 | `mute`（編譯器一律寫入排除條件） |
 | `TenantExporterAbsent`（critical） | 單實例 exporter 的節點被 drain → **會** | `page` |
 
-只剩一類：`TenantExporterAbsent` × 單實例 exporter。這條告警對租戶在 `_expected_exporters` 宣告的每一種 exporter 各判一次（宣告寫成 `種類@叢集` 時逐叢集判），某一種全部沒有回應就響。它刻意標成 `page`，因為「這一種 exporter 一台都沒在回應」在維護窗內也可能是真的停機。HA exporter 下，drain 一個節點還有別的副本在回應，這條告警不會響。
+只剩一類：`TenantExporterAbsent` × 單實例 exporter。這條告警對租戶在 `_expected_exporters` 宣告的每一種 exporter 各判一次（宣告寫成 `種類@叢集` 時逐叢集判，但只在 exporter 的存在序列帶 `da_cluster` 時成立；不帶時，這一種的任一 exporter 回應就算所有宣告的叢集都在），某一種全部沒有回應就響。它刻意標成 `page`，因為「這一種 exporter 一台都沒在回應」在維護窗內也可能是真的停機。HA exporter 下，drain 一個節點還有別的副本在回應，這條告警不會響。
 
 另有一類平台自我監控告警會在升級時響，受眾是平台 SRE，多半是「升級期間本來就該看到」的。處置是寫進 runbook，不是抑制。
 
@@ -105,7 +105,7 @@ threshold-exporter 因此對這個租戶輸出 `user_state_filter{filter="mainte
 
 1. **目前沒有需求。** 現有客戶都是 HA，這條告警在 drain 時不會響。
 2. **出錯的代價高。** 這個功能本質是「維護期間靜音一條 critical 存活告警」，設定一錯就能藏住真實停機。
-3. **之後補很便宜。** 標籤從 `page` 改成 `mute`，產生器就會寫入排除條件；要另外做的只有上面的 CLI 與護欄。
+3. **之後補很便宜。** 這條告警的 expr 由 `scripts/tools/_lib_exporter_presence.py` 生成：在 `alert_exprs()` 的 `TenantExporterAbsent` 項目加上維護條件、標籤改成 `mute` 即可，不動 `MassExporterOutage` 也在用的 `absent_expr()`；要另外做的只有上面的 CLI 與護欄。
 
 ## 考慮過的替代方案
 
