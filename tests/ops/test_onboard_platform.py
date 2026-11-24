@@ -24,7 +24,7 @@ from onboard_platform import (
     _extract_tenant_from_matchers,
     _check_timing_guardrails,
     classify_rule,
-    _clean_alert_expr,
+    _alert_core,
     _enrich_parsed_result,
     extract_threshold_candidates,
     analyze_rule_files,
@@ -623,35 +623,42 @@ class TestClassifyRule:
         assert classify_rule({"comment": "test"}) == "unknown"
 
 
-class TestCleanAlertExpr:
-    """_clean_alert_expr() 運算式清理測試。"""
+class TestAlertCore:
+    """_alert_core()：在語法樹上取出要切門檻的那一段（#4215，取代以 regex 清理文字）。"""
 
-    def test_multiline_merge(self):
-        """多行運算式合併為單行。"""
-        assert _clean_alert_expr("cpu_usage\n  > 80") == "cpu_usage > 80"
+    @staticmethod
+    def _core(expr):
+        import _lib_consumer_read as cr
+        tree = cr.promql_shape_each([expr], raise_refused=True)[0]
+        node = _alert_core(tree)
+        return expr.encode("utf-8")[node["start"]:node["end"]].decode("utf-8")
+
+    def test_multiline_kept_as_written(self):
+        """多行運算式不必合併：offset 指向原式。"""
+        assert self._core("cpu_usage\n  > 80") == "cpu_usage\n  > 80"
 
     def test_remove_unless_maintenance(self):
-        """移除 unless on() maintenance 子句。"""
+        """剝掉讀 user_state_filter 的 unless 子句。"""
         expr = 'metric > 50 unless on(tenant) (user_state_filter{flag="maintenance"} == 1)'
-        assert _clean_alert_expr(expr) == "metric > 50"
+        assert self._core(expr) == "metric > 50"
 
-    def test_unwrap_balanced_parens(self):
-        """移除最外層平衡括號。"""
-        assert _clean_alert_expr("(cpu > 80)") == "cpu > 80"
+    def test_an_unless_on_another_metric_is_kept(self):
+        expr = 'metric > 50 unless on(tenant) other_metric'
+        assert self._core(expr) == expr
 
-    def test_keep_unbalanced_parens(self):
-        """不平衡括號不移除。"""
+    def test_unwrap_parens(self):
+        """剝掉外層括號（含巢狀）。"""
+        assert self._core("((cpu > 80))") == "cpu > 80"
+        assert self._core("(max(cpu{job='test'}) > 80)") == "max(cpu{job='test'}) > 80"
+
+    def test_or_is_kept(self):
+        """不是單一括號節點的不剝。"""
         expr = "(cpu > 80) or (mem > 90)"
-        assert _clean_alert_expr(expr) == expr
+        assert self._core(expr) == expr
 
-    def test_empty_expr(self):
-        """空運算式回傳空字串。"""
-        assert _clean_alert_expr("") == ""
-        assert _clean_alert_expr("   ") == ""
-
-    def test_nested_balanced_parens(self):
-        """巢狀平衡括號正確處理。"""
-        assert _clean_alert_expr("(max(cpu{job='test'}) > 80)") == "max(cpu{job='test'}) > 80"
+    def test_a_paren_inside_a_label_value_does_not_count(self):
+        """regex 清理數括號會被 label 值裡的括號騙；語法樹不會。"""
+        assert self._core('(x{a=")"} > 1)') == 'x{a=")"} > 1'
 
 
 class TestExtractThresholdCandidates:

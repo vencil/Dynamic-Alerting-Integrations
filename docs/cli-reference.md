@@ -2318,7 +2318,6 @@ da-tools migrate <input_file> [options]
 | `--triage` | Triage 模式：只產出 CSV 分桶報告 | false |
 | `--interactive` | 遇到不確定時詢問使用者 | false |
 | `--no-prefix` | 停用 custom_ 前綴（不建議） | false |
-| `--no-ast` | 強制使用舊版 regex 引擎 | false |
 | `--prefix <PREFIX>` | 自訂指標前綴 | `custom_` |
 | `--no-dictionary` | 停用啟發式字典比對 | false |
 

@@ -116,7 +116,7 @@ da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /d
 
 ### 4. 轉換既有規則（da-tools migrate）
 
-已有傳統 Prometheus alert rules 的團隊，用自動轉換工具（v4 — AST + regex 雙引擎，PromQL AST 解析失敗時降級至 regex）：
+已有傳統 Prometheus alert rules 的團隊，用自動轉換工具（PromQL 由 Prometheus 自己的 parser 讀成語法樹；它拒收的規則檔以 rc 2 結束，沒有降級路徑）：
 
 ```bash
 da-tools migrate /data/legacy-rules.yml --dry-run            # 預覽
@@ -131,7 +131,7 @@ da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # 大型租戶
 - **Auto-Suppression**：同 metric 的 warning + critical 自動配對，兩條告警帶相同的 `metric_group` label，由 Alertmanager inhibit 壓制 warning 通知（租戶可設 `_severity_dedup: "disable"` 取消）
 - **聚合模式智能猜測**：6 條啟發規則自動猜 `sum` / `max`，帶 ASCII 警告方塊提示確認
 
-AST 引擎深度（為什麼 `promql-parser` 比 regex 準）+ 完整啟發規則 + Auto-Suppression 配對邏輯：[`migration-engine.md`](migration-engine.md)。CLI flag 矩陣：[`cli-reference.md#migrate`](cli-reference.md#migrate)。三件套部署位置（ConfigMap 合併 vs 獨立掛載）：[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署)。
+遷移引擎怎麼讀 PromQL（Prometheus 自己的語法樹，不掃文字）+ 完整啟發規則 + Auto-Suppression 配對邏輯：[`migration-engine.md`](migration-engine.md)。CLI flag 矩陣：[`cli-reference.md#migrate`](cli-reference.md#migrate)。三件套部署位置（ConfigMap 合併 vs 獨立掛載）：[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署)。
 
 ### 5. 部署 threshold-exporter
 
@@ -408,7 +408,7 @@ da-tools deprecate mysql_slave_lag mysql_innodb_buffer_pool --execute  # 批次
 | **工具與引擎參考** | |
 | [`migration-toolkit-installation.md`](migration-toolkit-installation.md)（三條交付路徑 + cosign keyless 驗章）| ⭐⭐⭐ |
 | [`cli-reference.md`](./cli-reference.md)（所有 `da-tools` 命令 + flag 矩陣）| ⭐⭐⭐ |
-| [AST 遷移引擎架構](./migration-engine.md)（promql-parser + 啟發規則 + Auto-Suppression）| ⭐⭐ |
+| [AST 遷移引擎架構](./migration-engine.md)（Prometheus 語法樹 + 啟發規則 + Auto-Suppression）| ⭐⭐ |
 | [VictoriaMetrics Integration](integration/victoriametrics-integration.md)（VM stack 整合導覽）| ⭐⭐ |
 | **角色快速入門** | |
 | [Tenant 快速入門指南](getting-started/for-tenants.md) | ⭐⭐ |

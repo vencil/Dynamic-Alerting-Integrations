@@ -374,7 +374,7 @@ OPTIONAL_CHARTS: frozenset = frozenset(CHART_PRESENCE)
 
 
 class AbsenceGuardUnreadable(Exception):
-    """The expression could not be parsed, so its guards cannot be judged."""
+    """Prometheus' parser refused the expression, so its guards cannot be judged."""
 
 
 #: Functions whose result has a value whatever their argument holds, so a
@@ -384,85 +384,81 @@ _ALWAYS_VALUED_CALLS = frozenset({
 })
 
 
-def _present(node) -> frozenset:
-    """The optional charts whose presence is GUARANTEED whenever *node* has a
-    value — not merely mentioned under it. `x and y` guarantees what either
-    side does; `x or y` only what both sides do (`<presence> or vector(1)`
-    guarantees nothing); `x unless y` only what `x` does; arithmetic and
-    comparison need every vector operand, so they guarantee what any operand
-    does; a function or aggregation guarantees what its arguments do, except
-    the always-valued ones (_ALWAYS_VALUED_CALLS). Unknown node → nothing."""
-    kind = type(node).__name__
-    if kind == "VectorSelector":
+def _present(node: dict) -> frozenset:
+    """The optional charts whose presence is GUARANTEED whenever *node* (a
+    ``promql_shape`` tree) has a value — not merely mentioned under it.
+    `x and y` guarantees what either side does; `x or y` only what both sides
+    do (`<presence> or vector(1)` guarantees nothing); `x unless y` only what
+    `x` does; arithmetic and comparison need every vector operand, so they
+    guarantee what any operand does; a function or aggregation guarantees
+    what its arguments do, except the always-valued ones
+    (_ALWAYS_VALUED_CALLS). Any other node → nothing."""
+    kind = node["kind"]
+    if kind == "selector":
+        eq = [(m["name"], m["value"]) for m in node["matchers"] if m["type"] == "="]
         return frozenset(
             chart for chart, (metric, label, value) in CHART_PRESENCE.items()
-            if node.name == metric and any(
-                m.name == label and str(m.op).endswith("Equal") and
-                not str(m.op).endswith("NotEqual") and m.value == value
-                for m in node.matchers.matchers))
-    if kind == "BinaryExpr":
-        op = str(node.op)
-        lhs, rhs = _present(node.lhs), _present(node.rhs)
-        if op == "or":
+            if ("__name__", metric) in eq and (label, value) in eq)
+    if kind == "binary":
+        lhs, rhs = _present(node["lhs"]), _present(node["rhs"])
+        if node["op"] == "or":
             return lhs & rhs
-        if op == "unless":
+        if node["op"] == "unless":
             return lhs
         return lhs | rhs
-    if kind == "Call":
-        if node.func.name in _ALWAYS_VALUED_CALLS:
+    if kind == "call":
+        if node["name"] in _ALWAYS_VALUED_CALLS:
             return frozenset()
         out: frozenset = frozenset()
-        for arg in node.args or []:
+        for arg in node["args"]:
             out |= _present(arg)
         return out
-    if kind == "MatrixSelector":
-        return _present(node.vector_selector)
-    if kind in ("AggregateExpr", "ParenExpr", "UnaryExpr", "SubqueryExpr"):
-        return _present(node.expr)
+    if kind in ("aggregate", "paren", "unary", "subquery"):
+        return _present(node["expr"])
     return frozenset()
 
 
-def unguarded_absences(expr: str) -> list[str]:
-    """The absence checks in *expr* over an optional chart's metric that are
-    not filtered by that chart's presence check (CHART_PRESENCE). A guard
-    counts only when an `and` joins it to the absence: walking down from the
-    root, the side of an `and` inherits the charts whose presence the OTHER
-    side checks; nothing else (`or`, `unless`, arithmetic) adds a guard. So
-    `absent(x) and on() count(<presence>) > 0` passes and `absent(x) or
-    <presence>` does not. Read with promql_parser; an expression it cannot
-    parse raises AbsenceGuardUnreadable (fail closed). [] when all guarded."""
-    try:
-        import promql_parser
-        tree = promql_parser.parse(expr)
-    except Exception as exc:  # noqa: BLE001 — any reader failure is unjudgeable
-        raise AbsenceGuardUnreadable(f"{expr!r}: {exc}") from exc
+def unguarded_absences(expr) -> list[str]:
+    """The absence checks in *expr* (its text, or its ``promql_shape`` tree)
+    over an optional chart's metric that are not filtered by that chart's
+    presence check (CHART_PRESENCE). A guard counts only when an `and` joins
+    it to the absence: walking down from the root, the side of an `and`
+    inherits the charts whose presence the OTHER side checks; nothing else
+    (`or`, `unless`, arithmetic) adds a guard. So `absent(x) and on()
+    count(<presence>) > 0` passes and `absent(x) or <presence>` does not.
+    Read off Prometheus' parse tree (#4215); an expression its parser refuses
+    raises AbsenceGuardUnreadable (fail closed). [] when all guarded."""
+    if isinstance(expr, dict):
+        tree = expr
+    else:
+        (tree,) = _lib_consumer_read.promql_shape_each([str(expr)])
+        if isinstance(tree, _lib_consumer_read.InputRefused):
+            raise AbsenceGuardUnreadable(f"{expr!r}: {_lib_consumer_read.error_text(tree)}")
     found: list[str] = []
 
-    def visit(node, guarded: frozenset) -> None:
-        kind = type(node).__name__
-        if kind == "BinaryExpr":
-            if str(node.op) == "and":
-                visit(node.lhs, guarded | _present(node.rhs))
-                visit(node.rhs, guarded | _present(node.lhs))
+    def visit(node: dict, guarded: frozenset) -> None:
+        kind = node["kind"]
+        if kind == "binary":
+            if node["op"] == "and":
+                visit(node["lhs"], guarded | _present(node["rhs"]))
+                visit(node["rhs"], guarded | _present(node["lhs"]))
             else:
-                visit(node.lhs, guarded)
-                visit(node.rhs, guarded)
+                visit(node["lhs"], guarded)
+                visit(node["rhs"], guarded)
             return
-        if kind == "Call" and node.func.name in ("absent", "absent_over_time"):
-            arg = node.args[0] if node.args else None
-            vs = getattr(arg, "vector_selector", arg)
-            metric = getattr(vs, "name", None)
-            fam = resolve_family(metric) if metric else None
-            if fam and fam[1] == "helm-service" and fam[2] in OPTIONAL_CHARTS \
-                    and fam[2] not in guarded:
-                pm, label, value = CHART_PRESENCE[fam[2]]
-                found.append(f"{node.func.name}({metric}): {fam[2]} is optional — AND it with "
-                             f"`count({pm}{{{label}=\"{value}\"}}) > 0`")
-        for attr in ("expr", "param"):
-            child = getattr(node, attr, None)
-            if child is not None and not isinstance(child, (str, int, float)):
-                visit(child, guarded)
-        for arg in getattr(node, "args", None) or []:
+        if kind == "call" and node["name"] in ("absent", "absent_over_time"):
+            for metric in (_lib_consumer_read.shape_metric_names(node["args"][0])
+                           if node["args"] else []):
+                fam = resolve_family(metric)
+                if fam and fam[1] == "helm-service" and fam[2] in OPTIONAL_CHARTS \
+                        and fam[2] not in guarded:
+                    pm, label, value = CHART_PRESENCE[fam[2]]
+                    found.append(f"{node['name']}({metric}): {fam[2]} is optional — AND it "
+                                 f"with `count({pm}{{{label}=\"{value}\"}}) > 0`")
+        for key in ("expr", "param"):
+            if isinstance(node.get(key), dict):
+                visit(node[key], guarded)
+        for arg in node.get("args") or []:
             visit(arg, guarded)
 
     visit(tree, frozenset())

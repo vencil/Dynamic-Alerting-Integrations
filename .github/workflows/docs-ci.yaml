@@ -350,16 +350,8 @@ jobs:
           #     different numbers (20 / 30 / 47) because the answer depends on
           #     what the measuring process had already imported. The direction
           #     is robust; the magnitude is an artefact.
-          #   * promql-parser is DEFENSIVE, not required —
-          #     `migrate_rule.py:54-58` guards promql_parser with
-          #     try/except ImportError, and with it removed the captured
-          #     defaults are byte-identical and blind stays 0. It is here so
-          #     a future unguarded import cannot turn a required check red on an
-          #     unrelated PR; it is pinned in the same constraints file.
-          # (An earlier revision called promql-parser required and cited a
-          # measurement — that measurement showed it was LOADED, which is not
-          # the same as needed.)
-          pip install pyyaml promql-parser -c requirements/ci-constraints.txt
+          #   (PromQL is read by da-read, built in the next step — #4215.)
+          pip install pyyaml -c requirements/ci-constraints.txt
 
       - name: Set up Go (da-read / da-crdecode)
         uses: actions/setup-go@v6
