@@ -98,7 +98,8 @@ type GroupRule struct {
 // Namespace honesty (single-trusted-hop MVP): the claim KEY is the
 // namespace unit. A deployment must not map two different upstream sources
 // onto the same claim key — nothing here can tell them apart. A true
-// issuer namespace arrives with JWT verification (iss), deferred to D2-A.
+// issuer namespace arrives with JWT verification (iss), deferred (ADR-027,
+// "Alternatives considered": verifying the user's JWT access token).
 type MatchBlock struct {
 	Groups []string            `yaml:"groups,omitempty" json:"groups,omitempty"` // OR-within: any one group qualifies
 	Claims map[string][]string `yaml:"claims,omitempty" json:"claims,omitempty"` // claim key → allowed values (OR-within); keys AND-across

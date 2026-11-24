@@ -141,7 +141,7 @@ def _main_tenant_routes(routes: list[dict]) -> dict[str, dict]:
 
 def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) -> tuple[list[dict], list[dict]]:
     """Prepend the four platform-static top-of-tree routes — the Watchdog liveness
-    route (index 0, ADR-025 D1 / #838), the Custom Alerts isolation route (index 1,
+    route (index 0, ADR-025 §1 / #838), the Custom Alerts isolation route (index 1,
     #741 S7/S8), the synthetic-probe sinkhole route (index 2, ADR-025 interop), then
     the sentinel sinkhole route (index 3, #1095) — plus their receivers, so the
     final ConfigMap always pins them AHEAD of the enforced NOC route and they
@@ -367,7 +367,7 @@ def watchdog_receiver_findings(am: object, *, strict: bool,
                                real_base: bool) -> list[Finding]:
     """The finding for an assembled config whose ``watchdog-heartbeat``
     receiver delivers nowhere (no non-empty ``*_configs``,
-    ``receiver_integration_kinds``), or none (ADR-025 D1: the always-firing
+    ``receiver_integration_kinds``), or none (ADR-025 §1: the always-firing
     Watchdog must reach an external dead-man's switch, or a dead alerting
     pipeline goes unnoticed).
 
@@ -911,7 +911,7 @@ def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
     merged["inhibit_rules"] = (list(merged.get("inhibit_rules") or [])
                                + list(inhibit_rules or []))
 
-    # ADR-025 D1: fail-closed if any inhibit rule (base or generated) would
+    # ADR-025 §1: fail-closed if any inhibit rule (base or generated) would
     # suppress the always-firing Watchdog heartbeat — it must always egress.
     assert_watchdog_inhibit_immunity(merged["inhibit_rules"])
     # A tenant-triggered inhibit (Silent Mode) must never suppress a PLATFORM
@@ -1174,7 +1174,7 @@ def evaluate_generated_config(routes: list[dict], receivers: list[dict],
     cm_yaml = None
     captured = io.StringIO()
     with contextlib.redirect_stderr(captured):
-        # ADR-025 D1 regression tripwire: a generated inhibit rule must never
+        # ADR-025 §1 regression tripwire: a generated inhibit rule must never
         # target the Watchdog heartbeat. (The full base+generated set is
         # enforced fail-closed at the render paths; this catches a
         # generator-side regression early.)

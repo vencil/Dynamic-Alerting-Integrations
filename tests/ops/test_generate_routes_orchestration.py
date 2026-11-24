@@ -1063,7 +1063,7 @@ class TestAssembleConfigmap:
 
         am_config = yaml.safe_load(parsed["data"]["alertmanager.yml"])
         routes_out = am_config["route"]["routes"]
-        # ADR-025 D1 (#838) + S7/S8 (#741) + ADR-025 synthetic-probe + #1095: four
+        # ADR-025 §1 (#838) + S7/S8 (#741) + ADR-025 synthetic-probe + #1095: four
         # platform-static routes are always injected at the FRONT — Watchdog
         # liveness (0), Custom Alerts isolation (1), synthetic-probe sinkhole (2),
         # sentinel sinkhole (3) — all continue:false; the tenant route follows.
@@ -1126,7 +1126,7 @@ class TestAssembleConfigmap:
 
 
 # ============================================================
-# ADR-025 D1 (#838) + S7/S8 (#741): platform-static route injection
+# ADR-025 §1 (#838) + S7/S8 (#741): platform-static route injection
 # ============================================================
 class TestCustomAlertIsolationInjection:
     """The four platform-static routes — Watchdog liveness (index 0), Custom
@@ -1249,7 +1249,7 @@ class TestCustomAlertIsolationInjection:
             "/etc/alertmanager/secrets/watchdog-heartbeat-url"
 
     def test_watchdog_route_knobs(self):
-        # ADR-025 D1 cadence contract on the generated artifact.
+        # ADR-025 §1 cadence contract on the generated artifact.
         cm_yaml = assemble_configmap(load_base_config(None), [], [], [])
         wd = self._routes_of(cm_yaml)[0]
         assert wd["receiver"] == "watchdog-heartbeat"
@@ -1480,7 +1480,7 @@ class TestCustomSubtreeTenantDelivery:
 
 
 # ============================================================
-# ADR-025 D1 (#838): Watchdog inhibition-immunity invariant
+# ADR-025 §1 (#838): Watchdog inhibition-immunity invariant
 # ============================================================
 class TestWatchdogInhibitImmunity:
     """No inhibit_rule's target_matchers may match the always-firing Watchdog
