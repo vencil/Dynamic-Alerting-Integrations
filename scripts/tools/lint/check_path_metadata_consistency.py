@@ -2,8 +2,8 @@
 """Refuse (with --ci) a conf.d/ hierarchical path that contradicts `_metadata`.
 
 ADR-016: `_metadata.{domain,region,environment}` is the one source of these
-values — the directory path supplies none (path inference was withdrawn),
-and they feed tenant-api's RBAC scope. A tree that files a tenant under
+values — the directory path supplies none (path inference was withdrawn);
+domain and environment feed tenant-api's RBAC scope. A tree that files a tenant under
 `finance/…/prod/` while its `_metadata` says another domain or environment
 misleads every reader of the layout, so the contradiction is an error under
 `--ci` (exit 1). Without `--ci` the findings are reported and the exit code

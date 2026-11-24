@@ -153,7 +153,7 @@ sum(rate(da_config_reload_trigger_total[5m])) by (reason)
 1. `WARN: hierarchical scan during Load failed: duplicate tenant ID` 連續出現 > 1 hour（duplicate 沒被清掉）
 2. `da_config_reload_duration_seconds` p99 持續 > 5s（顯著超出 mixed-mode 預期 degradation）
 3. `da_config_parse_failure_total` 任何 `_*` 前綴 file_basename 的 increment（_defaults.yaml 解析失敗會 silently drop 整個 block，cycle-6 RCA 已 codify 為 ERROR-level + metric，但客戶可能沒設 alert）
-4. Cutover 期間 alert 觸發行為變化（例：原本 fire 的 alert 突然不 fire）— 大機率是 mixed mode 期間 `domain`/`region` label 漏寫
+4. Cutover 期間 alert 觸發行為變化（例：原本 fire 的 alert 突然不 fire）— 先查租戶檔是不是搬進了子目錄：`configmap-assemble` 是扁平組裝，子目錄裡的租戶不會進 ConfigMap，線上 exporter 就沒有它（組裝時只印 WARN；見 [ADR-016](../adr/016-conf-d-directory-hierarchy-mixed-mode.md) 已知限制、[#4266](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4266)）
 
 ---
 

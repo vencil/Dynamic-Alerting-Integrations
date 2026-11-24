@@ -153,7 +153,7 @@ Any of the following warrants paging vencil on-call:
 1. `WARN: hierarchical scan during Load failed: duplicate tenant ID` persists > 1 hour (duplicate not cleaned up)
 2. `da_config_reload_duration_seconds` p99 sustained > 5s (significantly exceeds expected mixed-mode degradation)
 3. `da_config_parse_failure_total` increments for any `_*` prefix file_basename (`_defaults.yaml` parse failure silently drops the entire block — cycle-6 RCA was codified as ERROR-level + metric; customers may not have set up an alert)
-4. Alert firing behavior change during cutover (e.g. previously-firing alert suddenly silent) — likely missing `domain`/`region` labels in mixed mode
+4. Alert firing behavior change during cutover (e.g. previously-firing alert suddenly silent) — first check whether the tenant file moved into a subdirectory: `configmap-assemble` assembles flat, so a tenant in a subdirectory never enters the ConfigMap and the exporter in the cluster does not have it (assembly only logs a WARN; see [ADR-016](../adr/016-conf-d-directory-hierarchy-mixed-mode.en.md) known limits, [#4266](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4266))
 
 ---
 

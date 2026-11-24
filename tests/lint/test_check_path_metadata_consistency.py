@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""test_check_path_metadata_consistency — A-9 柔性一致性警告測試。
+"""test_check_path_metadata_consistency — 目錄路徑與 _metadata 一致性檢查的測試。
 
 覆蓋：
   1. 路徑推斷正確（domain = 第一層；environment = allowlist 命中）
-  2. _metadata 與 path 不符時發出警告（exit 0）
+  2. _metadata 與 path 不符時列出（不加 --ci exit 0；加 --ci exit 1）
   3. _metadata 缺欄位時不警告
   4. `_*.yaml` 檔案被略過
   5. 扁平配置（無階層路徑）不警告
