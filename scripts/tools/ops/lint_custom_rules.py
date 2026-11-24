@@ -471,6 +471,24 @@ def _pin(matchers, label, aliases, tenant):
     return any((a, tenant) in eq for a in aliases) and (label, "") in eq, None
 
 
+def _pins_a_label_its_series_lack(node, label, tenant, own_records):
+    """#4275: whether a selector pins *label* to *tenant* on a raw metric
+    whose series carry no *label* at all (``_lib_metric_sources.
+    tenant_presence`` "without": kube-state-metrics, Prometheus' and
+    Alertmanager's own series — jobs that write no tenant). Such a pin
+    selects nothing. Only for the tenant label, which that table models; not
+    for a name with a colon (a recording rule's, by Prometheus' naming rule:
+    an exporter's metric has none) nor for a record of the same file."""
+    metric = node.get("name")
+    if (label != _lib_metric_sources.TENANT_LABEL or not metric or ":" in metric
+            or metric in own_records):
+        return False
+    if not any(m["name"] == label and m["type"] == "=" and m["value"] == tenant
+               for m in node["matchers"]):
+        return False
+    return _lib_metric_sources.tenant_presence(metric) == "without"
+
+
 def _string_of(node):
     """The value of a string operand, through the parentheses Prometheus
     strips from a call's arguments and an aggregation's parameter
@@ -509,6 +527,7 @@ def isolation_problems(rules, tenant, label, filepath, shapes_of=None, flow_of=N
     whose = f"{safe_label(tenant)}'s rule file (the tenant its directory names)"
     results = []
     judged = [r for r in rules if r[2]]
+    own_records = {n for n, is_record, _, _ in rules if is_record}
     trees = shapes_of([e for _, _, e, _ in judged]) if judged else []
     for (name, _, expr, labels), tree in zip(judged, trees):
         for node in _lib_consumer_read.shape_nodes(tree):
@@ -524,6 +543,13 @@ def isolation_problems(rules, tenant, label, filepath, shapes_of=None, flow_of=N
                         f"selector {spelled} can read every {label}'s series: match "
                         f"{label}=\"{tenant}\" by equality (or "
                         f"{'/'.join(aliases) or 'an alias'}=\"{tenant}\" with {label}=\"\")"))
+                elif _pins_a_label_its_series_lack(node, label, tenant, own_records):
+                    results.append(LintResult(filepath, name, None, "ERROR",
+                        f"selector {spelled} pins {label}=\"{tenant}\", but the series of "
+                        f"{node['name']} carry no {label} (the job that scrapes them writes none): "
+                        f"it selects nothing, so the rule never fires (under absent(), always "
+                        f"does); match {'/'.join(aliases) or 'an alias'}=\"{tenant}\" with "
+                        f"{label}=\"\""))
                 continue
             written = []
             if kind == "call" and node["name"] in ("label_replace", "label_join") and len(node["args"]) > 1:
@@ -638,25 +664,52 @@ def lint_group_interval(interval, policy, filepath, group_name):
     return results
 
 
-def check_expiry_label(labels, filepath, rule_name):
-    """Warn if custom rule lacks expiry date."""
-    results = []
-    if not labels or "expiry" not in labels:
-        results.append(LintResult(
-            filepath, rule_name, None, "WARN",
-            "Tier 3 rule should have 'expiry' label (governance §5)"
-        ))
-    return results
+#: #4275: the annotations every Tier 3 alert names its owner and its expiry
+#: in, with the governance section that asks for each. Annotations, not
+#: labels: a label is part of the alert's identity, so renewing an expiry or
+#: handing a rule over would resolve every firing alert of it and fire it
+#: again, its `for:` restarted.
+GOVERNANCE_ANNOTATIONS = (("owner", "§3"), ("expiry", "§5"))
+_EXPIRY_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 
 
-def check_owner_label(labels, filepath, rule_name):
-    """Warn if custom rule lacks owner label."""
+def _is_date(value) -> bool:
+    import datetime
+    if not isinstance(value, str) or not _EXPIRY_DATE.match(value):
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def governance_problems(labels, annotations, filepath, rule_name):
+    """ERRORs for a Tier 3 alert's owner and expiry (#4275): each an
+    annotation, present and not empty, not a label; the expiry a calendar
+    date written YYYY-MM-DD.
+
+    ⛔ The expiry is not compared with today: the same commit would lint
+    green one day and red the next, and the CI that runs this lint runs only
+    when a rule file changes — on the day a rule expires nothing runs, and
+    the next unrelated change is the one that goes red. What happens at the
+    date is the rule's own business (an "expiring" alert beside it)."""
+    labels = labels or {}
+    annotations = annotations or {}
     results = []
-    if not labels or "owner" not in labels:
-        results.append(LintResult(
-            filepath, rule_name, None, "WARN",
-            "Tier 3 rule should have 'owner' label (governance §3)"
-        ))
+    for key, section in GOVERNANCE_ANNOTATIONS:
+        if key in labels:
+            results.append(LintResult(filepath, rule_name, None, "ERROR",
+                f"'{key}' is a label: move it to annotations — a label is part of the "
+                f"alert's identity, so changing it resolves the alert and fires it again "
+                f"(its for: restarted) (governance {section})"))
+        elif not str(annotations.get(key) or "").strip():
+            results.append(LintResult(filepath, rule_name, None, "ERROR",
+                f"Tier 3 alert needs an '{key}' annotation (governance {section})"))
+    expiry = annotations.get("expiry")
+    if "expiry" not in labels and str(expiry or "").strip() and not _is_date(expiry):
+        results.append(LintResult(filepath, rule_name, None, "ERROR",
+            f"expiry {safe_label(str(expiry))} is not a calendar date written YYYY-MM-DD"))
     return results
 
 
@@ -782,10 +835,12 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, r
                 alerts.append((rule_name, expr,
                                {**(group.get("labels") or {}), **(labels or {})}))
 
-            # Governance checks (Tier 3 best practices)
-            if not is_recording:
-                results.extend(check_expiry_label(labels, filepath, rule_name))
-                results.extend(check_owner_label(labels, filepath, rule_name))
+            # Governance (#4275): a tenant's Tier 3 alert names its owner and
+            # expiry, as annotations. Not a rule pack's, nor a file no tenant
+            # directory holds: governance is the Tier 3 contract.
+            if not is_recording and tenant is not None:
+                results.extend(governance_problems(
+                    labels, rule.get("annotations"), filepath, rule_name))
 
     # #4136: a tenant's rule file reads and writes only that tenant
     if tenant is not None:

@@ -121,7 +121,7 @@ For exceptional requirements that Tier 1 + Tier 2 cannot satisfy. Must go throug
 1. Submitter must explain why Tier 1 (threshold adjustment) and Tier 2 (pre-packaged scenarios) are insufficient
 2. Domain Expert reviews and determines whether the need can be abstracted into a new Tier 2 scenario
 3. Must pass CI deny-list linting (see §4)
-4. Must include owner label and expiry date
+4. Carry `owner` and `expiry` annotations (not labels, see §4.2)
 
 **Architectural isolation**:
 
@@ -143,9 +143,9 @@ groups:
         labels:
           tenant: "db-a"
           tier: "custom"
+        annotations:
           owner: "team-db-a"
           expiry: "2026-06-30"
-        annotations:
           ticket: "REQ-12345"
           justification: "No matching Tier 2 scenario: dedicated threshold for a specific tablespace"
 ```
@@ -261,6 +261,13 @@ The lint tool's built-in policy **is** the file below (`.github/custom-rule-poli
 >   theirs. A metric with only a namespace, such as kube-state-metrics', is written
 >   `namespace="<tenant>", tenant=""` (namespace alone also selects a series carrying both labels with
 >   different values). A pack's record needs it too, such as `tenant:mysql_up:max{tenant="db-a"}`.
+>   Conversely, `tenant="<tenant>"` on a metric whose series carry no `tenant` at all (kube-state-metrics',
+>   Prometheus' and Alertmanager's own: the jobs that scrape them write none) is an ERROR too: it selects
+>   nothing, so the rule never fires (inside `absent()`, it always does); write
+>   `namespace="<tenant>", tenant=""`. Which metrics are such is `_lib_metric_sources.tenant_presence()`'s answer
+>   (cadvisor and kubelet volume stats get a tenant at scrape time and are not among them); a name with a colon
+>   (a recording rule's, by Prometheus' naming rule) and a record of the same file are not judged
+>   ([#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)).
 > - `tenant` (or `namespace`) in the `labels:` of an alert, a recording rule or the group written as anything
 >   but that tenant. An alert may also write the series' own `{{ $labels.tenant }}`; a recording rule's labels are
 >   no template (Prometheus writes the text), so only the tenant.
@@ -315,6 +322,15 @@ docker run --rm \
 # FAIL: bad_rule.yaml:15 - denied function 'predict_linear' in expr
 # FAIL: bad_rule.yaml:22 - missing required label 'tenant'
 ```
+
+**Owner and expiry** ([#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)): every alert of a tenant's rule file (a file under `<scan dir>/<tenant>/`) carries
+an `owner` and an `expiry` annotation; one missing, empty, or written as a label is an ERROR. Annotations, not labels,
+because a label is part of the alert's identity: renewing the expiry or handing the rule over would resolve every
+firing alert of it and fire it again, its `for:` restarted. `expiry` is a real calendar date written `YYYY-MM-DD`.
+⚠️ The lint does **not** compare the expiry with today: the same commit would be green one day and red the next, and
+the CI that runs this lint runs only when a rule file changes — nothing goes red on the day a rule expires, the next
+unrelated change does. What happens at the date is the job of an "expiring" alert beside the rule. Rule packs and
+files outside a tenant directory are not checked for this.
 
 ### 4.3 Why Limit "Weight" Instead of "Count"
 
