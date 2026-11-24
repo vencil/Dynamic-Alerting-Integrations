@@ -1,6 +1,6 @@
 package main
 
-// ADR-035 D4 (#2655): a tenant whose id breaks the tenant-id rule is still
+// ADR-035 §4 (#2655): a tenant whose id breaks the tenant-id rule is still
 // loaded and exported, and every committed reload logs ONE WARN per such id,
 // citing tenantid.Description.
 //

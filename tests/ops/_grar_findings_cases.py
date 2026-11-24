@@ -124,7 +124,7 @@ FIXTURES: dict[str, dict[str, str]] = {
         "team/_defaults.yaml": "_routing_enforced:\n  enabled: false\n",
         "team/alpha.yaml": _tenant("alpha"),
     },
-    # ADR-035 D3: a tenant id the rule refuses.
+    # ADR-035 §3: a tenant id the rule refuses.
     "invalid_id": {
         "_defaults.yaml": _DEFAULTS,
         "alpha.yaml": _tenant("alpha"),

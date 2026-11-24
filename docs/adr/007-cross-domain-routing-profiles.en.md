@@ -5,367 +5,132 @@ audience: [platform-engineers]
 version: v2.9.0
 lang: en
 ---
-
 # ADR-007: Cross-Domain Routing Profiles and Domain Policies
 
-> **Language / 語言：** **English (Current)** | [中文](007-cross-domain-routing-profiles.md)
+> **Language / 語言：** **English (Current)** | [中文](./007-cross-domain-routing-profiles.md)
 
 ## Status
 
-✅ **Accepted** (v2.1.0) — Four-layer routing + domain policy validation completed, profile inheritance chain as v2.7.0+ candidate
+✅ **Accepted** (v2.1.0).
 
-Revised 2026-10-16: domain policies (`require_critical_escalation` included) and the checks on the resolved routing are run by the route generator alone, and da-guard and tenant-api no longer carry Go copies of those checks; the paragraphs concerned now describe that.
+Revised 2026-09-28: profiles and domain policies are scoped to the subtree they sit in, profile names are unique across the tree, and policies stack (see "Scope in a hierarchical conf.d").
 
-## Background
+Revised 2026-10-16: domain policies (including `require_critical_escalation`) and the checks on resolved routing are made by the route generator only; da-guard and tenant-api no longer keep a copy each.
 
-As the number of tenants managed by the platform grows, routing configurations exhibit significant duplication. Multiple tenants share the same on-call teams, notification channels, and grouping policies, yet each tenant's `_routing` block must be configured independently.
-
-### Problem Statement
-
-1. **Configuration Duplication**: When 10 tenants are managed by the same team, identical `receiver`, `group_by`, `group_wait` settings are repeated 10 times
-2. **Change Amplification**: Renaming a team's Slack channel requires modifying N tenant configurations
-3. **Missing Domain Constraints**: Different business domains (finance, e-commerce) have different compliance requirements for routing (e.g., finance domain prohibits Slack notifications, mandates PagerDuty), but lack enforcement mechanisms
-4. **Inheritance Conflicts**: Multi-layer configuration merging (`_routing_defaults` → tenant `_routing`) has unclear semantics in cross-domain scenarios
-
-A mechanism is needed to make routing configurations reusable, constrainable, and shareable across domains.
+Revised 2026-11-24: rewritten to describe current behavior; CLI flags that do not exist (`--audit`, `--resolve-profiles`, `--check-policies`) removed.
 
 ## Decision
 
-**Adopt a two-layer architecture: Routing Profiles (reuse) + Domain Policies (constraints), rather than a three-layer Contact Profile model.**
+**Routing settings have two layers: routing profiles for reuse, domain policies for constraints.** The three-layer contact-profile model is not adopted.
 
-### Layer 1: Routing Profiles
+1. **Routing profile**: `_routing_profiles.yaml` defines named routing settings; a tenant references one with `_routing_profile: <name>`. The merge order is `_routing_defaults` → profile → the tenant's own `_routing`, each step a shallow merge per top-level key.
+2. **Domain policy**: `_domain_policy.yaml` declares compliance constraints for a set of tenants (allowed or forbidden receiver types, `group_by`, an upper bound on `repeat_interval`, a lower bound on `group_wait`, critical alerts must escalate to PagerDuty). It injects nothing; it only **validates** the merged result.
+3. **`_routing_enforced` takes no part in the merge**: it is rendered as separate routes with `continue: true`, placed before the tenant routes, so a tenant cannot override it.
+4. **Only the route generator judges domain policies.** Under `--validate --strict` a violation is a blocking ERROR; without `--strict` it is a WARN.
 
-Define named routing configurations in `_routing_profiles.yaml`; tenants reference them via `_routing_profile`:
+### Example: a route that breaks a domain policy
 
 ```yaml
-# _routing_profiles.yaml — in config-dir
+# _routing_profiles.yaml
 routing_profiles:
   team-sre-apac:
     receiver:
-      type: slack
-      api_url: {secret: {key: slack-api-url}}
-    group_by: [tenant, alertname, severity]
-    group_wait: 30s
-    group_interval: 5m
-    repeat_interval: 4h
-    routes:
-      - match: { severity: critical }
-        receiver:
-          type: pagerduty
-          service_key: {secret: {key: pagerduty-service-key}}
-        repeat_interval: 15m
-
-  team-dba-global:
-    receiver:
       type: webhook
-      url: "https://alerting.internal/dba-global"
-    group_by: [tenant, alertname, pack]
-    group_wait: 1m
-    group_interval: 10m
-    repeat_interval: 8h
+      url: "https://alerting.internal/sre-apac"
+    group_by: [tenant, alertname, severity]
+    repeat_interval: 4h
 ```
 
 ```yaml
-# db-a.yaml — tenant configuration
+# _domain_policy.yaml
+domain_policies:
+  finance:
+    description: "Finance domain"
+    tenants: [db-a]
+    constraints:
+      forbidden_receiver_types: [slack, webhook]
+      max_repeat_interval: 1h
+```
+
+```yaml
+# db-a.yaml
 tenants:
   db-a:
-    _routing_profile: team-sre-apac   # reference profile, no duplication
-    cpu_usage_percent: "80"
-    memory_usage_percent: "85"
+    _routing_profile: team-sre-apac
+    mysql_connection_usage_percent: "80"
 ```
 
-**Merge Semantics**: `_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced` (NOC override, immutable). Later layers override earlier ones, but `_routing_enforced` always takes final precedence.
+The output of `generate_alertmanager_routes.py --config-dir conf.d --validate --strict` (exit code 1; without `--strict` both become WARNs and the exit code is 0):
 
-A profile has the same fields as a tenant's `_routing` (`routing-profiles.schema.json` references `tenant-config.schema.json#/definitions/routing` rather than keeping a second copy). The merge is shallow: any key the tenant's `_routing` sets replaces the profile's value wholesale, `routes` and `overrides` included; to drop a profile's `routes` for one tenant, write `routes: []`.
-
-**`routes` (label-match sub-routes)**: each `match` is label equality only (`{label: value}`, all must be equal), with no regex and no `continue`. The generator renders each entry as a child of the tenant's main route, after the children produced by `overrides`, so matching order is `overrides` → `routes` → the main route's own receiver, first match wins. The `tenant="<id>"` matcher stays on the main route; a child carries only the matchers from its own `match`. `group_wait` / `group_interval` / `repeat_interval` / `group_by` a child leaves out are inherited from the tenant's main route, and the ones it sets go through the same timing guardrails. Receivers are named `tenant-<id>-route-<i>`, separate from the overrides' `tenant-<id>-override-<i>`. Invalid entries (empty `match`, invalid label name, non-string value, unsupported key) are skipped with a `WARN … skipping` line, which fails `--validate`. `_routing_defaults` does not accept `routes`.
-
-### Layer 2: Domain Policies
-
-Define business domain compliance constraints in `_domain_policy.yaml`. Domain Policies are **validation rules**, not an inheritance layer:
-
-```yaml
-# _domain_policy.yaml — in config-dir
-domain_policies:
-  finance:
-    description: "Finance domain compliance requirements"
-    tenants: [db-a, db-b, db-e]
-    constraints:
-      allowed_receiver_types: [pagerduty, email]
-      forbidden_receiver_types: [slack, webhook]
-      enforce_group_by: [tenant, alertname, severity]
-      max_repeat_interval: 1h
-      min_group_wait: 30s
-      require_critical_escalation: true
-
-  ecommerce:
-    description: "E-commerce domain standards"
-    tenants: [db-c, db-d]
-    constraints:
-      allowed_receiver_types: [slack, pagerduty, email]
-      max_repeat_interval: 12h
+```text
+Config files: 3 read, 0 skipped
+Found 1 tenant(s) with routing config: db-a
+Found 1 tenant(s) for severity dedup: db-a
+  ERROR: domain_policy 'finance', tenant 'db-a': receiver type 'webhook' is forbidden — fix: domain forbids ['slack', 'webhook']; switch the tenant's receiver.type to a compliant type or amend the domain policy
+  ERROR: domain_policy 'finance', tenant 'db-a': repeat_interval '4h' exceeds max '1h' — fix: lower the tenant's repeat_interval to '1h' or less, or raise the policy's max_repeat_interval
+Validation: 1 route(s), 1 receiver(s), 2 inhibit rule(s)
+FAIL: 2 error(s) found (listed above)
 ```
 
-**Validation Timing**: When `generate_alertmanager_routes.py` generates the final routes, it checks Domain Policy constraints per-entry. On constraint violation:
-- `--strict` mode: Error and abort
-- Default mode: Emit WARNING and flag
+Tenant `db-a` writes no `_routing` of its own; its route comes entirely from the profile, and the policy judges the merged result.
 
-**`require_critical_escalation` criterion** (#2244): the tenant must have at least one `severity=critical` path to PagerDuty; the check does not guarantee that every critical alert reaches PagerDuty. A tenant complies when its main receiver type is `pagerduty`, or when a rendered `routes` entry matches `severity: critical` and sends to a `pagerduty` receiver; switching to some other receiver type or target does not count as escalation.
+## Background
 
-Once a tenant complies, every non-PagerDuty destination that can still receive a critical alert gets its own WARN, which never affects the exit code in either mode (#2312). Routing order is overrides → routes → main receiver, and the first match wins. For each destination N whose receiver is not PagerDuty, write the critical alerts it would catch as `C_N`: N's `match` plus `severity: critical` (an override's match is its `alertname` or `metric_group`; the main receiver's match is empty).
-- N's `match` has a `severity` other than `critical`: it never receives a critical alert, no WARN.
-- Some sub-route P ahead of N has a `match` that is a subset of `C_N` (whether or not P is PagerDuty; the `tenant=<tenant>` matcher of the tenant route counts as part of `C_N`): P takes those alerts first, N never sees one, no WARN.
-- Otherwise the WARN names N and the labels it catches, e.g. `severity=critical, team=app`.
+As the number of tenants grew, routing settings were duplicated widely: several tenants share an on-call team, a notification channel and a grouping strategy, yet each tenant's `_routing` had to repeat them. Renaming a team's Slack channel meant editing N files. Business domains have different compliance requirements for routing (a finance domain forbids Slack and requires PagerDuty, for example), and nothing enforced them.
 
-Whether the main receiver is PagerDuty does not change the verdict for a sub-route: the critical alerts a sub-route catches would otherwise have reached a later escalation destination. The WARN says critical alerts land on the main receiver only when N is the main receiver itself. The check is exact only within the tenant route's sub-tree and only for equality matchers. Two things fall outside its model. First, platform routes placed ahead of the tenant route (e.g. `alertname="Watchdog"` or the `component="sentinel"` route) are not considered, so a sub-route whose match names those values may be reported although it never receives an alert; this part can only over-report. Second, a sub-route whose receiver content is invalid, which the generator does not render, is still treated as present: it may itself be over-reported, and it may make a later N look already caught and so be under-reported. The custom sub-tree carries the same sub-routes, so the verdict holds there too (#2342).
+## The decisions in detail
 
-Only the generator judges this constraint ([ADR-036](036-single-parser-effective-config.en.md) §9): non-compliance has the finding kind `critical_escalation_missing` (a blocking ERROR under `--strict`) and each WARN above is `critical_escalation_leak`; the `escalation` column of `tests/shared/routing_policy_parity_matrix.json` pins the verdicts. da-guard does not judge domain policies: a tree with a `_domain_policy.yaml` is undetermined (exit 4) and left to the generator. tenant-api does not judge it itself: every write is judged by the generator over the whole tree after the write, and non-compliance is a 422 `GENERATOR_FINDINGS` ([ADR-036](036-single-parser-effective-config.en.md) §4); a WARN does not block the write. Because the whole tree is judged, after a routing profile or the domain policy file changes, any write through tenant-api meets the existing tenants' non-compliance.
+### Routing profiles
 
-### Why Reject Three-Layer Contact Profile Model
+- **The same fields as a tenant's `_routing`**: `routing-profiles.schema.json` references `tenant-config.schema.json#/definitions/routing` directly instead of keeping a second copy.
+- **Shallow merge**: a top-level key the tenant's `_routing` writes replaces the profile's key of the same name as a whole, `routes` and `overrides` included. To drop a profile's `routes` for one tenant, write `routes: []`. A tenant that references no profile behaves as before.
+- **`routes` (sub-routes split by label)**: each `match` only compares labels for equality (all must match) — no regex, no `continue`. Each becomes a sub-route under the tenant's main route, after the `overrides`, so matching goes `overrides` → `routes` → the main route's own receiver, first match wins. A sub-route's unset `group_wait` / `group_interval` / `repeat_interval` / `group_by` follow the main route, and the ones it sets go through the same timing guardrails. Receiver names are `tenant-<id>-route-<i>`. An invalid entry (an empty `match`, an invalid label name, a non-string value, an unsupported key) is skipped with a WARN, which fails `--validate`. `_routing_defaults` does not take `routes`.
 
-A three-layer model that surfaced during design discussion (Contact Profile → Routing Profile → Domain Policy) carries over-engineering risk:
+### Domain policies
 
-- **Contact Profile Overlaps with Alertmanager Receiver**: Contact information (Slack channels, PagerDuty keys) is already defined in Alertmanager `receivers`; an additional abstraction increases synchronization cost
-- **Three-Layer Merge Semantics Complexity**: Four-way merging (defaults → contact → profile → tenant) has unpredictable override ordering, high debugging cost
-- **YAGNI**: No current tenant requires mixing different contacts within the same profile; the system can be extended upward when the need arises
+- **They judge the resolved routing**: the receiver types of the main receiver, `overrides` and `routes` are all judged; `forbidden_receiver_types` and `allowed_receiver_types` are judged separately and can both fire.
+- **`require_critical_escalation`**: the tenant needs at least one `severity=critical` path to PagerDuty. It complies when the main receiver's type is `pagerduty`, or when a rendered `routes` entry matches `severity: critical` and sends to `pagerduty`. Non-compliance is the finding `critical_escalation_missing` (blocking under `--strict`). The value must be a boolean (unquoted `true` / `false`): `yes`, `on` or a string is refused in every mode and never read as true.
+- **WARN on critical leaks**: once compliant, every non-PagerDuty destination that can still receive critical alerts gets one `critical_escalation_leak` WARN, which does not affect the exit code. How: take destination N's `match` plus `severity: critical` as the alerts `C_N` it would catch; if N's `match` names another `severity` it receives no critical; if any sub-route before N has a `match` that is a subset of `C_N`, the alerts are caught first and nothing is reported. This is exact only inside the tenant's route subtree and only for equality matchers: platform routes placed before the tenant routes (Watchdog, sentinel) are not modelled and may cause over-reporting; a sub-route whose receiver is invalid and will not be rendered still counts as present and may cause over- or under-reporting. The `escalation` column of `tests/shared/routing_policy_parity_matrix.json` pins the verdicts.
+- **Who judges**: the route generator only ([ADR-036](036-single-parser-effective-config.en.md) §9). da-guard does not: a `_domain_policy.yaml` in the tree is listed as undetermined (exit code 4) and left to the generator. tenant-api does not judge on its own: every write is judged by the generator over the tree after the write, non-compliance is a 422 `GENERATOR_FINDINGS` ([ADR-036](036-single-parser-effective-config.en.md) §4), and a WARN does not block the write. Since the whole tree is judged, after a profile or policy changes any write through tenant-api meets the existing tenants' non-compliance. CI blocks violations with `generate-routes --validate --strict`.
 
-## Rationale
+### Scope in a hierarchical conf.d
 
-### Value of Routing Profiles
+In a hierarchical conf.d ([ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md)), the route generator and `check_routing_profiles.py` read `_routing_profiles.yaml` and `_domain_policy.yaml` (or `.yml`) on every level:
 
-**Configuration Convergence**: 10 tenants sharing one profile reduces routing changes from O(N) to O(1).
+- **A profile is visible to its subtree**: resolving `_routing_profile: X`, a tenant looks at profiles defined on its own level or an ancestor's. Profile names are **unique across the whole tree**: one name defined in two files is an error (a `.yaml` and a `.yml` at the root clashing counts too), the message names both files, and the generator exits 2.
+- **A policy applies only to its subtree**: a subtree policy whose `tenants:` names a tenant outside the subtree is an error (ERROR under `--strict`, WARN otherwise), worded apart from "this tenant is found nowhere". Policies on different levels **stack**: a tenant must satisfy every policy that applies to it, so a subtree can only tighten.
+- **The merge order is unchanged**: `_routing_defaults` is supplied by the chain of directory levels and `_routing_enforced` is read only at the root; see [ADR-017 Decision 9](017-defaults-yaml-inheritance-dual-hash.en.md#9-routing-settings-are-inherited-level-by-level-along-directories). tenant-api serves only the tenant files at the root; the policy verdict on a write is the generator's, over the whole tree.
 
-**Clear Semantics**: A Profile is a "complete routing template", not a partial fragment. Merge order is unambiguous: defaults → profile → tenant override → enforced.
+### Related tools
 
-**Backward Compatible**: Tenants not referencing `_routing_profile` behave exactly as before; the profile mechanism is opt-in.
+- `check_routing_profiles.py` (pre-commit): profile references exist and policy tenant lists are consistent.
+- `explain_route.py --show-profile-expansion`: shows the routing before and after the profile is expanded, and the sub-routes actually rendered.
+- `scaffold_tenant.py --routing-profile`: a new tenant references a profile directly.
+- `da-tools opa-evaluate`: additional policies written in Rego (alongside domain policies).
 
-### Design Philosophy of Domain Policies
+## Consequences and known limits
 
-**Constraints, Not Inheritance**: Domain Policy does not "inject" configuration into tenants; it "validates" the final merged result. This avoids the diamond problem of multiple inheritance.
+- **A routing change goes from O(N) to O(1)**: N tenants share one profile, and changing the profile changes them all.
+- **Compliance is machine-checked**: a platform engineer declares "the finance domain may not use Slack", and the generator and CI enforce it instead of human review.
+- **A policy's `tenants` list is maintained by hand** and must follow the tenant files; at thousands of tenants it brings merge conflicts. Matching tenants by regex or prefix (`tenant_matchers`) is not implemented; see the deferred items.
+- **The merge order has to be documented**: `_routing_defaults` → profile → the tenant's `_routing`, with `_routing_enforced` outside the merge.
 
-**Declarative Compliance**: Platform engineers can declare "finance domain tenants must not use Slack", and the toolchain enforces automatically, rather than relying on manual review.
+## Alternatives considered
 
-**Auditable**: `generate_alertmanager_routes.py --audit` outputs a complete policy compliance report.
+- **A three-layer contact-profile model** (contact → routing profile → domain policy): contact information overlaps with Alertmanager receivers, so an extra layer has to be kept in sync; a four-way merge has an unpredictable override order; no tenant needs to mix contacts within one profile. A layer can be added on top when the need appears.
+- **Tenant-group inheritance**: an intuitive grouping, but implicit inheritance overrides by accident and conflicts with the existing defaults / enforced mechanisms.
+- **Writing Alertmanager's native route tree directly**: no extra abstraction, but no named templates (everything is repeated by hand) and no constraint validation.
 
-## Consequences
+## Deferred
 
-### Positive Impact
+- **A profile extending another profile**: not implemented. Trigger: a team structure that needs layered profiles.
+- **`tenant_matchers`**: regex or prefix matching instead of a policy's `tenants` array (the two can coexist, the exact list taking precedence). Not implemented. Trigger: the tenant count makes the hand-kept list a burden.
 
-✅ Routing configuration duplication dramatically reduced; N tenants sharing a profile maintain only one copy
-✅ Team routing changes become atomic operations (modify profile → all referencing tenants automatically updated)
-✅ Domain policies provide machine-verifiable compliance constraints; CI automatically blocks violations via `--validate --strict` (blocking since v2.10.0)
-✅ Fully backward compatible with existing tenants; both profiles and policies are opt-in
-✅ No conflict with `_routing_enforced` (NOC override) mechanism
+## Related
 
-### Negative Impact
-
-⚠️ `generate_alertmanager_routes.py` needs extension to parse `_routing_profiles.yaml` and `_domain_policy.yaml`
-⚠️ Merge order (defaults → profile → tenant → enforced) must be thoroughly documented to avoid confusion
-⚠️ Domain Policy `tenants` list must be kept in sync with actual tenant YAML files
-
-### Operational Considerations
-
-- `generate_alertmanager_routes.py` adds `--resolve-profiles` and `--check-policies` subcommands
-- CI hook: `check_routing_profiles.py` validates profile references exist, policy tenant lists consistent
-- Route debugging tool `explain_route.py` should show pre/post profile expansion diff
-- Recommended profile naming convention: `team-{team}-{region}` or `domain-{domain}-{tier}`
-
-### Future Extensibility
-
-When tenant counts reach the thousands, maintaining a hardcoded `tenants` array will cause severe merge conflicts and maintenance burden. When implementing `generate_alertmanager_routes.py`, consider supporting `tenant_matchers` (regex/prefix matching) as an alternative syntax to `tenants`:
-
-```yaml
-domain_policies:
-  finance:
-    tenant_matchers:        # alternative to tenants
-      - "^finance-db-.*"   # regex: auto-apply to all finance-db prefixed tenants
-      - "payment-gateway"   # exact match still works
-    constraints:
-      forbidden_receiver_types: [slack, webhook]
-```
-
-This extension is backward compatible with v1's `tenants` array (both can coexist; `tenants` exact match takes priority). Implementation timing can be decided based on demand.
-
-## Alternative Approaches Considered
-
-### Approach A: Three-Layer Contact Profile Model (Rejected)
-- Pros: More fine-grained contact management
-- Cons: Overlaps with Alertmanager receiver concept, three-layer merge semantics complexity, YAGNI
-
-### Approach B: Tenant Group Inheritance (Considered)
-- Pros: Intuitive grouping concept
-- Cons: Implicit inheritance prone to unexpected overrides, conflicts with existing defaults/enforced mechanism
-
-### Approach C: Native Alertmanager Route Tree (Considered)
-- Pros: Zero additional abstraction
-- Cons: Alertmanager route tree does not support "named templates", requires manual duplication; no constraint validation capability
-
-## Design Details
-
-### Merge Pipeline
-
-```
-┌──────────────────┐
-│ _routing_defaults │  ← Global defaults
-└────────┬─────────┘
-         ▼
-┌──────────────────────┐
-│ routing_profiles[ref] │  ← Team/domain shared named config
-└────────┬─────────────┘
-         ▼
-┌──────────────────┐
-│ tenant _routing   │  ← Tenant-level overrides (optional)
-└────────┬─────────┘
-         ▼
-┌──────────────────────┐
-│ domain_policies       │  ← Validation constraints (no value modification, only error/warn)
-└────────┬─────────────┘
-         ▼
-┌──────────────────────┐
-│ _routing_enforced     │  ← NOC immutable override
-└──────────────────────┘
-```
-
-### Profile Reference Resolution
-
-```python
-# Logic of generate_alertmanager_routes.py (pseudocode)
-def shallow_merge(base, layer):
-    # Per top-level key: the whole value is replaced, never merged into
-    # (routes / overrides / receiver included).
-    merged = dict(base)
-    for k, v in layer.items():
-        merged[k] = v
-    return merged
-
-def resolve_tenant_routing(tenant_cfg, profiles, defaults):
-    base = copy(defaults)
-
-    # If a profile is referenced, merge profile first
-    if '_routing_profile' in tenant_cfg:
-        profile = profiles[tenant_cfg['_routing_profile']]
-        base = shallow_merge(base, profile)
-
-    # Then merge tenant-level overrides
-    if '_routing' in tenant_cfg:
-        base = shallow_merge(base, tenant_cfg['_routing'])
-
-    return base
-
-# _routing_enforced is NOT merged into the tenant's routing: it is rendered as
-# its own route(s) with `continue: true` ahead of the tenant routes
-# (_build_enforced_routes in _grar_routes.py), which is what makes it
-# impossible for a tenant to override.
-```
-
-All three steps merge shallowly (`merge_routing_with_defaults` in `_grar_merge.py`), as the
-"Merge Semantics" paragraph under Layer 1 states; `_routing_enforced` is not merged into the
-result, and the enforced routes are built separately.
-
-### Policy Validation Logic
-
-```python
-def check_domain_policies(resolved_routing, tenant_id, policies):
-    violations = []
-    for policy_name, policy in policies.items():
-        if tenant_id not in policy['tenants']:
-            continue
-        constraints = policy['constraints']
-
-        if 'forbidden_receiver_types' in constraints:
-            for recv_type in extract_receiver_types(resolved_routing):
-                if recv_type in constraints['forbidden_receiver_types']:
-                    violations.append(f"{policy_name}: {recv_type} forbidden")
-
-        if 'max_repeat_interval' in constraints:
-            if resolved_routing.get('repeat_interval') > parse_duration(constraints['max_repeat_interval']):
-                violations.append(f"{policy_name}: repeat_interval exceeds max")
-
-    return violations
-```
-
-### Amendment 2026-09-28 (#2326): directory scope of profiles and policies
-
-**Status: implemented**
-([#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)): the route
-generator and `check_routing_profiles` read
-`_routing_profiles.yaml` and `_domain_policy.yaml` at every level. A profile name defined twice
-is refused with the other blocking tree errors (generator exit 2; the first definition in
-root-first name order is kept and the later file is named). tenant-api serves tenant files
-at the root only; its write-time policy judgement is the generator's over the whole tree, reading
-`_domain_policy.yaml` at every level ([ADR-036](036-single-parser-effective-config.en.md) §4).
-
-In a hierarchical conf.d ([ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md)):
-
-- **Routing profiles**: `_routing_profiles.yaml` / `.yml` may sit in a subdirectory, and its
-  profiles are visible to the tenants in that subtree. A tenant resolves
-  `_routing_profile: X` against the profiles defined at its own level or an ancestor's. A
-  profile name is **unique across the whole tree**: the same name defined in two files is an
-  error (including `.yaml` and `.yml` both at the root; today the later one silently
-  overrides, so this is a behaviour change).
-- **Domain policies**: `_domain_policy.yaml` / `.yml` may sit in a subdirectory and applies
-  only within its subtree. A subtree policy whose `tenants:` names a tenant outside that
-  subtree is an **error** (ERROR under `--strict`, WARN otherwise), with a message distinct
-  from "tenant not found anywhere". Policies at different levels are judged **additively**:
-  a tenant must satisfy every policy that applies to it, so a subtree can only tighten.
-- **Merge order is unchanged**: `_routing_defaults` → profile → tenant `_routing`, each
-  step a shallow merge per top-level key. `_routing_defaults` itself now comes from a chain
-  of directory levels, and `_routing_enforced` stays root-only; both are specified in
-  [ADR-017 Decision 9](017-defaults-yaml-inheritance-dual-hash.en.md#9-routing-settings-are-inherited-level-by-level-along-directories).
-
-## v2.1.0 Implementation Summary
-
-- `generate_alertmanager_routes.py` — Four-layer merge (defaults → profile → tenant → enforced) + `check_domain_policies()` validation (21 tests)
-- `check_routing_profiles.py` — Profile/Policy lint tool (28 tests + pre-commit hook auto-run)
-- `explain_route.py` — Routing debug tool with `--show-profile-expansion` trace mode (25 tests + da-tools CLI integration)
-- `scaffold_tenant.py --routing-profile` — Onboarding integration, new tenants can reference profiles directly (9 tests)
-- `_parse_config_files()` → `_parse_platform_config()` + `_parse_tenant_overrides()` sub-function refactor
-- Example configs `conf.d/examples/_routing_profiles.yaml`, `conf.d/examples/_domain_policy.yaml`
-- JSON Schema: `routing-profiles.schema.json` (references `tenant-config.schema.json`'s `routing` definition since #2245), `domain-policy.schema.json`
-- Go/Python dual-side `_routing_profile` reserved key sync
-- Self-Service Portal: routing profile validation + example toggle UI
-
-## Evolution Status
-
-- **v2.1.0** (completed): Four-layer merge pipeline, `check_routing_profiles` lint, `explain_route` debug tool
-- **v2.3.0** (completed): OPA integration — `da-tools opa-evaluate` supports Rego-defined domain policies (routing-compliance, threshold-bounds, naming-convention example policies)
-- **v2.5.0** (completed): receiver-type constraints moved forward to API-time enforcement (tenant-api 403 responses); timing (`max_repeat_interval` / `min_group_wait`) and `enforce_group_by` constraints remain validated at assembly time
-- **v2.6.0** (completed): `generate_alertmanager_routes.py` refactored (21 helpers extracted), `_build_receiver_config()` converted to strategy pattern
-- **v2.10.0** (in development): `--strict` wired into the CLI and CI — assembly-time domain-policy violations escalate from WARN to ERROR and become blocking (`--validate --strict` exits 1; violation messages include actual value vs domain limit + a fix hint)
-- **#2245**: profile and tenant `routes` now render sub-routes (the generator used to drop them silently); domain policies and the `--policy` domain check cover those receivers; `explain_route` lists the sub-routes actually rendered; `check_confd_schema` now validates `_routing_profiles.yaml` against its schema, and `validate-config` now runs its YAML quoting check on it
-- **#2244**: `require_critical_escalation` is now enforced by `check_domain_policies()` (only the lint recognised the key before); the criterion is described under "Layer 2" above
-- **#2280**: domain policies judge the **resolved** routing (`_routing_defaults` → profile → tenant `_routing`, the generator's own merge); the receiver types of the main route, `overrides` and `routes` are all judged against domain policies, with `forbidden_receiver_types` and `allowed_receiver_types` as separate tests that can both fire; `routes` entry shapes and `_routing_defaults.routes` are checked too
-- **#2325**: the `require_critical_escalation` value is read as PyYAML reads it (an unquoted `yes` / `on` is true); the criterion is under "Layer 2" above
-- **#2326** (decided and implemented 2026-09-28): profiles and domain policies scoped to the subtree they sit in, profile names unique across the tree, policies judged additively — see "Amendment 2026-09-28" above
-
-**Remaining**:
-- Profile inheritance chain (profile extends another profile) — v2.7.0+ candidate
-- `tenant_matchers` (regex / prefix) to replace hardcoded `tenants` arrays — v2.7.0+ candidate
-
-## Related Decisions
-
-- [ADR-001: Severity Dedup via Inhibit Rules](./001-severity-dedup-via-inhibit.md) — inhibit rules complement routing
-- [ADR-003: Sentinel Alert Pattern](./003-sentinel-alert-pattern.md) — sentinel alerts affect routing behavior
-- [ADR-006: Tenant Mapping Topologies](./006-tenant-mapping-topologies.md) — 1:N mapped tenants still use routing profiles
-
-## References
-
-- [`docs/architecture-and-design.en.md`](../architecture-and-design.md) §2.9 — Routing Guardrails
-- [`docs/architecture-and-design.en.md`](../architecture-and-design.md) §2.11 — Dual-Perspective routing
-- [`generate_alertmanager_routes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/generate_alertmanager_routes.py) — Route generator (to be extended)
-- [Alertmanager Route Configuration](https://prometheus.io/docs/alerting/latest/configuration/#route) — Official documentation
-
-## Related Resources
-
-| Resource | Relevance |
-|----------|-----------|
-| [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ⭐⭐ |
-| [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ⭐ |
-| [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ⭐⭐ |
-| [004-federation-central-exporter-first.en](004-federation-central-exporter-first.en.md) | ⭐ |
-| [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐ |
-| [006-tenant-mapping-topologies.en](006-tenant-mapping-topologies.en.md) | ⭐⭐⭐ |
-| [007-cross-domain-routing-profiles.en](007-cross-domain-routing-profiles.en.md) | ⭐⭐⭐ |
-| [README.en](README.en.md) | ⭐⭐⭐ |
-| ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐⭐ |
-| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |
+- [ADR-001](001-severity-dedup-via-inhibit.en.md) — inhibit rules for severity dedup, complementary to routing
+- [ADR-003](003-sentinel-alert-pattern.en.md) — sentinel alerts
+- [ADR-006](006-tenant-mapping-topologies.en.md) — tenant mapping topologies
+- [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md), [ADR-017](017-defaults-yaml-inheritance-dual-hash.en.md) — directory hierarchy and inheritance
+- [ADR-036](036-single-parser-effective-config.en.md) — who judges routing
+- [Alertmanager route configuration](https://prometheus.io/docs/alerting/latest/configuration/#route)

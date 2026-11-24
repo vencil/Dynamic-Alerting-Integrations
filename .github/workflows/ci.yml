@@ -873,7 +873,7 @@ jobs:
       - name: "recipe copies match recipe_contract.json (HARD gate — #3229)"
         run: python scripts/tools/dx/gen_recipe_contract.py --check
 
-      # ADR-035 D2: tenant-id.json (Go go:embed + portal import) is DERIVED from
+      # ADR-035 §2: tenant-id.json (Go go:embed + portal import) is DERIVED from
       # tenant-config.schema.json definitions.tenantId. Edit the rule but forget
       # `make tenant-id-json` → fail here.
       - name: "tenant-id.json copies match the schema's definitions.tenantId (HARD gate — ADR-035)"

@@ -1042,7 +1042,7 @@ recipe-contract-check: ## 驗證 recipe 副本與 recipe_contract.json 同步（
 	@python3 ./scripts/tools/dx/gen_recipe_contract.py --check
 
 .PHONY: tenant-id-json
-tenant-id-json: ## 從 tenant-config schema 的 definitions.tenantId 生成 tenant-id.json（ADR-035 D2；committed artifact，Go go:embed 與 portal 各一份）
+tenant-id-json: ## 從 tenant-config schema 的 definitions.tenantId 生成 tenant-id.json（ADR-035 §2；committed artifact，Go go:embed 與 portal 各一份）
 	@python3 ./scripts/tools/dx/gen_tenant_id_json.py
 
 .PHONY: tenant-id-json-check

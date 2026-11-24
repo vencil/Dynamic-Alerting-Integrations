@@ -24,7 +24,6 @@ from _lib_constants import (  # noqa: F401
     RECEIVER_TYPES,
     RECEIVER_URL_FIELDS,
     JOB_DB_MAP,
-    METRIC_PREFIX_DB_MAP,
     ONBOARD_HINTS_FILENAME,
     DOCS_SITE_BASE,
     DOCS_INSTALL_URL,
