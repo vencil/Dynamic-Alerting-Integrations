@@ -493,6 +493,17 @@ def _inject_report(tmp: Path) -> str:
     return str(p)
 
 
+def _subprocess_scan_root(tmp: Path) -> str:
+    """A scan root for `lint/check_open_encoding --write-subprocess-baseline`:
+    one file with one subprocess text-mode call and no `encoding=`, so the
+    ledger has a row to write (#3981)."""
+    d = tmp / "open-encoding-src"
+    d.mkdir()
+    (d / "a.py").write_text('import subprocess\nsubprocess.run(["x"], text=True)\n',
+                            encoding="utf-8")
+    return str(d)
+
+
 def _trufflehog_ndjson(tmp: Path) -> str:
     """`--input` for `lint/trufflehog_to_sarif`: one unverified finding.
 
@@ -806,6 +817,14 @@ ROWS: list[Row] = [
       reach="in-repo self-test waveform pack fixture",
       shapes=("parent_is_file", "target_is_file")),
     # ── lint ───────────────────────────────────────────────────────────────
+    # #3981: the subprocess ledger, rewritten through the artifact entry. The
+    # ledger is read first; a missing one bootstraps, so both shapes reach
+    # the write.
+    R("lint/check_open_encoding.py", "--subprocess-baseline", "file", "artifact",
+      lambda c, out: ["--write-subprocess-baseline", "--subprocess-baseline", str(out),
+                      _subprocess_scan_root(c.tmp)],
+      reach="a temp scan root with one flagged subprocess call",
+      out_name="subprocess-encoding-baseline.json"),
     R("lint/trufflehog_to_sarif.py", "--output", "file", "operator",
       lambda c, out: ["--input", _trufflehog_ndjson(c.tmp), "--output", str(out)],
       reach="a one-finding NDJSON transcript; no trufflehog binary is needed, "
