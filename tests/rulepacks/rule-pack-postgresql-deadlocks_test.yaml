@@ -1,0 +1,202 @@
+# promtool unit test — PostgreSQLHighDeadlocks counts deadlocks over 5 minutes (#4033).
+# Run: promtool test rules tests/rulepacks/rule-pack-postgresql-deadlocks_test.yaml
+#
+# The alert is `tenant:pg_deadlocks:increase5m > 30` with `for: 1m`. It used to
+# be a per-second rate (`rate5m > 0.1`) with `for: 5m`, which a short burst
+# could not satisfy: the burst leaves the 5m window after ~4m45s, before the
+# 5m `for:` is over. 30 per 5 minutes is the same number as 0.1/s × 300 s.
+#
+# Every series is warm (24 flat samples = 6m) before anything happens, so
+# Prometheus and vmalert read the same samples.
+#   - t-burst: 60 deadlocks between 6m and 6m30s, quiet before and after. The
+#     count is above 30 from 6m30s through 11m (under 5m). Pending at 7m15s,
+#     firing at 8m and still at 10m, gone at 13m30s. This is the regression
+#     test: on the old rule (or with `for: 5m` alone) nothing fires at 8m or
+#     at 10m. (Not asserted at 11m: by then the first half of the burst has
+#     left the window and the two engines no longer count the same number.)
+#   - t-trickle: one deadlock every 20s = 15 per 5m, for 30m → never fires.
+#   - t-storm: 3 deadlocks per 15s = 60 per 5m, sustained → fires and stays.
+#   - t-small: a burst of 20 (< 30) → never fires. Option A of #4033 keeps the
+#     sensitivity the rule had; only "cannot see a burst" is fixed.
+#   - t-reset: 16 deadlocks, then the counter restarts (5016 → 0, a PostgreSQL
+#     restart or pg_stat_reset), then 8 more. increase() counts 24 → no alert.
+#   - t-multi: clusters east and west, burst only in west → exactly one alert,
+#     carrying da_cluster=west. t-maint: the same burst under maintenance → none.
+#
+# ⚠️ Why the two burst tenants start from 0: Prometheus extrapolates increase()
+# to the window edges, so a burst of 60 on a counter already at 1000 reads
+# 60 × 300/285 ≈ 63, while VictoriaMetrics reads 60
+# (docs/integration/victoriametrics-integration.md §3.1). A counter whose first
+# sample in the window is 0 is not extrapolated backwards (it cannot have been
+# below zero), so both engines render "60". The must-not-fire tenants sit on a
+# non-zero counter on purpose: there the extrapolated value (20 → ~21, 24 → ~25)
+# is what is compared, and it stays well under 30.
+rule_files:
+  - ../../rule-packs/rule-pack-postgresql.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── 1. Short burst fires, then clears once it leaves the window ──
+  - interval: 15s
+    name: deadlocks-short-burst-fires
+    input_series:
+      - series: 'pg_stat_database_deadlocks{tenant="t-burst", datname="app"}'
+        values: '0x24 25 60x60'
+    alert_rule_test:
+      # 45s after the count crossed 30: the expr is true, `for: 1m` not yet served.
+      - eval_time: 7m15s
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+      # Burst ended at 6m30s; +1m30s.
+      - eval_time: 8m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: &burst_alert
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              tenant: t-burst
+            exp_annotations:
+              summary: "Deadlocks detected on t-burst"
+              summary_zh: "t-burst 偵測到死鎖"
+              platform_summary: "[] t-burst: deadlocks detected — application-level lock contention"
+              platform_summary_zh: "[] t-burst：偵測到死鎖 — 應用層鎖競爭"
+              description: "60 deadlocks in the last 5 minutes"
+              description_zh: "過去 5 分鐘 60 次死鎖"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      # The whole burst is still inside the 5m window.
+      - eval_time: 10m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: *burst_alert
+      # 7m after the burst: it has left the window, the alert is gone.
+      - eval_time: 13m30s
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+
+  # ── 3. Benign trickle: 15 per 5m for 30m ──
+  - interval: 20s
+    name: deadlocks-benign-trickle-silent
+    input_series:
+      - series: 'pg_stat_database_deadlocks{tenant="t-trickle", datname="app"}'
+        values: '500+1x90'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+
+  # ── 4. Sustained storm: 60 per 5m from 6m on, fires and stays firing ──
+  - interval: 15s
+    name: deadlocks-sustained-storm-keeps-firing
+    input_series:
+      - series: 'pg_stat_database_deadlocks{tenant="t-storm", datname="app"}'
+        values: '100x23 100+3x80'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: &storm_alert
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              tenant: t-storm
+            exp_annotations:
+              summary: "Deadlocks detected on t-storm"
+              summary_zh: "t-storm 偵測到死鎖"
+              platform_summary: "[] t-storm: deadlocks detected — application-level lock contention"
+              platform_summary_zh: "[] t-storm：偵測到死鎖 — 應用層鎖競爭"
+              description: "60 deadlocks in the last 5 minutes"
+              description_zh: "過去 5 分鐘 60 次死鎖"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 20m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: *storm_alert
+      - eval_time: 26m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: *storm_alert
+
+  # ── 5. A burst of 20 stays under 30 ──
+  - interval: 15s
+    name: deadlocks-burst-below-threshold-silent
+    input_series:
+      - series: 'pg_stat_database_deadlocks{tenant="t-small", datname="app"}'
+        values: '1000x24 1008 1020x60'
+    alert_rule_test:
+      - eval_time: 7m15s
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+      - eval_time: 13m30s
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+
+  # ── 6. Counter reset inside the window is not a burst ──
+  - interval: 15s
+    name: deadlocks-counter-reset-silent
+    input_series:
+      - series: 'pg_stat_database_deadlocks{tenant="t-reset", datname="app"}'
+        values: '5000x24 5008 5016 0 4 8x60'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+      - eval_time: 13m30s
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: []
+
+  # ── 7. Per cluster: only the cluster that had the burst alerts; maintenance mutes ──
+  - interval: 15s
+    name: deadlocks-per-cluster-and-maintenance
+    input_series:
+      - series: 'pg_stat_database_deadlocks{tenant="t-multi", da_cluster="east", datname="app"}'
+        values: '700x84'
+      - series: 'pg_stat_database_deadlocks{tenant="t-multi", da_cluster="west", datname="app"}'
+        values: '0x24 25 60x60'
+      - series: 'pg_stat_database_deadlocks{tenant="t-maint", da_cluster="west", datname="app"}'
+        values: '0x24 25 60x60'
+      - series: 'user_state_filter{tenant="t-maint", filter="maintenance"}'
+        values: '1x84'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              tenant: t-multi
+              da_cluster: west
+            exp_annotations:
+              summary: "Deadlocks detected on t-multi"
+              summary_zh: "t-multi 偵測到死鎖"
+              platform_summary: "[] t-multi: deadlocks detected — application-level lock contention"
+              platform_summary_zh: "[] t-multi：偵測到死鎖 — 應用層鎖競爭"
+              description: "60 deadlocks in the last 5 minutes"
+              description_zh: "過去 5 分鐘 60 次死鎖"
+              runbook_url: ""
+              owner: ""
+              tier: ""
