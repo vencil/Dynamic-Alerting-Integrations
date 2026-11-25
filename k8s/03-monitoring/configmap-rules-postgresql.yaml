@@ -18,8 +18,8 @@ data:
     \ * max by(tenant, da_cluster) (pg_stat_activity_count)\n\n      / on(tenant,\
     \ da_cluster)\n\n      clamp_min(max by(tenant, da_cluster) (pg_settings_max_connections),\
     \ 1)\n\n      '\n  - record: tenant:pg_replication_lag:max\n    expr: max by(tenant,\
-    \ da_cluster) (pg_replication_lag)\n  - record: tenant:pg_deadlocks:rate5m\n \
-    \   expr: sum by(tenant, da_cluster) (rate(pg_stat_database_deadlocks[5m]))\n\
+    \ da_cluster) (pg_replication_lag)\n  - record: tenant:pg_deadlocks:increase5m\n\
+    \    expr: sum by(tenant, da_cluster) (increase(pg_stat_database_deadlocks[5m]))\n\
     \  - record: tenant:pg_rollback_ratio:rate5m\n    expr: \"sum by(tenant, da_cluster)\
     \ (rate(pg_stat_database_xact_rollback[5m]))\\n/ on(tenant, da_cluster)\\nclamp_min(\\\
     n  sum by(tenant, da_cluster) (rate(pg_stat_database_xact_commit[5m]))\\n  + sum\
@@ -125,12 +125,12 @@ data:
     \ replication lag on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
     \ }} 複寫延遲嚴重'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: PostgreSQLHighDeadlocks\n    expr: 'tenant:pg_deadlocks:rate5m > 0.1\n\
-    \n      unless on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"}\
-    \ == 1)\n\n      '\n    for: 5m\n    labels:\n      maintenance: mute\n      severity:\
+    \  - alert: PostgreSQLHighDeadlocks\n    expr: 'tenant:pg_deadlocks:increase5m\
+    \ > 30\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"\
+    } == 1)\n\n      '\n    for: 1m\n    labels:\n      maintenance: mute\n      severity:\
     \ warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
-    \ '{{ $value | printf \"%.2f\" }} deadlocks/sec over 5m'\n      description_zh:\
-    \ '{{ $value | printf \"%.2f\" }} 次死鎖／秒（5 分鐘內）'\n      owner: '{{ with query (printf\
+    \ '{{ $value | printf \"%.0f\" }} deadlocks in the last 5 minutes'\n      description_zh:\
+    \ 過去 5 分鐘 {{ $value | printf \"%.0f\" }} 次死鎖\n      owner: '{{ with query (printf\
     \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
     \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with\
     \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\

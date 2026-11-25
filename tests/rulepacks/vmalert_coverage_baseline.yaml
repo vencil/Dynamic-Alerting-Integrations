@@ -72,7 +72,6 @@ uncovered:
   rule-pack-postgresql.yaml:
   - PostgreSQLHighConnections
   - PostgreSQLHighConnectionsCritical
-  - PostgreSQLHighDeadlocks
   - PostgreSQLHighReplicationLag
   - PostgreSQLHighReplicationLagCritical
   - PostgreSQLHighRollbackRatio

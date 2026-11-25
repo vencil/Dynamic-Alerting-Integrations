@@ -80,7 +80,7 @@ _ALERT_COUNT = re.compile(
 #: Held both ways: a new rule without a firing test raises the count, a new
 #: firing test lowers it, and either fails `test_what_the_replay_reaches` until
 #: this number says what the tree does. (#4097 tracks bringing it down.)
-UNREACHED_CEILING = 48
+UNREACHED_CEILING = 47
 
 #: Alerts whose annotations name the cluster the alert is for. Read off the
 #: rule packs (`_cluster_naming`) and held equal to this, so one cannot be

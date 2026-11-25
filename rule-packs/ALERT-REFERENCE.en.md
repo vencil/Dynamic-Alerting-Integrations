@@ -228,7 +228,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | PostgreSQLHighConnectionsCritical | critical | muted | [tier] {{ $labels.tenant }}: critical connection saturation  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:pg_connection_usage:ratio |
 | PostgreSQLHighReplicationLag | warning | muted | [tier] {{ $labels.tenant }}: replication lag elevated  | Check replication status and network connectivity; inspect queue buildup | tenant:pg_replication_lag:max |
 | PostgreSQLHighReplicationLagCritical | critical | muted | [tier] {{ $labels.tenant }}: critical replication lag  | Check replication status and network connectivity; inspect queue buildup | tenant:pg_replication_lag:max |
-| PostgreSQLHighDeadlocks | warning | muted | [tier] {{ $labels.tenant }}: deadlocks detected  | Analyze deadlock query logs, adjust application logic to reduce contention; consider increasing lock timeout | tenant:pg_deadlocks:rate5m |
+| PostgreSQLHighDeadlocks | warning | muted | [tier] {{ $labels.tenant }}: deadlocks detected  | Analyze deadlock query logs, adjust application logic to reduce contention; consider increasing lock timeout | tenant:pg_deadlocks:increase5m |
 | PostgreSQLHighRollbackRatio | warning | muted | [tier] {{ $labels.tenant }}: high rollback ratio  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:pg_rollback_ratio:rate5m |
 | PostgreSQLRecentRestart | info | muted | PostgreSQL uptime is only {{ $value \| printf "%.0f" }}s (< 5 min) | Check alert metrics and review related logs; contact platform team for assistance if needed | pg_postmaster_start_time_seconds |
 
