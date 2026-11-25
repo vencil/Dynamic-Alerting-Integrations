@@ -938,7 +938,7 @@ def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
     for r in merged["receivers"]:
         if r.get("name") == MIGRATED_SHADOW_RECEIVER and receiver_integration_kinds(r):
             raise ValueError(
-                f"ERROR: the base config gives receiver {MIGRATED_SHADOW_RECEIVER!r} an "
+                f"ERROR: the base config gives receiver '{MIGRATED_SHADOW_RECEIVER}' an "
                 f"integration ({', '.join(receiver_integration_kinds(r))}): it takes every "
                 "migrated alert of a tenant still in shadow, the twin of a legacy alert "
                 "that still pages, so each event would page twice. Leave it name-only; "

@@ -101,7 +101,7 @@ def test_a_value_that_is_no_state_refuses_the_tree(tmp_path, value):
     """Guessing either state would page someone, or no one, wrongly."""
     proc, am = _render(_tree(tmp_path, {"t-a": value}))
     assert proc.returncode == 1, proc.stderr
-    assert "_routing_migrated is" in proc.stderr and "shadow, active" in proc.stderr, proc.stderr
+    assert "_routing_migrated must be one of shadow, active" in proc.stderr, proc.stderr
     assert am is None
 
 

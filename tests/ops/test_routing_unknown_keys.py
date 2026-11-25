@@ -51,7 +51,7 @@ def test_non_string_keys_are_passed_over():
     ("_routing_defaults", "tenant", "a platform key"),
     ("_routing", "platform", "a tenant key"),
     ("_routing_receiver_type", "tenant", "`_routing.receiver.type`"),
-    ("_routing_mode", "tenant", "read here: ['_routing', '_routing_profile']"),
+    ("_routing_mode", "tenant", "read here: ['_routing', '_routing_migrated', '_routing_profile']"),
 ])
 def test_message_names_the_key_and_a_hint(key, layer, hint):
     (w,) = gv.unknown_routing_keys({key: 1}, layer=layer, where="w", file="f.yaml")

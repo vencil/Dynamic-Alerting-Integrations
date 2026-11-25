@@ -1047,9 +1047,11 @@ def routing_migrated_state(tenant: str, value: object) -> tuple[str | None, str 
         return "shadow", None
     if isinstance(value, str) and value in ROUTING_MIGRATED_STATES:
         return value, None
-    shown = safe_label(repr(value))
-    return None, (f"{safe_label(tenant)}: _routing_migrated is {shown}: write one of "
-                  f"{', '.join(ROUTING_MIGRATED_STATES)} (absent means shadow)")
+    # The value is not shown — its type only, as for `_routing_profile`: a
+    # reserved key's value never reaches a message (the canary matrices).
+    return None, (f"tenant '{safe_label(tenant)}': _routing_migrated must be one of "
+                  f"{', '.join(ROUTING_MIGRATED_STATES)} (absent means shadow), got "
+                  f"{value_type_text(value)}")
 
 
 def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:

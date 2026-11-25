@@ -22,7 +22,7 @@ so nothing installed on this machine decides the verdict:
 * base shadowing a generated name → ``--output-configmap`` rc 1, nothing
   written (#1211 gap 2 states the reason the other way round too: the base
   is a SOURCE, and a ``tenant-*`` receiver there is an earlier output); the
-  four platform placeholder names are NOT shadowing;
+  five platform placeholder names are NOT shadowing;
 * a tree without collisions is unaffected (control).
 
 Tenant ids are fixture names (CLAUDE.md #9).
@@ -231,7 +231,10 @@ class TestBaseShadowing:
         assert set(placeholders) == {
             "custom-alerts-firehose", "watchdog-heartbeat",
             "synthetic-receiver", "sentinel-sinkhole", "migrated-alerts-shadow"}, placeholders
+        # #4277: migrated-alerts-shadow must stay name-only (a notifier on it
+        # is refused, test_generate_routes_migrated.py); the others may be fuller.
         base = self._base(tmp_path, [
+            {"name": n} if n == "migrated-alerts-shadow" else
             {"name": n, "webhook_configs": [{"url": f"https://p.example.com/{n}"}]}
             for n in placeholders])
         out = tmp_path / "cm.yaml"

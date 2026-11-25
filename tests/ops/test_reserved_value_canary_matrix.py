@@ -122,6 +122,8 @@ _EXPECTED: dict[str, "set[str] | dict[str, set[str]]"] = {
     "_routing_profile": {"url_string": {"unknown_routing_profile"},
                          "canary_key_mapping": {"routing_profile_invalid"} | _REFUSED,
                          "canary_key_list": {"routing_profile_invalid"} | _REFUSED},
+    # #4277: any value but shadow / active refuses the tree.
+    "_routing_migrated": {"routing_migrated_invalid"} | _REFUSED,
     "_routing_defaults": {"url_string": {"routing_defaults_not_mapping"},
                           "canary_key_mapping": {"routing_key_ignored", "missing_receiver_field"},
                           "canary_key_list": {"routing_defaults_not_mapping"}},
@@ -146,7 +148,7 @@ _NOT_JUDGED = {
 #: Kinds whose finding names the key itself in `field`: the proof that THIS
 #: key was judged.
 _FIELD_IS_KEY = {"key_value_unread", "severity_dedup_invalid", "routing_not_mapping",
-                 "unknown_routing_profile", "routing_profile_invalid",
+                 "unknown_routing_profile", "routing_profile_invalid", "routing_migrated_invalid",
                  "routing_defaults_not_mapping"}
 
 
