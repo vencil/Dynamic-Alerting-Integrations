@@ -62,7 +62,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
-    check_repo_artifact, exit_on_output_write_error, is_special_file, write_repo_artifact)
+    OutputWriteError, check_repo_artifact, exit_on_output_write_error, is_special_file,
+    write_repo_artifact)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -508,7 +509,11 @@ def main() -> int:
         for path, new, note in plans:
             if new is not None:
                 target = PROJECT_ROOT / path
-                write_repo_artifact(target, new, mode=stat.S_IMODE(os.stat(target).st_mode))
+                try:
+                    mode = stat.S_IMODE(os.stat(target).st_mode)
+                except OSError as exc:  # gone since the judgement (#4312 review)
+                    raise OutputWriteError(target, exc) from exc
+                write_repo_artifact(target, new, mode=mode)
             print(f"  {'✓' if new is not None else '…'} {path}: {note}", flush=True)
         print()
 

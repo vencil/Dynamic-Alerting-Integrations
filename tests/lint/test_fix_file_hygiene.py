@@ -282,3 +282,24 @@ def test_files_fixed_before_a_refusal_are_named(tmp_path, monkeypatch, capsys, c
         ffh.main()
     assert exc.value.code == 2
     assert f"  fixed {a}" in capsys.readouterr().out
+
+
+def test_a_file_gone_after_the_judgement_is_rc2_one_line(tmp_path, monkeypatch, capsys, cli_argv):
+    """#4312 review: a file removed between the judgement and its write was a
+    FileNotFoundError out of `main`; it is the one-line rc 2."""
+    a = tmp_path / "a.txt"
+    a.write_bytes(b"x")
+    real = ffh.check_repo_artifact
+
+    def judge_then_remove(path, **kw):
+        real(path, **kw)
+        Path(path).unlink()
+    monkeypatch.setattr(ffh, "check_repo_artifact", judge_then_remove)
+    cli_argv("fix_file_hygiene.py", str(a))
+    with pytest.raises(SystemExit) as exc:
+        ffh.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot write {a}: No such file or directory (errno 2)"
+        " — check the value given to FILE"], err

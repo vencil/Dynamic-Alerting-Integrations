@@ -444,3 +444,22 @@ def test_fix_names_what_it_wrote_before_a_refusal(git_repo, capsys, monkeypatch,
     with pytest.raises(SystemExit):
         chbh.main()
     assert "✓ a.txt: fixed working copy" in capsys.readouterr().out
+
+
+def test_fix_working_copy_gone_after_the_judgement_is_rc2(git_repo, capsys, monkeypatch, cli_argv):
+    """#4312 review: a working copy removed between the judgement and its
+    write is the one-line rc 2, not a FileNotFoundError out of `main`."""
+    repo = _damaged_repo(git_repo)
+    real = chbh.check_repo_artifact
+
+    def judge_then_remove(path, **kw):
+        real(path, **kw)
+        if Path(path).name == "a.txt":
+            Path(path).unlink()
+    monkeypatch.setattr(chbh, "check_repo_artifact", judge_then_remove)
+    cli_argv("check_head_blob_hygiene.py", "--fix")
+    with pytest.raises(SystemExit) as exc:
+        chbh.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert f"cannot write {repo / 'a.txt'}: No such file or directory" in err

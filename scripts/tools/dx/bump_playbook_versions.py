@@ -91,6 +91,9 @@ def write_bumps(writes: "list[tuple[Path, bytes]]") -> None:
         check_repo_artifact(filepath)
     for filepath, new in writes:
         write_repo_artifact(filepath, new)
+        # Named as it is written: a later refusal (rc 2) still shows which
+        # playbooks were already bumped (#4312 review).
+        print(f"  wrote {filepath}", flush=True)
 
 
 def plan_bump(filepath: Path, target: str) -> "tuple[str, str, bytes | None]":

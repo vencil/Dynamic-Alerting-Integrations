@@ -417,3 +417,21 @@ def test_crlf_survives_the_bump(tmp_path):
     assert bpv.apply_bump(f, "v2.8.0", write=True)[0] == "UPDATED"
     data = f.read_bytes()
     assert b"verified-at-version: v2.8.0\r\n" in data and b"\n" not in data.replace(b"\r\n", b"")
+
+
+def test_playbooks_written_before_a_refusal_are_named(tmp_path, monkeypatch, capsys):
+    """#4312 review: a refusal at the second write (a playbook the user may
+    not write) leaves the first bumped — and named, as it was written."""
+    from _lib_output import OutputWriteError
+    root = _make_playbook_tree(tmp_path, {})
+    second = root / bpv.PLAYBOOK_PATHS[1]
+    real = bpv.write_repo_artifact
+
+    def refuse_second(path, data, **kw):
+        if Path(path) == second:
+            raise OutputWriteError(path, OSError(13, "Permission denied"))
+        return real(path, data, **kw)
+    monkeypatch.setattr(bpv, "write_repo_artifact", refuse_second)
+    rc, out, _err = _run_cli(monkeypatch, capsys, root, "--to", "v2.8.0")
+    assert rc == 2
+    assert f"  wrote {root / bpv.PLAYBOOK_PATHS[0]}" in out

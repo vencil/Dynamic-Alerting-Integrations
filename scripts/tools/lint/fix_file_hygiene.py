@@ -17,7 +17,8 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
-    check_repo_artifact, exit_on_output_write_error, is_special_file, write_repo_artifact)
+    OutputWriteError, check_repo_artifact, exit_on_output_write_error, is_special_file,
+    write_repo_artifact)
 
 
 #: The positional's name, as the usage line names it: a refused target is
@@ -83,7 +84,11 @@ def write_fixes(writes: "list[tuple[str, bytes]]") -> None:
     for path, _fixed in writes:
         check_repo_artifact(path, flag=_FLAG)
     for path, fixed in writes:
-        write_repo_artifact(path, fixed, flag=_FLAG, mode=stat.S_IMODE(os.stat(path).st_mode))
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except OSError as exc:  # gone since the judgement: rc 2, one line (#4312 review)
+            raise OutputWriteError(path, exc, flag=_FLAG) from exc
+        write_repo_artifact(path, fixed, flag=_FLAG, mode=mode)
         print(f"  fixed {path}")
 
 
