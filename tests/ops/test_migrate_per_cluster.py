@@ -12,11 +12,14 @@ migrate_rule 產生的 metric 側 recording rule 因此改成
 1. metric 側分組是 `by(tenant, da_cluster)`，label 只有一種拼法
    （`_lib_cluster_identity.CLUSTER_IDENTITY_LABEL`）；閾值側、告警的
    `on(tenant) group_left`、維護的 `unless on(tenant)` 不變。
-2. 原式子自己寫的 `by(...)`／`on(...)` 點名身分 label 時補上叢集 label——
-   那是 migrate_rule 會產出的唯一一種「兩邊都是 metric 的配對」。
+2. 原式子自己寫的 `by(...)`／`on(...)` 照抄、不改寫（與 main 逐位元組相同）：
+   要不要補叢集 label 取決於配對的兩邊是否都帶它，工具看不出來。點名身分
+   label 卻沒有叢集 label 的，由 AST 偵測並在既有的註記管道標出來請人確認；
+   沒有 AST 時說「沒檢查」，不是什麼都不說。
 3. `{{ $labels.da_cluster }}` 照留；`{{ $labels.instance }}` 照舊改寫。
-4. `check_cluster_identity` 自己的判定，對每一種產出形狀都是零 finding
-   （把分組改回 `by(tenant)` 就有 finding：不是空集合上的綠燈）。
+4. `check_cluster_identity` 自己的判定：沒有原式子自帶分組的形狀是零
+   finding（把分組改回 `by(tenant)` 就有 finding：不是空集合上的綠燈）；
+   lint 會報的規則恰好就是工具標了註記的規則，沒有一條是悄悄產出的。
 5. promtool 跑產生出來的規則：兩個叢集各自比對閾值，告警帶 `da_cluster`
    與該叢集自己的值；序列沒有 `da_cluster` 時，告警、label、值與
    `by(tenant)` 的產物相同。
@@ -81,7 +84,7 @@ def _rule(alert, expr, severity="warning", **annotations):
 #: （sum：rate／_total；max：其餘）、算術、原式子自帶配對或分組、被 parse 成
 #: 「LHS op 數字」的複合規則（and／or／unless）、warning＋critical 配對、
 #: 只有 critical（改讀 base 閾值列）。
-EMITTING_RULES = [
+PLAIN_RULES = [
     _rule("Gt", "app_connections > 100"),
     _rule("Ge", "app_threads >= 10"),
     _rule("Lt", "app_free_ratio < 0.1"),
@@ -91,13 +94,15 @@ EMITTING_RULES = [
     _rule("SumTotal", "app_queue_jobs_total > 100"),
     _rule("SumRate", "rate(app_errors_total[5m]) > 1"),
     _rule("Arithmetic", "app_used_bytes / app_limit_bytes * 100 > 80"),
-    _rule("PairOnInstance", "app_hit_ratio / on(instance) app_all_ratio > 0.8"),
-    _rule("PairGroupLeft",
-          "app_role_lag * on(instance) group_left(version) app_build_info > 30"),
-    _rule("InnerBy", "sum by(instance) (rate(app_reqs_total[5m])) > 5"),
-    _rule("InnerByPostfix", "max(app_pool_usage) by (pod, namespace) > 0.9"),
     _rule("Quantile",
           "histogram_quantile(0.99, sum by(le) (rate(app_latency_bucket[5m]))) > 2"),
+    _rule("OnNothing", "app_share_ratio / on() group_left app_fleet_ratio > 0.5"),
+    _rule("Without", "sum without(instance) (app_open_files) > 1000"),
+    _rule("Ignoring", "app_busy_workers / ignoring(instance) app_max_workers > 0.9"),
+    _rule("AlreadyPerCluster",
+          "max by(instance, da_cluster) (app_heap_usage) "
+          "/ on(instance, da_cluster) app_heap_limit_usage > 0.9"),
+    _rule("StringMatcher", 'app_notes_count{note="sum by(instance) on(pod)"} > 3'),
     _rule("CompoundAnd", "app_and_lag > 5 and app_y_lag > 3"),
     _rule("CompoundOr", "app_or_lag > 5 or app_z_lag > 3"),
     _rule("CompoundUnless", "app_unless_lag > 5 unless app_w_lag > 3"),
@@ -105,6 +110,34 @@ EMITTING_RULES = [
     _rule("PairCrit", "app_replica_lag > 60", severity="critical"),
     _rule("OnlyCrit", "app_backlog_queue > 500", severity="critical"),
 ]
+
+#: 原式子自己寫了點名身分 label、卻沒有叢集 label 的 `on(...)`／`by(...)`：
+#: (規則, groupings_without_cluster 的結果)。
+GROUPED_RULES = [
+    (_rule("PairOnInstance", "app_hit_ratio / on(instance) app_all_ratio > 0.8"),
+     ["on(instance)"]),
+    (_rule("PairGroupLeft",
+           "app_role_lag * on(instance) group_left(version) app_build_info > 30"),
+     ["on(instance)"]),
+    (_rule("PairUpper", "app_errs_count / ON(instance) group_left app_reqs_count != 0"),
+     ["on(instance)"]),
+    (_rule("PairGroupLeftCluster",
+           "app_lat_latency * on(instance) group_left(da_cluster) app_info_latency > 5"),
+     ["on(instance)"]),
+    (_rule("PairOnTenant", "app_disk_usage / on(tenant) group_left app_quota_usage > 0.9"),
+     ["on(tenant)"]),
+    (_rule("InnerBy", "sum by(instance) (rate(app_reqs_total[5m])) > 5"), ["by(instance)"]),
+    (_rule("InnerByUpper", "sum BY(instance) (rate(app_jobs_total[5m])) > 5"),
+     ["by(instance)"]),
+    (_rule("InnerByQuoted", 'max by("instance") (app_gc_delay) > 5'), ["by(instance)"]),
+    (_rule("InnerByPostfix", "max(app_pool_usage) by (pod, namespace) > 0.9"),
+     ["by(pod, namespace)"]),
+    (_rule("InnerByTenant", "sum by(tenant, node) (app_node_errors) > 3"),
+     ["by(tenant, node)"]),
+    (_rule("Both", "sum by(pod) (app_a_count) / on(pod) sum by(pod) (app_b_count) > 2"),
+     ["on(pod)", "by(pod)"]),
+]
+EMITTING_RULES = PLAIN_RULES + [rule for rule, _groupings in GROUPED_RULES]
 
 #: migrate_rule 不產出規則、只給 LLM prompt 的輸入：absent() 類、沒有數字
 #: 閾值的向量比較、bool 修飾、整條包在括號裡、predict_linear。
@@ -167,8 +200,9 @@ def test_old_query_is_grouped_as_the_recording_rule_is(tmp_path, monkeypatch):
     mapping = yaml.safe_load(written["text"])
     assert mapping["custom_app_queue_jobs_total"]["old_query"] == (
         "sum by(tenant, da_cluster) (app_queue_jobs_total)")
+    # 原式子照抄：只有外層分組是新的
     assert mapping["custom_app_hit_ratio"]["old_query"] == (
-        "max by(tenant, da_cluster) (app_hit_ratio / on(instance, da_cluster) app_all_ratio)")
+        "max by(tenant, da_cluster) (app_hit_ratio / on(instance) app_all_ratio)")
     queries = [e["old_query"] for e in mapping.values()]
     assert len(queries) >= 15
     assert all(" by(tenant, da_cluster) (" in q for q in queries)
@@ -178,27 +212,124 @@ def test_old_query_is_grouped_as_the_recording_rule_is(tmp_path, monkeypatch):
 # 2. 原式子自己的配對與分組
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("expr,want", [
-    ("a / on(instance) b", "a / on(instance, da_cluster) b"),
-    ("a unless on(tenant, instance) b", "a unless on(tenant, instance, da_cluster) b"),
-    ("a * on (pod) group_left(version) b", "a * on (pod, da_cluster) group_left(version) b"),
-    ("sum by(instance) (x)", "sum by(instance, da_cluster) (x)"),
-    ("max(x) by (pod,namespace)", "max(x) by (pod, namespace, da_cluster)"),
-    ("sum by(node) (x) / on(node) y",
-     "sum by(node, da_cluster) (x) / on(node, da_cluster) y"),
-    # 已經有、沒點名身分 label、without／ignoring：不動
-    ("a / on(instance, da_cluster) b", "a / on(instance, da_cluster) b"),
-    ("sum by(le) (x)", "sum by(le) (x)"),
-    ("a / on() group_left b", "a / on() group_left b"),
-    ("sum without(instance) (x)", "sum without(instance) (x)"),
-    ("a / ignoring(instance) b", "a / ignoring(instance) b"),
-    # 字串常值裡的文字不是分組
-    ('x{note="by(instance)"} / on(instance) y{note=\'on(pod)\'}',
-     'x{note="by(instance)"} / on(instance, da_cluster) y{note=\'on(pod)\'}'),
-    ("plain_metric", "plain_metric"),
-])
-def test_a_grouping_of_the_original_expression_keeps_the_cluster(expr, want):
-    assert mr.keep_cluster_in_groupings(expr) == want
+#: 原式子帶 `on()`／`by()` 的規則，產生的 metric 側 recording rule——與
+#: origin/main 的產物只差外層的 `, da_cluster`（main 的產生器另外跑過一次，
+#: 見 commit 訊息）。
+_AS_WRITTEN = {
+    "PairOnInstance": 'max by(tenant, da_cluster) (app_hit_ratio{tenant=~".+"} '
+                      '/ on(instance) app_all_ratio{tenant=~".+"})',
+    "PairUpper": 'sum by(tenant, da_cluster) (app_errs_count{tenant=~".+"} '
+                 '/ ON(instance) group_left app_reqs_count{tenant=~".+"})',
+    "PairGroupLeftCluster": 'max by(tenant, da_cluster) (app_lat_latency{tenant=~".+"} '
+                            '* on(instance) group_left(da_cluster) '
+                            'app_info_latency{tenant=~".+"})',
+    "PairOnTenant": 'max by(tenant, da_cluster) (app_disk_usage{tenant=~".+"} '
+                    '/ on(tenant) group_left app_quota_usage{tenant=~".+"})',
+    "InnerBy": 'sum by(tenant, da_cluster) (sum by(instance) '
+               '(rate(app_reqs_total{tenant=~".+"}[5m])))',
+    "InnerByUpper": 'sum by(tenant, da_cluster) (sum BY(instance) '
+                    '(rate(app_jobs_total{tenant=~".+"}[5m])))',
+    "InnerByQuoted": 'max by(tenant, da_cluster) (max by("instance") '
+                     '(app_gc_delay{tenant=~".+"}))',
+    "InnerByPostfix": 'max by(tenant, da_cluster) (max(app_pool_usage{tenant=~".+"}) '
+                      'by (pod, namespace))',
+}
+
+
+def test_the_original_expression_goes_in_as_written():
+    results, _rec, _alerts = generate([rule for rule, _g in GROUPED_RULES])
+    got = {r.alert_name: r.recording_rules[0]["expr"] for r in results}
+    assert {name: got[name] for name in _AS_WRITTEN} == _AS_WRITTEN
+    for r in results:
+        # 舊查詢也是原式子本身
+        assert r.recording_lhs_original == r.original_expr.rsplit(" ", 2)[0]
+    assert not hasattr(mr, "keep_cluster_in_groupings")
+
+
+@pytest.mark.parametrize("rule,groupings", GROUPED_RULES, ids=lambda v: v.get("alert")
+                         if isinstance(v, dict) else None)
+def test_a_grouping_that_names_an_identity_without_the_cluster_gets_the_note(rule, groupings):
+    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
+    assert r.cluster_grouping_checked is True
+    assert r.cluster_groupings == groupings
+    note = mr.cluster_grouping_note(groupings)
+    assert "\n" not in note and "、".join(groupings) in note and "da_cluster" in note
+    assert r.notes.count(note) == 1
+    # 既有的「要人看」狀態：帶括號的式子本來就是 complex／review，不另設狀態
+    assert (r.status, r.triage_action) == ("complex", "review")
+
+
+@pytest.mark.parametrize("rule", PLAIN_RULES, ids=lambda r: r["alert"])
+def test_other_expressions_are_checked_and_get_no_note(rule):
+    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
+    assert r.cluster_grouping_checked is True
+    assert r.cluster_groupings == []
+    assert not any("da_cluster" in n for n in r.notes)
+
+
+def test_the_note_reaches_the_report_the_rule_file_the_tenant_file_notes_and_the_console(capsys):
+    rules = [GROUPED_RULES[0][0], PLAIN_RULES[0]]
+    results, recording, _alerts = generate(rules)
+    note = mr.cluster_grouping_note(["on(instance)"])
+    assert recording.count(f"      # ⚠️ {note}\n      - record: tenant:custom_app_hit_ratio:max\n") == 1
+    assert recording.count(note) == 1   # 不掛在閾值那一條、也不掛在別的規則上
+    report = mr.render_report(results)
+    assert report.count(f"    ⚠️ {note}\n") == 1
+    assert mr.CLUSTER_GROUPING_NOT_CHECKED not in report
+    mr.print_dry_run(results)
+    assert capsys.readouterr().out.count(f"     ⚠️ {note}\n") == 1
+    assert results[0].notes == [note]   # tenant_config_entry 把 notes 寫成 📖 註解
+
+
+@pytest.mark.parametrize("how", ["no-ast-flag", "no-parser"])
+def test_without_the_ast_the_check_is_reported_as_not_made(how, monkeypatch):
+    """「沒檢查」與「檢查了、沒有」分得開：沒有註記，但報告說沒檢查。"""
+    if how == "no-parser":
+        monkeypatch.setattr(mr, "HAS_AST", False)
+    use_ast = how != "no-ast-flag"
+    assert mr.groupings_without_cluster("a / on(instance) b") == (
+        None if how == "no-parser" else ["on(instance)"])
+    results, recording, _alerts = generate([rule for rule, _g in GROUPED_RULES], use_ast=use_ast)
+    for r in results:
+        assert r.cluster_grouping_checked is False
+        assert r.cluster_groupings == [] and r.notes == []
+    assert "⚠️ 原式子的" not in recording
+    report = mr.render_report(results)
+    assert f"  ⚠️ {mr.CLUSTER_GROUPING_NOT_CHECKED}：{len(results)} 條\n" in report
+    # 檢查過的那一次不說這句話
+    monkeypatch.undo()
+    checked, _rec, _al = generate([rule for rule, _g in GROUPED_RULES])
+    assert mr.CLUSTER_GROUPING_NOT_CHECKED not in mr.render_report(checked)
+
+
+def test_an_expression_the_parser_refuses_is_not_checked():
+    assert mr.groupings_without_cluster("sum by(instance (x") is None
+
+
+def test_a_quoted_label_name_stays_on_one_line_of_the_note():
+    found = mr.groupings_without_cluster('sum by(pod, "a\\nb") (x)')
+    assert found == ['by(pod, "a\\nb")']
+    assert "\n" not in mr.cluster_grouping_note(found)
+
+
+def test_the_cli_says_once_that_the_check_was_not_made(tmp_path):
+    rules = tmp_path / "rules.yml"
+    rules.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [
+        rule for rule, _g in GROUPED_RULES[:3]]}]}), encoding="utf-8")
+    tool = str(_TOOLS / "ops" / "migrate_rule.py")
+
+    def run(*flags):
+        return subprocess.run([sys.executable, tool, str(rules), "--dry-run", "--no-dictionary",
+                               *flags], capture_output=True, text=True, encoding="utf-8",
+                              timeout=120)
+    without = run("--no-ast")
+    assert without.returncode == 0, without.stderr
+    assert without.stderr.count(f"[WARN] {mr.CLUSTER_GROUPING_NOT_CHECKED}\n") == 1
+    assert "⚠️ 原式子的" not in without.stdout
+    with_ast = run()
+    assert with_ast.returncode == 0, with_ast.stderr   # 註記不改結束碼
+    assert mr.CLUSTER_GROUPING_NOT_CHECKED not in with_ast.stderr
+    assert with_ast.stdout.count("⚠️ 原式子的 on(instance) 沒有 da_cluster") == 3
 
 
 def test_the_identity_labels_are_the_lints():
@@ -245,49 +376,51 @@ def _lint_tree(root: Path, recording: str, alerts: str) -> Path:
 @pytest.mark.usefixtures("da_read_env")
 @pytest.mark.parametrize("use_ast", [True, False], ids=["ast", "no-ast"])
 @pytest.mark.parametrize("prefix", ["custom_", ""], ids=["prefix", "no-prefix"])
-def test_the_lint_finds_nothing_in_the_generated_rules(tmp_path, use_ast, prefix):
+def test_the_lint_finds_nothing_in_rules_without_a_grouping_of_their_own(
+        tmp_path, use_ast, prefix):
     import check_cluster_identity as cid
-    results, recording, alerts = generate(EMITTING_RULES + MANUAL_RULES,
+    results, recording, alerts = generate(PLAIN_RULES + MANUAL_RULES,
                                           prefix=prefix, use_ast=use_ast)
     root = _lint_tree(tmp_path / "now", recording, alerts)
     judged = cid._judged(root)
     emitted = [r for r in results if r.alert_rules]
-    assert len(emitted) == len(EMITTING_RULES)
-    # 每條產生的規則都被判到（metric 側與閾值側 recording rule 各一、alert 各一；
-    # 有 warning 配對的 critical 與 warning 共用 metric 側那一條）
-    assert len(judged) == 3 * len(emitted) - 1
+    assert len(emitted) == len(PLAIN_RULES)
+    # 每條產生的規則都被判到：去重後的 recording rule，加上每條 alert
+    assert len(judged) == len(mr._dedup_recording_rules(results)) + len(emitted)
     assert cid.findings(root) == {}
     assert cid.stale_declarations(root) == []
 
-    # 判定是真的在看這棵樹：分組改回 by(tenant)，每條 metric 側規則都有 finding
+    # 判定是真的在看這棵樹：分組改回 by(tenant)，metric 側規則就有 finding
     merged = _lint_tree(tmp_path / "merged",
                         recording.replace(mr.METRIC_GROUPING, "by(tenant)"), alerts)
     found = cid.findings(merged)
     assert set(found) == {"rule-pack-migrated-recording.yaml"}
     assert all("by-drops-cluster (tenant)" in f
                for f in found["rule-pack-migrated-recording.yaml"])
-    # by(le) 的那條內層已經不帶叢集，外層沒有東西可丟
-    assert len(found["rule-pack-migrated-recording.yaml"]) == len(emitted) - 2
+    flagged = {f.split(" / ", 1)[1].split(": ", 1)[0]
+               for f in found["rule-pack-migrated-recording.yaml"]}
+    # by(le) 那條的內層已經不帶叢集，外層沒有東西可丟；其餘每一條都報
+    quantile = next(r.record_name for r in results if r.alert_name == "Quantile")
+    assert flagged == {r.record_name for r in emitted} - {quantile}
+    assert len(flagged) >= 15
 
 
 @pytest.mark.usefixtures("da_read_env")
-def test_the_lint_would_report_an_original_pairing_left_as_written(tmp_path, monkeypatch):
-    """原式子的 `on(instance)`／`by(instance)` 照抄時，lint 報得出來——所以上面
-    的零 finding 包含了「這些配對也逐叢集」。"""
+def test_the_rules_the_lint_flags_are_the_rules_that_carry_the_note(tmp_path):
+    """產生器不會悄悄產出一條 lint 會報的規則：lint 報的 record 集合，等於
+    帶註記的規則的 record 集合。"""
     import check_cluster_identity as cid
-    monkeypatch.setattr(mr, "keep_cluster_in_groupings", lambda expr: expr)
-    _results, recording, alerts = generate(EMITTING_RULES)
+    results, recording, alerts = generate(EMITTING_RULES + MANUAL_RULES)
     found = cid.findings(_lint_tree(tmp_path, recording, alerts))
-    assert found == {"rule-pack-migrated-recording.yaml": [
-        "custom_migrated-recording-rules / tenant:custom_app_hit_ratio:max: "
-        "on-drops-cluster (instance)",
-        "custom_migrated-recording-rules / tenant:custom_app_pool_usage:max: "
-        "by-drops-cluster (pod,namespace)",
-        "custom_migrated-recording-rules / tenant:custom_app_reqs_total:sum: "
-        "by-drops-cluster (instance)",
-        "custom_migrated-recording-rules / tenant:custom_app_role_lag:max: "
-        "on-drops-cluster (instance)",
-    ]}
+    assert set(found) == {"rule-pack-migrated-recording.yaml"}
+    flagged = {f.split(" / ", 1)[1].split(": ", 1)[0]
+               for f in found["rule-pack-migrated-recording.yaml"]}
+    noted = {r.record_name for r in results if r.cluster_groupings}
+    assert len(noted) == len(GROUPED_RULES)
+    assert flagged == noted
+    kinds = {f.rsplit(": ", 1)[1].split(" (")[0]
+             for f in found["rule-pack-migrated-recording.yaml"]}
+    assert kinds == {"by-drops-cluster", "on-drops-cluster"}
 
 
 # ---------------------------------------------------------------------------
@@ -454,11 +587,11 @@ def test_thresholds_and_maintenance_stay_one_per_tenant(tmp_path):
 
 
 @needs_promtool
-def test_compound_rules_and_original_pairings_are_judged_inside_one_cluster(tmp_path):
-    """兩個叢集各有一台位址相同的實例（`i1`）。and／or／unless 的另一邊、與
-    `on(instance)` 的另一邊，都只取同一個叢集的序列；沒有一條產生的規則因為
-    多了一個叢集而求值失敗（promtool 把規則求值錯誤當成失敗）。"""
-    rules = SINGLE_PROMETHEUS_CASES["compound"][0]
+def test_compound_rules_are_judged_inside_one_cluster(tmp_path):
+    """兩個叢集各有一台位址相同的實例（`i1`）。and／or／unless 的另一邊只取同一個
+    叢集的序列（預設配對比的是全部 label，含叢集）；沒有一條因為多了一個叢集
+    而求值失敗（promtool 把規則求值錯誤當成失敗）。"""
+    rules = SINGLE_PROMETHEUS_CASES["compound"][0][:3]
     east, west = {"da_cluster": "east", "instance": "i1"}, {"da_cluster": "west", "instance": "i1"}
     assert_alerts(tmp_path, rules, [
         # and：west 沒有另一邊的序列
@@ -470,23 +603,46 @@ def test_compound_rules_and_original_pairings_are_judged_inside_one_cluster(tmp_
         # unless：east 被自己叢集的另一邊消掉
         series("app_unless_lag", 10, **east), series("app_w_lag", 1, **east),
         series("app_unless_lag", 20, **west),
-        # on(instance) group_left：east 0.5×1、west 0.9×1
-        series("app_hit_ratio", 0.5, **east), series("app_weight", 1, **east),
-        series("app_hit_ratio", 0.9, **west), series("app_weight", 1, **west),
         threshold("app_and_lag", 3), threshold("app_or_lag", 3),
-        threshold("app_unless_lag", 3), threshold("app_hit_ratio", 0.8),
+        threshold("app_unless_lag", 3),
     ], {"CustomAnd": [alert(10, "east")],
         "CustomOr": [alert(10, "east"), alert(4, "west")],
-        "CustomUnless": [alert(20, "west")],
-        "CustomPair": [alert(0.9, "west")]})
+        "CustomUnless": [alert(20, "west")]})
 
 
 @needs_promtool
-def test_an_original_pairing_left_as_written_fails_on_two_clusters(tmp_path, monkeypatch):
-    """上一條的對照：`on(instance)` 照抄時，兩個叢集的 `i1` 配成 many-to-many，
-    規則求值失敗——promtool 確實看得見這種錯。"""
-    monkeypatch.setattr(mr, "keep_cluster_in_groupings", lambda expr: expr)
-    _results, recording, alerts = generate([_rule("Pair", _PAIR_EXPR)])
+def test_a_pairing_with_a_one_per_tenant_series_still_fires(tmp_path):
+    """`usage / on(tenant) group_left quota`，右邊是租戶一份、不帶 da_cluster 的
+    序列（契約 3 的形狀）。原式子照抄，所以兩個叢集時照樣配得到：超標的叢集
+    告警、值是它自己的。把 `on(tenant)` 改寫成 `on(tenant, da_cluster)` 的話
+    什麼都配不到，告警悄悄消失——這條規則帶著註記交給人判斷。"""
+    rule = _rule("Quota", "app_disk_usage / on(tenant) group_left app_quota_usage > 0.9",
+                 value="{{ $value }}")
+    results, _rec, _alerts = generate([rule])
+    assert results[0].cluster_groupings == ["on(tenant)"]
+    assert "on(tenant) group_left app_quota_usage" in results[0].recording_rules[0]["expr"]
+    inputs = [
+        series("app_disk_usage", 95, da_cluster="east", instance="i1"),
+        series("app_disk_usage", 10, da_cluster="west", instance="i1"),
+        series("app_quota_usage", 100),
+        threshold("app_disk_usage", 0.9),
+    ]
+    assert_alerts(tmp_path / "two", [rule], inputs, {"CustomQuota": [alert(0.95, "east")]})
+    # 單一 Prometheus：與 by(tenant) 的產物相同
+    assert_alerts(tmp_path / "one", [rule], [
+        series("app_disk_usage", 95, instance="i1"), series("app_quota_usage", 100),
+        threshold("app_disk_usage", 0.9),
+    ], {"CustomQuota": [alert(0.95)]})
+
+
+@needs_promtool
+def test_an_original_on_instance_fails_on_two_clusters_and_carries_the_note(tmp_path):
+    """已知、未在這裡解決：原式子的 `on(instance)` 照抄，兩個叢集位址相同的
+    `i1` 配成 many-to-many，規則求值失敗（main 的產物也一樣）。工具做的是
+    標出來：這條規則帶註記。"""
+    results, recording, alerts = generate([_rule("Pair", _PAIR_EXPR)])
+    assert results[0].cluster_groupings == ["on(instance)"]
+    assert mr.cluster_grouping_note(["on(instance)"]) in recording
     proc = run_promtool(tmp_path, recording, alerts, [
         series("app_hit_ratio", 0.5, da_cluster="east", instance="i1"),
         series("app_weight", 1, da_cluster="east", instance="i1"),
@@ -617,16 +773,34 @@ def test_the_report_of_a_run_without_clusters_holds_the_tenant_alone(tmp_path):
     assert row["Tenant"] == "t1"
 
 
-@pytest.mark.parametrize("tenant,cluster", [
-    ("t1", None), ("t1", "east"), ("t1", "dc/eu:1"), ("__no_label__", "west"),
-    ("t (da_cluster=x)", "east"),
-])
-def test_the_tenant_cell_reads_back(tenant, cluster):
+_HOSTILE_CLUSTERS = ["east", "dc/eu:1", ")", "(", "=", "|", "a) (da_cluster=b",
+                     " (da_cluster=x)", "a\nb", "a\r\nb", "\\", "\\)", "x\\n", "a(b)c\\\\",
+                     "東", "a,b\"c"]
+
+
+@pytest.mark.parametrize("cluster", _HOSTILE_CLUSTERS, ids=repr)
+@pytest.mark.parametrize("tenant", ["t1", "__no_label__", "t (da_cluster=x)",
+                                    "a) (da_cluster=b", "t\\"], ids=repr)
+def test_the_tenant_cell_reads_back_whatever_the_cluster_is_called(tenant, cluster):
     cell = tenant_cell(tenant, cluster)
-    assert split_tenant_cell(cell) == (tenant, cluster) or (
-        cluster is None and cell == tenant)
-    if cluster is None:
-        assert cell == tenant
+    assert split_tenant_cell(cell) == (tenant, cluster)
+    assert "\n" not in cell and "\r" not in cell   # 一列仍是一行
+
+
+def test_a_cell_without_a_cluster_is_the_tenant_itself():
+    assert tenant_cell("t1") == tenant_cell("t1", None) == tenant_cell("t1", "") == "t1"
+    assert split_tenant_cell("t1") == ("t1", None)
+    assert tenant_cell("t1", "east") == "t1 (da_cluster=east)"
+    assert tenant_cell("t1", "a) (da_cluster=b") == "t1 (da_cluster=a\\) \\(da_cluster=b)"
+
+
+def test_a_hostile_cluster_name_survives_the_csv(tmp_path):
+    cluster = "a) (da_cluster=b\n|=("
+    diffs = vm.compare_vectors({vm.ClusterKey("t1", cluster): 1.0},
+                               {vm.ClusterKey("t1", cluster): 1.0})
+    (row,) = _csv_rows(tmp_path, [{"label": "k", "old_query": "o", "new_query": "n",
+                                   "diffs": diffs}])
+    assert split_tenant_cell(row["Tenant"]) == ("t1", cluster)
 
 
 def test_shadow_verify_counts_a_tenant_once_however_many_clusters(tmp_path):

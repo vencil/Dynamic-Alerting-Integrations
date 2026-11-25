@@ -88,38 +88,6 @@ METRIC_GROUPING = f"by(tenant, {CLUSTER_IDENTITY_LABEL})"
 #: 映像不帶 lint）：`by(...)`／`on(...)` 點名其中任一個，就是「逐這個東西」，
 #: 而它在每個叢集各有一份。
 _IDENTITY_LABELS = frozenset({"tenant", "instance", "pod", "namespace", "node"})
-_STRING_OR_GROUPING = re.compile(
-    r'''"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`'''
-    r'''|\b(?P<kw>by|on)(?P<gap>\s*)\((?P<labels>[^()]*)\)''')
-
-
-def keep_cluster_in_groupings(expr_str):
-    """原式子自己寫的 `by(...)`／`on(...)` 點名身分 label 卻沒有叢集 label
-    時，補上它（ADR-006 契約 4）。
-
-    原規則是在單一叢集寫的：`a / on(instance) b`、`sum by(instance) (x)` 在
-    收了多個叢集的 Prometheus 上會把兩個叢集位址相同的實例配在一起
-    （many-to-many，整條規則求值失敗）或加在一起。序列沒有叢集 label 時，
-    多列一個空 label 不改變分組，結果與原式相同。沒點名身分 label 的
-    （`by(le)`、`on()`）、`without(...)`、`ignoring(...)` 不動；字串常值裡的
-    文字不動。改寫後 parse 不過就回傳原式。
-    """
-    def fix(m):
-        if m.group("kw") is None:
-            return m.group(0)  # a string literal
-        labels = [x.strip() for x in m.group("labels").split(",") if x.strip()]
-        if CLUSTER_IDENTITY_LABEL in labels or not _IDENTITY_LABELS & set(labels):
-            return m.group(0)
-        return (f"{m.group('kw')}{m.group('gap')}"
-                f"({', '.join(labels + [CLUSTER_IDENTITY_LABEL])})")
-
-    result = _STRING_OR_GROUPING.sub(fix, expr_str)
-    if result != expr_str and HAS_AST:
-        try:
-            promql_parser.parse(result)
-        except Exception:
-            return expr_str
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +232,65 @@ def detect_semantic_break_ast(expr_str):
         return False
 
     return _walk_calls(ast)
+
+
+def groupings_without_cluster(expr_str):
+    """原式子自己寫的、點名身分 label 卻沒有叢集 label 的分組與配對。
+
+    回傳 list（依出現順序、不重複），每項是 `on(instance)`、
+    `by(pod, namespace)` 這樣的文字：vector matching 的 `on(...)` 與聚合的
+    `by(...)`，label 清單含 tenant／instance／pod／namespace／node 任一個而
+    不含 `da_cluster`。`ignoring(...)`、`without(...)`、沒點名身分 label 的
+    （`by(le)`、`on()`）不算。讀的是 AST，所以 `ON(...)`、`BY (...)`、
+    `by("instance")` 與字串常值裡的文字都不會看錯。
+
+    ⛔ 只偵測、不改寫（#1200）：要不要補 `da_cluster` 取決於配對的兩邊是否都帶
+    這個 label——`x / on(tenant) group_left quota`、右邊是租戶一份的序列時，
+    補上去就什麼都配不到，告警悄悄消失——而這從式子的文字與 AST 都看不出來。
+
+    沒有 AST 引擎、或式子 parse 不了時回傳 None：「沒檢查」，不是「沒有」。
+    """
+    if not HAS_AST:
+        return None
+    try:
+        ast = promql_parser.parse(expr_str)
+    except Exception:
+        return None
+    found = []
+
+    def note(keyword, labels):
+        labels = list(labels)
+        if _IDENTITY_LABELS & set(labels) and CLUSTER_IDENTITY_LABEL not in labels:
+            # a quoted label name can hold anything: written so that it stays
+            # on one line of a comment
+            shown = [x if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", x)
+                     else json.dumps(x, ensure_ascii=False) for x in labels]
+            text = f"{keyword}({', '.join(shown)})"
+            if text not in found:
+                found.append(text)
+
+    # `visit`, not `walk`: the conf.d census reads a call named `walk` as a
+    # directory listing (tests/shared/test_confd_hidden_axis_across_tools.py).
+    def visit(node):
+        tname = type(node).__name__
+        modifier = getattr(node, 'modifier', None)
+        if tname == 'AggregateExpr' and modifier is not None:
+            if modifier.type == promql_parser.AggModifierType.By:
+                note("by", modifier.labels)
+        elif tname == 'BinaryExpr' and modifier is not None:
+            matching = modifier.matching
+            if (matching is not None
+                    and matching.type == promql_parser.LabelModifierType.Include):
+                note("on", matching.labels)
+        for attr in ('lhs', 'rhs', 'expr', 'param', 'vector_selector'):
+            child = getattr(node, attr, None)
+            if child is not None and not isinstance(child, (str, int, float)):
+                visit(child)
+        for arg in getattr(node, 'args', None) or ():
+            visit(arg)
+
+    visit(ast)
+    return found
 
 
 def rewrite_expr_tenant_label(expr_str, metric_names):
@@ -535,6 +562,10 @@ class MigrationResult:
         self.record_name = None       # 新的 recording rule 名（validate 的新查詢）
         self.recording_lhs_original = None  # 原規則的 LHS（validate 的舊查詢）
         self.dropped_label_refs = []  # 改讀 tenant 的 $labels 名
+        # 原式子自己的 on()/by() 點名身分 label 卻沒有 da_cluster 的那幾個
+        # （groupings_without_cluster）；checked 為 False 表示沒檢查（沒有 AST）。
+        self.cluster_groupings = []
+        self.cluster_grouping_checked = None  # None：不產出規則，無從檢查
 
 
 def lookup_dictionary(metric_name, dictionary):
@@ -604,7 +635,7 @@ def _build_recording_rules(parsed, prefixed_key, severity, agg_mode, use_ast):
     # 來源指標是客戶既有的 exporter 發的，沒有任何東西會產生
     # `custom_<指標>` 這個名字的 series，改名後 recording rule 恆為空
     # （issue 1818）。
-    recording_lhs = keep_cluster_in_groupings(parsed['lhs'])
+    recording_lhs = parsed['lhs']
     if use_ast and HAS_AST:
         all_metrics = parsed.get('all_metrics', [])
         if all_metrics:
@@ -709,6 +740,22 @@ def rewrite_dropped_label_refs(templates, lhs, keep=(), explain=True):
             v = _LABEL_REF.sub(inner, _SIMPLE_LABEL_ACTION.sub(simple, v))
         rewritten[k] = v
     return rewritten, sorted(dropped)
+
+
+def cluster_grouping_note(groupings):
+    """一行：原式子的這些分組／配對沒有叢集 label，要人看過（#1200）。"""
+    return (f"原式子的 {'、'.join(groupings)} 沒有 {CLUSTER_IDENTITY_LABEL}：在收了多個叢集的 "
+            f"Prometheus 上會配對或合併不同叢集的同名序列（on() 可能 many-to-many）。"
+            f"兩邊都帶 {CLUSTER_IDENTITY_LABEL} 才補上，請人工確認；工具不改寫")
+
+
+#: 沒檢查時說的話（沒有 AST 引擎或 --no-ast）：與「檢查了、沒有」分得開。
+CLUSTER_GROUPING_NOT_CHECKED = (
+    f"未檢查原式子的 on()/by() 是否漏了 {CLUSTER_IDENTITY_LABEL}（需要 AST 引擎）")
+
+
+def _unchecked_cluster_groupings(results):
+    return [r for r in _emitting(results) if r.cluster_grouping_checked is False]
 
 
 #: The maintenance clause as every generated tenant alert spells it (#3309).
@@ -860,7 +907,12 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
             f"annotation／label 引用了依租戶聚合後不存在的 label（{', '.join(dropped)}），"
             f"已改讀 $labels.tenant；通知裡看不到原本是哪一個 {dropped[0]}")
     result.record_name = record_name
-    result.recording_lhs_original = keep_cluster_in_groupings(parsed['lhs'])
+    result.recording_lhs_original = parsed['lhs']
+    groupings = groupings_without_cluster(parsed['lhs']) if use_ast else None
+    result.cluster_grouping_checked = groupings is not None
+    result.cluster_groupings = groupings or []
+    if result.cluster_groupings:
+        result.notes.append(cluster_grouping_note(result.cluster_groupings))
 
     return result
 
@@ -1376,6 +1428,8 @@ def render_recording_rules(results, prefix="custom_"):
             buf.write("      # ============================================================\n")
         else:
             buf.write(f"      # {r.alert_name} | {r.agg_mode} — {r.agg_reason}\n")
+        if r.cluster_groupings and rr["record"] == r.record_name:
+            buf.write(f"      # ⚠️ {cluster_grouping_note(r.cluster_groupings)}\n")
         buf.write(f"      - record: {rr['record']}\n")
         buf.write(f"        expr: {rr['expr']}\n")
         buf.write("\n")
@@ -1525,6 +1579,11 @@ def render_report(results):
             buf.write(f"  • {r.alert_name}: {r.agg_mode} ({r.agg_reason})\n")
             if r.dim_hints:
                 buf.write(f"    📐 維度標籤偵測: {r.dim_hints}\n")
+            if r.cluster_groupings:
+                buf.write(f"    ⚠️ {cluster_grouping_note(r.cluster_groupings)}\n")
+        unchecked = _unchecked_cluster_groupings(complex_rules)
+        if unchecked:
+            buf.write(f"  ⚠️ {CLUSTER_GROUPING_NOT_CHECKED}：{len(unchecked)} 條\n")
         buf.write("\n")
 
     if unparseable:
@@ -1649,6 +1708,8 @@ def print_dry_run(results):
                 print(f"     → {k}: \"{v}\"")
             if r.dim_hints:
                 print(f"     📐 維度: {r.dim_hints}")
+            if r.cluster_groupings:
+                print(f"     ⚠️ {cluster_grouping_note(r.cluster_groupings)}")
     print()
 
 
@@ -1730,6 +1791,9 @@ def main():
     if not args.no_ast and not HAS_AST:
         print("[WARN] promql-parser 未安裝，降級為 regex 引擎。"
               "安裝: pip install promql-parser", file=sys.stderr)
+
+    if not use_ast:
+        print(f"[WARN] {CLUSTER_GROUPING_NOT_CHECKED}", file=sys.stderr)
 
     # 載入字典
     dictionary = {} if args.no_dictionary else load_metric_dictionary()

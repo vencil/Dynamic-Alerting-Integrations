@@ -14,8 +14,8 @@ read as a report with no mismatch (rc 0); now it is refused, rc 2.
 A row is one (tenant, cluster) group (ADR-006, #1200). The header has no
 column for the cluster, and a file without clusters is what it always was:
 ``Tenant`` holds the tenant, and for a row whose series carried ``da_cluster``
-it holds :func:`tenant_cell` — ``<tenant> (da_cluster=<cluster>)`` — which
-:func:`split_tenant_cell` reads back.
+it holds :func:`tenant_cell` — ``<tenant> (da_cluster=<cluster>)``, the cluster
+escaped — which :func:`split_tenant_cell` reads back.
 
 Standard library and `_lib_cluster_identity` (itself standard library only).
 """
@@ -48,9 +48,14 @@ def parse_timestamp(value: str) -> datetime:
     return datetime.strptime(value.strip(), TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
 
 
+#: The cluster as the cell holds it: `\`, `(`, `)` and line ends escaped, so
+#: the suffix is the one place of the cell an unescaped `(`…`)` pair closes at
+#: the end — whatever the cluster's name or the tenant's holds.
+_ESCAPES = {"\\": "\\\\", "(": "\\(", ")": "\\)", "\n": "\\n", "\r": "\\r"}
+_UNESCAPES = {"\\": "\\", "(": "(", ")": ")", "n": "\n", "r": "\r"}
 _CLUSTER_SUFFIX = re.compile(
-    r"^(?P<tenant>.*) \(" + re.escape(CLUSTER_IDENTITY_LABEL) + r"=(?P<cluster>.+)\)$",
-    re.DOTALL)
+    r"^(?P<tenant>.*) \(" + re.escape(CLUSTER_IDENTITY_LABEL)
+    + r"=(?P<cluster>(?:[^()\\\n\r]|\\[\\()nr])+)\)$", re.DOTALL)
 
 
 def tenant_cell(tenant: str, cluster: "str | None" = None) -> str:
@@ -58,11 +63,19 @@ def tenant_cell(tenant: str, cluster: "str | None" = None) -> str:
     the tenant alone when the row has no cluster."""
     if not cluster:
         return tenant
-    return f"{tenant} ({CLUSTER_IDENTITY_LABEL}={cluster})"
+    escaped = "".join(_ESCAPES.get(c, c) for c in cluster)
+    return f"{tenant} ({CLUSTER_IDENTITY_LABEL}={escaped})"
 
 
 def split_tenant_cell(cell: str) -> "tuple[str, str | None]":
     """``(tenant, cluster)`` of a ``Tenant`` cell; cluster None for a row
-    written without one."""
+    written without one. Every cell :func:`tenant_cell` writes for a cluster
+    reads back as written. ⚠️ A row WITHOUT a cluster holds the tenant as it
+    is (the file such a run writes is what it always was), so a tenant whose
+    own name ends in `` (da_cluster=…)`` reads back as a cluster row; no
+    tenant id is spelled that way (ADR-035)."""
     m = _CLUSTER_SUFFIX.match(cell)
-    return (m["tenant"], m["cluster"]) if m else (cell, None)
+    if not m:
+        return cell, None
+    cluster = re.sub(r"\\(.)", lambda e: _UNESCAPES[e.group(1)], m["cluster"])
+    return m["tenant"], cluster
