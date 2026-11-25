@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -2493,3 +2494,149 @@ class TestEveryCheckStillReadsSomething:
             f"these checks read nothing on the shipped tree, so they cannot "
             f"fail: {dead}. Point them at what they should read, or retire "
             f"them (and their patterns) instead of leaving them silent.")
+
+
+# ============================================================
+# #3981: `--fix` computes every repair first, then writes through the
+# artifact entry
+# ============================================================
+
+_COUNTS = {"pack_count": 16, "alert": 161}
+_TWO_BADGES = "bilingual-1%20pairs and rule%20packs-99- badges\n"
+
+
+def test_two_names_of_one_file_keep_every_repair(tmp_path, monkeypatch):
+    """`docs/README-root.md` is a symlink to `README.md` in this repo, so
+    one file is reported under two names. The writes wait until every repair
+    is computed, so each name must repair the same text: keyed by path, each
+    name would hold its own copy and the last write would drop the repair
+    made through the other, while both were reported fixed."""
+    from _platform_fs import symlink_or_skip
+    real = tmp_path / "README.md"
+    _write(real, _TWO_BADGES)
+    (tmp_path / "docs").mkdir()
+    symlink_or_skip("../README.md", tmp_path / "docs" / "README-root.md")
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    got = mod._auto_fix(
+        [mod.Issue("rule-pack-count", "error", "docs/README-root.md", 1, "x"),
+         mod.Issue("bilingual-count", "error", "README.md", 1, "y")],
+        96, _COUNTS)
+    text = real.read_text(encoding="utf-8")
+    assert len(got) == 2, [i.check for i in got]
+    assert "rule%20packs-16-" in text and "bilingual-96%20pairs" in text, text
+    assert (tmp_path / "docs" / "README-root.md").is_symlink()
+
+
+_STDOUT_DRIVER = '''\
+import sys
+from pathlib import Path
+sys.path[:0] = [sys.argv[1], sys.argv[2]]
+import importlib.util
+spec = importlib.util.spec_from_file_location("vdv", sys.argv[3])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+from _lib_output import exit_on_output_write_error
+mod.REPO_ROOT = Path(sys.argv[4])
+exit_on_output_write_error(lambda: mod._auto_fix(
+    [mod.Issue("bilingual-count", "error", "a.md", 1, "x"),
+     mod.Issue("bilingual-count", "error", "b.md", 1, "y")],
+    96, {"pack_count": 16, "alert": 161}))()
+'''
+
+
+def test_no_file_is_written_when_a_later_target_is_this_process_stdout(tmp_path):
+    """stdout appended onto the second target: rc 2, one line naming it,
+    and the first target untouched. The bare writes repaired the first,
+    then wrote the second while the shell appended the report to it (rc 0).
+    Not quiet: a `🔧 Fixed` line printed before the writes succeed would
+    land in b.md too."""
+    a, b = tmp_path / "a.md", tmp_path / "b.md"
+    _write(a, "bilingual-1%20pairs\n")
+    _write(b, "bilingual-1%20pairs\n")
+    tools = Path(mod.__file__).resolve().parent
+    with open(b, "a", encoding="utf-8") as out:
+        proc = subprocess.run(
+            [sys.executable, "-c", _STDOUT_DRIVER, str(tools), str(tools.parent),
+             mod.__file__, str(tmp_path)],
+            stdout=out, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+            timeout=60)
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.strip().splitlines() == [
+        f"ERROR: cannot write {b}: is this process's standard stream"
+        " — internal output path, this is a bug or an unwritable workspace"], proc.stderr
+    assert a.read_text(encoding="utf-8") == "bilingual-1%20pairs\n"
+    assert b.read_text(encoding="utf-8") == "bilingual-1%20pairs\n"
+
+
+def test_a_target_the_artifact_entry_refuses_is_rc2_one_line(
+        tmp_path, monkeypatch, capsys):
+    """Through the real `main()`: a reported file that is not a regular file
+    (here a directory) is refused before anything is read or written — rc 2,
+    one line, where a bare read ended in the crash handler
+    (`unexpected internal error (IsADirectoryError)`)."""
+    target = tmp_path / "README.md"
+    target.mkdir()
+    # An absolute `file`: `REPO_ROOT / file` is then the file itself, and the
+    # other checks still read the real tree (they resolve against REPO_ROOT).
+    monkeypatch.setattr(mod, "check_e2e_and_jsx_versions", lambda *a, **k: [
+        mod.Issue("bilingual-count", "error", str(target), 1, "x")])
+    monkeypatch.setattr(sys, "argv", ["validate_docs_versions", "--fix"])
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot write {target}: not a regular file"
+        " — internal output path, this is a bug or an unwritable workspace"], err
+
+
+def test_a_file_whose_repair_changes_nothing_is_not_rewritten(tmp_path, monkeypatch):
+    """A badge already right counts as repaired but its file is left as it
+    is: same inode, so no replace happened (a replace would also reset the
+    mode, and fail on a file the user may not write)."""
+    f = tmp_path / "README.md"
+    _write(f, "rule%20packs-16- badge\n")
+    before = f.stat().st_ino
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    issue = mod.Issue("rule-pack-count", "error", "README.md", 1, "x")
+    assert mod._auto_fix([issue], 96, _COUNTS) == [issue]
+    assert f.stat().st_ino == before
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+@pytest.mark.parametrize("before,after", [(0o640, 0o644), (0o755, 0o755)])
+def test_a_repaired_file_gets_the_mode_a_checkout_would_give(
+        before, after, tmp_path, monkeypatch):
+    """Through `write_repo_artifact`: 0644, or 0755 for an executable file —
+    the forced chmod made every repaired file 0644."""
+    f = tmp_path / "README.md"
+    _write(f, "bilingual-1%20pairs\n")
+    f.chmod(before)
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    mod._auto_fix([mod.Issue("bilingual-count", "error", "README.md", 1, "x")],
+                  96, _COUNTS)
+    assert f.read_text(encoding="utf-8") == "bilingual-96%20pairs\n"
+    assert f.stat().st_mode & 0o777 == after
+
+
+def test_an_issue_the_repair_cannot_handle_is_not_read(tmp_path, monkeypatch):
+    """Only the three repairable checks open a file: an unrepairable issue
+    on a path that would block the read (a FIFO) is passed over."""
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    os.mkfifo(tmp_path / "pipe.md")
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+
+    def hung(signum, frame):
+        raise AssertionError("opened a file no repair needed")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        got = mod._auto_fix(
+            [mod.Issue("e2e-package-version", "error", "pipe.md", 0, "x")],
+            96, _COUNTS)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert got == []
