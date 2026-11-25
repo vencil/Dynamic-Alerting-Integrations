@@ -2681,9 +2681,9 @@ WARNs are never escalated to ERRORs, and JSON output is not implemented yet; in 
 - Denied functions (`denied_functions`; each name must be a function or aggregation Prometheus knows and has enabled, #4099)
 - Results keep `tenant` (`preserved_labels`): whether each alert's result keeps tenant is judged on Prometheus' parse tree; `without(tenant)`, `sum by (a)`, an ungrouped `sum(…)` and other spellings that drop it are an `ERROR` ([#4098](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4098); the rules in [custom-rule-governance §4.1](custom-rule-governance.en.md#41-deny-list-rules))
 - Required labels (`required_labels`)
-- Tenant isolation (`isolated_label`): a rule file given as a path is the tenant's of its `<dir>/<tenant>/`; every selector matches `tenant="<tenant>"` by equality, tenant in `labels:` is only that tenant, and nothing writes tenant from elsewhere; `--rule-pack-dir`'s platform packs are not judged (⚠️ Breaking, [#4136](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4136); the rules in [custom-rule-governance §4.1](custom-rule-governance.en.md#41-deny-list-rules))
+- Tenant isolation (`isolated_label`): a rule file given as a path is the tenant's of its `<dir>/<tenant>/`; every selector matches `tenant="<tenant>"` by equality, tenant in `labels:` is only that tenant, and nothing writes tenant from elsewhere; `tenant="<tenant>"` on a metric whose series carry no tenant (kube-state-metrics' and the like) is an `ERROR` too, write `namespace="<tenant>", tenant=""` ([#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)); `--rule-pack-dir`'s platform packs are not judged (⚠️ Breaking, [#4136](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4136); the rules in [custom-rule-governance §4.1](custom-rule-governance.en.md#41-deny-list-rules))
 - Range vector cap (`max_range_duration`); rule-group `interval` cap (`max_evaluation_interval`)
-- WARN when an `owner` or `expiry` label is missing
+- Every alert of a tenant's rule file carries an `owner` and an `expiry` annotation, the expiry a `YYYY-MM-DD` date; missing, empty or written as a label is an `ERROR`, and the expiry is not compared with today (⚠️ Breaking: it used to be a WARN for a missing label, [#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275))
 
 **Examples**
 

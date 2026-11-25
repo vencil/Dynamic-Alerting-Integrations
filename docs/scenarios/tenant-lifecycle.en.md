@@ -291,8 +291,12 @@ groups:
             sum by(le, tenant) (rate(query_duration_seconds_bucket{tenant="db-product-01"}[5m]))
           ) > 10
         for: 5m
+        labels:
+          tenant: db-product-01
         annotations:
           summary: "Query latency p95 > 10s on {{ $labels.tenant }}"
+          owner: team-product
+          expiry: "2027-06-30"
 EOF
 
 # 2. Validate custom rules

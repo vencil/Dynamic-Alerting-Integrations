@@ -231,7 +231,7 @@ lint 的對象是 Prometheus 規則檔，不是租戶配置（租戶配置用上
 - 結果保留的 label：`preserved_labels`（`without(tenant)`、`sum by (a)`、不分組的 `sum(…)` 等丟掉 tenant 的寫法會被擋，依 Prometheus 語法樹判定）
 - 必備 label：`required_labels`
 - range vector 上限 `max_range_duration`、rule group 的 `interval` 上限 `max_evaluation_interval`
-- 缺 `owner` 或 `expiry` label 時出 WARN（不擋 CI）
+- 租戶規則檔的每條 alert 缺 `owner` 或 `expiry` annotation 時出 ERROR（寫在 labels 也是；expiry 寫成 `YYYY-MM-DD`）
 
 規則命名慣例的檢查尚未實作，policy 檔也沒有這一項。基數的防護由平台的 Cardinality Guard 負責，趨勢預測見下方的 Cardinality Forecasting。
 
