@@ -2,11 +2,12 @@
 
 兩件事在 PR 2203 之後仍成立：
 
-1. 遷移後的查詢是 `<agg> by(tenant) (...)`，告警的 $labels 只剩 tenant。
+1. 遷移後的查詢是 `<agg> by(tenant, da_cluster) (...)`，告警的 $labels 只剩
+   tenant 與 da_cluster（#1200：逐叢集；見 test_migrate_per_cluster）。
    原規則 annotation 裡的 `{{ $labels.instance }}`、`{{ $labels.queue }}`
    照抄會渲染成空字串（promtool 實測 `summary="Redis queue  is too long"`）。
-   owner 裁決保留 by(tenant)：被等值 matcher 定死的 label 代入字面值；其他
-   改讀 `$labels.tenant` 並警告。
+   owner 裁決不把實例層級的 label 帶回聚合：被等值 matcher 定死的 label 代入
+   字面值；其他改讀 `$labels.tenant` 並警告。
 2. `validate --mapping` 的新查詢固定組成 `tenant:<key>:max`，rate 類產物是
    `:sum`，查不到；舊查詢是原始指標的原值，沒套 rate()，量綱不同。
 
@@ -161,7 +162,7 @@ def test_mapping_pairs_point_at_the_real_record_and_keep_rate(tmp_path):
         assert p["new_query"] in records, (label, p["new_query"])
     ev = pairs["custom_redis_evicted_keys_total"]
     assert ev["new_query"] == "tenant:custom_redis_evicted_keys_total:sum"
-    assert ev["old_query"] == "sum by(tenant) (rate(redis_evicted_keys_total[5m]))"
+    assert ev["old_query"] == "sum by(tenant, da_cluster) (rate(redis_evicted_keys_total[5m]))"
 
 
 def test_legacy_mapping_file_falls_back_and_warns(tmp_path, capsys):

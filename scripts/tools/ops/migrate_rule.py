@@ -73,6 +73,20 @@ _OUTPUT_FLAG = "-o/--output-dir"
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_prompt import prompt_line  # noqa: E402  (#3822: an unreadable stdin is rc 2, named)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
+# ADR-006: the one spelling of the cluster label (shipped flat in da-tools).
+from _lib_cluster_identity import CLUSTER_IDENTITY_LABEL  # noqa: E402
+
+#: 產生的 metric 側 recording rule 的分組（ADR-006「多叢集同租戶」契約 4，
+#: #1200）：逐（租戶、叢集）。`da_cluster` 是 Prometheus 的 external label，
+#: 只在各叢集資料相遇的地方才在序列上；單一 Prometheus 的序列沒有它，分組
+#: 等同逐租戶，結果與 `by(tenant)` 相同。閾值側與維護狀態仍是租戶一份
+#: （契約 3），以 `on(tenant) group_left`／`unless on(tenant)` 套到每個叢集。
+METRIC_GROUPING = f"by(tenant, {CLUSTER_IDENTITY_LABEL})"
+
+#: 與 check_cluster_identity.IDENTITY_LABELS 同一組（由測試釘住；da-tools
+#: 映像不帶 lint）：`by(...)`／`on(...)` 點名其中任一個，就是「逐這個東西」，
+#: 而它在每個叢集各有一份。
+_IDENTITY_LABELS = frozenset({"tenant", "instance", "pod", "namespace", "node"})
 
 # ============================================================
 # PromQL：一律讀 Prometheus 的語法樹（#4215）
@@ -111,6 +125,52 @@ def _selector_metric(node):
 
 def _calls(tree):
     return {n["name"] for n in _lib_consumer_read.shape_nodes(tree) if n["kind"] == "call"}
+
+
+def groupings_without_cluster(tree):
+    """原式子自己寫的、點名身分 label 卻沒有叢集 label 的分組與配對。
+
+    *tree* 是語法樹（或其子樹）。回傳 list（依出現順序、不重複），每項是
+    `on(instance)`、`by(pod, namespace)` 這樣的文字：vector matching 的
+    `on(...)` 與聚合的 `by(...)`，label 清單含 tenant／instance／pod／
+    namespace／node 任一個而不含 `da_cluster`；以及點名 `da_cluster` 的
+    `without(...)`／`ignoring(...)`——那同樣把叢集丟掉。沒點名身分 label 的
+    （`by(le)`、`on()`）、沒點名叢集的 `without(...)`／`ignoring(...)` 不算。讀的是
+    Prometheus 的語法樹，所以 `ON(...)`、`BY (...)`、`by("instance")` 與字串
+    常值裡的文字都不會看錯。
+
+    ⛔ 只偵測、不改寫（#1200）：要不要補 `da_cluster` 取決於配對的兩邊是否都帶
+    這個 label——`x / on(tenant) group_left quota`、右邊是租戶一份的序列時，
+    補上去就什麼都配不到，告警悄悄消失——而這從語法樹看不出來。
+    """
+    found = []
+
+    def note(keyword, labels):
+        labels = list(labels)
+        keeps = keyword in ("by", "on")   # the list is what survives
+        if (_IDENTITY_LABELS & set(labels) and CLUSTER_IDENTITY_LABEL not in labels
+                if keeps else CLUSTER_IDENTITY_LABEL in labels):
+            # a quoted label name can hold anything: written so that it stays
+            # on one line of a comment
+            shown = [x if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", x)
+                     else json.dumps(x, ensure_ascii=False) for x in labels]
+            text = f"{keyword}({', '.join(shown)})"
+            if text not in found:
+                found.append(text)
+
+    for node in _lib_consumer_read.shape_nodes(tree):
+        if node["kind"] == "aggregate":
+            note("without" if node["without"] else "by", node["labels"])
+        elif node["kind"] == "binary" and node["matching"]:
+            note("on" if node["matching"]["on"] else "ignoring", node["matching"]["labels"])
+    return found
+
+
+def cluster_grouping_note(groupings):
+    """一行：原式子的這些分組／配對沒有叢集 label，要人看過（#1200）。"""
+    return (f"原式子的 {'、'.join(groupings)} 不保留 {CLUSTER_IDENTITY_LABEL}：在收了多個叢集的 "
+            f"Prometheus 上會配對或合併不同叢集的同名序列（on() 可能 many-to-many）。"
+            f"兩邊都帶 {CLUSTER_IDENTITY_LABEL} 才補上，請人工確認；工具不改寫")
 
 
 def _skip_blank(data, i, end):
@@ -357,6 +417,9 @@ class MigrationResult:
         self.record_name = None       # 新的 recording rule 名（validate 的新查詢）
         self.recording_lhs_original = None  # 原規則的 LHS（validate 的舊查詢）
         self.dropped_label_refs = []  # 改讀 tenant 的 $labels 名
+        # 原式子自己的 on()/by() 點名身分 label 卻沒有 da_cluster 的那幾個
+        # （groupings_without_cluster，#1200）。
+        self.cluster_groupings = []
 
 
 def lookup_dictionary(metric_name, dictionary):
@@ -375,8 +438,10 @@ def _build_unparseable_result(alert_name, expr, severity, rule, dictionary, tree
         f"請將以下傳統 Prometheus Alert 轉換為本專案的動態多租戶架構：\n"
         f"要求：\n"
         f"1. 提取閾值並提供 threshold-config.yaml 範例。\n"
-        f"2. 提供包含 sum/max by(tenant) 的 Recording Rule。\n"
-        f"3. 提供套用 group_left 與 unless maintenance 邏輯的 Alert Rule。\n"
+        f"2. 提供包含 sum/max {METRIC_GROUPING} 的 Recording Rule"
+        f"（逐租戶、逐叢集；閾值側維持 max by(tenant)）。\n"
+        f"3. 提供套用 on(tenant) group_left 與 unless on(tenant) maintenance "
+        f"邏輯的 Alert Rule。\n"
         f"4. 如有維度標籤 (如 queue, db, index)，請用 \"metric{{label=\\\"value\\\"}}\" "
         f"語法提供範例。\n\n"
         f"原始規則：\n{yaml.dump([rule], sort_keys=False)}"
@@ -436,7 +501,7 @@ def _build_recording_rules(parsed, prefixed_key, severity, agg_mode):
     rules = [
         {
             "record": record_name,
-            "expr": f"{agg_mode} by(tenant) ({recording_lhs})",
+            "expr": f"{agg_mode} {METRIC_GROUPING} ({recording_lhs})",
         },
         {
             "record": threshold_name,
@@ -448,8 +513,9 @@ def _build_recording_rules(parsed, prefixed_key, severity, agg_mode):
     return rules, record_name, threshold_name
 
 
-# recording rule 一律 `by(tenant)`，告警的 $labels 只剩 tenant。
-_SURVIVING_LABELS = frozenset({"tenant"})
+# recording rule 一律 `by(tenant, da_cluster)`（METRIC_GROUPING），告警的
+# $labels 只剩 tenant 與 da_cluster。
+_SURVIVING_LABELS = frozenset({"tenant", CLUSTER_IDENTITY_LABEL})
 _LABEL_REF = re.compile(r'\$labels\.([a-zA-Z_][a-zA-Z0-9_]*)')
 _SIMPLE_LABEL_ACTION = re.compile(
     r'\{\{-?\s*\$labels\.([a-zA-Z_][a-zA-Z0-9_]*)\s*-?\}\}')
@@ -481,8 +547,13 @@ def rewrite_dropped_label_refs(templates, lhs, keep=(), explain=True):
     """改寫 annotation／label 模板裡、聚合後不存在的 `$labels.X`。
 
     舊告警的 $labels 是原查詢 series 的 label；遷移後查詢是
-    `<agg> by(tenant) (...)`，只剩 tenant，其他引用照抄會渲染成空字串
-    （issue 1818）。owner 裁決保留 by(tenant)：
+    `<agg> by(tenant, da_cluster) (...)`，只剩 tenant 與 da_cluster，其他引用
+    照抄會渲染成空字串（issue 1818）。現行規則：粒度是「租戶 × 叢集」，
+    實例層級的 label（instance、pod…）不帶回聚合。這與 issue 1818 的 owner
+    裁決一致——那項裁決講的是不把實例層級的 label 帶回聚合、並改寫引用它們
+    的模板；`da_cluster` 不是實例層級的 label，而是同一個租戶在各叢集各算
+    一次（ADR-006，owner 2026-11-24 裁決，#1200），所以 `$labels.da_cluster`
+    照留，其餘照舊：
     - 被等值 matcher 定死的 label 代入字面值，渲染結果與舊告警相同；
     - 其他改讀 `$labels.tenant` 並附原 label 名，呼叫端負責警告。
     `keep` 是不改寫的名字（規則自己的 static label 本來就不在 $labels 裡，
@@ -687,6 +758,9 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
             f"已改讀 $labels.tenant；通知裡看不到原本是哪一個 {dropped[0]}")
     result.record_name = record_name
     result.recording_lhs_original = parsed['lhs']
+    result.cluster_groupings = groupings_without_cluster(parsed['lhs_tree'])
+    if result.cluster_groupings:
+        result.notes.append(cluster_grouping_note(result.cluster_groupings))
 
     return result
 
@@ -913,12 +987,14 @@ def write_prefix_mapping(results, output_dir, prefix):
                 "golden_rule": r.dict_match.get("golden_rule") if r.dict_match else None,
             }
             # validate --mapping 的比對組。新值是 recording rule 本身；舊值是原規則的
-            # LHS 以同一種方式依租戶聚合——rate 類要保留 rate()，聚合要用同一個
-            # agg，否則兩邊量綱或 record 名對不上（issue 1818）。改用黃金標準的
+            # LHS 以同一種方式逐（租戶、叢集）聚合——rate 類要保留 rate()，聚合要用
+            # 同一個 agg 與同一個分組，否則兩邊量綱、列數或 record 名對不上
+            # （issue 1818、#1200）。改用黃金標準的
             # 規則不產出 recording rule，沒有新值可比，不寫。
             if (r.triage_action != "use_golden" and r.record_name
                     and r.recording_lhs_original and r.agg_mode):
-                entry["old_query"] = f"{r.agg_mode} by(tenant) ({r.recording_lhs_original})"
+                entry["old_query"] = (
+                    f"{r.agg_mode} {METRIC_GROUPING} ({r.recording_lhs_original})")
                 entry["new_query"] = r.record_name
             mapping[key] = entry
 
@@ -1200,6 +1276,8 @@ def render_recording_rules(results, prefix="custom_"):
             buf.write("      # ============================================================\n")
         else:
             buf.write(f"      # {r.alert_name} | {r.agg_mode} — {r.agg_reason}\n")
+        if r.cluster_groupings and rr["record"] == r.record_name:
+            buf.write(f"      # ⚠️ {cluster_grouping_note(r.cluster_groupings)}\n")
         buf.write(f"      - record: {rr['record']}\n")
         expr_text = rr['expr']
         if "\n" in expr_text or "#" in expr_text or ": " in expr_text:
@@ -1356,6 +1434,8 @@ def render_report(results):
             buf.write(f"  • {r.alert_name}: {r.agg_mode} ({r.agg_reason})\n")
             if r.dim_hints:
                 buf.write(f"    📐 維度標籤偵測: {r.dim_hints}\n")
+            if r.cluster_groupings:
+                buf.write(f"    ⚠️ {cluster_grouping_note(r.cluster_groupings)}\n")
         buf.write("\n")
 
     if unparseable:
@@ -1480,6 +1560,8 @@ def print_dry_run(results):
                 print(f"     → {k}: \"{v}\"")
             if r.dim_hints:
                 print(f"     📐 維度: {r.dim_hints}")
+            if r.cluster_groupings:
+                print(f"     ⚠️ {cluster_grouping_note(r.cluster_groupings)}")
     print()
 
 

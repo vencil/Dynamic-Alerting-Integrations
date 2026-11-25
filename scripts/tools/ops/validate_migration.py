@@ -51,6 +51,7 @@ import time
 import argparse
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -68,7 +69,8 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerErr
 from _lib_label import safe_label  # noqa: E402  (#4210: a key is file content)
 from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③b)
 import _lib_input  # noqa: E402  (#3445: --mapping is read by the lib)
-from _lib_shadow_report import REPORT_COLUMNS, TIMESTAMP_FORMAT  # noqa: E402  (#3662)
+from _lib_shadow_report import REPORT_COLUMNS, TIMESTAMP_FORMAT, tenant_cell  # noqa: E402  (#3662)
+from _lib_cluster_identity import CLUSTER_IDENTITY_LABEL  # noqa: E402  (ADR-006)
 # #3133: a query not answered raises QueryError; a sample is read once, by
 # the lib (#3213).
 from _lib_prometheus import QueryError, prometheus_instant, vector_sample  # noqa: E402
@@ -77,12 +79,37 @@ from _lib_prometheus import QueryError, prometheus_instant, vector_sample  # noq
 query_prometheus = prometheus_instant
 
 
+class ClusterKey(NamedTuple):
+    """The key of a row that carries the cluster label: one group per
+    (tenant, cluster) (ADR-006, #1200)."""
+
+    tenant: str
+    da_cluster: str
+
+
+def _split_key(key):
+    """(tenant, cluster or None) of a value-map key."""
+    if isinstance(key, ClusterKey):
+        return key.tenant, key.da_cluster
+    return key, None
+
+
 def extract_value_map(results, group_by="tenant"):
-    """將 Prometheus 結果轉換為 {label_key: float_value} 字典。"""
+    """將 Prometheus 結果轉換為 {key: float_value} 字典。
+
+    migrate 產生的規則逐（租戶、叢集）聚合（ADR-006，#1200）：收了多個叢集的
+    Prometheus 對同一個租戶回好幾列，各帶自己的 `da_cluster`。key 因此是
+    （租戶、叢集）——帶 `da_cluster` 的列是 `ClusterKey(tenant, da_cluster)`，
+    兩個叢集各佔一格、不互相覆蓋；沒有這個 label 的列（單一 Prometheus）照舊
+    以 label 值（字串）為 key，自成一組。
+    """
     value_map = {}
     for item in results:
         metric = item.get("metric", {})
         key = metric.get(group_by, "__no_label__")
+        cluster = metric.get(CLUSTER_IDENTITY_LABEL)
+        if cluster:
+            key = ClusterKey(key, cluster)
         # None only for a histogram-only row: an unreadable value never gets
         # here (#3133: prometheus_instant refuses the answer, rc 2 — it used
         # to read as "missing", rc 1).
@@ -94,15 +121,27 @@ def compare_vectors(old_map, new_map, tolerance=0.001):
     """比對兩組向量值，回傳差異清單。
 
     tolerance: 允許的數值誤差 (預設 0.1%)
+
+    兩邊以同一個 key 配對：`ClusterKey` 的列逐叢集比（差異多一個
+    `da_cluster` 欄），字串 key 的列照舊。只在一邊出現的叢集是 `mismatch`
+    （另一邊的值是 None、delta 是 None）：兩邊的分組不同（例如一邊還是舊版
+    migrate 產的 `by(tenant)` 規則），那不是「資料還沒到」，也不會被略過。
+    沒有叢集 label 的列只在一邊出現時，照舊是 old_missing／new_missing。
     """
     diffs = []
-    all_keys = sorted(set(list(old_map.keys()) + list(new_map.keys())))
+    all_keys = sorted(set(list(old_map.keys()) + list(new_map.keys())),
+                      key=lambda k: tuple(x or "" for x in _split_key(k)))
 
     for key in all_keys:
         old_val = old_map.get(key)
         new_val = new_map.get(key)
+        tenant, cluster = _split_key(key)
+        one_sided_cluster = cluster is not None and (
+            (key in old_map) != (key in new_map))
 
-        if old_val is None and new_val is None:
+        if one_sided_cluster:
+            status = "mismatch"
+        elif old_val is None and new_val is None:
             status = "both_empty"
         elif old_val is None:
             status = "old_missing"
@@ -113,13 +152,16 @@ def compare_vectors(old_map, new_map, tolerance=0.001):
         else:
             status = "mismatch"
 
-        diffs.append({
-            "tenant": key,
+        diff = {
+            "tenant": tenant,
             "old_value": old_val,
             "new_value": new_val,
             "status": status,
             "delta": (new_val - old_val) if old_val is not None and new_val is not None else None,
-        })
+        }
+        if cluster is not None:
+            diff[CLUSTER_IDENTITY_LABEL] = cluster
+        diffs.append(diff)
     return diffs
 
 
@@ -319,7 +361,16 @@ def print_summary(all_results):
                 continue
             for d in result["diffs"]:
                 if d["status"] == "mismatch":
-                    print(f"  • [{result['label']}] tenant={d['tenant']}: "
+                    cluster = d.get(CLUSTER_IDENTITY_LABEL)
+                    if cluster is not None and d["delta"] is None:
+                        print(f"  • [{result['label']}] tenant={d['tenant']} "
+                              f"{CLUSTER_IDENTITY_LABEL}={cluster}: "
+                              f"舊={d['old_value']} 新={d['new_value']} "
+                              "(這個叢集只在一邊出現)")
+                        continue
+                    where = (f"tenant={d['tenant']}" if cluster is None else
+                             f"tenant={d['tenant']} {CLUSTER_IDENTITY_LABEL}={cluster}")
+                    print(f"  • [{result['label']}] {where}: "
                           f"舊={d['old_value']} 新={d['new_value']} "
                           f"(差異={d['delta']:.4f})")
         print()
@@ -382,7 +433,7 @@ def write_csv_report(all_results, output_dir):
         for d in result["diffs"]:
             writer.writerow({
                 "Label": result["label"],
-                "Tenant": d["tenant"],
+                "Tenant": tenant_cell(d["tenant"], d.get(CLUSTER_IDENTITY_LABEL)),
                 "Old Query": result["old_query"],
                 "New Query": result["new_query"],
                 "Old Value": d["old_value"],

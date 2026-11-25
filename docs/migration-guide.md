@@ -130,6 +130,7 @@ da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # 大型租戶
 - **三件套輸出**：`.migration/conf.d/<tenant>.yaml`（閾值寫在 `tenants.<tenant>` 底下）+ `.migration/platform-recording-rules.yaml` + `.migration/platform-alert-rules.yaml` + `migration-report.txt`，另附 `.migration/conf.d/_defaults.yaml`：它的 `defaults:` 區塊要先合併進 conf.d 根的 `_defaults.yaml`（合併，不要整份覆蓋），exporter 才會發射這些閾值。v2.9.0 映像還沒有 `--tenant` 與 `.migration/conf.d/`，只產出 `tenant-config.yaml`（閾值平鋪在頂層，要自己縮排放進 `tenants.<tenant>`），沒有 defaults 片段 <!-- image-caveat: v2.9.0 -->
 - **Auto-Suppression**：同 metric 的 warning + critical 自動配對，兩條告警帶相同的 `metric_group` label，由 Alertmanager inhibit 壓制 warning 通知（租戶可設 `_severity_dedup: "disable"` 取消）
 - **聚合模式智能猜測**：6 條啟發規則自動猜 `sum` / `max`，帶 ASCII 警告方塊提示確認
+- **逐叢集聚合**：產生的 recording rule 是 `<sum|max> by(tenant, da_cluster) (…)`。在收了多個叢集資料的 Prometheus 上，遷移後的規則逐叢集評估（`sum`／`max` 不再把同一個租戶的幾個叢集合在一起），告警帶 `da_cluster`；序列沒有 `da_cluster` 的單一 Prometheus 上，結果與先前相同。原式子自己的聚合已經丟掉 `tenant` 的規則（`sum(rate(x))`、`sum by(instance) (…)`）不在此列，遷移前後都算不出租戶的值；原式子自己的聚合丟掉 `da_cluster` 的規則（例如 `sum by(tenant) (…)`、`sum without(da_cluster) (…)`）也不在此列：外層的 `by(tenant, da_cluster)` 還原不了它，該規則仍把同一個租戶的幾個叢集合在一起，告警也不帶 `da_cluster`（點名身分 label 而沒有 `da_cluster` 的 `by(...)`／`on(...)`，以及點名 `da_cluster` 的 `without(...)`／`ignoring(...)`，工具會標出來請人確認）。原式子自己寫的 `on(...)`／`by(...)` 照抄；點名身分 label 卻沒有 `da_cluster` 的，在工具解析得了的規則裡會標出來請人確認（解析不了的規則不做這項檢查；見 [`migration-engine.md`](migration-engine.md)）。v2.9.0 映像產生的仍是 `by(tenant)` <!-- image-caveat: v2.9.0 -->
 
 遷移引擎怎麼讀 PromQL（Prometheus 自己的語法樹，不掃文字）+ 完整啟發規則 + Auto-Suppression 配對邏輯：[`migration-engine.md`](migration-engine.md)。CLI flag 矩陣：[`cli-reference.md#migrate`](cli-reference.md#migrate)。三件套部署位置（ConfigMap 合併 vs 獨立掛載）：[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署)。
 
@@ -214,7 +215,7 @@ da-tools diagnose db-a                                     # 租戶健康總檢
 # 1. Recording Rule (平台)
 - record: tenant:mysql_connection_usage:percent
   expr: |
-    max by(tenant) (
+    max by(tenant, da_cluster) (
       100 * mysql_global_status_threads_connected
       / (mysql_global_variables_max_connections > 0)
     )
@@ -245,9 +246,9 @@ tenants:
 | 場景 | 原始指標 | Recording Rule | Tenant Config 範例 | 特殊說明 |
 |------|---------|----------------|-------------------|---------|
 | **多層嚴重度** | `mysql_global_status_threads_connected` ÷ `mysql_global_variables_max_connections` | `tenant:mysql_connection_usage:percent` | `mysql_connection_usage_percent: "85"` + `mysql_connection_usage_percent_critical: "95"` | Alert Rule 自動處理 `_critical` 降級邏輯 |
-| **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_replication_lag: "30"` 或 `"disable"` | Max 用於「最弱環節」(最落後的 slave) |
-| **Rate 指標** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`：`sum by(tenant) (rate(...))` | 無租戶 key（見下方 ⚠️） | Sum 用於「叢集總量」 |
-| **比值計算** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:percent`：逐 instance 相除再 `max by(tenant) (100 * ... / (max_connections > 0))` | `mysql_connection_usage_percent: "80"`（佔 max_connections 的 %） | 比值在 Recording Rule 算好（乘 100，單位是 %）；逐 instance 相除再取最滿的一台，先 `sum` 再除會被閒置 replica 的餘裕稀釋（#3778） |
+| **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant, da_cluster) (...)` | `mysql_replication_lag: "30"` 或 `"disable"` | Max 用於「最弱環節」(最落後的 slave) |
+| **Rate 指標** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`：`sum by(tenant, da_cluster) (rate(...))` | 無租戶 key（見下方 ⚠️） | Sum 用於「叢集總量」 |
+| **比值計算** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:percent`：逐 instance 相除再 `max by(tenant, da_cluster) (100 * ... / (max_connections > 0))` | `mysql_connection_usage_percent: "80"`（佔 max_connections 的 %） | 比值在 Recording Rule 算好（乘 100，單位是 %）；逐 instance 相除再取最滿的一台，先 `sum` 再除會被閒置 replica 的餘裕稀釋（#3778） |
 
 > ⚠️ Rate 這一列，平台 MariaDB Rule Pack 目前只有 recording rule，沒有租戶可設的閾值 key：`MariaDBHighSlowQueries` 以固定的 `> 1` 判斷慢查詢速率。要讓租戶調這類閾值，平台要先宣告 key 並補上閾值正規化 recording rule，做法見 [Domain Expert 快速入門](getting-started/for-domain-experts.md)「新增指標到現有 Rule Pack」。沒有宣告就寫進租戶檔的 key 不會發射，validate-config 的 `routes` 那列會報 `unread … (no_row)`。
 
@@ -292,7 +293,7 @@ tenants:
 
 **正規化命名**：`tenant:<component>_<metric>:<aggregation_function>`
 
-**聚合模式選擇** — 問「一個節點超標、其他節點正常，是否代表有問題？」是 → `max by(tenant)`（最弱環節）；否 → `sum by(tenant)`（叢集總量）。
+**聚合模式選擇** — 問「一個節點超標、其他節點正常，是否代表有問題？」是 → `max by(tenant, da_cluster)`（最弱環節）；否 → `sum by(tenant, da_cluster)`（叢集總量）。分組一律帶 `da_cluster`：同一個租戶跑在多個叢集時逐叢集計算（[ADR-006](adr/006-tenant-mapping-topologies.md)）；閾值正規化那一條維持 `max by(tenant)`。
 
 **建立步驟**：Recording Rule → Threshold Normalization Rule → Alert Rule（含 `group_left` + `unless maintenance`）→ 獨立 ConfigMap → projected volume 加 source → `_defaults.yaml` 加預設 → `da-tools scaffold` 產 tenant config。
 
