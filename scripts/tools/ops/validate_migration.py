@@ -363,11 +363,10 @@ def print_summary(all_results):
                 if d["status"] == "mismatch":
                     cluster = d.get(CLUSTER_IDENTITY_LABEL)
                     if cluster is not None and d["delta"] is None:
-                        side = "舊" if d["old_value"] is None else "新"
                         print(f"  • [{result['label']}] tenant={d['tenant']} "
                               f"{CLUSTER_IDENTITY_LABEL}={cluster}: "
                               f"舊={d['old_value']} 新={d['new_value']} "
-                              f"(這個叢集只在一邊出現，{side}側沒有這一列)")
+                              "(這個叢集只在一邊出現)")
                         continue
                     where = (f"tenant={d['tenant']}" if cluster is None else
                              f"tenant={d['tenant']} {CLUSTER_IDENTITY_LABEL}={cluster}")
