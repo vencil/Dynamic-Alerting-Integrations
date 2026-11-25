@@ -75,6 +75,8 @@ from pathlib import Path
 # #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
+from _lib_output import (  # noqa: E402  (#3981: the operator entry)
+    ensure_dir, exit_on_output_write_error, targets_stdout, write_operator_output)
 
 # Precise race-detector banners. Deliberately NOT a bare "DATA RACE" substring:
 # a test that merely PRINTS those words would flip the issue title to "DATA RACE",
@@ -334,6 +336,7 @@ def build_fragment(
     return result
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--module", required=True)
@@ -353,10 +356,14 @@ def main(argv: list[str] | None = None) -> int:
         workdir=args.workdir,
         packages=args.packages,
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(frag, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    ensure_dir(args.output.parent, flag="--output")
+    write_operator_output(str(args.output), json.dumps(frag, indent=2, sort_keys=True) + "\n",
+                          flag="--output")
 
-    print(f"[parse_go_test_json] {args.module}: {json.dumps(frag, sort_keys=True)}")
+    # With --output on stdout the fragment is the stdout document: the receipt
+    # moves to stderr so the two do not mix (#3981).
+    print(f"[parse_go_test_json] {args.module}: {json.dumps(frag, sort_keys=True)}",
+          file=sys.stderr if targets_stdout(str(args.output)) else sys.stdout)
     # Always exit 0: the fragment IS the product. The workflow fails the matrix
     # leg separately off the recorded go exit code, so a parse that "succeeds at
     # reporting a failure" must not itself go red and mask the upload step.

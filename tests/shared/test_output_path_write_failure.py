@@ -1144,6 +1144,25 @@ ROWS: list[Row] = [
       shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="da-rule-pack-mariadb.yaml"),
     # ── scripts/ops (outside scripts/tools; `tool` is relative to it) ──────
+    # #3981: the nightly race job's fragment and timings files.
+    R("../ops/parse_go_test_json.py", "--output", "file", "operator",
+      lambda c, out: ["--module", "m", "--input", str(_empty_file(c.tmp)),
+                      "--output", str(out), "--go-exit-code", "0"],
+      reach="an empty `go test -json` stream: the fragment is written whatever it holds",
+      out_name="frag.json",
+      shapes=("parent_is_file", "target_is_dir")),
+    R("../ops/plan_race_shards.py", "--output", "file", "operator",
+      lambda c, out: ["timings", "--input", str(_empty_file(c.tmp)), "--output", str(out)],
+      reach="`timings` over an empty `go test -json` stream; no gh, no network",
+      out_name="timings.json",
+      shapes=("parent_is_file", "target_is_dir")),
+    R("../ops/bench_synth_tenants.py", "--state-file", "file", "operator",
+      lambda c, out: ["inject", "--tenants", "1", "--state-file", str(out)],
+      reach="test_bench_synth_tenants' stateful stand-in `kubectl` on PATH, "
+            "holding a ConfigMap with no synth tenant",
+      out_name="keys",
+      env=lambda c: _bench_kubectl_env(c.tmp),
+      shapes=("missing_parent", "parent_is_file", "target_is_dir")),
     R("../ops/configmap_assemble.py", "--output", "file", "artifact",
       lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output", str(out)],
       reach="in-repo try-local seed conf.d through a stand-in `kubectl` that "
@@ -1197,6 +1216,37 @@ def _fake_kubectl_env(tmp: Path) -> dict[str, str]:
                    encoding="utf-8", newline="\n")
     exe.chmod(0o755)
     return {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
+def _bench_kubectl_env(tmp: Path) -> dict[str, str]:
+    """PATH with test_bench_synth_tenants' stateful stand-in `kubectl` first,
+    over a ConfigMap that holds `_defaults.yaml` only (#3981)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_bst_tests", REPO_ROOT / "tests" / "ops" / "test_bench_synth_tenants.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    bindir = tmp / "bench-kubectl-bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    state = bindir / "cm.json"
+    state.write_text(json.dumps({"data": {"_defaults.yaml": "defaults: {}"}}),
+                     encoding="utf-8")
+    impl = bindir / "fake_kubectl.py"
+    impl.write_text(mod._FAKE_KUBECTL, encoding="utf-8")
+    exe = bindir / "kubectl"
+    # Mode 2: the patch is accepted and not persisted — the stand-in writes
+    # nothing, so the run's only write is the one under test.
+    exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{impl}" "{state}" 2 "$@"\n',
+                   encoding="utf-8", newline="\n")
+    exe.chmod(0o755)
+    return {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
+def _empty_file(tmp: Path) -> Path:
+    """An empty input file under the row's temp dir (#3981)."""
+    p = tmp / "empty-input.jsonl"
+    p.write_text("", encoding="utf-8")
+    return p
 
 
 def _kubectl_shim_env(tmp: Path) -> dict[str, str]:
@@ -1971,6 +2021,7 @@ VIA_OTHER_CLASS: dict[Key, str] = {
 #: stale entry here permits a program the tool no longer needs; it does not
 #: hide a write, which is what the two-directional lists are for.
 SPAWNS: dict[Key, tuple[str, ...]] = {
+    ("../ops/bench_synth_tenants.py", "--state-file"): ("da-guard", "kubectl"),
     ("../ops/configmap_assemble.py", "--output"): ("da-crdecode", "da-guard", "da-read", "kubectl", "python"),
     ("dx/compile_custom_alerts.py", "--out"): ("da-guard",),
     ("dx/describe_tenant.py", "-o/--output"): ("da-guard",),
@@ -2823,8 +2874,18 @@ NO_ROW: dict[Key, str] = {
         "`test_a_refused_file_is_rc2_and_the_others_are_left_alone` (a later "
         "file that is the process's stdout: rc 2, one line naming it and FILE, "
         "the earlier file keeps its bytes).",
+    # #3981, nineteenth batch.
+    ("../ops/plan_race_shards.py", "--out-dir"):
+        "`fetch-timings` creates the directory offline (with no gh it warns "
+        "and exits 0), but writes a file into it only for an artifact gh "
+        "returned, and a control run must write one. What speaks for it: "
+        "tests/ops/test_plan_race_shards.py "
+        "`test_fetch_timings_cli_with_an_unusable_out_dir_is_rc2` (main in "
+        "process: rc 2, one line naming --out-dir) and "
+        "`test_a_timings_file_that_cannot_be_written_names_the_flag` (the file "
+        "write, with gh stubbed out).",
 }
-_NO_ROW_CEILING = 7
+_NO_ROW_CEILING = 8
 
 
 def test_every_flag_named_at_a_writer_has_a_row():
@@ -3052,12 +3113,6 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "fixed repo files; its flags are switches. A refused target is held by "
         "tests/dx/test_gen_agent_adapters.py "
         "(test_an_adapter_that_is_a_fifo_is_rc2_and_nothing_is_written).",
-    "../ops/workflow_path_filter.py":
-        "`generate` rewrites the traced workflows and their trace files, and "
-        "`record` / `merge` the trace file: paths under --root, which names a "
-        "checkout, not an output. A refused target is held by "
-        "tests/ops/test_workflow_path_filter.py "
-        "(test_generate_judges_every_target_before_the_first_write).",
     # #3981, eighteenth batch: the runner's $GITHUB_OUTPUT / $GITHUB_STEP_SUMMARY,
     # appended to. The path comes from the environment, not from a flag, so the
     # refusal names no flag (as dx/paired_trend_watch does for the same file).
@@ -3065,16 +3120,18 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "Appends its report to $GITHUB_STEP_SUMMARY. A refused target is held "
         "by tests/ops/test_nightly_race_issue_policy.py "
         "(test_an_unwritable_step_summary_is_rc2_one_line).",
-    "../ops/plan_race_shards.py":
-        "Appends `plan` / `merge` outputs to $GITHUB_OUTPUT. A refused target is "
-        "held by tests/ops/test_plan_race_shards.py "
-        "(test_an_unwritable_github_output_is_rc2_one_line).",
+    "../ops/workflow_path_filter.py":
+        "`generate` rewrites the traced workflows and their trace files, and "
+        "`record` / `merge` the trace file: paths under --root, which names a "
+        "checkout, not an output. A refused target is held by "
+        "tests/ops/test_workflow_path_filter.py "
+        "(test_generate_judges_every_target_before_the_first_write).",
     "dx/check_release_immutable.py":
         "Appends the publish decision to $GITHUB_OUTPUT. A refused target is held "
         "by tests/dx/test_check_release_immutable.py "
         "(test_an_unwritable_github_output_is_rc2_one_line).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 37
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 36
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
@@ -4077,6 +4134,14 @@ class TestOwnWordedRefusal:
 #: could carry them), and calls in the libraries a tool imports. What a
 #: count cannot tell apart is in the module docstring, under NOT SEEN.
 UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
+    # #3981: $GITHUB_OUTPUT (env-named, no flag), and `fetch-timings`, which
+    # has no row (NO_ROW: a control run needs a file gh would have to supply).
+    # Held in process by
+    # tests/ops/test_plan_race_shards.py (test_an_unwritable_github_output_is_rc2_one_line,
+    # test_a_timings_file_that_cannot_be_written_names_the_flag).
+    ("../ops/plan_race_shards.py", "_write_github_output", "write_operator_output"): 1,
+    ("../ops/plan_race_shards.py", "fetch_timings", "ensure_dir"): 1,
+    ("../ops/plan_race_shards.py", "fetch_timings", "write_operator_output"): 1,
     ("ops/migrate_rule.py", "main", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_draft", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_phase2_outputs", "ensure_dir_or_die"): 1,

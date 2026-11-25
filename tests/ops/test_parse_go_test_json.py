@@ -392,3 +392,15 @@ def test_the_ratio_moves_the_line(monkeypatch) -> None:
     assert len(parse_stream(lines, go_exit_code=0)["slow_packages"]) == 3
     monkeypatch.setattr(pgtj, "SLOW_PACKAGE_RATIO", 1.0)
     assert parse_stream(lines, go_exit_code=0)["slow_packages"] == []
+
+
+def test_fragment_to_stdout_keeps_stdout_one_json_document(tmp_path: Path, capsys) -> None:
+    """#3981: `--output -` writes the fragment to stdout through the operator
+    entry; the receipt moves to stderr so stdout stays parseable."""
+    src = tmp_path / "in.jsonl"
+    src.write_text("", encoding="utf-8")
+    assert pgtj.main(["--module", "m", "--input", str(src), "--output", "-",
+                      "--go-exit-code", "0"]) == 0
+    out, err = capsys.readouterr()
+    assert json.loads(out)["module"] == "m"
+    assert "[parse_go_test_json] m:" in err
