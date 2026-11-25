@@ -183,6 +183,14 @@ class TestParseRegistry:
         assert "rules" not in t["audience"]
 
 
+def _apply(step, tools, **kw):
+    """Run one sync step and write what it left pending, as `main` does."""
+    pending: list = []
+    result = step(tools, pending=pending, **kw)
+    srt.write_pending(pending)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # sync_hub_cards — (a) populates/normalizes audience, (b) inserts missing card
 # ---------------------------------------------------------------------------
@@ -190,7 +198,7 @@ class TestSyncHubCards:
     def test_populates_and_sorts_audience_never_blanks(self, wired):
         _reg, hub, _loader = wired
         tools = srt.parse_registry(str(_reg))
-        changed = srt.sync_hub_cards(tools, dry_run=False, verbose=False)
+        changed = _apply(srt.sync_hub_cards, tools, dry_run=False, verbose=False)
         assert changed is True
         out = hub.read_text(encoding="utf-8")
 
@@ -210,7 +218,7 @@ class TestSyncHubCards:
     def test_inserts_missing_card_without_touching_unrelated(self, wired):
         _reg, hub, _loader = wired
         tools = srt.parse_registry(str(_reg))
-        srt.sync_hub_cards(tools, dry_run=False, verbose=False)
+        _apply(srt.sync_hub_cards, tools, dry_run=False, verbose=False)
         out = hub.read_text(encoding="utf-8")
 
         # gamma was absent → inserted with its registry audience + title.
@@ -230,14 +238,14 @@ class TestSyncHubCards:
         """A second run after applying must report no further changes."""
         _reg, hub, _loader = wired
         tools = srt.parse_registry(str(_reg))
-        assert srt.sync_hub_cards(tools, dry_run=False, verbose=False) is True
-        assert srt.sync_hub_cards(tools, dry_run=False, verbose=False) is False
+        assert _apply(srt.sync_hub_cards, tools, dry_run=False, verbose=False) is True
+        assert _apply(srt.sync_hub_cards, tools, dry_run=False, verbose=False) is False
 
     def test_dry_run_does_not_write(self, wired):
         _reg, hub, _loader = wired
         before = hub.read_text(encoding="utf-8")
         tools = srt.parse_registry(str(_reg))
-        assert srt.sync_hub_cards(tools, dry_run=True, verbose=False) is True
+        assert _apply(srt.sync_hub_cards, tools, dry_run=True, verbose=False) is True
         assert hub.read_text(encoding="utf-8") == before
 
 
@@ -248,7 +256,7 @@ class TestSyncFlowMap:
     def test_inserts_missing_map_entry(self, wired):
         _reg, _hub, loader = wired
         tools = srt.parse_registry(str(_reg))
-        changed = srt.sync_tool_meta(tools, dry_run=False, verbose=False)
+        changed = _apply(srt.sync_tool_meta, tools, dry_run=False, verbose=False)
         assert changed is True
         out = loader.read_text(encoding="utf-8")
         assert "'gamma': '../interactive/tools/gamma.jsx'" in out
@@ -260,8 +268,8 @@ class TestSyncFlowMap:
     def test_idempotent(self, wired):
         _reg, _hub, loader = wired
         tools = srt.parse_registry(str(_reg))
-        assert srt.sync_tool_meta(tools, dry_run=False, verbose=False) is True
-        assert srt.sync_tool_meta(tools, dry_run=False, verbose=False) is False
+        assert _apply(srt.sync_tool_meta, tools, dry_run=False, verbose=False) is True
+        assert _apply(srt.sync_tool_meta, tools, dry_run=False, verbose=False) is False
 
     def test_errors_when_block_absent(self, tmp_path, monkeypatch, capsys):
         """No CUSTOM_FLOW_MAP block → explicit error + returns None (fatal
@@ -269,7 +277,7 @@ class TestSyncFlowMap:
         loader = tmp_path / "loader.html"
         loader.write_text("<html><body>no map here</body></html>", encoding="utf-8")
         monkeypatch.setattr(srt, "LOADER_PATH", loader)
-        ok = srt.sync_tool_meta([{"key": "x", "file": "x.jsx"}], dry_run=False, verbose=False)
+        ok = _apply(srt.sync_tool_meta, [{"key": "x", "file": "x.jsx"}], dry_run=False, verbose=False)
         assert ok is None
         assert "Could not find CUSTOM_FLOW_MAP" in capsys.readouterr().err
 
@@ -338,3 +346,128 @@ class TestGenerators:
         assert "'a': '../interactive/tools/a.jsx'," in out  # not-last → comma
         assert "'b': '../getting-started/b.jsx'" in out  # last → no comma
         assert not out.rstrip().rstrip("};").rstrip().endswith(",")
+
+
+# ---------------------------------------------------------------------------
+# #3981: both targets are computed and judged before the first write
+# ---------------------------------------------------------------------------
+_STDOUT_DRIVER = """\
+import sys
+from pathlib import Path
+sys.path[:0] = [sys.argv[1], sys.argv[2]]
+import sync_tool_registry as srt, _lib_exitcodes
+d = Path(sys.argv[3])
+srt.REGISTRY_PATH = d / "tool-registry.yaml"
+srt.HUB_PATH = d / "index.html"
+srt.LOADER_PATH = d / "jsx-loader.html"
+sys.argv = ["sync_tool_registry.py"]
+_lib_exitcodes.run(srt.main)
+"""
+
+
+def test_no_target_is_written_when_the_hub_is_this_process_stdout(wired, tmp_path):
+    """stdout appended onto the hub page, the second target: rc 2, one line
+    naming it, and the loader page, the first, keeps its bytes. The bare
+    writes rewrote the loader and then the hub, the report landing in it."""
+    import subprocess
+    _reg, hub, loader = wired
+    before = {p: p.read_bytes() for p in (hub, loader)}
+    dx = os.path.abspath(_TOOLS_DIR)
+    with open(hub, "a", encoding="utf-8") as out:
+        proc = subprocess.run([sys.executable, "-c", _STDOUT_DRIVER, dx, os.path.dirname(dx),
+                               str(tmp_path)],
+                              stdout=out, stderr=subprocess.PIPE, text=True,
+                              encoding="utf-8", timeout=60)
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.strip().splitlines() == [
+        f"ERROR: cannot write {hub}: is this process's standard stream"
+        " — internal output path, this is a bug or an unwritable workspace"], proc.stderr
+    assert loader.read_bytes() == before[loader]
+    # The report printed ahead of the writes lands in the hub (it is stdout);
+    # its own text is untouched.
+    assert hub.read_bytes().startswith(before[hub])
+
+
+@pytest.mark.parametrize("shape", ["fifo", "not-utf8"])
+def test_a_target_that_cannot_be_read_is_rc2_one_line(shape, wired, monkeypatch, capsys):
+    """A FIFO where the loader page goes blocked the read forever; non-UTF-8
+    text ended in the crash handler. Now rc 2, one line naming it."""
+    import signal
+    _reg, _hub, loader = wired
+    loader.unlink()
+    if shape == "fifo":
+        if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+            pytest.skip("no FIFO / SIGALRM on this platform")
+        os.mkfifo(loader)
+        why = "not a regular file"
+    else:
+        loader.write_bytes(b"\xff\xfe")
+        why = "not UTF-8 (invalid start byte)"
+    monkeypatch.setattr(sys, "argv", ["sync_tool_registry.py", "--dry-run"])
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung) if hasattr(signal, "SIGALRM") else None
+    if prev is not None:
+        signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            srt.main()
+    finally:
+        if prev is not None:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, prev)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot read {loader}: {why}"
+        " — internal path, this is a bug or an unreadable workspace"], err
+
+
+def test_a_read_error_is_the_read_direction_error(wired, monkeypatch):
+    """An OSError on the read (EACCES cannot be denied to root, so it is
+    raised) is OutputWriteError(action="read"): rc 2 at `main`."""
+    from pathlib import Path
+    from _lib_output import OutputWriteError
+    _reg, hub, _loader = wired
+
+    def denied(self, *a, **k):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(Path, "read_text", denied)
+    with pytest.raises(OutputWriteError) as exc:
+        srt._read(hub)
+    assert exc.value.action == "read" and exc.value.path == str(hub)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_rewritten_page_gets_the_mode_a_checkout_would_give(wired):
+    """Through `write_repo_artifact`: 0644 — the bare write kept 0640."""
+    reg, hub, _loader = wired
+    hub.chmod(0o640)
+    assert _apply(srt.sync_hub_cards, srt.parse_registry(str(reg)),
+                  dry_run=False, verbose=False) is True
+    assert hub.stat().st_mode & 0o777 == 0o644
+
+
+def test_each_page_reports_its_change_after_it_is_written(wired, monkeypatch, capsys):
+    """The `[flow_map] Updated …` / `[hub] Applied …` lines are printed by
+    `write_pending`, once that page is written — not by the step that
+    computed it."""
+    _reg, hub, loader = wired
+    seen = []
+    real = srt.write_repo_artifact
+
+    def spy(path, text, **kw):
+        seen.append(("write", path))
+        real(path, text, **kw)
+    monkeypatch.setattr(srt, "write_repo_artifact", spy)
+    monkeypatch.setattr("builtins.print", lambda *a, **k: seen.append(("print", " ".join(map(str, a)))))
+    monkeypatch.setattr(sys, "argv", ["sync_tool_registry.py"])
+    with pytest.raises(SystemExit) as exc:
+        srt.main()
+    assert exc.value.code == 0
+    lines = [x for kind, x in seen if kind == "print"]
+    flow = seen.index(("print", "[flow_map] Updated CUSTOM_FLOW_MAP (3 entries)"))
+    applied = next(i for i, (k, x) in enumerate(seen) if k == "print" and x.startswith("[hub] Applied "))
+    assert seen.index(("write", loader)) < flow < seen.index(("write", hub)) < applied, seen
+    assert any(x.startswith("  new card: gamma") for x in lines), lines

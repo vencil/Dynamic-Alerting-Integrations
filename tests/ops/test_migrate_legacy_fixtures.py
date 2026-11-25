@@ -136,8 +136,8 @@ def test_dummy_recording_rules(dummy):
     # base_key 取指標名，不是外層函式名
     assert "tenant:rate:" not in rec
     # 聚合猜測：rate() → sum；connections → max
-    assert _has(r"sum by.tenant. .rate.", rec), rec
-    assert _has(r"max by.tenant..*mysql_global_status_threads_connected", rec), rec
+    assert _has(r"sum by.tenant, da_cluster. .rate.", rec), rec
+    assert _has(r"max by.tenant, da_cluster. .mysql_global_status_threads_connected", rec), rec
 
 
 @pytest.mark.parametrize("word", ["maintenance", "group_left"])
@@ -183,8 +183,8 @@ def test_multidb_recording_rules(multidb):
     # RedisHighKeyEvictions：base_key 是 redis 指標，不是 rate
     assert "tenant:rate:" not in rec
     assert "tenant:custom_redis_evicted_keys_total" in rec
-    assert _has(r"sum by.tenant. .rate.", rec), rec
-    assert _has(r"max by.tenant..*mongodb_connections_current", rec), rec
+    assert _has(r"sum by.tenant, da_cluster. .rate.", rec), rec
+    assert _has(r"max by.tenant, da_cluster. .mongodb_connections_current", rec), rec
 
 
 @pytest.mark.parametrize("word", ["MongoDBDown", "absent", "維度標籤"])

@@ -526,3 +526,77 @@ def test_every_shipped_state_filter_copy_offers_the_unset_notice_off():
         f = filters.get("unset_thresholds")
         assert f, f"{where}: no unset_thresholds state filter"
         assert f.get("default_state") == "disable", (where, f)
+
+
+def _stale_tree(tmp_path):
+    """Every pack under *tmp_path*, the liveness and platform packs stale."""
+    fresh = {}
+    for pack in sorted({p for p, _alert in presence.alert_exprs()}):
+        dst = tmp_path / pack
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        fresh[dst] = (ROOT / pack).read_text(encoding="utf-8")
+        stale = (fresh[dst].replace('mysql_up{job="tenant-exporters"}', "mysql_up")
+                 if pack in (presence.LIVENESS_PACK, presence.PLATFORM_PACK) else fresh[dst])
+        dst.write_text(stale, encoding="utf-8")
+    return fresh
+
+
+def test_a_refused_pack_leaves_the_other_stale_packs_alone(tmp_path):
+    """#3981: stdout appended onto one stale pack. The bare writes rewrote
+    every pack and the report then landed in that one (rc 0); now it is
+    refused before the first write — rc 2, one line naming it — and the
+    other stale pack keeps its bytes."""
+    fresh = _stale_tree(tmp_path)
+    target = tmp_path / presence.PLATFORM_PACK
+    other = tmp_path / presence.LIVENESS_PACK
+    before = {p: p.read_bytes() for p in fresh}
+    tool = Path(presence.__file__).resolve()
+    with open(target, "a", encoding="utf-8") as out:
+        proc = subprocess.run([sys.executable, str(tool), "--root", str(tmp_path), "--write"],
+                              stdout=out, stderr=subprocess.PIPE, text=True,
+                              encoding="utf-8", timeout=120)
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.strip().splitlines() == [
+        f"ERROR: cannot write {target}: is this process's standard stream"
+        " — internal output path, this is a bug or an unwritable workspace"], proc.stderr
+    assert other.read_bytes() == before[other]
+    assert target.read_bytes() == before[target]
+
+
+def test_write_rewrites_only_the_packs_that_change(tmp_path):
+    """#3981: a pack already right is left as it is (same inode: no replace);
+    the bare loop rewrote every pack it had read."""
+    fresh = _stale_tree(tmp_path)
+    untouched = [p for p in fresh if p.read_text(encoding="utf-8") == fresh[p]]
+    assert untouched, "the fixture must hold a pack that needs no rewrite"
+    inodes = {p: p.stat().st_ino for p in fresh}
+    assert presence.main(["--root", str(tmp_path), "--write"]) == 0
+    for p, text in fresh.items():
+        assert p.read_text(encoding="utf-8") == text
+    assert all(p.stat().st_ino == inodes[p] for p in untouched)
+    assert any(p.stat().st_ino != inodes[p] for p in fresh if p not in untouched)
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "mkfifo"), reason="no FIFO on this platform")
+def test_a_pack_that_is_a_fifo_is_rc2_not_a_hang(tmp_path, capsys):
+    """#3981: a FIFO where a pack goes blocked the read forever."""
+    import os
+    import signal
+    if not hasattr(signal, "SIGALRM"):
+        pytest.skip("no SIGALRM on this platform")
+    _stale_tree(tmp_path)
+    fifo = tmp_path / presence.LIVENESS_PACK
+    fifo.unlink()
+    os.mkfifo(fifo)
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        rc = presence.main(["--root", str(tmp_path)])
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert rc == 2
+    assert capsys.readouterr().err.strip() == f"ERROR: {fifo}: not a regular file"

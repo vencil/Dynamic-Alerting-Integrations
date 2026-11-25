@@ -77,6 +77,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    check_repo_artifact, exit_on_output_write_error, write_repo_artifact)
 from _lib_toolcount import count_scope, is_tool_file  # noqa: E402
 from _lib_versions import read_platform_version  # noqa: E402
 
@@ -926,16 +928,34 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
     never invalidated on write, so a second issue on the same file used to
     read the pre-repair text and write it back — silently reverting the first
     repair while printing `🔧 Fixed` for both.
+
+    ⛔ #3981: nothing is written until every repair is computed. Each file is
+    read once — keyed by ``(st_dev, st_ino)``, so two names of one file (a
+    symlink, a hard link) share one text — and every issue on it repairs
+    that accumulated text. A target ``write_repo_artifact`` would refuse (not
+    a regular file, this process's own stdout) is :class:`OutputWriteError`
+    before the first write; the writes then go through it (atomic replace,
+    the mode a checkout gives). Only the three repairable checks read a file.
     """
-    import stat
     repaired: List[Issue] = []
+    texts: Dict[Tuple[int, int], str] = {}
+    names: Dict[Tuple[int, int], Path] = {}
+    originals: Dict[Tuple[int, int], str] = {}
+    changed: List[Issue] = []
 
     for issue in issues:
+        if issue.check not in _REPAIRABLE_CHECKS:
+            continue
         fpath = REPO_ROOT / issue.file
         if not fpath.exists():
             continue
+        # ⚠️ Not `key`: the rule-pack branch below loops `for pat, key, …`.
+        fkey = _file_key(fpath)
+        if fkey not in texts:
+            names[fkey] = fpath
+            texts[fkey] = originals[fkey] = _read_for_repair(fpath)
 
-        content = fpath.read_text(encoding="utf-8")
+        content = texts[fkey]
         new_content = content
         already_fixed = False
 
@@ -999,21 +1019,50 @@ def _auto_fix(issues: List[Issue], bilingual_pairs: int,
             already_fixed = bool(found) and all(a == b for a, b in found)
 
         if new_content != content:
-            fpath.write_text(new_content, encoding="utf-8", newline="\n")
-            # `_auto_fix` reads fresh now, so the cache no longer causes the
-            # revert bug — but leaving pre-repair text in it would hand
-            # stale content to any re-verify pass added later in-process.
-            _CONTENT_CACHE.pop(fpath, None)
-            os.chmod(fpath,
-                     stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
-                     | stat.S_IROTH)
-            if not quiet:
-                print(f"  🔧 Fixed {issue.check} in {issue.file}")
+            texts[fkey] = new_content
+            changed.append(issue)
             repaired.append(issue)
         elif already_fixed:
             repaired.append(issue)
 
+    # Every target was judged (`check_repo_artifact`) and read before this
+    # first write (#3981).
+    written = [k for k in names if texts[k] != originals[k]]
+    for fkey in written:
+        write_repo_artifact(names[fkey], texts[fkey])
+    # `_auto_fix` reads fresh, so the cache no longer causes the revert bug —
+    # but leaving pre-repair text in it would hand stale content to any
+    # re-verify pass added later in-process. A file may be cached under
+    # another of its names, so the cache goes whole.
+    if written:
+        _CONTENT_CACHE.clear()
+    if not quiet:
+        for issue in changed:
+            print(f"  🔧 Fixed {issue.check} in {issue.file}")
+
     return repaired
+
+
+#: The checks `_auto_fix` knows how to repair; any other issue is left alone
+#: without its file being read.
+_REPAIRABLE_CHECKS = ("bilingual-count", "tool-count", "rule-pack-count")
+
+
+def _file_key(path: Path) -> Tuple[int, int]:
+    """``(st_dev, st_ino)`` of *path*, symlinks followed: two names of one
+    file are one key, so their repairs land in one text (#3981)."""
+    st = os.stat(path)
+    return (st.st_dev, st.st_ino)
+
+
+def _read_for_repair(path: Path) -> str:
+    """The text `_auto_fix` repairs, refused first the way the write would
+    refuse it (not a regular file, a standard stream such as a redirected
+    stdout) so no target is written when any one is refused (#3981). The
+    checks already read every file they report, so a read error or non-UTF-8
+    text has failed there before this runs."""
+    check_repo_artifact(path)
+    return path.read_text(encoding="utf-8")
 
 
 def check_image_tag_v_prefix() -> List[Issue]:
@@ -1226,6 +1275,7 @@ def check_mkdocs_extra_versions(versions: Dict[str, str]) -> List[Issue]:
 # Main
 # ---------------------------------------------------------------------------
 
+@exit_on_output_write_error
 def main() -> "Report | None":
     """CLI entry point: 文件版號與計數一致性檢查."""
     try_utf8_stdout()

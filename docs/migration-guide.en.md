@@ -116,7 +116,7 @@ The three ConfigMap injection paths (Helm / kubectl / GitOps): [threshold-export
 
 ### 4. Convert Existing Rules (da-tools migrate)
 
-Teams with legacy Prometheus alert rules use the auto-conversion tool (v4 — dual AST + regex engine; falls back to regex when PromQL AST parsing fails):
+Teams with legacy Prometheus alert rules use the auto-conversion tool (PromQL is read into Prometheus' own parse tree; a rule file its parser refuses ends the run with rc 2 — there is no fallback):
 
 ```bash
 da-tools migrate /data/legacy-rules.yml --dry-run            # Preview
@@ -130,8 +130,9 @@ The tool automatically handles:
 - **Three-piece output**: `.migration/conf.d/<tenant>.yaml` (thresholds under `tenants.<tenant>`) + `.migration/platform-recording-rules.yaml` + `.migration/platform-alert-rules.yaml` + `migration-report.txt`, plus `.migration/conf.d/_defaults.yaml`, whose `defaults:` block must be merged into the conf.d root `_defaults.yaml` (merge, do not overwrite the whole file) before the exporter emits these thresholds. The v2.9.0 image has neither `--tenant` nor `.migration/conf.d/`: it writes only `tenant-config.yaml` (thresholds flat at the top level, to indent under `tenants.<tenant>` yourself) and no defaults fragment <!-- image-caveat: v2.9.0 -->
 - **Auto-Suppression**: warning + critical pairs for the same metric are auto-matched; both alerts carry the same `metric_group` label, and Alertmanager inhibit suppresses the warning notification (a tenant can set `_severity_dedup: "disable"` to opt out)
 - **Aggregation-mode heuristic**: 6 heuristic rules guess `sum` / `max` automatically and emit an ASCII warning box asking the user to confirm
+- **Per-cluster aggregation**: the generated recording rule is `<sum|max> by(tenant, da_cluster) (…)`. On a Prometheus holding several clusters' data, migrated rules are evaluated per cluster (`sum` / `max` no longer merge one tenant's clusters) and alerts carry `da_cluster`; on a single Prometheus whose series have no `da_cluster`, the result is what it was; this does not cover a rule whose own aggregation already drops `tenant` (`sum(rate(x))`, `sum by(instance) (…)`), which yields no per-tenant value before or after migration. Nor does it cover a rule whose own aggregation drops `da_cluster` (for example `sum by(tenant) (…)` or `sum without(da_cluster) (…)`): the outer `by(tenant, da_cluster)` cannot bring the label back, so that rule still merges one tenant's clusters and its alert carries no `da_cluster` (the tool flags, for a human decision, a `by(...)` / `on(...)` that names an identity label without `da_cluster` and a `without(...)` / `ignoring(...)` that names `da_cluster`). A `by(...)` / `on(...)` the original expression wrote itself goes in as written; one that names an identity label without `da_cluster` is flagged, in rules the tool can parse (a rule it cannot parse is not checked for this), for a human decision (see [`migration-engine.en.md`](migration-engine.en.md)). The v2.9.0 image still generates `by(tenant)` <!-- image-caveat: v2.9.0 -->
 
-AST engine depth (why `promql-parser` beats regex) + the full heuristic rule set + Auto-Suppression pairing logic: [`migration-engine.en.md`](migration-engine.en.md). CLI flag matrix: [`cli-reference.md#migrate`](cli-reference.md#migrate). Three-piece-set deployment locations (ConfigMap merge vs independent mount): [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
+How the migration engine reads PromQL (Prometheus' own parse tree, never the text) + the full heuristic rule set + Auto-Suppression pairing logic: [`migration-engine.en.md`](migration-engine.en.md). CLI flag matrix: [`cli-reference.md#migrate`](cli-reference.md#migrate). Three-piece-set deployment locations (ConfigMap merge vs independent mount): [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
 
 ### 5. Deploy threshold-exporter
 
@@ -214,7 +215,7 @@ Migrated three-piece set:
 # 1. Recording Rule (platform)
 - record: tenant:mysql_connection_usage:percent
   expr: |
-    max by(tenant) (
+    max by(tenant, da_cluster) (
       100 * mysql_global_status_threads_connected
       / (mysql_global_variables_max_connections > 0)
     )
@@ -245,9 +246,9 @@ tenants:
 | Scenario | Source Metric | Recording Rule | Tenant Config Example | Notes |
 |----------|---------------|----------------|----------------------|-------|
 | **Multi-tier severity** | `mysql_global_status_threads_connected` ÷ `mysql_global_variables_max_connections` | `tenant:mysql_connection_usage:percent` | `mysql_connection_usage_percent: "85"` + `mysql_connection_usage_percent_critical: "95"` | Alert Rule handles `_critical` downgrade logic automatically |
-| **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_replication_lag: "30"` or `"disable"` | Max captures the "weakest link" (slowest slave) |
-| **Rate metric** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`: `sum by(tenant) (rate(...))` | No tenant key (see ⚠️ below) | Sum reflects cluster-wide load |
-| **Ratio** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:percent`: divided per instance, then `max by(tenant) (100 * ... / (max_connections > 0))` | `mysql_connection_usage_percent: "80"` (% of max_connections) | Ratio computed in the Recording Rule (multiplied by 100, unit is %); dividing per instance and taking the fullest one, because a `sum` before dividing is diluted by idle replicas' headroom (#3778) |
+| **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant, da_cluster) (...)` | `mysql_replication_lag: "30"` or `"disable"` | Max captures the "weakest link" (slowest slave) |
+| **Rate metric** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`: `sum by(tenant, da_cluster) (rate(...))` | No tenant key (see ⚠️ below) | Sum reflects cluster-wide load |
+| **Ratio** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:percent`: divided per instance, then `max by(tenant, da_cluster) (100 * ... / (max_connections > 0))` | `mysql_connection_usage_percent: "80"` (% of max_connections) | Ratio computed in the Recording Rule (multiplied by 100, unit is %); dividing per instance and taking the fullest one, because a `sum` before dividing is diluted by idle replicas' headroom (#3778) |
 
 > ⚠️ For the rate row, the platform MariaDB Rule Pack currently has only the recording rule and no tenant-settable threshold key: `MariaDBHighSlowQueries` judges the slow-query rate against a fixed `> 1`. To let tenants tune this kind of threshold, the platform must first declare the key and add a threshold-normalization recording rule; see "Add a metric to an existing Rule Pack" in the [Domain Expert Quick Start](getting-started/for-domain-experts.en.md). A key written into a tenant file without that declaration is not emitted, and validate-config's `routes` row reports `unread … (no_row)`.
 
@@ -292,7 +293,7 @@ The preloaded Rule Packs already cover mainstream DBs / middleware (MariaDB / Po
 
 **Normalization naming**: `tenant:<component>_<metric>:<aggregation_function>`
 
-**Aggregation mode** — Ask: "If one node breaches and others are fine, is that a problem?" Yes → `max by(tenant)` (weakest link); No → `sum by(tenant)` (cluster total).
+**Aggregation mode** — Ask: "If one node breaches and others are fine, is that a problem?" Yes → `max by(tenant, da_cluster)` (weakest link); No → `sum by(tenant, da_cluster)` (cluster total). The grouping always carries `da_cluster`: a tenant that runs in several clusters is computed per cluster ([ADR-006](adr/006-tenant-mapping-topologies.en.md)); the threshold normalization rule stays `max by(tenant)`.
 
 **Build steps**: Recording Rule → Threshold Normalization Rule → Alert Rule (with `group_left` + `unless maintenance`) → standalone ConfigMap → add source in projected volume → add default in `_defaults.yaml` → produce tenant config via `da-tools scaffold`.
 
@@ -408,7 +409,7 @@ Offboarding effects: threshold-exporter clears thresholds on next reload (30s) �
 | **Tool & Engine Reference** | |
 | [`migration-toolkit-installation.md`](migration-toolkit-installation.en.md) (three delivery paths + cosign keyless verification) | ⭐⭐⭐ |
 | [`cli-reference.md`](./cli-reference.md) (all `da-tools` commands + flag matrix) | ⭐⭐⭐ |
-| [AST Migration Engine Architecture](./migration-engine.en.md) (promql-parser + heuristics + Auto-Suppression) | ⭐⭐ |
+| [AST Migration Engine Architecture](./migration-engine.en.md) (Prometheus' parse tree + heuristics + Auto-Suppression) | ⭐⭐ |
 | [VictoriaMetrics Integration](integration/victoriametrics-integration.en.md) (VM stack integration walkthrough) | ⭐⭐ |
 | **Role Quick Starts** | |
 | [Tenant Quick Start](getting-started/for-tenants.en.md) | ⭐⭐ |

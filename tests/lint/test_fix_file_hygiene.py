@@ -196,3 +196,110 @@ class TestMain:
         assert clean.read_bytes() == b"good\n"
         assert dirty.read_bytes() == b"bad\n"
         assert "fixed 1 file" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# #3981: every file is judged before the first is fixed, through the entry
+# ---------------------------------------------------------------------------
+def test_a_refused_file_is_rc2_and_the_others_are_left_alone(tmp_path):
+    """stdout appended onto the second file: rc 2, one line naming it and
+    FILE, and the first keeps its bytes — the bare writes fixed the first and
+    then the second, the summary landing in it (rc 1)."""
+    import subprocess
+    import sys
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    a.write_bytes(b"no newline")
+    b.write_bytes(b"no newline")
+    tool = Path(ffh.__file__).resolve()
+    with open(b, "ab") as out:
+        proc = subprocess.run([sys.executable, str(tool), str(a), str(b)], stdout=out,
+                              stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.strip().splitlines() == [
+        f"ERROR: cannot write {b}: is this process's standard stream"
+        " — check the value given to FILE"], proc.stderr
+    assert a.read_bytes() == b"no newline"
+
+
+def test_a_fifo_is_skipped_not_a_hang(tmp_path):
+    """A FIFO handed to the hook blocked the read forever."""
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    fifo = tmp_path / "pipe.txt"
+    os.mkfifo(fifo)
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        assert ffh.fix_file(str(fifo), check_only=False) is False
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+@pytest.mark.parametrize("mode", [0o600, 0o640, 0o755])
+def test_a_fixed_file_keeps_its_own_mode(mode, tmp_path):
+    """The hook rewrites the committer's working copies: a file keeps its
+    own permission bits (a 0600 file under `umask 077` must not be widened
+    to 0644)."""
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"x")
+    f.chmod(mode)
+    assert ffh.fix_file(str(f), check_only=False) is True
+    assert f.read_bytes() == b"x\n" and f.stat().st_mode & 0o777 == mode
+
+
+def test_bytes_that_are_not_utf8_are_written_unchanged(tmp_path, cli_argv):
+    """Through the CLI: a file holding bytes that are not UTF-8 is fixed byte
+    for byte — never decoded, so nothing is replaced."""
+    f = tmp_path / "a.bin.txt"
+    f.write_bytes(b"\xff\xfe\x00tail")
+    cli_argv("fix_file_hygiene.py", str(f))
+    assert ffh.main() == 1
+    assert f.read_bytes() == b"\xff\xfetail\n"
+
+
+def test_files_fixed_before_a_refusal_are_named(tmp_path, monkeypatch, capsys, cli_argv):
+    """A refusal at the write of the second file (one the user may not
+    write): the first is already fixed — and named, as it was written."""
+    from _lib_output import OutputWriteError
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    a.write_bytes(b"x")
+    b.write_bytes(b"x")
+    real = ffh.write_repo_artifact
+
+    def refuse_b(path, data, **kw):
+        if Path(path) == b:
+            raise OutputWriteError(path, OSError(13, "Permission denied"), flag="FILE")
+        return real(path, data, **kw)
+    monkeypatch.setattr(ffh, "write_repo_artifact", refuse_b)
+    cli_argv("fix_file_hygiene.py", str(a), str(b))
+    with pytest.raises(SystemExit) as exc:
+        ffh.main()
+    assert exc.value.code == 2
+    assert f"  fixed {a}" in capsys.readouterr().out
+
+
+def test_a_file_gone_after_the_judgement_is_rc2_one_line(tmp_path, monkeypatch, capsys, cli_argv):
+    """#4312 review: a file removed between the judgement and its write was a
+    FileNotFoundError out of `main`; it is the one-line rc 2."""
+    a = tmp_path / "a.txt"
+    a.write_bytes(b"x")
+    real = ffh.check_repo_artifact
+
+    def judge_then_remove(path, **kw):
+        real(path, **kw)
+        Path(path).unlink()
+    monkeypatch.setattr(ffh, "check_repo_artifact", judge_then_remove)
+    cli_argv("fix_file_hygiene.py", str(a))
+    with pytest.raises(SystemExit) as exc:
+        ffh.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot write {a}: No such file or directory (errno 2)"
+        " — check the value given to FILE"], err

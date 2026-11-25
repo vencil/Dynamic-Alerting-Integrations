@@ -134,22 +134,19 @@ clusters to expect it in, ADR-006 contract 6). The last one is written by
 the compiler (custom_alert_compile.go `absenceTenantWide`), since nobody
 edits that pack by hand.
 
-The baseline
-------------
-tests/rulepacks/cluster_identity_baseline.yaml lists the findings the tree is
-allowed to have, and the check is a two-way ratchet on it (as
-check_vmalert_coverage.py is on its own): a finding not listed is a failure,
-and so is a listed finding that is gone — the list must equal the tree.
-`--generate` rewrites it.
+No list of allowed findings
+---------------------------
+The check is "zero findings": every rule of the shipped tree keeps
+`da_cluster`, or declares its tenant-wide read where the rule is. There is no
+baseline file and no flag that writes one — a finding has nowhere to be
+listed, so the rule gets the label, or the declaration above.
 
-The list is EMPTY, and that is its meaning: every rule of the shipped tree
-either keeps `da_cluster` or declares its tenant-wide read where the rule is.
-A new finding therefore has nowhere to be listed — the rule gets the label,
-or the declaration above. The file stays so that the ratchet keeps one shape
-(and `--generate` on a tree with a finding still shows what it would list);
-an entry in it is debt to remove, never an exemption.
+What an alert's RESULT carries is also what severity dedup pairs on:
+`alert_result_scopes()` hands it to check_metric_group_pairs.py, which holds
+the warning and the critical of one `metric_group` to the same scope.
 
-Exit codes: 0 the tree equals the baseline; 1 it does not; 2 could not run.
+Exit codes: 0 no finding; 1 a finding or a declaration that excuses nothing;
+2 could not run.
 """
 from __future__ import annotations
 
@@ -159,20 +156,14 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-import yaml
-
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 sys.path.insert(0, str(_HERE))
-from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
-
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 import _lib_consumer_read  # noqa: E402
-import _lib_io  # noqa: E402
 import _lib_metric_sources  # noqa: E402
 
 PROJECT_ROOT = _HERE.parent.parent.parent
-BASELINE = PROJECT_ROOT / "tests" / "rulepacks" / "cluster_identity_baseline.yaml"
 
 EXIT_OK, EXIT_VIOLATION, EXIT_CANNOT_RUN = 0, 1, 2
 
@@ -426,6 +417,35 @@ def _record_scopes(rules: list, trees: list) -> "dict[str, str]":
     return records
 
 
+def _scoped(root: "Path | None") -> "tuple[dict[str, str], list[tuple[str, int, str, frozenset]]]":
+    """({recorded name: scope}, the rows of `alert_result_scopes`) — one read
+    of the tree for both."""
+    rules = _rules(root or PROJECT_ROOT)
+    trees = _lib_consumer_read.promql_shape([r[3] for r in rules])
+    records = _record_scopes(rules, trees)
+    out, place = [], Counter()
+    for (file, _g, name, _e, is_record), tree in zip(rules, trees):
+        nth = place[file]
+        place[file] += 1
+        if not is_record:
+            out.append((file, nth, name,
+                        frozenset(judge(side, records, []) for side in _or_sides(tree))))
+    return records, out
+
+
+def alert_result_scopes(root: "Path | None" = None) -> "list[tuple[str, int, str, frozenset]]":
+    """[(file, n, alert name, the scopes of its result)] for every alerting
+    rule of the rule-pack tree; n is the rule's place in its file (recording
+    rules counted), so a caller that walks the same files can attach labels
+    to the row and two alerts of one name stay apart.
+
+    The scopes are those of the `or` sides at the top of the expression: an
+    alert fires from either side, each with its own labels. A side `judge`
+    gives no scope for (a scalar) is None in the set — "not judged", which a
+    caller must not read as flat."""
+    return _scoped(root)[1]
+
+
 def rule_scopes(root: "Path | None" = None) -> "tuple[dict[str, str], dict[str, set[str]]]":
     """({recorded name: scope}, {alert name: the scopes of the rules of that
     name}) for the rule-pack tree — what a test needs to know which series
@@ -438,14 +458,10 @@ def rule_scopes(root: "Path | None" = None) -> "tuple[dict[str, str], dict[str, 
     declared alone) reads as {cluster, flat} and not as cluster-scoped
     throughout. (`judge` still holds the whole of such an expression to the
     contract: there, `or` with a cluster side is cluster.)"""
-    rules = _rules(root or PROJECT_ROOT)
-    trees = _lib_consumer_read.promql_shape([r[3] for r in rules])
-    records = _record_scopes(rules, trees)
+    records, rows = _scoped(root)
     alerts: "dict[str, set[str]]" = {}
-    for (_f, _g, name, _e, is_record), tree in zip(rules, trees):
-        if not is_record:
-            alerts.setdefault(name, set()).update(
-                judge(side, records, []) or FLAT for side in _or_sides(tree))
+    for _file, _nth, name, scopes in rows:
+        alerts.setdefault(name, set()).update(sc or FLAT for sc in scopes)
     return records, alerts
 
 
@@ -594,78 +610,37 @@ def per_target_jobs(root: "Path | None" = None) -> "set[str | None]":
     return jobs
 
 
-_BASELINE_HEADER = """\
-# Rules that do not keep `da_cluster` (#4097, ADR-006 "one tenant in several
-# clusters"). Managed by scripts/tools/lint/check_cluster_identity.py — a two-way
-# ratchet: a finding not listed here fails, and so does a listed finding that is gone.
-# The list is meant to be EMPTY: every shipped rule keeps the cluster, or says in
-# the comment block directly above it that it reads the tenant's clusters together
-# (`# da_cluster: tenant-wide <kind> (<labels>) — <why>`; the lint's docstring names
-# the rules that do). So a new finding is not added here: give the rule the label,
-# or declare it where it is. An entry is debt to remove, never an exemption.
-# Regenerate with `python3 scripts/tools/lint/check_cluster_identity.py --generate`
-# (needs da-read: `make da-read-build`).
-"""
-
-
-def load_baseline() -> "dict[str, list[str]]":
-    if not BASELINE.exists():
-        return {}
-    data = strict_safe_load(BASELINE.read_text(encoding="utf-8")) or {}
-    return {f: sorted(v or []) for f, v in (data.get("findings") or {}).items()}
-
-
-def _flat(by_file: "dict[str, list[str]]") -> "set[tuple[str, str]]":
-    return {(f, x) for f, xs in by_file.items() for x in xs}
-
-
-def generate() -> int:
-    now = findings()
-    body = yaml.safe_dump({"findings": now}, allow_unicode=True, sort_keys=True,
-                          default_flow_style=False, width=200)
-    _lib_io.write_repo_artifact(BASELINE, _BASELINE_HEADER + body)
-    print(f"check_cluster_identity: wrote {sum(map(len, now.values()))} finding(s) in "
-          f"{len(now)} file(s) -> {BASELINE.relative_to(PROJECT_ROOT)}")
-    return EXIT_OK
-
-
 def check() -> int:
-    now, base = _flat(findings()), _flat(load_baseline())
-    new, gone = sorted(now - base), sorted(base - now)
     stale = stale_declarations()
     if stale:
         print("check_cluster_identity: `da_cluster: tenant-wide` declaration(s) that excuse nothing:")
         for x in stale:
             print(f"    ! {x}")
         return EXIT_VIOLATION
-    if not new and not gone:
-        print(f"check_cluster_identity: OK — {len(now)} finding(s), all baselined (== the tree).")
+    now = sorted((f, x) for f, xs in findings().items() for x in xs)
+    if not now:
+        print("check_cluster_identity: OK — every rule keeps the cluster or declares its "
+              "tenant-wide read.")
         return EXIT_OK
-    rel = BASELINE.relative_to(PROJECT_ROOT)
-    if new:
-        print("check_cluster_identity: NEW rule(s) that drop the cluster label — with one tenant "
-              "in two clusters these merge or mask each other (ADR-006). Add `da_cluster` to the "
-              f"grouping / matching named below; do not add the finding to {rel}:")
-        for f, x in new:
-            print(f"    + {f}: {x}")
-    if gone:
-        print(f"check_cluster_identity: STALE entry(ies) in {rel} — fixed, renamed or removed. "
-              "Drop them so the list equals the tree (--generate):")
-        for f, x in gone:
-            print(f"    - {f}: {x}")
+    print("check_cluster_identity: rule(s) that drop the cluster label — with one tenant "
+          "in two clusters these merge or mask each other (ADR-006). Add `da_cluster` to the "
+          "grouping / matching named below, or — when the rule means to read the tenant's "
+          "clusters together — declare it in the comment block directly above the rule "
+          "(`# da_cluster: tenant-wide <kind> (<labels>) — <why>`):")
+    for f, x in now:
+        print(f"    + {f}: {x}")
     return EXIT_VIOLATION
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--generate", action="store_true", help="rewrite the baseline from the tree")
     ap.add_argument("--ci", action="store_true", help="accepted for hook symmetry")
     ap.add_argument("files", nargs="*", help="ignored (pre-commit passes changed files)")
-    args = ap.parse_args()
+    ap.parse_args()
     try:
-        return generate() if args.generate else check()
+        return check()
     except (CannotRun, _lib_consumer_read.ConsumerReadError,
-            _lib_consumer_read.InputRefused, _lib_io.OutputWriteError) as e:
+            _lib_consumer_read.InputRefused) as e:
         print(f"check_cluster_identity: cannot run: {e}", file=sys.stderr)
         return EXIT_CANNOT_RUN
 
