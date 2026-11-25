@@ -57,6 +57,8 @@ sys.path.insert(0, os.path.dirname(_THIS_DIR))
 from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    check_repo_artifact, exit_on_output_write_error, is_special_file, write_repo_artifact)
 
 DA_READ_DIR = "components/da-read"
 PROXY_LIB_TESTS_DIR = "tests/oauth2-proxy"
@@ -93,10 +95,15 @@ def _repo_root() -> Path:
 
 
 def _read(path: Path) -> str:
+    # A FIFO would block the read; non-UTF-8 text is a ValueError (#3981).
+    if is_special_file(path):
+        raise FixupError(f"cannot read {path}: not a regular file")
     try:
         return path.read_text(encoding="utf-8")
     except OSError as exc:
         raise FixupError(f"cannot read {path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise FixupError(f"cannot read {path}: not UTF-8 ({exc.reason})") from exc
 
 
 def _yaml(path: Path):
@@ -296,7 +303,9 @@ def _run(cmd: list[str], cwd: Path, timeout: int) -> None:
 
 
 def _write(path: Path, text: str) -> None:
-    path.write_text(text, encoding="utf-8", newline="\n")
+    """Through the artifact entry (#3981): atomic, the mode a checkout gives;
+    a refused or failed write is rc 2, one line, from `main`'s decorator."""
+    write_repo_artifact(path, text)
 
 
 def fix_proxy_library(repo: Path, deployed: dict[str, str], dry_run: bool) -> None:
@@ -311,7 +320,10 @@ def fix_proxy_library(repo: Path, deployed: dict[str, str], dry_run: bool) -> No
         _run(["go", "mod", "tidy"], repo / PROXY_LIB_TESTS_DIR, _GO_TIMEOUT_S)
 
 
-def fix_federation_compose(repo: Path, deployed: dict[str, str], dry_run: bool) -> None:
+def fix_federation_compose(repo: Path, deployed: dict[str, str],
+                           dry_run: bool) -> "tuple[Path, str] | None":
+    """The compose rewrite as ``(path, text)``, or None when nothing is to be
+    written: `main` writes both compose files once both are computed (#3981)."""
     path = repo / FEDERATION_COMPOSE
     text = _read(path)
     plan = federation_plan(_yaml(path) or {}, deployed)
@@ -319,10 +331,11 @@ def fix_federation_compose(repo: Path, deployed: dict[str, str], dry_run: bool) 
         text, _ = set_compose_image(text, service, new)
         print(f"PLAN: {FEDERATION_COMPOSE}: {service} {old} -> {new}")
     if plan and not dry_run:
-        _write(path, text)
+        return path, text
+    return None
 
 
-def fix_trylocal_compose(repo: Path, dry_run: bool) -> None:
+def fix_trylocal_compose(repo: Path, dry_run: bool) -> "tuple[Path, str] | None":
     path = repo / TRY_LOCAL_COMPOSE
     text = _read(path)
     plan = trylocal_plan(_yaml(path) or {}, scan_matrix_tags(_yaml(repo / SCAN_WORKFLOW)))
@@ -330,7 +343,8 @@ def fix_trylocal_compose(repo: Path, dry_run: bool) -> None:
         text, _ = set_compose_image(text, service, new, TRY_LOCAL_COMPOSE)
         print(f"PLAN: {TRY_LOCAL_COMPOSE}: {service} {old} -> {new}")
     if plan and not dry_run:
-        _write(path, text)
+        return path, text
+    return None
 
 
 def fix_image_mirror(repo: Path, dry_run: bool) -> None:
@@ -346,6 +360,7 @@ def fix_image_mirror(repo: Path, dry_run: bool) -> None:
         _write(path, text)
 
 
+@exit_on_output_write_error
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Write the follow-on edits a Renovate third-party image PR cannot (#3799)")
@@ -361,6 +376,12 @@ def main() -> int:
                 print(f"ERROR: {tool} is not on PATH; run this in the dev container "
                       "(`make dc-run CMD=\"make renovate-fixup\"`).", file=sys.stderr)
                 return 2
+    if not args.dry_run:
+        # #3981: every file this run rewrites is judged before STEP 1, so a
+        # refused one (a FIFO, a directory, this process's stdout) stops the
+        # run before anything is changed.
+        for rel in (FEDERATION_COMPOSE, TRY_LOCAL_COMPOSE, IMAGES_JS):
+            check_repo_artifact(repo / rel)
     try:
         print(f"STEP 1/5: {DA_READ_DIR} go mod tidy")
         if not args.dry_run:
@@ -369,8 +390,11 @@ def main() -> int:
         print("STEP 2/5: oauth2-proxy library = deployed oauth2-proxy image")
         fix_proxy_library(repo, deployed, args.dry_run)
         print("STEP 3/5: federation-e2e compose = deployed images; try-local = scan matrix tags")
-        fix_federation_compose(repo, deployed, args.dry_run)
-        fix_trylocal_compose(repo, args.dry_run)
+        # Both compose files are computed before either is written (#3981).
+        writes = [fix_federation_compose(repo, deployed, args.dry_run),
+                  fix_trylocal_compose(repo, args.dry_run)]
+        for path, text in (w for w in writes if w is not None):
+            _write(path, text)
         print("STEP 4/5: make platform-data")
         if not args.dry_run:
             _run(["make", "platform-data"], repo, _MAKE_TIMEOUT_S)
