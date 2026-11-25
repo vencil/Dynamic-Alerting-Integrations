@@ -3004,8 +3004,13 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "`--name`, which is a name, not a path. A refused target is held by "
         "tests/dx/test_scaffold_lint.py "
         "(test_a_refused_target_writes_nothing_and_is_rc2_one_line).",
+    # #3981, thirteenth batch.
+    "dx/sync_tool_registry.py":
+        "Rewrites the portal hub page and the jsx loader, fixed repo files; its "
+        "flags are switches. A refused target is held by tests/dx/test_sync_tool_registry.py "
+        "(test_no_target_is_written_when_the_hub_is_this_process_stdout).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 28
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 29
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

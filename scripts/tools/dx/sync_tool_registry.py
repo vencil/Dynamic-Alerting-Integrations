@@ -37,6 +37,9 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    OutputWriteError, check_repo_artifact, exit_on_output_write_error, is_special_file,
+    write_repo_artifact)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -172,14 +175,44 @@ def generate_flow_map(tools: list) -> str:
     return "\n".join(lines)
 
 
-def sync_tool_meta(tools: list, dry_run: bool, verbose: bool):
+def _read(path: Path) -> str:
+    """A target's text. A FIFO would block the read, and an unreadable or
+    non-UTF-8 file would end in the crash handler: both are one line at rc 2
+    (#3981). `is_special_file`, not the artifact's check: `--dry-run` only
+    reads."""
+    if is_special_file(path):
+        raise OutputWriteError(path, OSError(None, "not a regular file"), action="read")
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise OutputWriteError(path, exc, action="read") from exc
+    except UnicodeDecodeError as exc:  # a ValueError: the crash handler's, before
+        raise OutputWriteError(path, OSError(None, f"not UTF-8 ({exc.reason})"),
+                               action="read") from exc
+
+
+def write_pending(pending: list) -> None:
+    """Write what the sync steps left in *pending* — ``(path, text, lines)``
+    — once every step has computed its text (#3981): each target is judged
+    before the first is written, then written through the artifact entry,
+    then its *lines* are printed."""
+    for path, _text, _lines in pending:
+        check_repo_artifact(path)
+    for path, text, lines in pending:
+        write_repo_artifact(path, text)
+        for line in lines:
+            print(line)
+
+
+def sync_tool_meta(tools: list, dry_run: bool, verbose: bool, pending: list):
     """Update CUSTOM_FLOW_MAP in jsx-loader.html.
 
     Returns True if changed, False if already in sync, and **None** on a fatal
     condition (the CUSTOM_FLOW_MAP block is missing) — the caller must treat
     None distinctly from the False no-op and fail loud, not silently succeed.
+    A change is appended to *pending* for :func:`write_pending`, not written.
     """
-    content = LOADER_PATH.read_text(encoding="utf-8")
+    content = _read(LOADER_PATH)
 
     # Find existing CUSTOM_FLOW_MAP block (2-space indent, see jsx-loader.html)
     pattern = re.compile(
@@ -210,8 +243,8 @@ def sync_tool_meta(tools: list, dry_run: bool, verbose: bool):
         return True
 
     new_content = content.replace(old_block, new_block)
-    LOADER_PATH.write_text(new_content, encoding="utf-8", newline="\n")
-    print("[flow_map] Updated CUSTOM_FLOW_MAP ({} entries)".format(len(tools)))
+    pending.append((LOADER_PATH, new_content,
+                    ["[flow_map] Updated CUSTOM_FLOW_MAP ({} entries)".format(len(tools))]))
     return True
 
 
@@ -257,9 +290,10 @@ def generate_card_html(tool: dict) -> str:
     )
 
 
-def sync_hub_cards(tools: list, dry_run: bool, verbose: bool) -> bool:
-    """Sync Hub card data-audience and add missing cards. Returns True if changed."""
-    content = HUB_PATH.read_text(encoding="utf-8")
+def sync_hub_cards(tools: list, dry_run: bool, verbose: bool, pending: list) -> bool:
+    """Sync Hub card data-audience and add missing cards. Returns True if
+    changed; the change is appended to *pending*, not written."""
+    content = _read(HUB_PATH)
     original = content
     changes = []
 
@@ -320,10 +354,7 @@ def sync_hub_cards(tools: list, dry_run: bool, verbose: bool) -> bool:
             print(c)
         return True
 
-    HUB_PATH.write_text(content, encoding="utf-8", newline="\n")
-    print(f"[hub] Applied {len(changes)} change(s):")
-    for c in changes:
-        print(c)
+    pending.append((HUB_PATH, content, [f"[hub] Applied {len(changes)} change(s):", *changes]))
     return True
 
 
@@ -358,6 +389,7 @@ def scan_appears_in(tools: list, verbose: bool) -> dict:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+@exit_on_output_write_error
 def main():
     """CLI entry point: 從 tool-registry.yaml 同步 Hub 卡片 + TOOL_META."""
     try_utf8_stdout()
@@ -381,12 +413,14 @@ def main():
     print(f"Loaded {len(tools)} tools from registry")
     print()
 
-    changed_meta = sync_tool_meta(tools, args.dry_run, args.verbose)
+    pending: list = []
+    changed_meta = sync_tool_meta(tools, args.dry_run, args.verbose, pending)
     if changed_meta is None:
         # Fatal: jsx-loader.html lacks the CUSTOM_FLOW_MAP block. Fail loud
         # (dev-rule #5) rather than letting the swallowed error exit 0.
         sys.exit(EXIT_CALLER_ERROR)
-    changed_hub = sync_hub_cards(tools, args.dry_run, args.verbose)
+    changed_hub = sync_hub_cards(tools, args.dry_run, args.verbose, pending)
+    write_pending(pending)
 
 
     if args.scan_appears_in:
