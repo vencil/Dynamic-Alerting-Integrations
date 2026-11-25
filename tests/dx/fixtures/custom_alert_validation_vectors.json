@@ -1,5 +1,5 @@
 {
-  "_comment": "STATELESS per-recipe validation vectors (ADR-024 §5), asserted by components/threshold-exporter/app/pkg/config TestValidationContract_GoldenVectors: the accept/reject verdict of resolveOneCustomAlert, which the exporter, tenant-api's preflight and the compiler (da-guard compile-custom-alerts, #3229) all take. Scope: recipe/metric/op/horizon/selector-reserved/severity/for enums + adversarial selector-VALUE acceptance (a key-valid value is accepted; escapeSelectorValue is the injection boundary at emit, not the validator). The per-case notes keep the history of the Go/Python pair each case was written against. NOT here: STATEFUL checks (name/severity uniqueness, cap, cross-tree) — mock-tree tests.",
+  "_comment": "STATELESS per-recipe validation vectors (ADR-024 §5), asserted by components/threshold-exporter/app/pkg/config TestValidationContract_GoldenVectors: the accept/reject verdict of resolveOneCustomAlert, which the exporter, tenant-api's preflight and the compiler (da-guard compile-custom-alerts, #3229) all take. Scope: recipe/metric/op/horizon/selector-reserved/severity/for enums + adversarial selector-VALUE acceptance (a key-valid value is accepted, except one Prometheus cannot load: a selectors_re value that does not compile as a regex, or any value holding U+FFFD; escapeSelectorValue is the injection boundary at emit, not the validator). The per-case notes keep the history of the Go/Python pair each case was written against. NOT here: STATEFUL checks (name/severity uniqueness, cap, cross-tree) — mock-tree tests.",
   "cases": [
     {"_note": "valid threshold", "valid": true,
      "spec": {"recipe": "threshold", "name": "ok", "metric": "queue_depth", "op": ">", "window": "5m", "threshold": "100:warning"}},
@@ -7,6 +7,10 @@
      "spec": {"recipe": "forecast", "name": "disk", "metric": "avail", "capacity_metric": "cap", "op": "<", "horizon": "4h", "threshold": "0.15:warning"}},
     {"_note": "adversarial selector VALUE accepted (key valid; value escaped at emit by Python _escape_value, never breaks the quoted literal)", "valid": true,
      "spec": {"recipe": "rate", "name": "r", "metric": "http_requests_total", "selectors_re": {"status": "5.."}, "selectors": {"path": "a\"b\\c"}, "op": ">", "window": "5m", "threshold": "10:warning"}},
+    {"_note": "selectors_re value that is not a valid regex rejected (Prometheus refuses the whole rule file at load)", "valid": false,
+     "spec": {"recipe": "rate", "name": "r", "metric": "http_requests_total", "selectors_re": {"job": "(unclosed"}, "op": ">", "window": "5m", "threshold": "10:warning"}},
+    {"_note": "selector value holding U+FFFD rejected (the PromQL lexer refuses it in a string literal)", "valid": false,
+     "spec": {"recipe": "rate", "name": "r", "metric": "http_requests_total", "selectors": {"job": "a\uFFFDb"}, "op": ">", "window": "5m", "threshold": "10:warning"}},
     {"_note": "bad metric (colon → recording-rule reference)", "valid": false,
      "spec": {"recipe": "threshold", "name": "x", "metric": "tenant:alert:x", "op": ">", "window": "5m", "threshold": "1:warning"}},
     {"_note": "unknown recipe", "valid": false,
