@@ -23,6 +23,8 @@ updated_at: 2026-11-24
 
 2026-11-24 修訂：改寫為現行行為。決策不變。
 
+2026-11-24 修訂：多餘覆寫的檢查改以 exporter 讀到的值比對，根目錄寫數字、租戶寫字串的一般寫法不再漏報（[#4288](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4288)）。
+
 ## 決策
 
 **一群租戶共用的閾值寫在它們共同上層目錄的 `_defaults.yaml`；租戶檔只寫「與它繼承到的值不同」的鍵。**
@@ -62,7 +64,7 @@ tenants:
 
 da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租戶刪掉它之後會拿到的值相同時，報一筆 warning。比對的對象是這個租戶自己的繼承結果：目錄鏈上每一層的 `_defaults.yaml`，以及租戶綁定的 `_profile`（profile 給了值，就以 profile 的值為準）。
 
-⚠️ 比對的是 YAML 讀出來的值，型別要相同。上例根目錄寫數字 `80`、`db-a` 寫字串 `"80"`，da-guard 不報任何 finding；這正是一般的寫法，所以多餘的閾值覆寫通常抓不到。把根目錄那行寫成 `mysql_connection_usage_percent: "80"`（exporter 一樣讀成 80），`da-guard --config-dir conf.d` 才指出 `db-a`（結束碼 0；Summary 與掃描清單省略）：
+比對的是 exporter 讀到的值，不是 YAML 的型別：頂層的鍵先比 exporter 把繼承值當成租戶檔內容時的文字，不同再比 exporter 讀出的閾值（同一個有限數、同一個 severity）。所以上例根目錄寫數字 `80`、`db-a` 依 schema 寫字串 `"80"`，算同值；`"80.0"`、`"80:warning"` 也算，`"80:critical"`（severity 不同）與 exporter 讀不了的值（由 `value_not_served` 指出）不算。對上例跑 `da-guard --config-dir conf.d` 指出 `db-a`（結束碼 0；Summary 與掃描清單省略）：
 
 ```text
 ### Warnings (informational)
@@ -74,6 +76,7 @@ da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租�
 
 - warning 不影響結束碼（0）；加 `--warn-as-error` 時結束碼 1。由 `cmd/da-guard/main_test.go` 的 `TestRun_RedundantOverride_SurfacesAsWarning` 與 `TestRun_RedundantOverride_WithWarnAsError_ExitsOne` 守住。
 - 不同子目錄的租戶各自比對自己那條鏈：`TestRun_RedundantOverride_HonorsCascadingDefaults`。
+- 報出與否，與「刪掉這行後 `da-guard served-values` 的值與 severity 是否不變」逐一對照：`cmd/da-guard/redundant_override_read_test.go` 的 `TestGuard_RedundantOverrideFiresExactlyWhenServedIsUnchanged`。
 - 綁了 `_profile` 的租戶比對 profile 的值：`cmd/da-guard/profile_guard_test.go` 的 `TestGuard_RedundantOverrideFollowsTheProfile`。
 
 ## 背景
@@ -89,7 +92,7 @@ da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租�
 ## 後果與已知限制
 
 - **多餘的覆寫只是警告，不擋 merge。** 執行時它無害，只是讓租戶檔變長、讓意圖變模糊。要擋就在 CI 加 `--warn-as-error`。
-- **比對區分型別。** 租戶寫字串、default 寫數字時（一般的寫法），值相同也不報，見「誰在守這條規則」。
+- **巢狀的值仍分型別比對。** mapping 底下的葉節點由它所在的結構讀取，各結構的讀法不同，da-guard 對它們只在 YAML 的值與型別都相同時才報；頂層的鍵才以 exporter 的讀法比對。
 - **只比對單一值。** mapping 會攤平到每個葉節點逐一比對；list 不比對，內容相同也不報（`internal/guard/guard_test.go` 的 `TestCheckRedundantOverrides_SkipsStructuredValues`）。
 - **子目錄 `_defaults.yaml` 不生效的鍵不判。** 子目錄 `_defaults.yaml` 裡 `_` 開頭的鍵（例如 `_silent_mode`），exporter 不套用（ADR-017 決策 4），租戶自己那一行才是生效的值；這種覆寫不算多餘，da-guard 也不報（`cmd/da-guard/subtree_reserved_test.go` 的 `TestGuard_RedundantOverrideSkipsRefusedSubtreeKey`）。
 - **租戶只能覆寫有宣告的閾值。** 租戶檔寫了一個 `_defaults.yaml` 沒宣告的閾值鍵，`/metrics` 不送它，而 da-guard 對此不報任何 finding。哪些算已宣告（根目錄、內建層、`optional_overrides:`）見 ADR-017 決策 3、4、11。

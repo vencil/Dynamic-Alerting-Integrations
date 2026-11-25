@@ -16,8 +16,10 @@ package guard
 // PR-1 emits SeverityWarn so reviewers see the cleanup hint without
 // blocking merge. The duplication is harmless at runtime.
 //
-// Equality semantics:
-//   - Scalars (string / int / float / bool): direct ==.
+// Equality semantics (leafValuesReadAlike):
+//   - Top-level scalars: as the exporter reads them, so a root `80` and a
+//     tenant `"80"` (the schema's spelling) are the same value.
+//   - Nested scalars (string / int / float / bool): direct ==.
 //   - Nil values: nil == nil. A tenant that explicitly sets a field
 //     to YAML null while the new defaults also have it as null is
 //     redundant (and weird, but we still flag).
@@ -84,10 +86,13 @@ func checkRedundantOverrides(input CheckInput) []Finding {
 			if !exists {
 				continue
 			}
-			if !scalarsEqual(tenantValue, defaultValue) {
+			if !leafValuesReadAlike(path, tenantValue, defaultValue) {
 				continue
 			}
 			if inheritedFromRefusedSubtreeKey(input, tenantID, path) {
+				continue
+			}
+			if valueNotServedAsWritten(input, tenantID, path) {
 				continue
 			}
 			out = append(out, Finding{
@@ -118,6 +123,17 @@ func tenantDefaultsLeaves(input CheckInput, tenantID string, globalLeaves map[st
 	return globalLeaves
 }
 
+// leafValuesReadAlike is the redundancy test: a top-level key compares as the
+// exporter reads it (config.TopLevelValuesReadAlike — a root `80` and a
+// tenant `"80"` are one value, #4288); a nested leaf, whose reader is the
+// structure it sits in, keeps scalarsEqual's same-type comparison.
+func leafValuesReadAlike(path string, tenant, inherited any) bool {
+	if !strings.Contains(path, ".") {
+		return config.TopLevelValuesReadAlike(path, tenant, inherited)
+	}
+	return scalarsEqual(tenant, inherited)
+}
+
 // scalarsEqual is the PR-1 equality test for redundant-override
 // detection. Returns true for matching scalars + nil; returns
 // false for any structured value (map / slice) so we don't false-
@@ -139,6 +155,17 @@ func scalarsEqual(a, b any) bool {
 		return false
 	}
 	return a == b
+}
+
+// valueNotServedAsWritten reports whether the tenant's key at path is one
+// value_not_served refuses (the same selection, config.ValueNotServedAsWritten
+// over CheckInput.ValuesNotServed). Such a value is not "the same value as the
+// defaults" even when it is the same text — the exporter serves neither — and
+// the error already tells the tenant what to write (#4288).
+func valueNotServedAsWritten(input CheckInput, tenantID, path string) bool {
+	top, _, _ := strings.Cut(path, ".")
+	ns, ok := input.ValuesNotServed[tenantID][top]
+	return ok && config.ValueNotServedAsWritten(top, ns.Reason)
 }
 
 // inheritedFromRefusedSubtreeKey reports whether the leaf at path belongs to
