@@ -103,6 +103,21 @@ data:
           group_by: ["tenant", "alertname"]
           receiver: "sentinel-sinkhole"
           continue: false
+        # ── #4277: migrated-alerts shadow (migrate-rule's legacy rules) ──
+        # migrate-rule writes a tenant's legacy rules back unchanged, labelled
+        # component="migrated". While the old rules still run (the shadow
+        # period) their alerts must page no one: this route takes them to the
+        # name-only migrated-alerts-shadow, AHEAD of the enforced NOC route. A
+        # tenant whose conf.d sets `_routing_migrated: active` gets a
+        # tenant!~ exclusion here, so its migrated alerts route like its others.
+        # ⚠️ generate_alertmanager_routes.py RE-INJECTS this at index 4 on every
+        # regen; this hand-authored copy (every tenant in shadow) keeps the
+        # committed base self-consistent.
+        - matchers:
+            - component="migrated"
+          group_by: ["tenant", "alertname"]
+          receiver: "migrated-alerts-shadow"
+          continue: false
 
     receivers:
       - name: "default"
@@ -150,6 +165,12 @@ data:
         # a notifier here; if a "remind me while silent" feature is ever wanted,
         # add a dedicated explicit severity=warning alert (TenantConfigEvent
         # pattern), not sentinel delivery.
+      - name: "migrated-alerts-shadow"
+        # #4277 migrated-alerts shadow sink. NAME-ONLY on purpose: during the
+        # shadow period a migrated alert is the twin of a legacy one that still
+        # pages; it stays visible in the AM UI and the ALERTS series for the
+        # shadow comparison, and notifies no one. Cutover is conf.d's
+        # `_routing_migrated: active`, never a notifier attached here.
 
     inhibit_rules:
       # Severity Dedup (critical suppresses warning of the same tenant,

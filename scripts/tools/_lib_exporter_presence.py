@@ -146,6 +146,8 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import _lib_exitcodes  # noqa: E402  (the one exit path: tests/shared/test_single_exit_path.py)
 from _lib_consumer_read import RULE_PACKS  # noqa: E402  (#3471: the rule-pack file names)
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    check_repo_artifact, exit_on_output_write_error, is_special_file, write_repo_artifact)
 from _lib_python import detect_cli_lang  # noqa: E402  (dev-rules §9: CLI help 語言)
 
 #: The label of ``tenant_expected_exporter`` that carries the kind — the label
@@ -497,6 +499,7 @@ def rewrite(text: str, alert: str, expr: str) -> str:
     return text[:start] + body + text[stop:]
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None) -> int:
     zh = detect_cli_lang() == "zh"
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -509,12 +512,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     stale = []
     texts: dict[Path, str] = {}
+    originals: dict[Path, str] = {}
     try:
         for (pack, alert), expr in alert_exprs().items():
             path = Path(args.root) / pack
             text = texts.get(path)
             if text is None:
-                text = path.read_text(encoding="utf-8")
+                # A FIFO would block the read (#3981); check mode is read-only,
+                # so the stdin-tolerant test, not the artifact's.
+                if is_special_file(path):
+                    raise ValueError(f"{path}: not a regular file")
+                text = originals[path] = path.read_text(encoding="utf-8")
             new = rewrite(text, alert, expr)
             if new != text:
                 stale.append(f"{pack}: {alert}")
@@ -529,8 +537,15 @@ def main(argv: list[str] | None = None) -> int:
         for item in stale:
             print(f"{item}: expr is stale; run with --write", file=sys.stderr)
         return 1
-    for path, text in texts.items():
-        path.write_text(text, encoding="utf-8", newline="\n")
+    # #3981: only the packs that change, every one judged before the first
+    # is written; a bad `--root` fails on the read above, before this. No
+    # `flag=`: the write gate reads a `_`-prefixed module's writers as a
+    # library's, forwarding a caller's flag.
+    changed = [path for path, text in texts.items() if text != originals[path]]
+    for path in changed:
+        check_repo_artifact(path)
+    for path in changed:
+        write_repo_artifact(path, texts[path])
     for item in stale:
         print(f"{item}: expr rewritten")
     return 0

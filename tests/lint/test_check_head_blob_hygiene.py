@@ -333,3 +333,133 @@ class TestIsSkippable:
     )
     def test_text_extensions_not_skipped(self, path):
         assert chbh._is_skippable(path) is False
+
+
+# ---------------------------------------------------------------------------
+# #3981: --fix judges every working copy before the first write
+# ---------------------------------------------------------------------------
+def _damaged_repo(git_repo):
+    repo = git_repo(0)
+    for name in ("a.txt", "b.txt"):
+        (repo / name).write_bytes(b"bad\x00byte\n")
+    # subprocess-timeout: ignore
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    # subprocess-timeout: ignore
+    subprocess.run(["git", "commit", "--quiet", "-m", "damaged"], cwd=repo, check=True,
+                   capture_output=True)
+    return repo
+
+
+def test_fix_rewrites_every_damaged_working_copy(git_repo, capsys, cli_argv):
+    """Control: both working copies are fixed and reported after the writes."""
+    repo = _damaged_repo(git_repo)
+    cli_argv("check_head_blob_hygiene.py", "--fix")
+    chbh.main()
+    out = capsys.readouterr().out
+    assert (repo / "a.txt").read_bytes() == b"badbyte\n"
+    assert (repo / "b.txt").read_bytes() == b"badbyte\n"
+    assert "--fix:\n  ✓ a.txt: fixed working copy" in out
+
+
+def test_fix_refused_target_writes_nothing(git_repo, capsys, monkeypatch, cli_argv):
+    """The entry refuses the second working copy: rc 2, one line naming it,
+    and the first keeps its bytes — the bare loop wrote each as it went and
+    reported a refused write as a `write failed` note under rc 0."""
+    from _lib_output import OutputWriteError
+    repo = _damaged_repo(git_repo)
+    real_check = chbh.check_repo_artifact
+
+    def refuse_b(path, **kw):
+        if Path(path).name == "b.txt":
+            raise OutputWriteError(path, OSError(13, "Permission denied"))
+        return real_check(path, **kw)
+    monkeypatch.setattr(chbh, "check_repo_artifact", refuse_b)
+    cli_argv("check_head_blob_hygiene.py", "--fix")
+    with pytest.raises(SystemExit) as exc:
+        chbh.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot write {repo / 'b.txt'}: Permission denied (errno 13)"
+        " — internal output path, this is a bug or an unwritable workspace"], err
+    assert (repo / "a.txt").read_bytes() == b"bad\x00byte\n"
+
+
+def test_fix_skips_a_working_copy_that_is_a_fifo(git_repo, capsys, cli_argv):
+    """A FIFO where a damaged file's working copy goes blocked the read."""
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    repo = _damaged_repo(git_repo)
+    (repo / "b.txt").unlink()
+    os.mkfifo(repo / "b.txt")
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        cli_argv("check_head_blob_hygiene.py", "--fix")
+        chbh.main()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert "… b.txt: read failed: not a regular file" in capsys.readouterr().out
+
+
+def test_fix_keeps_non_utf8_bytes_and_the_file_mode(git_repo, capsys, cli_argv):
+    """A damaged working copy holding bytes that are not UTF-8 is fixed byte
+    for byte, and keeps its own permission bits."""
+    repo = git_repo(0)
+    f = repo / "c.txt"
+    f.write_bytes(b"\xff\x00tail")
+    # subprocess-timeout: ignore
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    # subprocess-timeout: ignore
+    subprocess.run(["git", "commit", "--quiet", "-m", "x"], cwd=repo, check=True,
+                   capture_output=True)
+    if os.name != "nt":
+        f.chmod(0o600)
+    cli_argv("check_head_blob_hygiene.py", "--fix")
+    chbh.main()
+    assert f.read_bytes() == b"\xfftail\n"
+    if os.name != "nt":
+        assert f.stat().st_mode & 0o777 == 0o600
+
+
+def test_fix_names_what_it_wrote_before_a_refusal(git_repo, capsys, monkeypatch, cli_argv):
+    """A refusal at the write (after the judgement, e.g. a file the user may
+    not write) leaves the earlier working copies fixed — and named, printed
+    as each was written."""
+    from _lib_output import OutputWriteError
+    repo = _damaged_repo(git_repo)
+    real = chbh.write_repo_artifact
+
+    def refuse_b(path, data, **kw):
+        if Path(path).name == "b.txt":
+            raise OutputWriteError(path, OSError(13, "Permission denied"))
+        return real(path, data, **kw)
+    monkeypatch.setattr(chbh, "write_repo_artifact", refuse_b)
+    cli_argv("check_head_blob_hygiene.py", "--fix")
+    with pytest.raises(SystemExit):
+        chbh.main()
+    assert "✓ a.txt: fixed working copy" in capsys.readouterr().out
+
+
+def test_fix_working_copy_gone_after_the_judgement_is_rc2(git_repo, capsys, monkeypatch, cli_argv):
+    """#4312 review: a working copy removed between the judgement and its
+    write is the one-line rc 2, not a FileNotFoundError out of `main`."""
+    repo = _damaged_repo(git_repo)
+    real = chbh.check_repo_artifact
+
+    def judge_then_remove(path, **kw):
+        real(path, **kw)
+        if Path(path).name == "a.txt":
+            Path(path).unlink()
+    monkeypatch.setattr(chbh, "check_repo_artifact", judge_then_remove)
+    cli_argv("check_head_blob_hygiene.py", "--fix")
+    with pytest.raises(SystemExit) as exc:
+        chbh.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert f"cannot write {repo / 'a.txt'}: No such file or directory" in err

@@ -470,7 +470,7 @@ def test_generator_renders_no_tenant_routing_for_a_tree_without_tenants(tmp_path
     assert not [n for n in names if n.startswith(("tenant-", "platform-enforced"))], names
     assert [r["receiver"] for r in cfg["route"]["routes"]] == [
         "watchdog-heartbeat", "custom-alerts-firehose", "synthetic-receiver",
-        "sentinel-sinkhole"], cfg["route"]
+        "sentinel-sinkhole", "migrated-alerts-shadow"], cfg["route"]
 
 
 def test_generator_is_found_beside_this_module():

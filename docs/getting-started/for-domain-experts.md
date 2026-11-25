@@ -194,7 +194,7 @@ python3 scripts/tools/ops/validate_migration.py \
 ```
 
 - **步驟 1**：`--rule-files` 吃檔或目錄（可多個，目錄遞迴取 `*.yaml`／`*.yml`），不展開 glob（v2.9.0 映像仍把值當成一個 glob、只收一個值，給目錄什麼檔都選不到（WARN、結束碼 1）；用那個映像時給加引號的 glob（`'rules/*.yaml'`）或單一檔 <!-- image-caveat: v2.9.0 -->）。只給規則檔時，輸出是規則分析；`onboard-hints.json` 只有在另外給 `--alertmanager-config`、而且從中找到租戶時才會寫出。
-- **步驟 2**：輸出不是 Rule Pack 檔，是一組平台規則加租戶配置：`.migration/platform-recording-rules.yaml`、`.migration/platform-alert-rules.yaml`、`.migration/conf.d/<tenant>.yaml`（閾值寫在 `tenants.<tenant>` 底下，租戶 id 由 `--tenant` 給）、`.migration/conf.d/_defaults.yaml`、`.migration/prefix-mapping.yaml`，以及 `migration-report.txt`、`triage-report.csv` 兩份報告。`--prefix` 是閾值 key 與 recording rule 名稱的前綴（預設 `custom_`），不是租戶前綴，也不會改來源指標名；直接產出 Rule Pack 檔，工具尚未實作。⚠️ 先把 `.migration/conf.d/_defaults.yaml` 的 `defaults:` 區塊合併進 conf.d 根的 `_defaults.yaml`（合併，不要整份覆蓋）：exporter 只發射宣告過的 key，沒合併時租戶檔的值不會生效。有 warning 配對的 critical 層不能放 defaults，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡。⚠️ v2.9.0 映像的 migrate 還沒有這些修正（閾值 selector 對不上 exporter 發射的 `component`／`metric`、recording rule 讀的是加了前綴的指標名、沒有 `defaults-snippet.yaml`）；用那個版本時，套用前請照上方「第二部分」人工核對。 <!-- image-caveat: v2.9.0 -->
+- **步驟 2**：輸出不是 Rule Pack 檔，是一組平台規則加租戶配置：`.migration/platform-recording-rules.yaml`、`.migration/platform-alert-rules.yaml`、`.migration/conf.d/<tenant>.yaml`（閾值寫在 `tenants.<tenant>` 底下，租戶 id 由 `--tenant` 給）、`.migration/conf.d/_defaults.yaml`、`.migration/prefix-mapping.yaml`，以及 `migration-report.txt`、`triage-report.csv` 兩份報告。`--prefix` 是閾值 key 與 recording rule 名稱的前綴（預設 `custom_`），不是租戶前綴，也不會改來源指標名；直接產出 Rule Pack 檔，工具尚未實作。產生的 recording rule 與上方「第一部分」一樣是 `by(tenant, da_cluster)`：在收了多個叢集資料的 Prometheus 上，遷移後的規則逐叢集評估（`sum`／`max` 不再把同一個租戶的幾個叢集合在一起），告警帶 `da_cluster`；原式子自己寫的 `on(...)`／`by(...)` 照抄，點名身分 label 卻沒有 `da_cluster` 的會標出來請人確認。⚠️ 先把 `.migration/conf.d/_defaults.yaml` 的 `defaults:` 區塊合併進 conf.d 根的 `_defaults.yaml`（合併，不要整份覆蓋）：exporter 只發射宣告過的 key，沒合併時租戶檔的值不會生效。有 warning 配對的 critical 層不能放 defaults，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡。⚠️ v2.9.0 映像的 migrate 還沒有這些修正（閾值 selector 對不上 exporter 發射的 `component`／`metric`、recording rule 讀的是加了前綴的指標名、分組是 `by(tenant)`、沒有 `defaults-snippet.yaml`）；用那個版本時，套用前請照上方「第二部分」人工核對。 <!-- image-caveat: v2.9.0 -->
 - **步驟 3**：比對的是同一個 Prometheus 上的新舊兩組查詢，`--mapping` 讀步驟 2 產出的 `prefix-mapping.yaml`；單組比對用 `--old '<舊查詢>' --new '<新查詢>'`。兩個 Prometheus 之間互相比對、指定比對的時間範圍，這兩件事工具尚未實作；要持續觀察用 `--watch --interval <秒> --rounds <輪>`，加 `--auto-detect-convergence` 會在數值收斂時自動停止。完整流程見 [Shadow Monitoring SOP](../shadow-monitoring-sop.md)。
 
 ### 回測閾值變更
@@ -231,7 +231,7 @@ lint 的對象是 Prometheus 規則檔，不是租戶配置（租戶配置用上
 - 結果保留的 label：`preserved_labels`（`without(tenant)`、`sum by (a)`、不分組的 `sum(…)` 等丟掉 tenant 的寫法會被擋，依 Prometheus 語法樹判定）
 - 必備 label：`required_labels`
 - range vector 上限 `max_range_duration`、rule group 的 `interval` 上限 `max_evaluation_interval`
-- 缺 `owner` 或 `expiry` label 時出 WARN（不擋 CI）
+- 租戶規則檔的每條 alert 缺 `owner` 或 `expiry` annotation 時出 ERROR（寫在 labels 也是；expiry 寫成 `YYYY-MM-DD`）
 
 規則命名慣例的檢查尚未實作，policy 檔也沒有這一項。基數的防護由平台的 Cardinality Guard 負責，趨勢預測見下方的 Cardinality Forecasting。
 

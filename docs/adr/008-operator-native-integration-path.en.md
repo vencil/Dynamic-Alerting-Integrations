@@ -60,7 +60,7 @@ kubectl create secret generic alertmanager-routing -n monitoring \
   --from-file=alertmanager.yaml=out.yaml --dry-run=client -o yaml | kubectl apply --server-side --force-conflicts -f -
 ```
 
-The `route.routes` of `out.yaml` go, in order, to: `watchdog-heartbeat`, `custom-alerts-firehose`, `synthetic-receiver`, `sentinel-sinkhole`, `ops-pager`, `tenant-team-a`. Testing destinations with `amtool config routes test --config.file=out.yaml`:
+The `route.routes` of `out.yaml` go, in order, to: `watchdog-heartbeat`, `custom-alerts-firehose`, `synthetic-receiver`, `sentinel-sinkhole`, `migrated-alerts-shadow`, `ops-pager`, `tenant-team-a`. Testing destinations with `amtool config routes test --config.file=out.yaml`:
 
 | Alert labels | Delivered to |
 |---|---|

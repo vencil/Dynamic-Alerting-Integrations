@@ -51,7 +51,7 @@ _TIMEOUT = 60
 #: receivers (Watchdog heartbeat, custom-alert isolation, synthetic probe,
 #: sentinel sink). notification_tester tests a tenant's receivers only.
 _NOT_TENANT = {"default", "watchdog-heartbeat", "custom-alerts-firehose",
-               "synthetic-receiver", "sentinel-sinkhole"}
+               "synthetic-receiver", "sentinel-sinkhole", "migrated-alerts-shadow"}
 
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
 _HOOK = ("    _routing:\n      receiver:\n        type: webhook\n"

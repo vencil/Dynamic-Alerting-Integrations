@@ -17,7 +17,7 @@ Pinned contracts
    that reaches raw `user_threshold` through a function, parentheses or a
    binary operator is judged like a direct one; a `max` in between collapses
    the replica copies and the outer aggregation passes.
-7. **Fail closed**: an expr `promql-parser` cannot parse is an error
+7. **Fail closed**: an expr Prometheus' parser refuses is an error
    (`UnparseableExpr`, main rc 2), never a pass.
 """
 from __future__ import annotations
@@ -177,11 +177,17 @@ def test_aggregation_param_is_walked():
     ('sum({__name__=~"user_.*"})', ["sum"]),
     ('sum({__name__=~"real_.*", tenant="x"})', []),
     ('sum({__name__!~"user_.*", tenant="x"})', []),
-    ('sum({__name__="a" or __name__="user_threshold"})', ["sum"]),
-    ('sum({__name__="a" or __name__="b"})', []),
-], ids=["re-accepts", "re-rejects", "not-re-rejects", "or-second", "or-neither"])
+], ids=["re-accepts", "re-rejects", "not-re-rejects"])
 def test_name_matchers(expr, ops):
     assert _ops(expr) == ops
+
+
+def test_an_or_inside_a_selector_is_refused():
+    """#4215: `{a or b}` is a selector form Prometheus' parser refuses (the
+    third-party parser this lint used to read with accepted it). The lint
+    reads with Prometheus', so it is an error naming why, never a pass."""
+    with pytest.raises(lint.UnparseableExpr, match="or"):
+        lint.nonmax_aggregations('sum({__name__="a" or __name__="user_threshold"})')
 
 
 @pytest.mark.parametrize("expr", [
@@ -215,19 +221,7 @@ def test_other_metric_names_pass(expr):
 
 def test_unknown_node_kind_raises():
     with pytest.raises(lint.UnparseableExpr, match="unhandled PromQL node"):
-        lint._walk(object(), [])
-
-
-def test_parser_panic_is_an_error_not_a_crash(monkeypatch):
-    class PanicException(BaseException):  # pyo3's panic type is a BaseException
-        pass
-
-    def boom(_s):
-        raise PanicException("rust panicked")
-
-    monkeypatch.setattr(lint.promql_parser, "parse", boom)
-    with pytest.raises(lint.UnparseableExpr, match="PanicException"):
-        lint.nonmax_aggregations("sum(user_threshold)")
+        lint._walk({"kind": "no-such-kind", "start": 0, "end": 0}, b"", [])
 
 
 # --- 7. fail closed ---------------------------------------------------------
@@ -388,14 +382,20 @@ def test_live_repo_all_max():
     assert not offenders, f"non-max user_threshold aggregation(s): {offenders}"
 
 
-def test_main_without_parser_is_rc2_not_a_pass(tmp_path, monkeypatch, capsys):
-    """Fail closed: when the expressions cannot be parsed (here: no parser),
-    main exits 2 naming the rule — it never reports `use max`."""
+def test_main_without_a_reading_is_rc2_not_a_pass(tmp_path, monkeypatch, capsys):
+    """Fail closed: when an expression cannot be read (here: the parser
+    refuses it), main exits 2 naming the rule — it never reports `use max`."""
     rp = _ha_tree(tmp_path, monkeypatch)
     (rp / "rule-pack-t.yaml").write_text(_RAW.format(op="max"), encoding="utf-8")
-    monkeypatch.setattr(lint, "promql_parser", None)
+    real = lint._lib_consumer_read.promql_shape_each
+
+    def refuse(exprs, *a, **kw):
+        return [lint._lib_consumer_read.InputRefused("refused", ["no"]) for _ in exprs]
+
+    monkeypatch.setattr(lint._lib_consumer_read, "promql_shape_each", refuse)
     assert lint.main() == 2
     assert "tenant:alert_threshold:x" in capsys.readouterr().err
+    assert real  # the real reader is restored by monkeypatch
 
 
 _INNER_MAX = ('max by (tenant, recipe_id, severity, name, mode) '

@@ -66,6 +66,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    check_repo_artifact, exit_on_output_write_error, write_repo_artifact)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -322,6 +324,14 @@ def execute_plan(plan: MigrationPlan, use_git: bool = False) -> bool:
     """
     import subprocess
 
+    # #3981: every file the plan renames or rewrites is judged before the
+    # first rename, so a refused one (a FIFO, this process's stdout) leaves
+    # the tree as it was rather than half migrated. A renamed file becomes a
+    # rewrite target, so its source is judged too.
+    for action in plan.actions:
+        for path in (action.source, action.target):
+            check_repo_artifact(path)  # an absent target passes
+
     success = True
     rename_pairs = []
 
@@ -373,7 +383,7 @@ def execute_plan(plan: MigrationPlan, use_git: bool = False) -> bool:
             new_lang = "zh" if ".zh.md" in filepath.name else "en"
             updated = update_frontmatter_lang(content, new_lang)
             if updated != content:
-                filepath.write_text(updated, encoding="utf-8", newline="\n")
+                write_repo_artifact(filepath, updated)
                 print(f"  ✓ frontmatter lang → {new_lang}: {filepath.relative_to(REPO_ROOT)}")
             else:
                 print(f"  · frontmatter unchanged: {filepath.relative_to(REPO_ROOT)}")
@@ -405,7 +415,7 @@ def execute_plan(plan: MigrationPlan, use_git: bool = False) -> bool:
 
             updated = content.replace(old_link, new_link) if old_link in content else content
             if updated != content:
-                filepath.write_text(updated, encoding="utf-8", newline="\n")
+                write_repo_artifact(filepath, updated)
                 print(f"  ✓ nav link updated: {filepath.relative_to(REPO_ROOT)}")
             else:
                 print(f"  · nav link unchanged: {filepath.relative_to(REPO_ROOT)}")
@@ -486,6 +496,7 @@ def print_plan(plan: MigrationPlan):
     print()
 
 
+@exit_on_output_write_error
 def main():
     try_utf8_stdout()
     parser = argparse.ArgumentParser(

@@ -2803,8 +2803,18 @@ NO_ROW: dict[Key, str] = {
         "before any read. What speaks for the write: "
         "tests/ops/test_ops_tool_flags.py "
         "`test_a_target_that_is_stdin_is_refused_and_the_others_are_left_alone`.",
+    # #3981, sixteenth batch.
+    ("lint/fix_file_hygiene.py", "FILE"):
+        "The positional names the files pre-commit hands the hook, which it "
+        "rewrites in place: a row's bad-path shapes (a missing parent, a parent "
+        "that is a file) are skipped by the read like any path the hook cannot "
+        "open, before any write — the pair would measure that skip. What speaks "
+        "for the write: tests/lint/test_fix_file_hygiene.py "
+        "`test_a_refused_file_is_rc2_and_the_others_are_left_alone` (a later "
+        "file that is the process's stdout: rc 2, one line naming it and FILE, "
+        "the earlier file keeps its bytes).",
 }
-_NO_ROW_CEILING = 6
+_NO_ROW_CEILING = 7
 
 
 def test_every_flag_named_at_a_writer_has_a_row():
@@ -2863,12 +2873,6 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "not a path. A write that fails is held by "
         "tests/ops/test_threshold_recommend.py "
         "(test_generate_observed_map_that_cannot_be_written_is_exit_2).",
-    "lint/check_cluster_identity.py":
-        "`--generate` rewrites the committed "
-        "`tests/rulepacks/cluster_identity_baseline.yaml`; the flag is a switch, "
-        "not a path. A write that fails is held by "
-        "tests/lint/test_check_cluster_identity.py "
-        "(test_generate_that_cannot_write_the_baseline_is_exit_2).",
     # #3981: the four generators that called the atomic writer directly and
     # go through the artifact entry now. None takes a path: each rewrites
     # documents the repository names.
@@ -2978,8 +2982,62 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "includes the tool names; the flag is a switch, not a path. A write that "
         "fails is held by tests/lint/test_check_includes_sync.py "
         "(test_a_stub_that_cannot_be_written_is_rc2_one_line).",
+    # #3981, eleventh batch.
+    "lint/validate_docs_versions.py":
+        "`--fix` rewrites the docs the checks reported; the flag is a switch, "
+        "not a path. A refused target is held by tests/lint/test_validate_docs_versions.py "
+        "(test_a_target_the_artifact_entry_refuses_is_rc2_one_line).",
+    # #3981, twelfth batch.
+    "_lib_exporter_presence.py":
+        "`--write` rewrites the rule packs under `--root`, the repository root it "
+        "reads them from; a bad root fails on that read, before any write. A "
+        "refused pack is held by tests/rulepacks/test_exporter_presence.py "
+        "(test_a_refused_pack_leaves_the_other_stale_packs_alone).",
+    "dx/migrate_ssot_language.py":
+        "`--execute` rewrites the frontmatter and nav links of the pairs its plan "
+        "renamed; `--directory` only narrows the plan. A refused target is held by "
+        "tests/dx/test_migrate_ssot_language.py "
+        "(test_a_refused_target_is_rc2_one_line).",
+    "dx/renovate_fixup.py":
+        "Rewrites fixed repo files (the federation and try-local compose files, "
+        "the portal image mirror); `--dry-run` is a switch. A refused target is "
+        "held by tests/dx/test_renovate_fixup.py "
+        "(test_a_refused_target_is_rc2_one_line).",
+    "dx/scaffold_lint.py":
+        "Writes the new lint, its test and the hook entry at paths derived from "
+        "`--name`, which is a name, not a path. A refused target is held by "
+        "tests/dx/test_scaffold_lint.py "
+        "(test_a_refused_target_writes_nothing_and_is_rc2_one_line).",
+    # #3981, thirteenth batch.
+    "dx/sync_tool_registry.py":
+        "Rewrites the portal hub page and the jsx loader, fixed repo files; its "
+        "flags are switches. A refused target is held by tests/dx/test_sync_tool_registry.py "
+        "(test_no_target_is_written_when_the_hub_is_this_process_stdout).",
+    # #3981, fourteenth batch.
+    "dx/generate_platform_data.py":
+        "Writes docs/assets/platform-data.json and the portal's offline fallback, "
+        "fixed repo files; its flags are switches. A refused target is held by "
+        "tests/dx/test_generate_platform_data.py "
+        "(test_a_refused_fallback_leaves_the_data_file_alone).",
+    # #3981, fifteenth batch.
+    "dx/bump_docs.py":
+        "Rewrites the version and count references its rules name, and the "
+        "CHANGELOG stubs; its flags are versions and switches, not paths. A "
+        "refused target is held by tests/dx/test_bump_docs.py "
+        "(test_init_changelog_writes_neither_when_one_is_refused).",
+    # #3981, sixteenth batch.
+    "dx/bump_playbook_versions.py":
+        "Rewrites the operational playbooks' `verified-at-version`, fixed repo "
+        "files; `--to` is a version. A refused target is held by "
+        "tests/dx/test_bump_playbook_versions.py "
+        "(test_a_refused_playbook_leaves_the_others_alone).",
+    "lint/check_head_blob_hygiene.py":
+        "`--fix` rewrites the working copies of the HEAD blobs it found "
+        "damaged; the flag is a switch. A refused target is held by "
+        "tests/lint/test_check_head_blob_hygiene.py "
+        "(test_fix_refused_target_writes_nothing).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 23
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 32
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

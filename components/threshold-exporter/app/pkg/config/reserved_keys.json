@@ -61,6 +61,11 @@
       "description": "A routing profile in `_routing_profiles.yaml` the tenant's route starts from.",
       "value": {"shape": "scalar"}
     },
+    "_routing_migrated": {
+      "read_by": {"generator": ["tenant", "platform_tenants"]},
+      "description": "Where the tenant's migrated alerts (component=\"migrated\", what migrate-rule writes) go: `shadow`, the default, keeps them in a receiver that notifies no one; `active` routes them like the tenant's other alerts (#4277).",
+      "value": {"shape": "scalar"}
+    },
     "_custom_alerts": {
       "read_by": {
         "exporter": ["tenant", "platform_tenants", "profile"],

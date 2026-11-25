@@ -26,6 +26,8 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    check_repo_artifact, exit_on_output_write_error, is_special_file, write_repo_artifact)
 
 # Canonical list, mirrored from check_playbook_freshness.py. Kept as a literal
 # (not imported) so this tool works when the lint module is not on sys.path
@@ -73,29 +75,53 @@ def _read_frontmatter_block(text: str) -> tuple[int, int] | None:
 
 
 def apply_bump(filepath: Path, target: str, write: bool) -> tuple[str, str]:
-    """Apply bump to one file.
+    """Apply bump to one file: :func:`plan_bump`, then (when *write*) the
+    write through the artifact entry. Returns ``(status, detail)``."""
+    status, detail, new = plan_bump(filepath, target)
+    if write and new is not None:
+        write_bumps([(filepath, new)])
+    return status, detail
 
-    Returns (status, detail) where status is one of:
-      - "UPDATED"      : value changed, written (or would-write in check/dry mode)
+
+def write_bumps(writes: "list[tuple[Path, bytes]]") -> None:
+    """Every planned playbook is judged before the first is written, then
+    written through the artifact entry (bytes as computed: CRLF stays CRLF)
+    — `main` and :func:`apply_bump` share this one path (#3981)."""
+    for filepath, _new in writes:
+        check_repo_artifact(filepath)
+    for filepath, new in writes:
+        write_repo_artifact(filepath, new)
+        # Named as it is written: a later refusal (rc 2) still shows which
+        # playbooks were already bumped (#4312 review).
+        print(f"  wrote {filepath}", flush=True)
+
+
+def plan_bump(filepath: Path, target: str) -> "tuple[str, str, bytes | None]":
+    """The bump of one file, computed and not written (#3981).
+
+    Returns (status, detail, new bytes or None) where status is one of:
+      - "UPDATED"      : value changes; the bytes to write
       - "OK"           : already at target value
       - "MISSING"      : no front-matter or no verified-at-version field
-      - "CALLER_ERROR" : file unreadable / undecodable (environment problem)
+      - "CALLER_ERROR" : file unreadable / undecodable / not a regular file
     """
+    if is_special_file(filepath):  # a FIFO would block the read
+        return ("CALLER_ERROR", "read error: not a regular file", None)
     try:
         # Read bytes to preserve CRLF — read_text defaults to universal
         # newline translation which loses the original terminator.
         raw = filepath.read_bytes()
     except OSError as exc:
-        return ("CALLER_ERROR", f"read error: {exc}")
+        return ("CALLER_ERROR", f"read error: {exc}", None)
 
     try:
         original = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        return ("CALLER_ERROR", f"decode error: {exc}")
+        return ("CALLER_ERROR", f"decode error: {exc}", None)
 
     block = _read_frontmatter_block(original)
     if block is None:
-        return ("MISSING", "no YAML front-matter")
+        return ("MISSING", "no YAML front-matter", None)
 
     lines = original.splitlines(keepends=True)
     start, end = block
@@ -109,24 +135,22 @@ def apply_bump(filepath: Path, target: str, write: bool) -> tuple[str, str]:
             break
 
     if found_idx is None:
-        return ("MISSING", "no verified-at-version field in front-matter")
+        return ("MISSING", "no verified-at-version field in front-matter", None)
 
     if _normalize_version(current_value or "") == target:
-        return ("OK", current_value or "")
+        return ("OK", current_value or "", None)
 
     old_line = lines[found_idx]
     newline = "\r\n" if old_line.endswith("\r\n") else "\n"
     new_line = f"verified-at-version: {target}{newline}"
 
-    if write:
-        lines[found_idx] = new_line
-        # write_bytes to bypass universal-newline translation; terminators
-        # in `lines` are already byte-faithful.
-        filepath.write_bytes("".join(lines).encode("utf-8"))
-
-    return ("UPDATED", f"{current_value} -> {target}")
+    lines[found_idx] = new_line
+    # Bytes, so the entry writes them as given: the terminators in `lines`
+    # are byte-faithful (CRLF stays CRLF).
+    return ("UPDATED", f"{current_value} -> {target}", "".join(lines).encode("utf-8"))
 
 
+@exit_on_output_write_error
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -164,13 +188,21 @@ def main() -> int:
     write = not (args.check or args.dry_run)
 
     results: list[tuple[str, str, str]] = []
+    writes: list[tuple[Path, bytes]] = []
     for rel in PLAYBOOK_PATHS:
         filepath = repo_root / rel
         if not filepath.exists():
             results.append(("MISSING", rel, "file not found"))
             continue
-        status, detail = apply_bump(filepath, target, write=write)
+        status, detail, new = plan_bump(filepath, target)
         results.append((status, rel, detail))
+        if new is not None:
+            writes.append((filepath, new))
+
+    # #3981: nothing is written while any playbook cannot be read, and every
+    # target is judged before the first is written.
+    if write and not any(r[0] == "CALLER_ERROR" for r in results):
+        write_bumps(writes)
 
     updated = [r for r in results if r[0] == "UPDATED"]
     missing = [r for r in results if r[0] == "MISSING"]
@@ -191,7 +223,7 @@ def main() -> int:
     if caller_errors:
         print(
             f"\nerror: {len(caller_errors)} playbook(s) could not be read; "
-            "fix the file/environment and retry",
+            "nothing was written; fix the file/environment and retry",
             file=sys.stderr,
         )
         return EXIT_CALLER_ERROR

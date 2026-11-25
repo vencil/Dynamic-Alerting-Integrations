@@ -2,11 +2,12 @@
 
 兩件事在 PR 2203 之後仍成立：
 
-1. 遷移後的查詢是 `<agg> by(tenant) (...)`，告警的 $labels 只剩 tenant。
+1. 遷移後的查詢是 `<agg> by(tenant, da_cluster) (...)`，告警的 $labels 只剩
+   tenant 與 da_cluster（#1200：逐叢集；見 test_migrate_per_cluster）。
    原規則 annotation 裡的 `{{ $labels.instance }}`、`{{ $labels.queue }}`
    照抄會渲染成空字串（promtool 實測 `summary="Redis queue  is too long"`）。
-   owner 裁決保留 by(tenant)：被等值 matcher 定死的 label 代入字面值；其他
-   改讀 `$labels.tenant` 並警告。
+   owner 裁決不把實例層級的 label 帶回聚合：被等值 matcher 定死的 label 代入
+   字面值；其他改讀 `$labels.tenant` 並警告。
 2. `validate --mapping` 的新查詢固定組成 `tenant:<key>:max`，rate 類產物是
    `:sum`，查不到；舊查詢是原始指標的原值，沒套 rate()，量綱不同。
 
@@ -99,7 +100,7 @@ def test_process_rule_reports_the_rewrite():
     rule = {"alert": "HighConn", "expr": "mysql_global_status_threads_connected > 100",
             "labels": {"severity": "warning"},
             "annotations": {"summary": "on {{ $labels.instance }}"}}
-    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
+    r = mr.process_rule(rule, prefix="custom_", dictionary={})
     assert r.dropped_label_refs == ["instance"]
     assert any("instance" in n and "$labels.tenant" in n for n in r.notes)
     out = mr.render_alert_rules([r], "custom_")
@@ -116,7 +117,7 @@ def test_alert_rules_with_quotes_and_templated_labels_parse_back():
                        "who": "{{ $labels.tenant }}"},
             "annotations": {"summary": 'Conn {{ $value | printf "%.1f" }} \\ ok',
                             "zh": "連線數過高"}}
-    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
+    r = mr.process_rule(rule, prefix="custom_", dictionary={})
     doc = yaml.safe_load(mr.render_alert_rules([r], "custom_"))
     got = doc["groups"][0]["rules"][0]
     assert got["annotations"] == rule["annotations"]
@@ -161,7 +162,7 @@ def test_mapping_pairs_point_at_the_real_record_and_keep_rate(tmp_path):
         assert p["new_query"] in records, (label, p["new_query"])
     ev = pairs["custom_redis_evicted_keys_total"]
     assert ev["new_query"] == "tenant:custom_redis_evicted_keys_total:sum"
-    assert ev["old_query"] == "sum by(tenant) (rate(redis_evicted_keys_total[5m]))"
+    assert ev["old_query"] == "sum by(tenant, da_cluster) (rate(redis_evicted_keys_total[5m]))"
 
 
 def test_legacy_mapping_file_falls_back_and_warns(tmp_path, capsys):
@@ -287,7 +288,7 @@ def test_every_label_value_is_a_double_quoted_scalar():
     as None and 8 — sees the original string. No reader is guessed at."""
     rule = {"alert": "X", "expr": "up == 0",
             "labels": {"a": "null", "b": "010", "c": "warning", "d": "true"}}
-    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
+    r = mr.process_rule(rule, prefix="custom_", dictionary={})
     out = mr.render_alert_rules([r], "custom_")
     for k, v in rule["labels"].items():
         assert f'          {k}: "{v}"\n' in out

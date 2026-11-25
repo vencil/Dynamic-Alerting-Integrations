@@ -1011,11 +1011,19 @@ def promql_shape(exprs: "list[str]", binary: str | None = None) -> "list[dict]":
     an expression."""
     resolved = da_read_binary(binary)
     data = json.dumps(list(exprs)).encode("utf-8")
-    out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
-               ["promql-shape", "-"], data)
-    docs = out.get("documents")
-    if (not isinstance(docs, list) or len(docs) != 1 or not isinstance(docs[0], list)
-            or len(docs[0]) != len(exprs) or not all(_is_shape(e) for e in docs[0])):
+    try:
+        out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
+                   ["promql-shape", "-"], data)
+        docs = out.get("documents")
+        shaped = (isinstance(docs, list) and len(docs) == 1 and isinstance(docs[0], list)
+                  and len(docs[0]) == len(exprs) and all(_is_shape(e) for e in docs[0]))
+    except RecursionError:
+        # A tree nested deeper than Python's recursion limit (#4298 review):
+        # no tool here can walk it, so it is refused like any expression we
+        # cannot read — `promql_shape_each` re-reads one at a time and names it.
+        raise InputRefused("the expression is nested too deeply to read",
+                           ["parse tree deeper than the Python recursion limit"]) from None
+    if not shaped:
         _fault(DA_READ_BINARY_NAME, ["promql-shape"], "stale")
         raise ConsumerReadError(
             f"{DA_READ_BINARY_NAME} printed JSON without one tree per expression "
@@ -1026,12 +1034,14 @@ def promql_shape(exprs: "list[str]", binary: str | None = None) -> "list[dict]":
 def shape_nodes(node: dict):
     """Every node of a ``promql_shape`` tree, *node* first, then its operands
     depth first, in the order they appear."""
-    yield node
-    for key in ("expr", "param", "lhs", "rhs"):
-        if isinstance(node.get(key), dict):
-            yield from shape_nodes(node[key])
-    for arg in node.get("args") or []:
-        yield from shape_nodes(arg)
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        children = [current[key] for key in ("expr", "param", "lhs", "rhs")
+                    if isinstance(current.get(key), dict)]
+        children += list(current.get("args") or [])
+        stack.extend(reversed(children))
 
 
 def promql_shape_each(exprs: "list[str]", binary: str | None = None, *,

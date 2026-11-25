@@ -653,40 +653,28 @@ def classify_rule(rule):
     return "unknown"
 
 
-def _clean_alert_expr(expr):
-    """清理 PromQL 告警運算式以利解析。
+def _reads_only_user_state_filter(tree):
+    """右邊每一個 selector 都只讀 user_state_filter：無名 selector（``{job="db"}``）
+    也是別的排除條件，不算。"""
+    selectors = [n for n in _lib_consumer_read.shape_nodes(tree) if n["kind"] == "selector"]
+    return bool(selectors) and all(
+        _lib_consumer_read.shape_metric_names(n) == ["user_state_filter"] for n in selectors)
 
-    處理步驟：
-    1. 合併多行為單行
-    2. 移除 ``unless on(...) (user_state_filter{...} == N)`` 維護模式子句
-    3. 移除最外層平衡括號
 
-    Returns:
-        str — 清理後的運算式。
-    """
-    # 合併多行
-    clean = " ".join(expr.strip().split())
-    # 移除維護模式 unless 子句
-    clean = re.sub(
-        r'\s*unless\s+on\s*\([^)]*\)\s*\(user_state_filter\{[^}]*\}\s*==\s*\d+\)',
-        '', clean)
-    clean = clean.strip()
-    # 移除最外層平衡括號
-    if clean.startswith("(") and clean.endswith(")"):
-        inner = clean[1:-1].strip()
-        depth = 0
-        balanced = True
-        for c in inner:
-            if c == '(':
-                depth += 1
-            elif c == ')':
-                depth -= 1
-                if depth < 0:
-                    balanced = False
-                    break
-        if balanced and depth == 0:
-            clean = inner
-    return clean
+def _alert_core(tree):
+    """告警運算式語法樹裡要切門檻的那一段：剝掉外層括號與維護模式子句
+    （``… unless on(…) (user_state_filter{…} == N)``，右邊只讀 user_state_filter
+    的 ``unless``；右邊還讀別的指標或有無名 selector，就是另一個排除條件，保留）。在語法樹上剝，不改寫文字（#4215）：子樹的 offset 仍指向
+    原式，換行、註解、label 值裡的括號都不影響。"""
+    node = tree
+    while True:
+        if node["kind"] == "paren":
+            node = node["expr"]
+        elif (node["kind"] == "binary" and node["op"] == "unless"
+              and _reads_only_user_state_filter(node["rhs"])):
+            node = node["lhs"]
+        else:
+            return node
 
 
 def _enrich_parsed_result(result, parsed, metric_dict):
@@ -700,7 +688,7 @@ def _enrich_parsed_result(result, parsed, metric_dict):
     result["status"] = "complex" if parsed["is_complex"] else "perfect"
 
     # 推測 aggregation 方式
-    agg, reason = guess_aggregation(parsed["base_key"], parsed["lhs"])
+    agg, reason = guess_aggregation(parsed["base_key"], parsed["lhs_tree"])
     result["aggregation"] = agg
     result["agg_reason"] = reason
 
@@ -709,11 +697,11 @@ def _enrich_parsed_result(result, parsed, metric_dict):
         result["dict_match"] = metric_dict[parsed["base_key"]]
 
 
-def extract_threshold_candidates(alert_rule, metric_dict=None):
+def extract_threshold_candidates(alert_rule, metric_dict=None, tree=None):
     """Extract threshold candidates from an alert rule expression.
 
-    委派至 :func:`_clean_alert_expr` 清理運算式，再由
-    :func:`_enrich_parsed_result` 填充解析結果。
+    *tree* 是運算式的語法樹（省略時讀一次）；:func:`_alert_core` 取出要切門檻
+    的那一段，再由 :func:`_enrich_parsed_result` 填充解析結果。
 
     Returns dict:
       {metric_key, threshold_value, operator, severity, aggregation,
@@ -742,8 +730,12 @@ def extract_threshold_candidates(alert_rule, metric_dict=None):
     if not HAS_MIGRATE:
         return result
 
-    clean_expr = _clean_alert_expr(alert_rule.get("expr", ""))
-    parsed = parse_expr(clean_expr)
+    expr = str(alert_rule.get("expr", ""))
+    if tree is None:
+        (tree,) = _lib_consumer_read.promql_shape_each([expr])
+    if isinstance(tree, _lib_consumer_read.InputRefused):
+        return result
+    parsed = parse_expr(expr, _alert_core(tree))
     if parsed is None:
         return result
 
@@ -802,6 +794,7 @@ def analyze_rule_files(file_paths, tenant_label=DEFAULT_TENANT_LABEL, metric_dic
 
     candidates = []
     recording_rules = []
+    alerts = []
     errors = []
     total_groups = 0
     total_rules = 0
@@ -831,10 +824,16 @@ def analyze_rule_files(file_paths, tenant_label=DEFAULT_TENANT_LABEL, metric_dic
                         "file": Path(fpath).name,
                     })
                 elif rtype == "alert":
-                    candidate = extract_threshold_candidates(rule, metric_dict)
-                    candidate["group"] = group_name
-                    candidate["file"] = Path(fpath).name
-                    candidates.append(candidate)
+                    alerts.append((rule, group_name, Path(fpath).name))
+
+    # Every alert's expression read into its parse tree in one run (#4215).
+    trees = (_lib_consumer_read.promql_shape_each([str(r.get("expr", "")) for r, _g, _f in alerts])
+             if HAS_MIGRATE and alerts else [None] * len(alerts))
+    for (rule, group_name, fname), tree in zip(alerts, trees):
+        candidate = extract_threshold_candidates(rule, metric_dict, tree)
+        candidate["group"] = group_name
+        candidate["file"] = fname
+        candidates.append(candidate)
 
     summary = {
         "files_scanned": len(file_paths),

@@ -168,6 +168,9 @@ def _as_another_user(tool: str, setup) -> tuple[subprocess.CompletedProcess, Pat
     d = Path(tempfile.mkdtemp(dir="/var/tmp"))  # tmp_path is 0700: 65534 could not reach it
     target = d / "a_test.go"
     target.write_text(_CHANGES[tool][1], encoding="utf-8")
+    # The mode a checkout gives, not the umask's: under `umask 077` root made
+    # it 0600 and uid 65534 failed on the read, not on the write (#3981).
+    target.chmod(0o644)
     try:
         setup(d, target, bool(prefix))
         proc = subprocess.run([*prefix, sys.executable, str(OPS / tool), str(target)],
@@ -190,8 +193,22 @@ def _remove_the_other_users_dirs():
         shutil.rmtree(_AS_ANOTHER_USER_DIRS.pop(), ignore_errors=True)
 
 
+@pytest.fixture(params=[None, 0o077], ids=["default-umask", "umask-077"])
+def umask(request):
+    """Each other-uid case also under `umask 077` (#3981): the helper's
+    files must not take their mode from the creator's umask."""
+    if request.param is None:
+        yield
+        return
+    old = os.umask(request.param)
+    try:
+        yield
+    finally:
+        os.umask(old)
+
+
 @pytest.mark.parametrize("tool", CODEMODS)
-def test_a_write_that_fails_is_rc2_one_line_naming_the_positional(tool):
+def test_a_write_that_fails_is_rc2_one_line_naming_the_positional(tool, umask):
     """The target can be read but neither replaced nor written in place:
     rc 2, one line naming the file and the positional, where a bare write
     was `unexpected internal error (PermissionError)`."""
@@ -210,7 +227,7 @@ def test_a_write_that_fails_is_rc2_one_line_naming_the_positional(tool):
 
 
 @pytest.mark.parametrize("tool", CODEMODS)
-def test_a_file_that_cannot_be_read_is_rc2_one_line_naming_the_positional(tool):
+def test_a_file_that_cannot_be_read_is_rc2_one_line_naming_the_positional(tool, umask):
     """rc 2, one line naming the file. add_t_parallel's read used to raise
     into the crash handler (`unexpected internal error (PermissionError)`)."""
     def setup(d: Path, target: Path, privileged: bool) -> None:
