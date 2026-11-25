@@ -171,3 +171,73 @@ def test_a_tenant_with_routing_disabled_still_cuts_over(tmp_path):
     assert proc.returncode == 0, proc.stderr
     (_, route), = _migrated_routes(am)
     assert route["matchers"] == ['component="migrated"', 'tenant!~"t-off"']
+
+
+def test_a_notifier_on_the_shadow_receiver_is_refused(tmp_path):
+    """A base must not give migrated-alerts-shadow an integration: each event
+    would page twice in the shadow period (review: the base's fuller
+    placeholder definition used to win silently)."""
+    conf = _tree(tmp_path, {"t-a": ...})
+    base = tmp_path / "base.yml"
+    base.write_text(textwrap.dedent("""\
+        route:
+          receiver: default
+        receivers:
+          - name: default
+          - name: migrated-alerts-shadow
+            webhook_configs:
+              - url: https://pager.example.com/x
+    """), encoding="utf-8")
+    out = tmp_path / "am.yml"
+    proc = subprocess.run(
+        [sys.executable, "-s", str(_GAR), "--config-dir", str(conf), "--output-alertmanager",
+         "--base-config", str(base), "-o", str(out)],
+        capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert proc.returncode == 1, proc.stderr
+    assert "migrated-alerts-shadow" in proc.stderr and "Leave it name-only" in proc.stderr, proc.stderr
+    assert not out.exists()
+
+
+def test_a_name_only_shadow_receiver_in_the_base_is_kept(tmp_path):
+    conf = _tree(tmp_path, {"t-a": ...})
+    base = tmp_path / "base.yml"
+    base.write_text("route:\n  receiver: default\nreceivers:\n  - name: default\n"
+                    "  - name: migrated-alerts-shadow\n", encoding="utf-8")
+    out = tmp_path / "am.yml"
+    proc = subprocess.run(
+        [sys.executable, "-s", str(_GAR), "--config-dir", str(conf), "--output-alertmanager",
+         "--base-config", str(base), "-o", str(out)],
+        capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    am = yaml.safe_load(out.read_text(encoding="utf-8"))
+    assert [r["name"] for r in am["receivers"]].count("migrated-alerts-shadow") == 1
+
+
+def test_the_validate_assembly_check_sees_the_cut_over_tenants(tmp_path, monkeypatch):
+    """--validate hands the generated config to Alertmanager's loader: the
+    tree it judges is the output's, the tenant!~ matcher included (review)."""
+    seen = []
+    real = gar.evaluate_generated_config
+
+    def spy(*a, **kw):
+        seen.append(set(kw.get("migrated_active") or ()))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(gar, "evaluate_generated_config", spy)
+    conf = _tree(tmp_path, {"t-a": "active", "t-b": ...})
+    with pytest.raises(SystemExit):
+        gar.main(["--config-dir", str(conf), "--validate"])
+    assert seen == [{"t-a"}]
+
+
+def test_the_verdict_assembles_with_the_set_it_was_given(monkeypatch):
+    seen = []
+    real = render.assemble_configmap
+
+    def spy(*a, **kw):
+        seen.append(set(kw.get("migrated_active") or ()))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(render, "assemble_configmap", spy)
+    render.evaluate_generated_config([], [], [], [], migrated_active=["t-a"])
+    assert seen == [{"t-a"}]

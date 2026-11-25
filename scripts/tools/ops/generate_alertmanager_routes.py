@@ -298,7 +298,8 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
                    all_warnings: list[str], sink: list | None = None,
                    key_blocks: "list[str] | None" = None,
                    generated: "list | None" = None, *,
-                   show_loader_reason: bool = False) -> NoReturn:
+                   show_loader_reason: bool = False,
+                   migrated_active: "frozenset[str]" = frozenset()) -> NoReturn:
     """The last step of ``validate_tree``: judge the generation result
     (``evaluate_generated_config``), print the verdict and exit with it.
 
@@ -310,7 +311,7 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     verdict = evaluate_generated_config(
         routes, receivers, inhibit_rules, all_warnings,
         extra_errors=_policy_errors(all_warnings),
-        show_loader_reason=show_loader_reason)
+        show_loader_reason=show_loader_reason, migrated_active=migrated_active)
     if generated is not None:
         generated.append(verdict)
     # #2766: the lines only --validate prints join the findings. A verdict
@@ -2181,7 +2182,8 @@ def validate_tree(config_dir: str, *, strict: bool = False,
             _emit_custom_firehose_findings(undelivered, None, strict=strict,
                                            findings=findings)
         _validate_mode(routes, receivers, inhibit_rules, all_warnings, findings,
-                       key_blocks, generated, show_loader_reason=show_loader_reason)
+                       key_blocks, generated, show_loader_reason=show_loader_reason,
+                       migrated_active=tree.migrated_active)
     except SystemExit as exc:
         code = _exit_code_of(exc)
     return ValidateOutcome(code, findings, generated[0] if generated else None,

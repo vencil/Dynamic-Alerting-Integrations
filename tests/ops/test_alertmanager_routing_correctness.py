@@ -48,7 +48,6 @@ from generate_alertmanager_routes import (
     assemble_configmap,
     generate_inhibit_rules,
     generate_routes,
-    _build_migrated_alert_routes,
     load_base_config,
     load_tenant_tree,
 )
@@ -334,16 +333,17 @@ def _build_enforced_am_yml() -> str:
     }
     routes, receivers, warnings = generate_routes(
         routing_configs, enforced_routing=enforced, tenants=())
-    # #4277: the first demo tenant has cut over its migrated alerts; the other
-    # is still in shadow.
-    routes = routes + _build_migrated_alert_routes([_DEMO_TENANTS[0]])[0]
+
     # receiver 建置若被 WARN+skip，下面的路由斷言會驗到殘缺樹 → 前提先擋。
     blocking = [w for w in warnings if "skipping" in w or "blocked" in w]
     assert not blocking, f"synthetic config unexpectedly degraded: {blocking}"
     inhibit_rules, _ = generate_inhibit_rules(
         {t: "enable" for t in _DEMO_TENANTS})
+    # #4277: the first demo tenant has cut over its migrated alerts; the other
+    # is still in shadow.
     cm_yaml = assemble_configmap(
-        load_base_config(None), routes, receivers, inhibit_rules)
+        load_base_config(None), routes, receivers, inhibit_rules,
+        migrated_active=[_DEMO_TENANTS[0]])
     return yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
 
 

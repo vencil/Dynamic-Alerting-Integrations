@@ -65,7 +65,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
-    _build_migrated_alert_routes,
+    _build_migrated_alert_routes, MIGRATED_SHADOW_RECEIVER,
     _build_sentinel_sinkhole_route)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#3276)
@@ -931,6 +931,19 @@ def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
             "The base definition would clash with the conf.d one. Rename them "
             "in the base config.")
     merged["receivers"] = base_receivers + [r for r in receivers if r["name"] not in base_names]
+    # #4277: the migrated-alerts shadow receiver notifies no one, ever: a
+    # shadow alert is the twin of a legacy one that still pages. Unlike the
+    # other placeholders, a fuller base definition does not win — cutover is
+    # conf.d's `_routing_migrated: active`, never a notifier here.
+    for r in merged["receivers"]:
+        if r.get("name") == MIGRATED_SHADOW_RECEIVER and receiver_integration_kinds(r):
+            raise ValueError(
+                f"ERROR: the base config gives receiver {MIGRATED_SHADOW_RECEIVER!r} an "
+                f"integration ({', '.join(receiver_integration_kinds(r))}): it takes every "
+                "migrated alert of a tenant still in shadow, the twin of a legacy alert "
+                "that still pages, so each event would page twice. Leave it name-only; "
+                "to route a tenant's migrated alerts, set `_routing_migrated: active` "
+                "in its conf.d.")
 
     merged["inhibit_rules"] = (list(merged.get("inhibit_rules") or [])
                                + list(inhibit_rules or []))
@@ -1176,7 +1189,8 @@ class GeneratedConfigVerdict:
 def evaluate_generated_config(routes: list[dict], receivers: list[dict],
                               inhibit_rules: list[dict], warnings: list[str],
                               *, extra_errors: "list[str] | tuple" = (),
-                              show_loader_reason: bool = False
+                              show_loader_reason: bool = False,
+                              migrated_active: "Iterable[str]" = ()
                               ) -> GeneratedConfigVerdict:
     """Every ``--validate`` verdict on a generation result, returned — never
     printed, never ``sys.exit``-ed (#2311).
@@ -1218,7 +1232,8 @@ def evaluate_generated_config(routes: list[dict], receivers: list[dict],
         if not errors:
             try:
                 cm_yaml = assemble_configmap(load_base_config(None), routes,
-                                             receivers, inhibit_rules)
+                                             receivers, inhibit_rules,
+                                             migrated_active=migrated_active)
             except ValueError as exc:
                 verdict.assembly_error = str(exc)
     verdict.warnings = captured.getvalue().splitlines()
