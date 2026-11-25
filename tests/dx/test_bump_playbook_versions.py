@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import os
+
 import pytest
 
 import bump_playbook_versions as bpv  # noqa: E402
@@ -353,3 +355,65 @@ class TestNormalizeVersion:
     )
     def test_normalizes(self, raw, expected):
         assert bpv._normalize_version(raw) == expected
+
+
+# ── #3981: every playbook is judged before the first is written ────────
+
+def test_a_refused_playbook_leaves_the_others_alone(tmp_path, monkeypatch, capsys):
+    """The entry refuses the last playbook at the write (a refusal injected at
+    `check_repo_artifact`: a directory or FIFO is already a CALLER_ERROR at
+    the read): rc 2, one line, and the playbooks ahead of it keep their text
+    — the bare loop wrote each as it went."""
+    from _lib_output import OutputWriteError
+    root = _make_playbook_tree(tmp_path, {})
+    before = {rel: (root / rel).read_bytes() for rel in bpv.PLAYBOOK_PATHS}
+    last = root / bpv.PLAYBOOK_PATHS[-1]
+    real_check = bpv.check_repo_artifact
+
+    def refuse_last(path, **kw):
+        if Path(path) == last:
+            raise OutputWriteError(path, OSError(13, "Permission denied"))
+        return real_check(path, **kw)
+    monkeypatch.setattr(bpv, "check_repo_artifact", refuse_last)
+    rc, _out, err = _run_cli(monkeypatch, capsys, root, "--to", "v2.8.0")
+    assert rc == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot write {last}: Permission denied (errno 13)"
+        " — internal output path, this is a bug or an unwritable workspace"], err
+    assert {rel: (root / rel).read_bytes() for rel in bpv.PLAYBOOK_PATHS} == before
+
+
+def test_a_playbook_that_is_a_fifo_is_a_caller_error_and_nothing_is_written(
+        tmp_path, monkeypatch, capsys):
+    """A FIFO among the playbooks blocked the read forever, the playbooks
+    ahead of it already rewritten."""
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    root = _make_playbook_tree(tmp_path, {})
+    last = root / bpv.PLAYBOOK_PATHS[-1]
+    last.unlink()
+    os.mkfifo(last)
+    first = root / bpv.PLAYBOOK_PATHS[0]
+    before = first.read_bytes()
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        rc, _out, err = _run_cli(monkeypatch, capsys, root, "--to", "v2.8.0")
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert rc == 2, err
+    assert first.read_bytes() == before
+
+
+def test_crlf_survives_the_bump(tmp_path):
+    """Bytes go through the entry as given: a CRLF playbook stays CRLF."""
+    f = tmp_path / "p.md"
+    f.write_bytes(FRONTMATTER_TEMPLATE.format(verified="v2.7.0").replace("\n", "\r\n").encode())
+    assert bpv.apply_bump(f, "v2.8.0", write=True)[0] == "UPDATED"
+    data = f.read_bytes()
+    assert b"verified-at-version: v2.8.0\r\n" in data and b"\n" not in data.replace(b"\r\n", b"")

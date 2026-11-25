@@ -4361,3 +4361,19 @@ def test_a_target_whose_rule_changes_nothing_is_not_rewritten(tmp_path, monkeypa
     monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
     bump_docs.apply_rules([_tag_rule("a.md")], "0.2.0", check_only=False)
     assert f.stat().st_ino == ino and f.stat().st_mode & 0o777 == 0o600
+
+
+def test_a_target_replaced_after_its_read_is_staged_under_the_read_key(tmp_path, monkeypatch):
+    """#4311 review: `set` used a fresh stat, so a target atomically replaced
+    between `read` and `set` was staged under a key `commit` never read —
+    a KeyError. The key recorded at the read is used instead."""
+    f = tmp_path / "a.md"
+    f.write_text("ghcr.io/vencil/da-tools:0.1.0\n", encoding="utf-8")
+    staged = bump_docs._Staged()
+    staged.read(f)
+    replacement = tmp_path / "a.md.new"
+    replacement.write_text("ghcr.io/vencil/da-tools:0.1.0\n", encoding="utf-8")
+    os.replace(replacement, f)  # a new inode under the same name
+    staged.set(f, "ghcr.io/vencil/da-tools:0.2.0\n")
+    staged.commit()
+    assert f.read_text(encoding="utf-8") == "ghcr.io/vencil/da-tools:0.2.0\n"
