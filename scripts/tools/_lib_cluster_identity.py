@@ -6,11 +6,17 @@ without it — `federation-check edge` and `byo-check prometheus` (the running
 config, as `/api/v1/status/config` prints it), `onboard` (a config file,
 already parsed by Prometheus' own loader) and the repo's scrape-config lint.
 
+Also the one split of a query answer by that label (`rows_by_cluster`): the
+rule packs record a tenant's series once per cluster, so a tool that replays
+or measures one must do it cluster by cluster (ADR-006, #1200).
+
 Standard library only, and no I/O: a tool that reads a file imports this
 without becoming a tool that can use HTTP.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from typing import Any
 
 #: ADR-006: the external label that says which cluster a Prometheus is in.
@@ -168,3 +174,104 @@ def cluster_identity(labels: "dict[str, Any] | None") -> "str | None":
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def rows_by_cluster(rows: "list[dict[str, Any]]") -> "dict[str, list[dict[str, Any]]]":
+    """The rows of a Prometheus query answer (`data.result`), grouped by
+    their `da_cluster` label: ``{cluster: [row, ...]}``, the clusters in
+    sorted order. A row whose `metric` has no `da_cluster` — or an empty one,
+    which is the same thing to Prometheus — is in the group ``""``, a group
+    of its own beside the named clusters.
+
+    ADR-006 (#1200): a `tenant:*` recording rule has one series per (tenant,
+    cluster) and its alert fires per cluster, so the samples of two groups
+    are never one series. Nothing is merged here: what a group holding more
+    than one row means is `repeated_rows`' to say (two series at once, or one
+    series in succession) — never to add up."""
+    groups: "dict[str, list[dict[str, Any]]]" = {}
+    for row in rows:
+        metric = row.get("metric") if isinstance(row, dict) else None
+        value = metric.get(CLUSTER_IDENTITY_LABEL) if isinstance(metric, dict) else None
+        groups.setdefault(value if isinstance(value, str) else "", []).append(row)
+    return {cluster: groups[cluster] for cluster in sorted(groups)}
+
+
+def in_time_order(rows: "list[Any]", span: Any) -> "list[Any]":
+    """*rows* by the time of their first sample (`span(row)` is a row's
+    ``(first, last)`` sample timestamps, None for a row with no sample,
+    which sorts first)."""
+    return sorted(rows, key=lambda row: (span(row) is not None, span(row) or (0, 0)))
+
+
+def repeated_rows(groups: "dict[str, list[dict[str, Any]]]", span: Any) -> "dict[str, str]":
+    """``{cluster: why}`` for every group of *groups* (`rows_by_cluster`)
+    that cannot be read as one series: it holds rows whose samples OVERLAP
+    in time (`span(row)`: a row's ``(first, last)`` sample timestamps, or
+    None) — two series at once that the `da_cluster` label does not tell
+    apart. Typically an HA pair read without deduplication (the rows differ
+    in `replica`), not several clusters. *why* names the labels the rows
+    differ in and what to do; it is never a reason to add the rows up or to
+    pick one.
+
+    Rows of one cluster whose time ranges do not overlap are not in the
+    answer: they are ONE series in succession — a label that changed once
+    inside the window (the pod that evaluates the rule was replaced) starts
+    a new row where the old one ends — and the caller joins them in time
+    order (`in_time_order`)."""
+    out: "dict[str, str]" = {}
+    for cluster, rows in groups.items():
+        spans = sorted(s for s in (span(row) for row in rows) if s is not None)
+        if (len(rows) < 2 or len(spans) == len(rows) and all(
+                later[0] > earlier[1] for earlier, later in zip(spans, spans[1:]))):
+            continue
+        metrics = [row.get("metric") if isinstance(row.get("metric"), dict) else {}
+                   for row in rows]
+        names = sorted({name for metric in metrics for name in metric})
+        differ = [name for name in names
+                  if len({repr(metric.get(name)) for metric in metrics}) > 1]
+        how = ("that differ only in " + ", ".join(differ) if differ
+               else "with identical labels")
+        out[cluster] = (f"{len(rows)} series at the same time {how} — not one series, and "
+                        "never added up; query a deduplicated endpoint (one series per cluster)")
+    return out
+
+
+#: The characters `markdown_text` escapes: the ones that start markup inside
+#: a line of GitHub-flavoured Markdown (a table cell among them).
+_MARKDOWN_ACTIVE = "\\`*_[]<>|~&#"
+
+
+# What GitHub links with no markup: `www.` at a word start, and `scheme://`.
+_WWW = re.compile(r"(?i)(?<![0-9A-Za-z])(www)\.")
+_SCHEME = re.compile(r":(?=//)")
+
+
+def markdown_text(text: str) -> str:
+    """*text* as literal text inside one line of Markdown — the one escaping
+    for anything that carries a cluster name (a label value, set outside
+    this repo) into a Markdown report: a control character, a line break
+    among them, becomes ``?``, and every character that starts markup (a
+    table's ``|``, a code span's backtick, an HTML tag's ``<``, emphasis, a
+    link, an entity) is backslash-escaped, so it renders as itself. GitHub
+    also links bare addresses (`www.…`, `https://…`, `a@b.c`) with no markup
+    at all: the `:` of `://` and the dot after a leading `www` are escaped
+    for that. A backslash does not stop the address form — GitHub still
+    renders `a\\@b.c` as a `mailto:` link — so an `@` is written inside a
+    `<span>`: the address is then no longer one run of text, which is what
+    the link is made from."""
+    out = []
+    for ch in text:
+        if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp"):
+            out.append("?")
+        elif ch in _MARKDOWN_ACTIVE:
+            out.append("\\" + ch)
+        else:
+            out.append(ch)
+    text = _SCHEME.sub(r"\\:", _WWW.sub(r"\1\\.", "".join(out)))
+    return text.replace("@", "<span>@</span>")
+
+
+def cluster_text(cluster: str) -> str:
+    """A `rows_by_cluster` group as a report names it."""
+    return (f'{CLUSTER_IDENTITY_LABEL}="{cluster}"' if cluster
+            else f"no {CLUSTER_IDENTITY_LABEL}")

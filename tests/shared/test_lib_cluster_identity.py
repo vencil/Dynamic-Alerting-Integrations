@@ -350,3 +350,107 @@ def test_cluster_identity(labels, expected):
 ])
 def test_config_external_labels(config, expected):
     assert lib.config_external_labels(config) == expected
+
+
+# ── #1200: a query answer, one group of rows per cluster ──────────────
+
+def _r(tag, metric="absent"):
+    row = {"values": [[1, tag]]}
+    if metric != "absent":
+        row["metric"] = metric
+    return row
+
+
+def test_rows_by_cluster():
+    """Sorted by cluster; a row with no `da_cluster` — no `metric`, no label,
+    an empty one, one that is not a string — is in the group ``""``; rows of
+    one group keep their order and nothing is merged."""
+    west1, east, bare, west2 = (_r("w1", {"da_cluster": "west"}), _r("e", {"da_cluster": "east"}),
+                                _r("b", {"tenant": "t"}), _r("w2", {"da_cluster": "west"}))
+    empty, none, absent, number = (_r("x", {"da_cluster": ""}), _r("n", None), _r("a"),
+                                   _r("5", {"da_cluster": 5}))
+    groups = lib.rows_by_cluster([west1, east, bare, west2, empty, none, absent, number])
+    assert list(groups) == ["", "east", "west"]
+    assert groups["west"] == [west1, west2]
+    assert groups["east"] == [east]
+    assert groups[""] == [bare, empty, none, absent, number]
+    assert lib.rows_by_cluster([]) == {}
+
+
+_DEDUP = ("— not one series, and never added up; query a deduplicated endpoint "
+          "(one series per cluster)")
+
+
+def _m(first=0, last=9, **labels):
+    """A row holding samples from `first` to `last`."""
+    return {"metric": labels, "span": (first, last)}
+
+
+def _span(row):
+    return row.get("span")
+
+
+@pytest.mark.parametrize("groups, expected", [
+    ({}, {}),
+    ({"": [_m()], "east": [_m(da_cluster="east")], "west": [_m(da_cluster="west")]}, {}),
+    # an HA pair read without deduplication: at the same time, differing in `replica`
+    ({"east": [_m(da_cluster="east")],
+      "west": [_m(da_cluster="west", replica="a"), _m(da_cluster="west", replica="b")]},
+     {"west": "2 series at the same time that differ only in replica " + _DEDUP}),
+    # a label one row has and the other does not is a difference too
+    ({"": [_m(pod="x", replica="a"), _m(replica="b"), _m(replica="b")]},
+     {"": "3 series at the same time that differ only in pod, replica " + _DEDUP}),
+    ({"west": [_m(da_cluster="west"), _m(da_cluster="west")]},
+     {"west": "2 series at the same time with identical labels " + _DEDUP}),
+    # one after the other (a label changed inside the window): one series, in any order
+    ({"west": [_m(0, 9, pod="old"), _m(10, 19, pod="new")]}, {}),
+    ({"west": [_m(20, 29, pod="c"), _m(0, 9, pod="a"), _m(10, 19, pod="b")]}, {}),
+    # sharing one timestamp, or one inside another, is at the same time
+    ({"west": [_m(0, 10, pod="old"), _m(10, 19, pod="new")]},
+     {"west": "2 series at the same time that differ only in pod " + _DEDUP}),
+    ({"west": [_m(0, 9, pod="a"), _m(10, 19, pod="b"), _m(5, 6, pod="c")]},
+     {"west": "3 series at the same time that differ only in pod " + _DEDUP}),
+    # a row with no sample has no time range to be after another's
+    ({"west": [{"metric": {}}, {"metric": None, "span": (0, 9)}]},
+     {"west": "2 series at the same time with identical labels " + _DEDUP}),
+])
+def test_repeated_rows(groups, expected):
+    assert lib.repeated_rows(groups, _span) == expected
+
+
+def test_in_time_order():
+    a, b, c, empty = _m(0, 9), _m(10, 19), _m(20, 29), {"metric": {}}
+    assert lib.in_time_order([c, a, empty, b], _span) == [empty, a, b, c]
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("edge-1", "edge-1"),
+    ('da_cluster="west"', 'da\\_cluster="west"'),
+    ("a|b", "a\\|b"),                                 # a table cell's separator
+    ("a`b`", "a\\`b\\`"),                             # a code span
+    ("<b>x</b>&amp;", "\\<b\\>x\\</b\\>\\&amp;"),       # HTML and an entity
+    ("*a* _b_ [c](d) ~e~ # f", "\\*a\\* \\_b\\_ \\[c\\](d) \\~e\\~ \\# f"),
+    ("a\\|b", "a\\\\\\|b"),                              # an escape already there
+    ("a\nb\rc\x1b[31m\u2028d\u200be", "a?b?c?\\[31m?d?e"),  # line breaks and controls
+    ("叢集-東", "叢集-東"),
+])
+def test_markdown_text(text, expected):
+    assert lib.markdown_text(text) == expected
+
+
+def test_cluster_text():
+    assert lib.cluster_text("west") == 'da_cluster="west"'
+    assert lib.cluster_text("") == "no da_cluster"
+
+
+@pytest.mark.parametrize("text, escaped", [
+    ("edge www.example.test west", "edge www\\.example.test west"),
+    ("WWW.x.test", "WWW\\.x.test"),
+    ("see https://x.test/a", "see https\\://x.test/a"),
+    ("a@b.test", "a<span>@</span>b.test"),
+    ("awww.x plain-east.1 x: 1", "awww.x plain-east.1 x: 1"),
+])
+def test_markdown_text_leaves_no_bare_address_to_autolink(text, escaped):
+    """GitHub links `www.…`, `scheme://…` and `a@b` with no markup at all; a
+    cluster name is a label value set outside this repo."""
+    assert lib.markdown_text(text) == escaped

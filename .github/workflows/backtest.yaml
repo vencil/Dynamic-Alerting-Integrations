@@ -71,6 +71,7 @@ on:
       - "scripts/ops/paths_filter_glob.py"
       - "scripts/ops/workflow_path_filter.py"
       - "scripts/tools/_lib_atomic_write.py"
+      - "scripts/tools/_lib_cluster_identity.py"
       - "scripts/tools/_lib_compat.py"
       - "scripts/tools/_lib_confd.py"
       - "scripts/tools/_lib_confedit.py"
