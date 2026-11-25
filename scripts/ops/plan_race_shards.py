@@ -58,8 +58,8 @@ from pathlib import Path
 # #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
-from _lib_output import (  # noqa: E402  (#3981: the operator entry)
-    ensure_dir, exit_on_output_write_error, targets_stdout, write_operator_output)
+from _lib_output import (  # noqa: E402  (#3981: the two entries)
+    ensure_dir, exit_on_output_write_error, write_operator_output, write_repo_artifact)
 
 # Explicit, so `python3 -I` (which drops the script's own directory from
 # sys.path) still finds the sibling parser whose timeout regex, -timeout value
@@ -353,9 +353,10 @@ def fetch_timings(repo: str, workflow: str, branch: str, out_dir: Path,
                     zipfile.BadZipFile, subprocess.SubprocessError) as exc:
                 warn(f"timings artifact of run {run_id} for {module} unusable ({exc})")
                 continue
-            write_operator_output(str(out_dir / TIMINGS_FILE_TMPL.format(module=module)),
-                                  json.dumps(timings, indent=2, sort_keys=True) + "\n",
-                                  flag="--out-dir")
+            # `plan --timings-dir` loads these whole: the artifact entry.
+            write_repo_artifact(out_dir / TIMINGS_FILE_TMPL.format(module=module),
+                                json.dumps(timings, indent=2, sort_keys=True) + "\n",
+                                flag="--out-dir")
             found[module] = str(run_id)
     for m in modules:
         if m not in found:
@@ -504,10 +505,10 @@ def main(argv: list[str] | None = None) -> int:
         with args.input.open("r", encoding="utf-8", errors="replace") as fh:
             timings = stream_timings(fh)
         ensure_dir(args.output.parent, flag="--output")
-        write_operator_output(str(args.output), json.dumps(timings, indent=2, sort_keys=True)
-                              + "\n", flag="--output")
-        print(f"[plan_race_shards] timings: {len(timings)} package(s)",
-              file=sys.stderr if targets_stdout(str(args.output)) else sys.stdout)
+        # `plan --timings-dir` loads this whole: the artifact entry.
+        write_repo_artifact(args.output, json.dumps(timings, indent=2, sort_keys=True)
+                            + "\n", flag="--output")
+        print(f"[plan_race_shards] timings: {len(timings)} package(s)")
         return 0
     return 2
 

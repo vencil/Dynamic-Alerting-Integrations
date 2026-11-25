@@ -529,12 +529,15 @@ def test_a_timings_file_that_cannot_be_written_names_the_flag(tmp_path: Path) ->
     assert caught.value.flag == "--out-dir"
 
 
-def test_timings_to_stdout_keeps_stdout_one_json_document(tmp_path: Path, capsys) -> None:
-    """#3981: `--output -` writes the timings to stdout through the operator
-    entry; the receipt moves to stderr so stdout stays parseable."""
+def test_timings_to_stdout_is_refused(tmp_path: Path, capsys) -> None:
+    """#3981: `plan --timings-dir` loads the timings file whole, so it is an
+    artifact, and an artifact cannot be standard output: `--output -` is rc 2
+    (it used to write a file named `-`)."""
     src = tmp_path / "in.jsonl"
     src.write_text("", encoding="utf-8")
-    assert prs.main(["timings", "--input", str(src), "--output", "-"]) == 0
+    with pytest.raises(SystemExit) as caught:
+        prs.main(["timings", "--input", str(src), "--output", "-"])
+    assert caught.value.code == 2
     out, err = capsys.readouterr()
-    assert json.loads(out) == {}
-    assert "[plan_race_shards] timings" in err
+    assert out == ""
+    assert "standard output" in err and "--output" in err

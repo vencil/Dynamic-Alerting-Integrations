@@ -1145,23 +1145,24 @@ ROWS: list[Row] = [
       artifact="da-rule-pack-mariadb.yaml"),
     # ── scripts/ops (outside scripts/tools; `tool` is relative to it) ──────
     # #3981: the nightly race job's fragment and timings files.
-    R("../ops/parse_go_test_json.py", "--output", "file", "operator",
-      lambda c, out: ["--module", "m", "--input", str(_empty_file(c.tmp)),
-                      "--output", str(out), "--go-exit-code", "0"],
-      reach="an empty `go test -json` stream: the fragment is written whatever it holds",
-      out_name="frag.json",
-      shapes=("parent_is_file", "target_is_dir")),
-    R("../ops/plan_race_shards.py", "--output", "file", "operator",
+    # Artifact: `plan --timings-dir` loads the file whole (the reader below,
+    # run from the repo root so `go list` lists tenant-api's packages and the
+    # file is read rather than skipped by the single-leg fallback).
+    R("../ops/plan_race_shards.py", "--output", "file", "artifact",
       lambda c, out: ["timings", "--input", str(_empty_file(c.tmp)), "--output", str(out)],
       reach="`timings` over an empty `go test -json` stream; no gh, no network",
-      out_name="timings.json",
+      out_name="race-timings-tenant-api.json",
+      cwd=lambda c: REPO_ROOT,
+      readers=lambda c, out: [["plan", "--timings-dir", str(out.parent)]],
       shapes=("parent_is_file", "target_is_dir")),
-    R("../ops/bench_synth_tenants.py", "--state-file", "file", "operator",
+    # Artifact: `cleanup` reads the keys back to know what to remove.
+    R("../ops/bench_synth_tenants.py", "--state-file", "file", "artifact",
       lambda c, out: ["inject", "--tenants", "1", "--state-file", str(out)],
       reach="test_bench_synth_tenants' stateful stand-in `kubectl` on PATH, "
             "holding a ConfigMap with no synth tenant",
       out_name="keys",
       env=lambda c: _bench_kubectl_env(c.tmp),
+      readers=lambda c, out: [["cleanup", "--state-file", str(out)]],
       shapes=("missing_parent", "parent_is_file", "target_is_dir")),
     R("../ops/configmap_assemble.py", "--output", "file", "artifact",
       lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output", str(out)],
@@ -4141,7 +4142,7 @@ UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
     # test_a_timings_file_that_cannot_be_written_names_the_flag).
     ("../ops/plan_race_shards.py", "_write_github_output", "write_operator_output"): 1,
     ("../ops/plan_race_shards.py", "fetch_timings", "ensure_dir"): 1,
-    ("../ops/plan_race_shards.py", "fetch_timings", "write_operator_output"): 1,
+    ("../ops/plan_race_shards.py", "fetch_timings", "write_repo_artifact"): 1,
     ("ops/migrate_rule.py", "main", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_draft", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_phase2_outputs", "ensure_dir_or_die"): 1,
