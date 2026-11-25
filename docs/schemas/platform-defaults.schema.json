@@ -68,6 +68,9 @@
     },
     "_metadata": {},
     "_routing": {},
+    "_routing_migrated": {
+      "description": "Where the tenant's migrated alerts (component=\"migrated\", what migrate-rule writes) go: `shadow`, the default, keeps them in a receiver that notifies no one; `active` routes them like the tenant's other alerts (#4277)."
+    },
     "_routing_profile": {},
     "_silent_mode": {},
     "_severity_dedup": {},

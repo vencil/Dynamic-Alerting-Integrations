@@ -1034,6 +1034,26 @@ def routing_profile_ref(tenant: str, value: object) -> tuple[str | None, str | N
                   f"takes no time window or expires (#3269); write the name alone")
 
 
+#: #4277: the words `_routing_migrated` takes; absent (or null) is `shadow`.
+ROUTING_MIGRATED_STATES = ("shadow", "active")
+
+
+def routing_migrated_state(tenant: str, value: object) -> tuple[str | None, str | None]:
+    """→ (state, None) or (None, why) for a tenant's `_routing_migrated`
+    (#4277): `shadow` (also when absent or null) or `active`. Any other value
+    — another word, a boolean, a mapping — is refused (`routing_migrated_
+    invalid`): guessing either state would page someone, or no one, wrongly."""
+    if value is None:
+        return "shadow", None
+    if isinstance(value, str) and value in ROUTING_MIGRATED_STATES:
+        return value, None
+    # The value is not shown — its type only, as for `_routing_profile`: a
+    # reserved key's value never reaches a message (the canary matrices).
+    return None, (f"tenant '{safe_label(tenant)}': _routing_migrated must be one of "
+                  f"{', '.join(ROUTING_MIGRATED_STATES)} (absent means shadow), got "
+                  f"{value_type_text(value)}")
+
+
 def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     """Extract per-tenant config from a tenant overrides dict.
 
@@ -1060,6 +1080,15 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     if rp_error is not None:
         _field_type_error(result, "routing_profile_invalid", rp_error,
                           tenant=tenant, field="_routing_profile")
+
+    # #4277: where its migrated alerts go. Read before a `_routing: disable`
+    # returns below: the state is the tenant's whatever its own routing is.
+    state, state_error = routing_migrated_state(tenant, overrides.get("_routing_migrated"))
+    if state_error is not None:
+        _field_type_error(result, "routing_migrated_invalid", state_error,
+                          tenant=tenant, field="_routing_migrated")
+    elif state == "active":
+        result.setdefault("migrated_active", set()).add(tenant)
 
     # Severity dedup (#3621): the tenant joins the dedup tenant set here;
     # its mode is the exporter's own reading of `_severity_dedup` — its
@@ -1796,6 +1825,10 @@ class TenantTree:
     # #1211: the tenants whose own `_routing` is `disable` (an explicit
     # opt-out, as opposed to having no `_routing` at all).
     routing_disabled: frozenset[str] = frozenset()
+    # #4277: the tenants whose `_routing_migrated` is `active` — their
+    # component="migrated" alerts route like their other alerts; every other
+    # tenant's stay in the shadow receiver (`_build_migrated_alert_routes`).
+    migrated_active: frozenset[str] = frozenset()
     # #1560 ⑤-b: every credential a file writes out, and every place whose
     # receivers cannot be judged (`CredentialFact`, judged as each file was
     # read) — `credential_findings` turns them into the run's findings.
@@ -2021,6 +2054,7 @@ def load_tenant_tree(
         field_type_errors=field_type_errors,
         unselected_carriers=list(parsed.get("unselected_carriers", [])),
         routing_disabled=frozenset(parsed.get("disabled_tenants", ())),
+        migrated_active=frozenset(parsed.get("migrated_active", ())),
         credential_facts=list(parsed.get("credential_facts", ())))
 
 

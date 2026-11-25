@@ -190,7 +190,7 @@ _MATCHERS = ("alertname", "metric_group")
 #: The whole-tree refusals: the tree is refused before any receiver is
 #: judged, so they come alone, with the refusal's framing line.
 _REFUSING = {"routing_group_by_invalid", "routing_enforced_enabled_invalid",
-             "routing_profile_invalid"}
+             "routing_profile_invalid", "routing_migrated_invalid"}
 
 
 def _marker_kinds(where: str, key: str, kind: str) -> set[str]:
@@ -231,6 +231,9 @@ def _marker_kinds(where: str, key: str, kind: str) -> set[str]:
         # A mapping is a type error; a string naming no profile is the
         # unknown-profile WARN (round 7: its own kind, da-guard's spelling).
         return {"routing_profile_invalid"} if kind == "receiver_mapping" else {"unknown_routing_profile"}
+    if key == "_routing_migrated":
+        # #4277: neither shadow nor active, in any form, refuses the tree.
+        return {"routing_migrated_invalid"}
     raise KeyError((where, key, kind))
 
 
