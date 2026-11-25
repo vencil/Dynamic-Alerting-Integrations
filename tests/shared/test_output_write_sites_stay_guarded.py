@@ -1046,15 +1046,32 @@ def test_scanner_finds_the_known_sites(rel, expected):
     assert expected <= seen, f"{rel}: missing {sorted(expected - seen)}; saw {sorted(seen)}"
 
 
+# The output entries' own raw sinks: the implementation every migrated tool
+# writes through, so they stay however much of the tools tree moves onto the
+# entries (#3981 — a count floor here fell as the debt was paid down).
+ENTRY_SINKS = {
+    ("scripts/tools/_lib_atomic_write.py", ".write_bytes"),
+    ("scripts/tools/_lib_atomic_write.py", ".write_text"),
+    ("scripts/tools/_lib_atomic_write.py", "os.chmod"),
+    ("scripts/tools/_lib_atomic_write.py", "os.fdopen"),
+    ("scripts/tools/_lib_atomic_write.py", "os.replace"),
+    ("scripts/tools/_lib_atomic_write.py", "tempfile.mkstemp"),
+    ("scripts/tools/_lib_output.py", ".mkdir"),
+    ("scripts/tools/_lib_output.py", "io.open(w)"),
+    ("scripts/tools/_lib_output.py", "os.chmod"),
+}
+
+
 def test_the_scan_root_is_not_empty():
-    """Anti-vacuity for the instrument, NOT for GUARDED_FILES: it is taken
-    from the whole tools tree, which does not shrink when the pinned list
-    does. A drifted scan root reports zero, and zero is what a clean tree
-    reports too."""
+    """Anti-vacuity for the instrument, NOT for GUARDED_FILES: a drifted scan
+    root, or a sink vocabulary that lost a name, reports zero, and zero is
+    what a clean tree reports too. Pinned on sinks that cannot migrate away
+    (ENTRY_SINKS), not on a count of the ones that are meant to."""
     sinks = [c for c in scan_tools_tree() if c.guard != "or_die"]
-    assert len(sinks) >= 100, (
-        f"only {len(sinks)} raw sinks found under {TOOLS_DIR} — the scan root "
-        "or the sink vocabulary has drifted")
+    seen = {(c.file, c.sink) for c in sinks}
+    assert ENTRY_SINKS <= seen, (
+        f"the output entries' own sinks {sorted(ENTRY_SINKS - seen)} were not "
+        f"found under {TOOLS_DIR} — the scan root or the sink vocabulary has drifted")
     assert any(c.guard == "try" for c in sinks), "no try-guarded sink found — guard arm dead"
 
 

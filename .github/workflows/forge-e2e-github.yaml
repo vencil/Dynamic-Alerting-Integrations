@@ -30,8 +30,11 @@ on:
       - "scripts/ops/atime_trace.py"
       - "scripts/ops/paths_filter_glob.py"
       - "scripts/ops/workflow_path_filter.py"
+      - "scripts/tools/_lib_atomic_write.py"
       - "scripts/tools/_lib_compat.py"
       - "scripts/tools/_lib_exitcodes.py"
+      - "scripts/tools/_lib_label.py"
+      - "scripts/tools/_lib_output.py"
       - "scripts/tools/_lib_yaml_strict.py"
       # END GENERATED path-trace
   push:
