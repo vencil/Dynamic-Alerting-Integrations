@@ -24,7 +24,8 @@ the critical HA-double-count danger; `avg`/`min` happen to be HA-safe for
 identical duplicates but are off the documented convention, so anything
 other than `max` is flagged.
 
-HOW (PromQL AST, `promql-parser`): the expression is parsed, not matched
+HOW (Prometheus' parse tree, `da-read promql-shape` via
+`_lib_consumer_read.promql_shape_each`, #4215): the expression is parsed, not matched
 as text, so an aggregation that reaches `user_threshold` through a function
 or parentheses (`count by(x) (label_replace(user_threshold, ...))`,
 `sum(abs(user_threshold))`, `topk(1, (user_threshold))`) is judged exactly
@@ -48,8 +49,7 @@ collapsed (operator-only — see below), so `count(max by(...)
 
 A selector counts as (possibly) selecting `user_threshold` unless it rules
 the metric out: a metric name other than `user_threshold`, or an `__name__`
-matcher (`=`, `!=`, `=~`, `!~`) that rejects it — in every `or` alternative.
-So a nameless `{severity="warning"}` or `{__name__!="foo"}` counts: Prometheus would
+matcher (`=`, `!=`, `=~`, `!~`) that rejects it. So a nameless `{severity="warning"}` or `{__name__!="foo"}` counts: Prometheus would
 select `user_threshold` with it. Other label matchers never rule it out (the
 lint does not know which label values `user_threshold` series carry). The
 name is matched exactly: `user_threshold_x` or a recording rule named
@@ -60,12 +60,11 @@ uses a POSIX class (`[[:alpha:]]`, which Python reads as a different set)
 counts as accepting `user_threshold` (fail closed). Other RE2/`re`
 differences in the semantics of a regex both accept are not modelled.
 
-An expression `promql-parser` cannot parse is an error (exit 2), never a
-pass: every expression here was already accepted by Prometheus' rule
-loader (`_lib_consumer_read`), so a parse failure means the parser diverged
-from Prometheus and this lint cannot vouch for the expression. A panic in
-the Rust parser (pyo3 `PanicException`, a `BaseException`) is that error
-too, not a crash read as a violation.
+An expression Prometheus' parser refuses is an error (exit 2), never a
+pass. Every expression here was already accepted by Prometheus' rule
+loader (`_lib_consumer_read`), which uses the same parser, so this cannot
+happen on the files the lint reads; a direct caller of `nonmax_aggregations`
+gets the refusal, naming the expression.
 
 WHAT THIS DOES **NOT** CHECK (deliberately — Gemini adversarial review):
 the labels inside `by(...)`. The lint constrains only the OPERATOR, never
@@ -83,7 +82,7 @@ constrained — only aggregations of the `user_threshold` config metric.
 Exit codes:
     0  All `user_threshold` aggregations use `max`
     1  Found a non-`max` aggregation of `user_threshold` (--ci)
-    2  Error (YAML parse / no files / an expr `promql-parser` cannot parse)
+    2  Error (YAML parse / no files / an expr Prometheus' parser refuses)
 
 Usage:
     python scripts/tools/lint/check_ha_threshold_aggregation.py        # report
@@ -110,11 +109,6 @@ except Exception:  # pragma: no cover
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 
-try:
-    import promql_parser  # requirements/ci-constraints.txt pins it
-except ImportError:  # pragma: no cover - reported by main() as rc 2
-    promql_parser = None  # type: ignore[assignment]
-
 _METRIC = "user_threshold"
 # Their result is no longer one series per replica copy (see module doc).
 _NON_CARRYING_FUNCS = frozenset({"absent", "absent_over_time", "scalar"})
@@ -124,8 +118,9 @@ _EXCERPT_LEN = 100
 
 
 class UnparseableExpr(ValueError):
-    """`promql-parser` refused an expression (or is not installed). Never a
-    pass: the lint cannot say what that expression aggregates."""
+    """Prometheus' parser refused an expression, or the walk met a node it
+    does not know. Never a pass: the lint cannot say what that expression
+    aggregates."""
 
 
 def _repo_root() -> Path:
@@ -144,67 +139,65 @@ def _regex_accepts(pattern: str) -> "bool | None":
         return None  # RE2-only syntax (`\pL`, ...)
 
 
-def _name_matcher_accepts(m) -> bool:
-    """Whether `__name__` matcher *m* lets `user_threshold` through.
-    Undecidable regexes let it through (fail closed)."""
-    op = m.op
-    MatchOp = promql_parser.MatchOp
-    if op == MatchOp.Equal:
-        return m.value == _METRIC
-    if op == MatchOp.NotEqual:
-        return m.value != _METRIC
-    hit = _regex_accepts(m.value)
+def _name_matcher_accepts(m: dict) -> bool:
+    """Whether `__name__` matcher *m* (a `promql_shape` matcher) lets
+    `user_threshold` through. Undecidable regexes let it through (fail closed)."""
+    if m["type"] == "=":
+        return m["value"] == _METRIC
+    if m["type"] == "!=":
+        return m["value"] != _METRIC
+    hit = _regex_accepts(m["value"])
     if hit is None:
         return True
-    return hit if op == MatchOp.Re else not hit
+    return hit if m["type"] == "=~" else not hit
 
 
-def _may_select_metric(sel) -> bool:
-    """True unless VectorSelector *sel* rules `user_threshold` out: a metric
-    name other than it, or `__name__` matchers rejecting it in every `or`
-    alternative. A nameless `{severity="warning"}` may select it."""
-    if sel.name is not None and sel.name != _METRIC:
+def _may_select_metric(sel: dict) -> bool:
+    """True unless selector *sel* rules `user_threshold` out: a metric name
+    other than it, or a `__name__` matcher rejecting it. A nameless
+    `{severity="warning"}` may select it."""
+    if sel["name"] and sel["name"] != _METRIC:
         return False
-    matchers = sel.matchers
-    if matchers is None:
-        return True
-    base = list(matchers.matchers)
-    alternatives = ([base + list(g) for g in matchers.or_matchers]
-                    if matchers.or_matchers else [base])
-    return any(all(_name_matcher_accepts(m) for m in group if m.name == "__name__")
-               for group in alternatives)
+    return all(_name_matcher_accepts(m) for m in sel["matchers"] if m["name"] == "__name__")
 
 
-def _walk(node, out: List[Tuple[str, str]]) -> bool:
+def _walk(node: dict, src: bytes, out: List[Tuple[str, str]]) -> bool:
     """Append a finding to *out* for every non-`max` aggregation in *node*
-    whose argument carries raw `user_threshold` replica copies. Return
-    whether *node* itself still carries them (see the module doc)."""
-    p = promql_parser
-    if isinstance(node, p.AggregateExpr):
-        if node.param is not None:
-            _walk(node.param, out)  # topk's k, quantile's φ: findings only
-        if _walk(node.expr, out):
-            op = str(node.op)
-            if op != "max":
-                out.append((op, str(node)[:_EXCERPT_LEN]))
+    (a `promql_shape` tree over *src*) whose argument carries raw
+    `user_threshold` replica copies. Return whether *node* itself still
+    carries them (see the module doc)."""
+    kind = node["kind"]
+    if kind == "aggregate":
+        if node["param"] is not None:
+            _walk(node["param"], src, out)  # topk's k, quantile's φ: findings only
+        if _walk(node["expr"], src, out) and node["op"] != "max":
+            excerpt = src[node["start"]:node["end"]].decode("utf-8", "replace")
+            out.append((node["op"], excerpt[:_EXCERPT_LEN]))
         return False  # past an aggregation the copies count as collapsed
-    if isinstance(node, p.VectorSelector):
+    if kind == "selector":
         return _may_select_metric(node)
-    if isinstance(node, p.MatrixSelector):
-        return _walk(node.vector_selector, out)
-    if isinstance(node, (p.ParenExpr, p.UnaryExpr, p.SubqueryExpr)):
-        return _walk(node.expr, out)
-    if isinstance(node, p.Call):
-        carried = [_walk(arg, out) for arg in node.args]
-        return any(carried) and node.func.name not in _NON_CARRYING_FUNCS
-    if isinstance(node, p.BinaryExpr):
-        lhs = _walk(node.lhs, out)
-        rhs = _walk(node.rhs, out)
-        return lhs or (rhs and str(node.op) not in _FILTER_SET_OPS)
-    if isinstance(node, (p.NumberLiteral, p.StringLiteral)):
+    if kind in ("paren", "unary", "subquery"):
+        return _walk(node["expr"], src, out)
+    if kind == "call":
+        carried = [_walk(arg, src, out) for arg in node["args"]]
+        return any(carried) and node["name"] not in _NON_CARRYING_FUNCS
+    if kind == "binary":
+        lhs = _walk(node["lhs"], src, out)
+        rhs = _walk(node["rhs"], src, out)
+        return lhs or (rhs and node["op"] not in _FILTER_SET_OPS)
+    if kind in ("number", "string"):
         return False
     # A node kind this walk does not know: refuse rather than pass it by.
-    raise UnparseableExpr(f"unhandled PromQL node {type(node).__name__}: {node}")
+    raise UnparseableExpr(f"unhandled PromQL node kind {kind!r}")
+
+
+def _findings(expr: str, tree) -> List[Tuple[str, str]]:
+    if isinstance(tree, _lib_consumer_read.InputRefused):
+        raise UnparseableExpr(
+            f"Prometheus' parser refuses the expression: {_lib_consumer_read.error_text(tree)}")
+    out: List[Tuple[str, str]] = []
+    _walk(tree, expr.encode("utf-8"), out)
+    return out
 
 
 def nonmax_aggregations(expr: str) -> List[Tuple[str, str]]:
@@ -217,41 +210,30 @@ def nonmax_aggregations(expr: str) -> List[Tuple[str, str]]:
     so `max by(tenant, version, env)` is fine (dimensions preserved) while
     `sum by(tenant)` is flagged (HA double-count).
 
-    Raises `UnparseableExpr` when `promql-parser` refuses `expr` (or is not
-    installed) — the expression is parsed, so `#` comments need no
-    stripping: the parser drops them, and a `#` inside a string stays text."""
-    # No textual pre-filter: a nameless `{severity="warning"}` selects user_threshold
-    # without spelling it, so every expression is parsed and walked.
+    Raises `UnparseableExpr` when Prometheus' parser refuses `expr`. The
+    expression is parsed, so `#` comments need no stripping: the parser
+    drops them, and a `#` inside a string stays text. No textual pre-filter:
+    a nameless `{severity="warning"}` selects user_threshold without spelling
+    it, so every expression is parsed and walked."""
     s = str(expr)
-    if promql_parser is None:
-        raise UnparseableExpr("promql-parser is not installed "
-                              "(pip install -c requirements/ci-constraints.txt promql-parser)")
-    try:
-        ast = promql_parser.parse(s)
-    except (KeyboardInterrupt, SystemExit, GeneratorExit):
-        raise
-    except BaseException as exc:  # noqa: B036 — ValueError, or pyo3's PanicException
-        raise UnparseableExpr(
-            f"promql-parser refuses the expression ({type(exc).__name__}): {exc}") from exc
-    out: List[Tuple[str, str]] = []
-    _walk(ast, out)
-    return out
+    return _findings(s, _lib_consumer_read.promql_shape_each([s])[0])
 
 
 def check_groups(groups: list) -> List[Tuple[str, str, str]]:
     """Return [(rule_name, operator, expr_excerpt)] for non-max aggregations.
-    Raises `UnparseableExpr` naming the rule whose expr cannot be parsed."""
+    Every rule's expression is read in one da-read run (#4215). Raises
+    `UnparseableExpr` naming the rule whose expr cannot be parsed."""
+    rules = [rule for group in groups for rule in group.get("rules", [])]
+    exprs = [str(rule.get("expr", "")) for rule in rules]
     findings: List[Tuple[str, str, str]] = []
-    for group in groups:
-        for rule in group.get("rules", []):
-            expr = str(rule.get("expr", ""))
-            name = rule.get("record") or rule.get("alert") or "?"
-            try:
-                found = nonmax_aggregations(expr)
-            except UnparseableExpr as exc:
-                raise UnparseableExpr(f"{name}: {exc}") from exc
-            for op, excerpt in found:
-                findings.append((name, op, excerpt))
+    for rule, expr, tree in zip(rules, exprs, _lib_consumer_read.promql_shape_each(exprs)):
+        name = rule.get("record") or rule.get("alert") or "?"
+        try:
+            found = _findings(expr, tree)
+        except UnparseableExpr as exc:
+            raise UnparseableExpr(f"{name}: {exc}") from exc
+        for op, excerpt in found:
+            findings.append((name, op, excerpt))
     return findings
 
 
@@ -304,8 +286,8 @@ def main() -> int:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
     except UnparseableExpr as exc:
-        # Prometheus loaded it, promql-parser did not: this lint cannot judge
-        # the expression, so it does not pass it.
+        # Prometheus' parser refused it: this lint cannot judge the
+        # expression, so it does not pass it.
         print(f"ERROR: cannot judge a rule expression: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 

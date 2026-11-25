@@ -2336,7 +2336,6 @@ da-tools migrate <input_file> [options]
 | `--triage` | Triage 模式：只產出 CSV 分桶報告 | false |
 | `--interactive` | 遇到不確定時詢問使用者 | false |
 | `--no-prefix` | 停用 custom_ 前綴（不建議） | false |
-| `--no-ast` | 強制使用舊版 regex 引擎 | false |
 | `--prefix <PREFIX>` | 自訂指標前綴 | `custom_` |
 | `--no-dictionary` | 停用啟發式字典比對 | false |
 
@@ -2668,9 +2667,9 @@ WARN 不會升級成 ERROR，也沒有 JSON 輸出（尚未實作）；CI 請用
 - 禁用函式（`denied_functions`；每個名字須是 Prometheus 認得且已啟用的函式或聚合，#4099）
 - 結果保留 `tenant`（`preserved_labels`）：依 Prometheus 語法樹判定每條 alert 的結果是否保留 tenant，`without(tenant)`、`sum by (a)`、不分組的 `sum(…)` 等丟掉 tenant 的寫法都是 `ERROR`（[#4098](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4098)；判定規則見 [custom-rule-governance §4.1](custom-rule-governance.md#41-deny-list-規則)）
 - 必備 label（`required_labels`）
-- 租戶隔離（`isolated_label`）：位置參數給的規則檔是 `<目錄>/<租戶>/` 那個租戶的，每個 selector 都要以等號寫 `tenant="<租戶>"`，`labels:` 的 tenant 只能是該租戶，不得從別處寫入 tenant；`--rule-pack-dir` 的平台 pack 不判定（⚠️ Breaking，[#4136](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4136)；判定規則見 [custom-rule-governance §4.1](custom-rule-governance.md#41-deny-list-規則)）
+- 租戶隔離（`isolated_label`）：位置參數給的規則檔是 `<目錄>/<租戶>/` 那個租戶的，每個 selector 都要以等號寫 `tenant="<租戶>"`，`labels:` 的 tenant 只能是該租戶，不得從別處寫入 tenant；series 不帶 tenant 的指標（kube-state-metrics 等）寫 `tenant="<租戶>"` 也是 `ERROR`，要寫 `namespace="<租戶>", tenant=""`（[#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)）；`--rule-pack-dir` 的平台 pack 不判定（⚠️ Breaking，[#4136](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4136)；判定規則見 [custom-rule-governance §4.1](custom-rule-governance.md#41-deny-list-規則)）
 - range vector 上限（`max_range_duration`）、rule group 的 `interval` 上限（`max_evaluation_interval`）
-- 缺 `owner` 或 `expiry` label 時出 WARN
+- 租戶規則檔的每條 alert 都要有 `owner` 與 `expiry` 兩個 annotation，`expiry` 是 `YYYY-MM-DD` 的日期；缺、空值、寫在 labels 都是 `ERROR`，不拿 expiry 跟今天比（⚠️ Breaking：以前只在缺 label 時出 WARN，[#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)）
 
 **範例**
 

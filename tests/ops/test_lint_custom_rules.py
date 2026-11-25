@@ -96,10 +96,11 @@ def _lint_alert(tmp_path, expr, tenant="{{ $labels.tenant }}", records=None, nam
     """lint_file of one alert *expr* (its `tenant` label *tenant*; None for
     none) beside the recording rules *records* ({name: expr})."""
     rules = [{"record": n, "expr": e} for n, e in (records or {}).items()]
-    labels = {"owner": "o", "expiry": "2099-01-01"}
+    labels = {}
     if tenant is not None:
         labels["tenant"] = tenant
-    rules.append({"alert": "A", "expr": expr, "labels": labels})
+    rules.append({"alert": "A", "expr": expr, "labels": labels,
+                  "annotations": {"owner": "o", "expiry": "2099-01-01"}})
     f = tmp_path / name
     f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": rules}]}), encoding="utf-8")
     results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy())
@@ -251,7 +252,8 @@ def test_group_labels_are_the_alerts_labels_too(tmp_path):
     (rules/manager.go), each a template: a group-level tenant decides as a
     rule-level one does, the rule's own winning."""
     def lint(group_labels, rule_tenant=None):
-        rule = {"alert": "A", "expr": "sum(x) > 0", "labels": {"owner": "o", "expiry": "2099-01-01"}}
+        rule = {"alert": "A", "expr": "sum(x) > 0", "labels": {},
+                "annotations": {"owner": "o", "expiry": "2099-01-01"}}
         if rule_tenant is not None:
             rule["labels"]["tenant"] = rule_tenant
         f = tmp_path / "g.yaml"
@@ -405,35 +407,165 @@ def test_lint_recording_rule_skips_label_check(policy):
     assert len(results) == 0
 
 
-def test_expiry_missing_expiry_warns():
-    """測試缺少到期日期警告。"""
-    results = lint_custom_rules.check_expiry_label(
-        {"owner": "team-a"}, "test.yaml", "TestRule"
-    )
-    assert len(results) == 1
-    assert results[0].severity == "WARN"
+# ── #4275: owner and expiry are annotations, required, the expiry a date ──
 
-def test_expiry_has_expiry_passes():
-    """測試有到期日期通過檢查。"""
-    results = lint_custom_rules.check_expiry_label(
-        {"expiry": "2026-06-30"}, "test.yaml", "TestRule"
-    )
-    assert len(results) == 0
+def _governance(labels=None, annotations=None):
+    return [r.message for r in lint_custom_rules.governance_problems(
+        labels, annotations, "test.yaml", "TestRule") if r.severity == "ERROR"]
 
-def test_owner_missing_owner_warns():
-    """測試缺少擁有者警告。"""
-    results = lint_custom_rules.check_owner_label(
-        {"expiry": "2026-06-30"}, "test.yaml", "TestRule"
-    )
-    assert len(results) == 1
-    assert results[0].severity == "WARN"
 
-def test_owner_has_owner_passes():
-    """測試有擁有者通過檢查。"""
-    results = lint_custom_rules.check_owner_label(
-        {"owner": "team-a"}, "test.yaml", "TestRule"
-    )
-    assert len(results) == 0
+def test_owner_and_expiry_as_annotations_pass():
+    assert _governance({"tenant": "db-a"}, {"owner": "team-a", "expiry": "2026-06-30"}) == []
+
+
+@pytest.mark.parametrize("missing", ["owner", "expiry"])
+def test_a_missing_owner_or_expiry_is_an_error(missing):
+    annotations = {"owner": "team-a", "expiry": "2026-06-30"}
+    del annotations[missing]
+    found = _governance({}, annotations)
+    assert len(found) == 1 and f"needs an '{missing}' annotation" in found[0], found
+
+
+@pytest.mark.parametrize("empty", ["", "  ", None])
+def test_an_empty_owner_is_missing(empty):
+    found = _governance({}, {"owner": empty, "expiry": "2026-06-30"})
+    assert len(found) == 1 and "needs an 'owner' annotation" in found[0], found
+
+
+@pytest.mark.parametrize("key", ["owner", "expiry"])
+def test_owner_or_expiry_as_a_label_is_an_error(key):
+    """A label is part of the alert's identity: renewing the expiry would
+    resolve and re-fire the alert, its for: restarted."""
+    labels = {key: "team-a" if key == "owner" else "2026-06-30"}
+    annotations = {"owner": "team-a", "expiry": "2026-06-30"}
+    del annotations[key]
+    found = _governance(labels, annotations)
+    assert len(found) == 1 and f"'{key}' is a label: move it to annotations" in found[0], found
+
+
+@pytest.mark.parametrize("expiry", ["2026-02-30", "2026-6-30", "next quarter",
+                                    "2026-06-30T00:00:00Z", "20260630"])
+def test_an_expiry_that_is_no_calendar_date_is_an_error(expiry):
+    found = _governance({}, {"owner": "o", "expiry": expiry})
+    assert len(found) == 1 and "is not a calendar date written YYYY-MM-DD" in found[0], found
+
+
+def test_a_past_expiry_is_not_judged_against_today():
+    """The same commit lints alike any day (the lint runs only on change)."""
+    assert _governance({}, {"owner": "o", "expiry": "2001-01-01"}) == []
+
+
+def _tenant_file(tmp_path, rule):
+    d = tmp_path / "custom" / "db-a"
+    d.mkdir(parents=True)
+    f = d / "r.yaml"
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [rule]}]}), encoding="utf-8")
+    return str(f)
+
+
+def test_owner_or_expiry_in_the_groups_labels_is_an_error(tmp_path):
+    """Prometheus writes the group's labels on the alert too (review)."""
+    d = tmp_path / "custom" / "db-a"
+    d.mkdir(parents=True)
+    f = d / "r.yaml"
+    f.write_text(yaml.safe_dump({"groups": [{
+        "name": "g", "labels": {"owner": "team-x", "expiry": "2026-01-01"},
+        "rules": [{"alert": "A", "expr": 'x{tenant="db-a"} > 0', "labels": {"tenant": "db-a"},
+                   "annotations": {"owner": "o", "expiry": "2099-01-01"}}]}]}), encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy(),
+                                             tenant="db-a")
+    said = [r.message for r in results if r.severity == "ERROR"]
+    assert sum("is a label: move it to annotations" in m for m in said) == 2, said
+
+
+def test_an_unquoted_expiry_date_is_a_date(tmp_path):
+    """`expiry: 2026-06-30` unquoted: Prometheus' loader reads a string (review:
+    a test writing through yaml.safe_dump always quotes it)."""
+    d = tmp_path / "custom" / "db-a"
+    d.mkdir(parents=True)
+    f = d / "r.yaml"
+    f.write_text("groups:\n- name: g\n  rules:\n  - alert: A\n    expr: x{tenant=\"db-a\"} > 0\n"
+                 "    labels: {tenant: db-a}\n    annotations: {owner: o, expiry: 2026-06-30}\n",
+                 encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy(),
+                                             tenant="db-a")
+    assert not [r.message for r in results if r.severity == "ERROR"]
+
+
+def test_the_rule_packs_the_rule_pack_dir_selects_are_not_governed(tmp_path):
+    """--rule-pack-dir selects the shipped rule packs (rule-pack-*.yaml): none
+    is a Tier 3 rule, so none needs an owner or expiry (#4275 review)."""
+    f = tmp_path / "rule-pack-x.yaml"
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [
+        {"alert": "A", "expr": 'x{tenant="db-a"} > 0', "labels": {"tenant": "db-a"}}]}]}),
+        encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy(),
+                                             flag="--rule-pack-dir", selected=True)
+    assert not any("annotation (governance" in r.message for r in results)
+
+
+def test_governance_is_judged_on_a_tenants_rule_file_only(tmp_path):
+    """A rule pack or a file no tenant directory holds is not Tier 3."""
+    rule = {"alert": "A", "expr": 'x{tenant="db-a"} > 0', "labels": {"tenant": "db-a"}}
+    f = _tenant_file(tmp_path, rule)
+    policy = lint_custom_rules.builtin_policy()
+    as_tenant, _ = lint_custom_rules.lint_file(f, policy, tenant="db-a")
+    plain, _ = lint_custom_rules.lint_file(f, policy)
+    assert sum("annotation (governance" in r.message for r in as_tenant) == 2
+    assert not any("annotation (governance" in r.message for r in plain)
+
+
+# ── #4275: a tenant pin on a metric whose series carry no tenant ────────
+
+def _pin_lint(tmp_path, expr, records=()):
+    rules = [{"record": n, "expr": e, "labels": {"tenant": "db-a"}} for n, e in records]
+    rules.append({"alert": "A", "expr": expr, "labels": {"tenant": "db-a"},
+                  "annotations": {"owner": "o", "expiry": "2099-01-01"}})
+    d = tmp_path / "custom" / "db-a"
+    d.mkdir(parents=True)
+    f = d / "r.yaml"
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": rules}]}), encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy(),
+                                             tenant="db-a")
+    return [r.message for r in results if r.severity == "ERROR"]
+
+
+@pytest.mark.parametrize("expr", [
+    'kube_pod_container_status_restarts_total{tenant="db-a"} > 5',
+    'absent(kube_deployment_status_replicas_available{tenant="db-a"})',
+    'kube_pod_info{tenant="db-a", namespace="db-a"} > 0',
+    '{__name__="kube_pod_info", tenant="db-a"} > 0',  # the name as a matcher (review)
+])
+def test_a_tenant_pin_on_series_without_tenant_is_an_error(tmp_path, expr):
+    """kube-state-metrics' series carry no tenant (its job writes none):
+    the pin selects nothing, so the rule never fires (absent(): always)."""
+    found = [m for m in _pin_lint(tmp_path, expr) if "carry no tenant" in m]
+    assert len(found) == 1, _pin_lint(tmp_path, expr)
+    assert 'namespace="db-a" with tenant=""' in found[0]
+    assert "it is no tenant's to read" in found[0]  # not every such metric has a namespace
+
+
+@pytest.mark.parametrize("expr", [
+    'kube_pod_container_status_restarts_total{namespace="db-a", tenant=""} > 5',
+    'rate(container_cpu_usage_seconds_total{tenant="db-a"}[5m]) > 1',  # cadvisor: relabelled
+    'kubelet_volume_stats_available_bytes{tenant="db-a"} < 1',          # volume stats: relabelled
+    'mysql_up{tenant="db-a"} == 0',                                     # a tenant exporter's
+    'up{tenant="db-a"} == 0',                                           # per target
+])
+def test_a_tenant_pin_on_series_with_tenant_passes(tmp_path, expr):
+    assert not [m for m in _pin_lint(tmp_path, expr) if "carry no tenant" in m]
+
+
+@pytest.mark.parametrize("expr, records", [
+    # a colon: a recording rule's name (Prometheus' naming rule), defined elsewhere
+    ('kube_restarts:sum{tenant="db-a"} > 5', ()),
+    # no colon, but a record of this file
+    ('kube_restarts{tenant="db-a"} > 5', [("kube_restarts", 'sum by (tenant) (x{tenant="db-a"})')]),
+], ids=["colon", "own-record"])
+def test_a_record_named_like_such_a_metric_is_not_judged_as_one(tmp_path, expr, records):
+    """A recording rule's name is not the raw metric the table describes."""
+    found = _pin_lint(tmp_path, expr, records=records)
+    assert not [m for m in found if "carry no tenant" in m], found
 
 
 def test_lint_file_direct_rule_format():
@@ -444,8 +576,8 @@ def test_lint_file_direct_rule_format():
             "rules": [{
                 "alert": "TestAlert",
                 "expr": "my_metric > 100",
-                "labels": {"severity": "warning", "tenant": "db-a",
-                           "owner": "team-a", "expiry": "2026-12-31"},
+                "labels": {"severity": "warning", "tenant": "db-a"},
+                "annotations": {"owner": "team-a", "expiry": "2026-12-31"},
             }]
         }]
     }
@@ -1346,6 +1478,7 @@ _REGISTRY = "entries:\n- metric: mysql_up\n  default: 1\n"
 _OK_RULE = (
     "groups:\n- name: g\n  rules:\n  - alert: Ok\n    expr: up{tenant=\"t\"} == 0\n"
     "    labels: {tenant: t, severity: warning}\n"
+    "    annotations: {owner: o, expiry: '2099-01-01'}\n"
 )
 
 
@@ -1666,7 +1799,8 @@ def _isolation(tmp_path, rules, tenant="db-a"):
 
 
 def _alert(expr, tenant="db-a"):
-    return {"alert": "A", "expr": expr, "labels": {"tenant": tenant, "owner": "o", "expiry": "2099-01-01"}}
+    return {"alert": "A", "expr": expr, "labels": {"tenant": tenant},
+            "annotations": {"owner": "o", "expiry": "2099-01-01"}}
 
 
 @pytest.mark.parametrize("expr, said", [
