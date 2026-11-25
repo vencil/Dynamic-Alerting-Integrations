@@ -3003,8 +3003,14 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "Rewrites the portal hub page and the jsx loader, fixed repo files; its "
         "flags are switches. A refused target is held by tests/dx/test_sync_tool_registry.py "
         "(test_no_target_is_written_when_the_hub_is_this_process_stdout).",
+    # #3981, fourteenth batch.
+    "dx/generate_platform_data.py":
+        "Writes docs/assets/platform-data.json and the portal's offline fallback, "
+        "fixed repo files; its flags are switches. A refused target is held by "
+        "tests/dx/test_generate_platform_data.py "
+        "(test_a_refused_fallback_leaves_the_data_file_alone).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 28
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 29
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

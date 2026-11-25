@@ -16,7 +16,6 @@ import importlib.util
 import json
 import os
 import re
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +32,9 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION, OutputNotSerializable, Report, encode_json  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Chart.yaml, read Helm's way)
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    OutputWriteError, check_repo_artifact, ensure_dir, exit_on_output_write_error,
+    is_special_file, write_repo_artifact)
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4)
     DaGuardError,
     DaGuardNotFoundError,
@@ -642,6 +644,25 @@ def unpublishable_chart_pins(pinned: dict, tree: dict) -> tuple[list[str], list[
     return bad, notes
 
 
+def _read_artifact(path) -> str:
+    """The text of a file this generator writes and also reads back (#3981).
+    A FIFO would block the read and an unreadable or non-UTF-8 one would end
+    in the crash handler: all are `OutputWriteError(action="read")`, rc 2.
+    `is_special_file`, not the artifact's check: `--check` only reads, and a
+    target given on stdin is still a file to compare."""
+    if is_special_file(path):
+        raise OutputWriteError(path, OSError(None, "not a regular file"), action="read")
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise OutputWriteError(path, exc, action="read") from exc
+    except UnicodeDecodeError as exc:  # a ValueError: the crash handler's, before
+        raise OutputWriteError(path, OSError(None, f"not UTF-8 ({exc.reason})"),
+                               action="read") from exc
+
+
 def carried_wizard_charts() -> dict:
     """The `charts` block platform-data.json already carries, unchanged.
 
@@ -652,7 +673,7 @@ def carried_wizard_charts() -> dict:
     how = ("Write it from Chart.yaml with `make platform-data RELEASE_CHARTS=1` "
            "(release wrap-up), or restore the published versions by hand.")
     try:
-        existing = json.loads(OUTPUT_PATH.read_text(encoding="utf-8"))
+        existing = json.loads(_read_artifact(OUTPUT_PATH))
     except FileNotFoundError:
         raise WizardImagesInconsistent(
             f"ERROR: {_display_path(OUTPUT_PATH)} does not exist, so there are no "
@@ -843,6 +864,7 @@ def build_platform_data(at: str | None = None, release_charts: bool = False) -> 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+@exit_on_output_write_error
 def main():
     """CLI entry point: 共用平台資料產生器."""
     try_utf8_stdout()
@@ -860,11 +882,15 @@ def main():
                              "unless the pins are the charts in the tree (make pre-tag)")
     args = parser.parse_args()
 
+    # `--check` reads the data file once (#3981): a FIFO, a read error or
+    # non-UTF-8 text is rc 2 here, and the comparison below reuses the text.
     at = None
-    if args.check and OUTPUT_PATH.exists():
+    existing_text = (_read_artifact(OUTPUT_PATH)
+                     if args.check and OUTPUT_PATH.exists() else None)
+    if existing_text is not None:
         try:
-            at = recorded_at(json.loads(OUTPUT_PATH.read_text(encoding="utf-8")))
-        except (OSError, ValueError):
+            at = recorded_at(json.loads(existing_text))
+        except ValueError:
             at = None  # the comparison below reports the file itself
     try:
         data = (build_platform_data(at=at, release_charts=True) if args.release_charts
@@ -916,13 +942,22 @@ def main():
 
     if args.check:
         if not OUTPUT_PATH.exists():
-            print(f"❌ {OUTPUT_PATH.relative_to(REPO_ROOT)} does not exist. "
+            print(f"❌ {_display_path(OUTPUT_PATH)} does not exist. "
                   f"Run without --check first.")
             sys.exit(EXIT_VIOLATION)
-        existing = json.loads(OUTPUT_PATH.read_text(encoding="utf-8"))
+        try:
+            existing = json.loads(existing_text)
+        except ValueError:
+            # #3981: here the file is only the output being compared, so
+            # text that is not JSON is a file the generator did not write —
+            # outdated (rc 1). Without --release-charts it is also an INPUT
+            # (its `charts` block), and `carried_wizard_charts` has already
+            # refused it as unreadable (rc 2) before this runs.
+            existing = None
         new_stable = encode_json(strip_volatile(data)) + "\n"
         try:
-            existing_stable = encode_json(strip_volatile(existing)) + "\n"
+            existing_stable = (encode_json(strip_volatile(existing)) + "\n"
+                               if isinstance(existing, dict) else None)
         except OutputNotSerializable:
             # A hand edit JSON reads but cannot carry (NaN / Infinity): the
             # file is not what the generator writes — outdated, not a crash.
@@ -934,7 +969,7 @@ def main():
             for note in notes:
                 print(f"NOTE: wizard chart pin: {note}")
             if bad:
-                print(f"❌ {OUTPUT_PATH.relative_to(REPO_ROOT)} `charts`: the Deployment "
+                print(f"❌ {_display_path(OUTPUT_PATH)} `charts`: the Deployment "
                       f"Wizard would pin a chart nothing publishes:\n  "
                       + "\n  ".join(bad)
                       + "\nRun `make platform-data RELEASE_CHARTS=1` and copy the versions "
@@ -945,7 +980,7 @@ def main():
             data["charts"] = pinned
             new_stable = encode_json(strip_volatile(data)) + "\n"
         if existing_stable != new_stable:
-            print(f"❌ {OUTPUT_PATH.relative_to(REPO_ROOT)} is outdated. "
+            print(f"❌ {_display_path(OUTPUT_PATH)} is outdated. "
                   f"Run `make platform-data` to update.")
             sys.exit(EXIT_VIOLATION)
         # ⛔ The fallback is checked SEPARATELY and by exact bytes. It carries no
@@ -957,25 +992,25 @@ def main():
             print(f"❌ {_display_path(FALLBACK_PATH)} does not exist. "
                   f"Run `make platform-data` first.")
             sys.exit(EXIT_VIOLATION)
-        if FALLBACK_PATH.read_text(encoding="utf-8") != fallback_content:
+        if _read_artifact(FALLBACK_PATH) != fallback_content:
             print(f"❌ {_display_path(FALLBACK_PATH)} is outdated or was "
                   f"hand-edited. It is GENERATED from "
-                  f"{OUTPUT_PATH.relative_to(REPO_ROOT)}; run `make "
+                  f"{_display_path(OUTPUT_PATH)}; run `make "
                   f"platform-data` to regenerate. (#1226)")
             sys.exit(EXIT_VIOLATION)
-        print(f"✅ {OUTPUT_PATH.relative_to(REPO_ROOT)} is up to date.")
+        print(f"✅ {_display_path(OUTPUT_PATH)} is up to date.")
         print(f"✅ {_display_path(FALLBACK_PATH)} is up to date.")
         return
 
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(content, encoding="utf-8", newline="\n")
-    os.chmod(OUTPUT_PATH,
-             stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
-    FALLBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    FALLBACK_PATH.write_text(fallback_content, encoding="utf-8", newline="\n")
-    os.chmod(FALLBACK_PATH,
-             stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
-    print(f"✅ Generated {OUTPUT_PATH.relative_to(REPO_ROOT)}")
+    # #3981: both targets are judged before either is written, then written
+    # through the artifact entry (atomic, the mode a checkout gives).
+    writes = ((OUTPUT_PATH, content), (FALLBACK_PATH, fallback_content))
+    for path, _text in writes:
+        check_repo_artifact(path)
+    for path, text in writes:
+        ensure_dir(path.parent)
+        write_repo_artifact(path, text)
+    print(f"✅ Generated {_display_path(OUTPUT_PATH)}")
     print(f"✅ Generated {_display_path(FALLBACK_PATH)} "
           f"(the portal's offline fallback)")
     print(f"   {data['totals']['packs']} packs, "
