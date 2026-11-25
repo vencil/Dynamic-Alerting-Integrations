@@ -1493,10 +1493,25 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAtLogf(now time.Time, logf fun
 	// #4263: a config built from a tree decided its `expires:` where it
 	// merged them (decideExpiry): the values that give way, at any layer.
 	if c.expiry != nil {
-		// Expired is the build's reading: a value expiring after it turns
-		// with the rebuild, so two values of one key never both read
-		// expired (one series twice fails the whole Gather).
-		result = append(result, c.expiry.events...)
+		// Read where the resolver reads `expires:` (expiryReadAt): the
+		// build's instant until the rebuild, the instant past the grace.
+		// Two values of one key read expired then (a stacked one past its
+		// own `expires:` too): one event per key, the one the tenant got —
+		// decideExpiry lists it first — since one series twice fails the
+		// whole Gather.
+		readAt := c.expiryReadAt(now)
+		named := map[string]bool{}
+		for _, e := range c.expiry.events {
+			e.Expired = !e.Expires.After(readAt)
+			if e.Expired {
+				canon, _ := canonicalKeyFor(e.MetricKey)
+				if named[e.Tenant+"\x00"+canon] {
+					continue
+				}
+				named[e.Tenant+"\x00"+canon] = true
+			}
+			result = append(result, e)
+		}
 		// An `expires:` that does not parse never takes effect (fail-open)
 		// and names no event; it is logged, as before the decision moved.
 		for tenant, overrides := range c.Tenants {

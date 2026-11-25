@@ -87,12 +87,18 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 ) {
 	perTenant := map[string][]string{}
 	rounds := 0
-	// #4263: the tenant's lines described (DescribedTenants): what is served,
-	// and an expired `disable` still written (its effect, below, is none).
-	for tenant, overrides := range cfg.DescribedTenants() {
-		for k, sv := range overrides {
-			if switchedOff(sv) && !registeredReserved(k) {
-				perTenant[tenant] = append(perTenant[tenant], k)
+	// #4263: every `disable` the tenant's lines hold — the ones served
+	// (DescribedTenant) and the ones written whose `expires:` passed
+	// (WrittenTenant), whatever they gave way to: an expired one's effect,
+	// below, is none.
+	for tenant := range cfg.Tenants {
+		listed := map[string]bool{}
+		for _, overrides := range []map[string]config.ScheduledValue{cfg.DescribedTenant(tenant), cfg.WrittenTenant(tenant)} {
+			for k, sv := range overrides {
+				if switchedOff(sv) && !registeredReserved(k) && !listed[k] {
+					listed[k] = true
+					perTenant[tenant] = append(perTenant[tenant], k)
+				}
 			}
 		}
 		// #3832: a root `disable` of a built-in key the tenant inherits is

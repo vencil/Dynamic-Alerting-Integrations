@@ -243,7 +243,7 @@ The built-in values are in the effective config too: when the platform changes o
 
 **When reloads happen**: the exporter scans conf.d/ every 30 seconds (`-reload-interval`). After it sees a change it waits 300 ms (`-scan-debounce`) before reloading. This wait is called debouncing: changes that arrive close together are folded into one, so a `git pull` that changes 20 files triggers a single reload.
 
-A reload also happens with no file changed: the config is merged for the current instant, and a threshold past its `expires:` is as if not written (Decision 10). So at the tree's next `expires:` the exporter merges again, after the same debounce; when the clock is set back before the last `expires:` that passed, the next scan merges again too.
+A reload also happens with no file changed: the config is merged for the current instant, and a threshold past its `expires:` is as if not written (Decision 10). So at the tree's next `expires:` the exporter merges again, after the same debounce; when the clock is set back before the last `expires:` that passed, the next scan merges again too. When merging again keeps failing (the load is refused, say, and the exporter keeps the previous config) for more than a minute, `expires:` is read at the current instant instead: an expired value falls back to the root's value and the expiry event fires, so an expired value is never served for good.
 
 **Every reload rebuilds the whole config.** The two hashes decide what a change is recorded as, for the metrics, including the affected-tenant count (`da_config_blast_radius_tenants_affected`, how many tenants one change affected):
 

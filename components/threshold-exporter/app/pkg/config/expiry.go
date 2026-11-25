@@ -42,7 +42,7 @@ type expiryState struct {
 	honoured map[string]map[string]bool
 	events   []ResolvedThresholdExpiry
 	// written is the tenants' merged maps of the whole tree, before
-	// `expires:` was decided (DescribedTenants); nil when nothing was
+	// `expires:` was decided (DescribedTenant, WrittenTenant); nil when nothing was
 	// decided away.
 	written map[string]map[string]ScheduledValue
 }
@@ -76,38 +76,50 @@ func (c *ThresholdConfig) ValidAt(t time.Time) bool {
 	return st.validUntil.IsZero() || t.Before(st.validUntil)
 }
 
-// DescribedTenants is, per tenant, the lines a reader that describes the
+// DescribedTenant is the lines of tenant a reader that describes the
 // tenant's own lines reads (da-guard's disable effects, key verdicts, the
 // served keys): every value the instant serves (Tenants), and beside it
 // every value the merge left out because its `expires:` passed — the line
-// is still written (#4263). Where both name one threshold, the served one is
-// described. Tenants itself when the build decided nothing away.
-func (c *ThresholdConfig) DescribedTenants() map[string]map[string]ScheduledValue {
+// is still written (#4263). Where both name one threshold the served one is
+// described; both spellings stay when both are served. Tenants[tenant]
+// itself when the build decided nothing away. One tenant at a time: O(its
+// keys).
+func (c *ThresholdConfig) DescribedTenant(tenant string) map[string]ScheduledValue {
+	if c == nil {
+		return nil
+	}
+	served := c.Tenants[tenant]
+	if c.expiry == nil || c.expiry.written == nil {
+		return served
+	}
+	written := c.expiry.written[tenant]
+	m := make(map[string]ScheduledValue, len(written)+len(served))
+	for k, v := range written {
+		m[k] = v
+	}
+	var buf [2]string
+	for k, v := range served {
+		for _, sp := range otherSpellings(k, &buf) {
+			if _, servedToo := served[sp]; !servedToo {
+				delete(m, sp) // the written spelling the served one replaces
+			}
+		}
+		m[k] = v
+	}
+	return m
+}
+
+// WrittenTenant is tenant's merged map of the whole tree as written, before
+// `expires:` was decided: every time-boxed value in place, expired or not
+// (#4263). Tenants[tenant] when the build decided nothing away.
+func (c *ThresholdConfig) WrittenTenant(tenant string) map[string]ScheduledValue {
 	if c == nil {
 		return nil
 	}
 	if c.expiry == nil || c.expiry.written == nil {
-		return c.Tenants
+		return c.Tenants[tenant]
 	}
-	out := make(map[string]map[string]ScheduledValue, len(c.expiry.written))
-	for tenant, written := range c.expiry.written {
-		m := make(map[string]ScheduledValue, len(written))
-		for k, v := range written {
-			m[k] = v
-		}
-		served := c.Tenants[tenant]
-		var buf [2]string
-		for k, v := range served {
-			for _, sp := range otherSpellings(k, &buf) {
-				if _, servedToo := served[sp]; !servedToo {
-					delete(m, sp) // the written spelling the served one replaces
-				}
-			}
-			m[k] = v
-		}
-		out[tenant] = m
-	}
-	return out
+	return c.expiry.written[tenant]
 }
 
 // ValidUntil is the first `expires:` of the tree after the instant the
@@ -531,8 +543,25 @@ func eachUnparsedExpiry(overrides map[string]ScheduledValue, f func(key, text st
 // replaces it, instead of lapsing a value to the root the merge never chose
 // (#4263) — else now.
 func (c *ThresholdConfig) expiryReadAt(now time.Time) time.Time {
-	if c != nil && c.expiry != nil && !c.expiry.at.IsZero() {
-		return c.expiry.at
+	if c == nil || c.expiry == nil || c.expiry.at.IsZero() {
+		return now
 	}
-	return now
+	st := c.expiry
+	// Past the grace the rebuild has not come (a reload keeps failing):
+	// `expires:` is read at now again — a degraded reading (an expired
+	// value lapses to the root, the merge's layer beneath unknown), but
+	// never an expired override served for good with no expiry event.
+	if !st.validUntil.IsZero() && !now.Before(st.validUntil.Add(expiryRebuildGrace)) {
+		return now
+	}
+	if !st.validFrom.IsZero() && now.Before(st.validFrom.Add(-expiryRebuildGrace)) {
+		return now
+	}
+	return st.at
 }
+
+// expiryRebuildGrace is how long past ValidUntil (or before ValidFrom) a
+// config keeps answering for its build instant (expiryReadAt): long enough
+// for the exporter's rebuild — the debounce, one build, a watch tick's
+// retry — so a value does not flip to the root and back in between.
+const expiryRebuildGrace = time.Minute

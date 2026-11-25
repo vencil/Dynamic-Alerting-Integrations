@@ -483,3 +483,25 @@ func TestServedValues_DisableEffectsDescribeWhatIsServed(t *testing.T) {
 		t.Errorf("redis_memory: %+v (listed %v), want reason %q and disable %q — the profile's, served", e, ok, keyReasonDisabled, disableEffective)
 	}
 }
+
+// #4263: an expired `disable` is listed, its effect none, whatever it gave
+// way to — a profile's number as much as the root's.
+func TestServedValues_AnExpiredDisableIsListedWhateverIsBeneath(t *testing.T) {
+	t.Parallel()
+	for name, profile := range map[string]string{"profile beneath": "    redis_memory: \"70\"\n", "root only": ""} {
+		files := map[string]string{
+			"_defaults.yaml": "defaults:\n  redis_memory: 50\n",
+			"a.yaml": "tenants:\n  a:\n    _profile: p\n    redis_memory:\n      default: disable\n" +
+				"      expires: \"2020-01-01T00:00:00Z\"\n",
+		}
+		files["_profiles.yaml"] = "profiles:\n  p:\n" + profile
+		if profile == "" {
+			files["_profiles.yaml"] = "profiles:\n  p: {}\n"
+		}
+		code, doc, _, stderr := servedWith(t, files, "2026-07-01T03:00:00Z", "--disable-effects")
+		mustOK(t, code, stderr)
+		if e := doc.Tenants["a"].Keys["redis_memory"]; e.Disable != disableNoop {
+			t.Errorf("%s: redis_memory disable %q, want %q", name, e.Disable, disableNoop)
+		}
+	}
+}

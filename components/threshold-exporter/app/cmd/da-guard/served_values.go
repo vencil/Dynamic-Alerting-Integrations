@@ -1372,7 +1372,7 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 		view := cfg.FamilyView(tenant)
 		// #4263: keys are the tenant's lines as written — an expired one
 		// included, which the merge at --at left out of what is served.
-		tv.Keys = servedKeys(tv, cfg.DescribedTenants()[tenant], undeliverable[tenant], at, recordedReasons(cfg, tenant, at),
+		tv.Keys = servedKeys(tv, cfg.DescribedTenant(tenant), undeliverable[tenant], at, recordedReasons(cfg, tenant, at),
 			func(k string) bool { return view.SwitchedOffWithBase(k, at, at) })
 		addRootRefused(tv, overrides, rootRefused)
 		addRootDisabled(tv, cfg, tenant, at)

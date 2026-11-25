@@ -356,13 +356,14 @@ func TestExpiry_TenantAPIMergeStacksEveryPlatformFile(t *testing.T) {
 }
 
 // #4263: a config read past its ValidUntil — between the next `expires:`
-// and the rebuild that follows it — keeps answering for the instant it was
+// and the rebuild that follows it, within expiryRebuildGrace — keeps answering for the instant it was
 // built at: the value it served, not a lapse to the root the merge never
 // decided, and no expiry event turning a second time.
 func TestExpiry_PastValidUntilTheBuiltInstantStands(t *testing.T) {
 	t.Parallel()
 	built := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	later := built.Add(2 * time.Hour)
+	// Past the profile's expires: (01:00), within the rebuild's grace.
+	later := built.Add(time.Hour + expiryRebuildGrace/2)
 	cfg := loadTreeAt(t, map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
 		"_profiles.yaml": "profiles:\n  p:\n    mysql_connections:\n      default: \"90\"\n      expires: \"2026-01-01T01:00:00Z\"\n",
@@ -386,7 +387,7 @@ func TestExpiry_PastValidUntilTheBuiltInstantStands(t *testing.T) {
 	}
 }
 
-// #4263: DescribedTenants keeps both spellings a tenant writes and serves
+// #4263: DescribedTenant keeps both spellings a tenant writes and serves
 // (renamed_shadowed is reported on them), and puts the served spelling in
 // place of a written one the merge left out.
 func TestExpiry_DescribedTenantsSpellings(t *testing.T) {
@@ -401,7 +402,7 @@ func TestExpiry_DescribedTenantsSpellings(t *testing.T) {
 			"      expires: \"2020-01-01T00:00:00Z\"\n    pg_connections: \"61\"\n",
 	})
 	for i := 0; i < 20; i++ { // map order: the result must not depend on it
-		d := cfg.DescribedTenants()
+		d := map[string]map[string]ScheduledValue{"tx": cfg.DescribedTenant("tx"), "ty": cfg.DescribedTenant("ty")}
 		if _, a := d["tx"][canon]; !a {
 			t.Fatalf("tx: %s missing from %v", canon, d["tx"])
 		}
@@ -414,5 +415,59 @@ func TestExpiry_DescribedTenantsSpellings(t *testing.T) {
 		if _, gone := d["ty"][retired]; gone {
 			t.Fatalf("ty: the expired %s is described beside the %s it gave way to", retired, canon)
 		}
+	}
+}
+
+// #4263: a config that is not rebuilt (a reload keeps failing) stops
+// standing on its build instant once ValidUntil is long past
+// (expiryRebuildGrace): `expires:` is read at the instant again — the value
+// lapses to the root and the expiry event names it — rather than an
+// expired override being served for good with nothing said. Within the
+// grace the built answer stands (TestExpiry_PastValidUntilTheBuiltInstantStands).
+func TestExpiry_NotRebuiltPastTheGraceExpiresAtTheInstant(t *testing.T) {
+	t.Parallel()
+	built := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	cfg := loadTreeAt(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  redis_connected_clients: 70\n",
+		"t.yaml":         "tenants:\n  tx:\n    redis_connected_clients:\n      default: \"5\"\n      expires: \"2026-01-01T01:00:00Z\"\n",
+	}, built)
+	within := built.Add(time.Hour + expiryRebuildGrace/2)
+	if got := strings.Join(offRows(cfg, "tx", "redis", within), "|"); got != "redis_connected_clients warning 5" {
+		t.Errorf("within the grace: %s, want the built 5", got)
+	}
+	past := built.Add(5 * time.Hour)
+	if got := strings.Join(offRows(cfg, "tx", "redis", past), "|"); got != "redis_connected_clients warning 70" {
+		t.Errorf("long past ValidUntil, not rebuilt: %s, want the root's 70", got)
+	}
+	n := 0
+	for _, e := range cfg.ResolveThresholdExpiriesAt(past) {
+		if e.Tenant == "tx" && e.Expired {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d expired events long past ValidUntil, want 1", n)
+	}
+}
+
+// #4263: past the grace, two values of one key that have both expired name
+// one event — the one the tenant got (two identical series fail the Gather).
+func TestExpiry_PastTheGraceOneEventPerKey(t *testing.T) {
+	t.Parallel()
+	built := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	cfg := loadTreeAt(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+		"_profiles.yaml": "profiles:\n  p:\n    mysql_connections:\n      default: \"90\"\n      expires: \"2026-01-01T01:00:00Z\"\n",
+		"t.yaml": "tenants:\n  tx:\n    _profile: p\n    mysql_connections:\n      default: \"95\"\n" +
+			"      expires: \"2025-12-31T00:00:00Z\"\n",
+	}, built)
+	n := 0
+	for _, e := range cfg.ResolveThresholdExpiriesAt(built.Add(5 * time.Hour)) {
+		if e.Tenant == "tx" && e.Expired {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d expired events for one key, want 1", n)
 	}
 }
