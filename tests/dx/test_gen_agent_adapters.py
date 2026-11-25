@@ -866,3 +866,18 @@ def test_a_refused_removal_is_rc2_and_names_what_was_removed(tmp_path, monkeypat
     assert f"removed stale adapter: {gaa.OUT_ROLES}/aaa-ghost.md" in out
     assert "cannot remove" in err and "Permission denied" in err
     assert "Traceback" not in err
+
+
+@pytest.mark.parametrize("name, st_mode, expected", [
+    ("posix", 0o100644, True),
+    ("posix", 0o100666, False),
+    ("posix", 0o100755, False),
+    # Windows reports a writable file as 0o666 whatever chmod asked: the
+    # read-only bit is all it keeps, so writable is up to date.
+    ("nt", 0o100666, True),
+    ("nt", 0o100444, False),
+])
+def test_the_adapter_mode_is_judged_by_what_the_platform_can_hold(
+        monkeypatch, name, st_mode, expected):
+    monkeypatch.setattr(gaa.os, "name", name)
+    assert gaa._has_adapter_mode(st_mode) is expected

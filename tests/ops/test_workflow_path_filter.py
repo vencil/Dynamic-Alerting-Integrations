@@ -1648,10 +1648,17 @@ def test_record_whose_write_is_refused_is_rc2_one_line(
     assert not _trace_file(repo).exists()
 
 
-def _no_hang(call):
+def _need_fifo() -> None:
+    """Called before the first `os.mkfifo`, so a platform without FIFOs or
+    SIGALRM skips instead of failing on the fixture."""
     import signal
     if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
         pytest.skip("no FIFO / SIGALRM on this platform")
+
+
+def _no_hang(call):
+    import signal
+    _need_fifo()
 
     def hung(signum, frame):
         raise AssertionError("blocked on the FIFO")
@@ -1667,6 +1674,7 @@ def _no_hang(call):
 def test_a_workflow_that_is_a_fifo_is_a_caller_error_not_a_hang(
         repo: Path, tmp_path: Path) -> None:
     """`generate` reads every workflow before it rewrites the traced ones."""
+    _need_fifo()
     _record_and_generate(repo, tmp_path / "t")
     other = repo / ".github/workflows/zother.yaml"
     os.mkfifo(other)
@@ -1680,6 +1688,7 @@ def test_a_workflow_that_is_a_fifo_is_a_caller_error_not_a_hang(
 def test_a_trace_file_that_is_a_fifo_is_a_caller_error_not_a_hang(
         repo: Path, tmp_path: Path) -> None:
     state = tmp_path / "t"
+    _need_fifo()
     _record_and_generate(repo, state)
     _trace_file(repo).unlink()
     os.mkfifo(_trace_file(repo))

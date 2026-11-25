@@ -520,13 +520,23 @@ def diff_against_disk(plan):
 ADAPTER_MODE = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH
 
 
+def _has_adapter_mode(st_mode):
+    """Whether *st_mode* is the mode a written adapter ends up with. POSIX:
+    exactly ADAPTER_MODE. Windows keeps one permission bit, read-only, and
+    reports a writable file as 0o666 whatever was asked: there the
+    representable state, writable, is the whole comparison."""
+    if os.name == "nt":
+        return bool(st_mode & stat.S_IWRITE)
+    return stat.S_IMODE(st_mode) == ADAPTER_MODE
+
+
 def _up_to_date(abs_path, data):
-    """Whether *abs_path* already holds *data* with ADAPTER_MODE. Called
+    """Whether *abs_path* already holds *data* with the adapter mode. Called
     after `check_repo_artifact`, so a file that is there is a regular one;
     anything unreadable is "not up to date" and the write that follows
     reports it."""
     try:
-        if stat.S_IMODE(os.stat(abs_path).st_mode) != ADAPTER_MODE:
+        if not _has_adapter_mode(os.stat(abs_path).st_mode):
             return False
         with open(abs_path, "rb") as fh:
             return fh.read() == data
