@@ -1565,6 +1565,7 @@ class _Staged:
 
     def __init__(self):
         self._paths, self._original, self._text = {}, {}, {}
+        self._key_of = {}  # str(path) -> the key it was read under
 
     def read(self, path: Path) -> str:
         st = os.stat(path)  # every caller has checked exists() first
@@ -1572,11 +1573,14 @@ class _Staged:
         if key not in self._text:
             text = _read_target(path)
             self._paths[key], self._original[key], self._text[key] = path, text, text
+        self._key_of[str(path)] = key
         return self._text[key]
 
     def set(self, path: Path, text: str) -> None:
-        st = os.stat(path)
-        self._text[(st.st_dev, st.st_ino)] = text
+        # The key the read recorded, not a fresh stat: a target replaced in
+        # between would otherwise be staged under a key commit() never read
+        # (#4311 review: a KeyError, not an OutputWriteError).
+        self._text[self._key_of[str(path)]] = text
 
     def commit(self) -> None:
         changed = [k for k in self._text if self._text[k] != self._original[k]]

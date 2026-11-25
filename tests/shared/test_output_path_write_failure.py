@@ -2803,8 +2803,18 @@ NO_ROW: dict[Key, str] = {
         "before any read. What speaks for the write: "
         "tests/ops/test_ops_tool_flags.py "
         "`test_a_target_that_is_stdin_is_refused_and_the_others_are_left_alone`.",
+    # #3981, sixteenth batch.
+    ("lint/fix_file_hygiene.py", "FILE"):
+        "The positional names the files pre-commit hands the hook, which it "
+        "rewrites in place: a row's bad-path shapes (a missing parent, a parent "
+        "that is a file) are skipped by the read like any path the hook cannot "
+        "open, before any write — the pair would measure that skip. What speaks "
+        "for the write: tests/lint/test_fix_file_hygiene.py "
+        "`test_a_refused_file_is_rc2_and_the_others_are_left_alone` (a later "
+        "file that is the process's stdout: rc 2, one line naming it and FILE, "
+        "the earlier file keeps its bytes).",
 }
-_NO_ROW_CEILING = 6
+_NO_ROW_CEILING = 7
 
 
 def test_every_flag_named_at_a_writer_has_a_row():
@@ -3015,8 +3025,19 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "CHANGELOG stubs; its flags are versions and switches, not paths. A "
         "refused target is held by tests/dx/test_bump_docs.py "
         "(test_init_changelog_writes_neither_when_one_is_refused).",
+    # #3981, sixteenth batch.
+    "dx/bump_playbook_versions.py":
+        "Rewrites the operational playbooks' `verified-at-version`, fixed repo "
+        "files; `--to` is a version. A refused target is held by "
+        "tests/dx/test_bump_playbook_versions.py "
+        "(test_a_refused_playbook_leaves_the_others_alone).",
+    "lint/check_head_blob_hygiene.py":
+        "`--fix` rewrites the working copies of the HEAD blobs it found "
+        "damaged; the flag is a switch. A refused target is held by "
+        "tests/lint/test_check_head_blob_hygiene.py "
+        "(test_fix_refused_target_writes_nothing).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 30
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 32
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

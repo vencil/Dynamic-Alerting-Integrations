@@ -481,7 +481,7 @@ def _repo_artifact_mode(path: str) -> int:
     return 0o755 if executable else 0o644
 
 
-def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
+def write_repo_artifact(path: Any, content: "str | bytes", *, flag: Optional[str] = None,
                         mode: Optional[int] = None, atomic_only: bool = False) -> None:
     """Atomically rewrite a committed artifact a regen tool owns.
 
@@ -491,6 +491,9 @@ def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
     before any userspace ``realpath`` runs — and an existing target must be
     a regular file. ``-``, devices, FIFOs and sockets are
     refused with :class:`OutputWriteError`.
+
+    *content* is text (written UTF-8, LF), or ``bytes`` written exactly as
+    given (#3981: a tool that rewrites a file byte for byte, CRLF and all).
 
     *mode* (#3107): the permission bits the file ends up with. Left out, it
     is :func:`_repo_artifact_mode` — a regen leaves a tracked file the way a

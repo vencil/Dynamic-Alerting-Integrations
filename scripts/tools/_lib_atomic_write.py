@@ -181,7 +181,8 @@ def _warn_not_atomic(out: Path, why: str) -> None:
     )
 
 
-def _write_in_place(out: Path, content: str, opts: _Opts, *, set_mode: bool) -> None:
+def _write_in_place(out: Path, content: Union[str, bytes], opts: _Opts, *,
+                    set_mode: bool) -> None:
     """The pre-#2082 writer: truncate, write, chmod. Only for the fallbacks.
 
     #2128 S1: a ``chmod`` refused with EPERM AFTER the write succeeded — the
@@ -193,7 +194,10 @@ def _write_in_place(out: Path, content: str, opts: _Opts, *, set_mode: bool) -> 
     try:
         # `newline` is atomic_write_text's own parameter, default "\n" —
         # pinned by test_line_ending_policy::test_atomic_write_text_defaults_to_lf.
-        out.write_text(content, encoding=opts.encoding, newline=opts.newline)  # line-ending: ignore
+        if isinstance(content, bytes):  # #3981: bytes go out exactly as given
+            out.write_bytes(content)
+        else:
+            out.write_text(content, encoding=opts.encoding, newline=opts.newline)  # line-ending: ignore
     except OSError as exc:
         raise _output_error(out, exc, opts, previous_kept=False) from exc
     if not set_mode:
@@ -282,7 +286,7 @@ def _xattr_mismatch(target: Path, fd: int) -> Optional[str]:
 
 def atomic_write_text(
     path: Union[str, "os.PathLike[str]"],
-    content: str,
+    content: Union[str, bytes],
     *,
     encoding: str = "utf-8",
     newline: Optional[str] = "\n",
@@ -306,7 +310,8 @@ def atomic_write_text(
 
     Args:
         path: the output file. Its parent directory must already exist.
-        content: text to write.
+        content: text to write, or ``bytes`` (#3981) written exactly as given
+            — *encoding* and *newline* do not apply to them.
         encoding: file encoding (default utf-8).
         newline: line-ending policy; ``"\\n"`` (default) forces LF so a
             Windows regen emits the same bytes as CI. ``None`` opts back into
@@ -375,7 +380,7 @@ def atomic_write_text(
     _write_in_place(out, content, opts, set_mode=regular)
 
 
-def _try_atomic(out: Path, content: str, st: Optional[os.stat_result],
+def _try_atomic(out: Path, content: Union[str, bytes], st: Optional[os.stat_result],
                 opts: _Opts) -> "tuple[bool, Optional[str]]":
     """Replace *out* atomically: ``(True, None)``, or ``(False, why)`` to fall back.
 
@@ -457,7 +462,8 @@ def _try_atomic(out: Path, content: str, st: Optional[os.stat_result],
             if why is not None:
                 return False, why
         # `newline` is atomic_write_text's own parameter (default "\n").
-        fh = os.fdopen(fd, "w", encoding=opts.encoding, newline=opts.newline)  # line-ending: ignore
+        fh = (os.fdopen(fd, "wb") if isinstance(content, bytes)  # #3981: as given
+              else os.fdopen(fd, "w", encoding=opts.encoding, newline=opts.newline))  # line-ending: ignore
         fd = -1  # the file object owns it now
         with fh:
             fh.write(content)

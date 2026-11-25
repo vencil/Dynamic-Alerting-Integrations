@@ -51,6 +51,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import stat
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -60,6 +61,9 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    OutputWriteError, check_repo_artifact, exit_on_output_write_error, is_special_file,
+    write_repo_artifact)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -351,19 +355,21 @@ def scan_blob(path: str, blob: bytes, strict: bool = False) -> list[BlobViolatio
     return issues
 
 
-def _fix_working_copy(path: str, original: bytes) -> tuple[bool, str]:
-    """Strip NUL bytes + ensure EOF newline in the working-copy file.
-
-    Returns ``(fixed, note)``. Does NOT touch binary files and does not
-    stage/commit anything — the user still has to commit the fix.
+def _plan_fix(path: str) -> "tuple[bytes | None, str]":
+    """The working-copy fix for *path* (NUL bytes stripped, EOF newline on a
+    text file), computed and not written (#3981): ``(new bytes or None,
+    note)``. Does NOT touch binary files and does not stage/commit anything —
+    the user still has to commit the fix.
     """
     full = PROJECT_ROOT / path
     if not full.exists():
-        return False, "working copy missing"
+        return None, "working copy missing"
+    if is_special_file(full):  # a FIFO would block the read
+        return None, "read failed: not a regular file"
     try:
         current = full.read_bytes()
     except OSError as exc:
-        return False, f"read failed: {exc}"
+        return None, f"read failed: {exc}"
 
     fixed = current.replace(b"\x00", b"")
     ext = Path(path).suffix.lower()
@@ -372,16 +378,11 @@ def _fix_working_copy(path: str, original: bytes) -> tuple[bool, str]:
 
     if fixed == current:
         # Working copy is already clean; defect only exists in HEAD blob.
-        return False, "working copy already clean — commit needed to replace HEAD blob"
-
-    try:
-        full.write_bytes(fixed)
-    except OSError as exc:
-        return False, f"write failed: {exc}"
-
-    return True, "fixed working copy (re-stage and commit)"
+        return None, "working copy already clean — commit needed to replace HEAD blob"
+    return fixed, "fixed working copy (re-stage and commit)"
 
 
+@exit_on_output_write_error
 def main() -> int:
     """CLI entry point: scan HEAD blobs for hygiene defects."""
     try_utf8_stdout()
@@ -485,15 +486,35 @@ def main() -> int:
         by_file.setdefault(v.path, []).append(v)
 
     print(f"✗ {len(violations)} defect(s) in {len(by_file)} HEAD blob(s):\n")
+    plans: list[tuple[str, "bytes | None", str]] = []
     for path, items in sorted(by_file.items()):
         print(f"  {path}")
         for v in items:
             print(f"    [{v.rule}] {v.detail}")
         if args.fix:
-            original = _cat_blob(path) or b""
-            fixed, note = _fix_working_copy(path, original)
-            marker = "✓" if fixed else "…"
-            print(f"    {marker} {note}")
+            plans.append((path, *_plan_fix(path)))
+        print()
+
+    if plans:
+        # #3981: every working copy is judged before the first is written,
+        # through the artifact entry (bytes, as computed); a refused one is
+        # rc 2, one line, from the decorator on main.
+        # Each line is printed as its file is written, so a later refusal
+        # (rc 2) still shows which working copies were already fixed; the
+        # file's own permission bits are kept (it is the user's working copy).
+        for path, new, _note in plans:
+            if new is not None:
+                check_repo_artifact(PROJECT_ROOT / path)
+        print("--fix:")
+        for path, new, note in plans:
+            if new is not None:
+                target = PROJECT_ROOT / path
+                try:
+                    mode = stat.S_IMODE(os.stat(target).st_mode)
+                except OSError as exc:  # gone since the judgement (#4312 review)
+                    raise OutputWriteError(target, exc) from exc
+                write_repo_artifact(target, new, mode=mode)
+            print(f"  {'✓' if new is not None else '…'} {path}: {note}", flush=True)
         print()
 
     print(

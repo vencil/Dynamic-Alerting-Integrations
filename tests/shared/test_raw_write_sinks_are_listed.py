@@ -235,9 +235,6 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/dx/bench_verdict.py": {
         "main open(w) [ci_env_file]": 1,
     },
-    "scripts/tools/dx/bump_playbook_versions.py": {
-        "apply_bump .write_bytes [artifact]": 1,
-    },
     "scripts/tools/dx/check_release_immutable.py": {
         "write_output open(w) [ci_env_file]": 1,
     },
@@ -257,12 +254,6 @@ DEBT: dict[str, dict[str, int]] = {
     },
     "scripts/tools/dx/suggest_related.py": {
         "main .write_text [artifact]": 1,
-    },
-    "scripts/tools/lint/check_head_blob_hygiene.py": {
-        "_fix_working_copy .write_bytes [artifact]": 1,
-    },
-    "scripts/tools/lint/fix_file_hygiene.py": {
-        "fix_file open(w) [artifact]": 1,
     },
     "scripts/tools/ops/_gsvc_child.py": {
         "_parent_dir os.mkdir [work_dir]": 1,
@@ -291,15 +282,16 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 53
+_DEBT_CEILING = 50
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
     "scripts/tools/_lib_atomic_write.py": {
         "_try_atomic os.chmod [entry]": 1,
-        "_try_atomic os.fdopen [entry]": 1,
+        "_try_atomic os.fdopen [entry]": 2,  # text, and bytes as given (#3981)
         "_try_atomic os.replace [entry]": 1,
         "_try_atomic tempfile.mkstemp [entry]": 1,
+        "_write_in_place .write_bytes [entry]": 1,  # #3981: bytes as given
         "_write_in_place .write_text [entry]": 1,
         "_write_in_place os.chmod [entry]": 1,
     },
