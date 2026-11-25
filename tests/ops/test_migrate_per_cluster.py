@@ -283,6 +283,19 @@ def _lhs_tree(expr):
     return mr.read_trees([expr])[0]
 
 
+@pytest.mark.parametrize("expr, found", [
+    # naming the cluster label in `without`／`ignoring` drops it just the same
+    ("sum without(da_cluster) (app_open_files)", ["without(da_cluster)"]),
+    ("sum WITHOUT (instance, da_cluster) (app_open_files)", ["without(instance, da_cluster)"]),
+    ("app_a_ratio / ignoring(da_cluster) app_b_ratio", ["ignoring(da_cluster)"]),
+    # not naming it keeps it: nothing to say
+    ("sum without(instance) (app_open_files)", []),
+    ("app_a_ratio / ignoring(instance) app_b_ratio", []),
+])
+def test_without_and_ignoring_that_name_the_cluster_are_flagged(expr, found):
+    assert mr.groupings_without_cluster(_lhs_tree(expr)) == found
+
+
 def test_a_quoted_label_name_stays_on_one_line_of_the_note():
     found = mr.groupings_without_cluster(_lhs_tree('sum by(pod, "a\\nb") (x)'))
     assert found == ['by(pod, "a\\nb")']
@@ -304,7 +317,7 @@ def test_the_note_does_not_change_the_exit_code(tmp_path):
         [sys.executable, str(_TOOLS / "ops" / "migrate_rule.py"), str(rules), "--dry-run",
          "--no-dictionary"], capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.count("⚠️ 原式子的 on(instance) 沒有 da_cluster") == 3
+    assert proc.stdout.count("⚠️ 原式子的 on(instance) 不保留 da_cluster") == 3
     assert "未檢查" not in proc.stdout + proc.stderr
 
 

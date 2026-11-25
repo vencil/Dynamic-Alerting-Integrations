@@ -133,8 +133,9 @@ def groupings_without_cluster(tree):
     *tree* 是語法樹（或其子樹）。回傳 list（依出現順序、不重複），每項是
     `on(instance)`、`by(pod, namespace)` 這樣的文字：vector matching 的
     `on(...)` 與聚合的 `by(...)`，label 清單含 tenant／instance／pod／
-    namespace／node 任一個而不含 `da_cluster`。`ignoring(...)`、
-    `without(...)`、沒點名身分 label 的（`by(le)`、`on()`）不算。讀的是
+    namespace／node 任一個而不含 `da_cluster`；以及點名 `da_cluster` 的
+    `without(...)`／`ignoring(...)`——那同樣把叢集丟掉。沒點名身分 label 的
+    （`by(le)`、`on()`）、沒點名叢集的 `without(...)`／`ignoring(...)` 不算。讀的是
     Prometheus 的語法樹，所以 `ON(...)`、`BY (...)`、`by("instance")` 與字串
     常值裡的文字都不會看錯。
 
@@ -146,7 +147,9 @@ def groupings_without_cluster(tree):
 
     def note(keyword, labels):
         labels = list(labels)
-        if _IDENTITY_LABELS & set(labels) and CLUSTER_IDENTITY_LABEL not in labels:
+        keeps = keyword in ("by", "on")   # the list is what survives
+        if (_IDENTITY_LABELS & set(labels) and CLUSTER_IDENTITY_LABEL not in labels
+                if keeps else CLUSTER_IDENTITY_LABEL in labels):
             # a quoted label name can hold anything: written so that it stays
             # on one line of a comment
             shown = [x if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", x)
@@ -156,16 +159,16 @@ def groupings_without_cluster(tree):
                 found.append(text)
 
     for node in _lib_consumer_read.shape_nodes(tree):
-        if node["kind"] == "aggregate" and not node["without"]:
-            note("by", node["labels"])
-        elif node["kind"] == "binary" and node["matching"] and node["matching"]["on"]:
-            note("on", node["matching"]["labels"])
+        if node["kind"] == "aggregate":
+            note("without" if node["without"] else "by", node["labels"])
+        elif node["kind"] == "binary" and node["matching"]:
+            note("on" if node["matching"]["on"] else "ignoring", node["matching"]["labels"])
     return found
 
 
 def cluster_grouping_note(groupings):
     """一行：原式子的這些分組／配對沒有叢集 label，要人看過（#1200）。"""
-    return (f"原式子的 {'、'.join(groupings)} 沒有 {CLUSTER_IDENTITY_LABEL}：在收了多個叢集的 "
+    return (f"原式子的 {'、'.join(groupings)} 不保留 {CLUSTER_IDENTITY_LABEL}：在收了多個叢集的 "
             f"Prometheus 上會配對或合併不同叢集的同名序列（on() 可能 many-to-many）。"
             f"兩邊都帶 {CLUSTER_IDENTITY_LABEL} 才補上，請人工確認；工具不改寫")
 
