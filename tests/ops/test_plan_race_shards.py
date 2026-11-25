@@ -431,3 +431,54 @@ def test_workflow_withholds_the_fragment_of_an_incomplete_module() -> None:
     names = {s.get("name") for s in steps}
     problems += [f"step {n!r} is gone" for n in gated - names]
     assert not problems, "an incomplete module could still be parsed/uploaded:\n  " + "\n  ".join(problems)
+
+
+# ── $GITHUB_OUTPUT through the operator entry (#3981) ────────────────────────
+
+def test_github_output_is_appended_to_not_replaced(tmp_path: Path, monkeypatch) -> None:
+    out_file = tmp_path / "gh_output"
+    out_file.write_text("earlier=1\n", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out_file))
+    raw = tmp_path / "raw"
+    _shard(raw, "m", "1", [], 0)
+    prs.main(["merge", "--module", "m", "--shards", "1", "--raw-dir", str(raw),
+              "--output", str(tmp_path / "o.jsonl")])
+    assert out_file.read_text().splitlines()[0] == "earlier=1"
+
+
+def test_an_unwritable_github_output_is_rc2_one_line(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Was a traceback ('unexpected internal error')."""
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "no-such-dir" / "out"))
+    raw = tmp_path / "raw"
+    _shard(raw, "m", "1", [], 0)
+    with pytest.raises(SystemExit) as caught:
+        prs.main(["merge", "--module", "m", "--shards", "1", "--raw-dir", str(raw),
+                  "--output", str(tmp_path / "o.jsonl")])
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "cannot write" in err and "no-such-dir" in err and "Traceback" not in err
+
+
+def test_a_github_output_that_is_a_fifo_is_rc2_not_a_hang(tmp_path: Path, monkeypatch) -> None:
+    import os
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    fifo = tmp_path / "fifo"
+    os.mkfifo(fifo)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(fifo))
+    raw = tmp_path / "raw"
+    _shard(raw, "m", "1", [], 0)
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as caught:
+            prs.main(["merge", "--module", "m", "--shards", "1", "--raw-dir", str(raw),
+                      "--output", str(tmp_path / "o.jsonl")])
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert caught.value.code == 2

@@ -58,6 +58,8 @@ from pathlib import Path
 # #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
+from _lib_output import (  # noqa: E402  (#3981: the operator entry)
+    exit_on_output_write_error, write_operator_output)
 
 # Explicit, so `python3 -I` (which drops the script's own directory from
 # sys.path) still finds the sibling parser whose timeout regex, -timeout value
@@ -436,11 +438,12 @@ def _write_github_output(pairs: dict[str, str]) -> None:
     path = os.environ.get("GITHUB_OUTPUT")
     if not path:
         return
-    with open(path, "a", encoding="utf-8", newline="\n") as fh:
-        for k, v in pairs.items():
-            fh.write(f"{k}={v}\n")
+    # The runner's file, named by $GITHUB_OUTPUT, not by a flag (flag=None).
+    write_operator_output(path, "".join(f"{k}={v}\n" for k, v in pairs.items()),
+                          flag=None, append=True)
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)

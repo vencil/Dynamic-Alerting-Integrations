@@ -150,6 +150,8 @@ from pathlib import Path
 # #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
+from _lib_output import (  # noqa: E402  (#3981: the operator entry)
+    exit_on_output_write_error, write_operator_output)
 
 # GitHub API hard limits. Documented here because exceeding one 422s from deep
 # inside the alerting path, where it reads as "the nightly is broken" rather than
@@ -1223,6 +1225,7 @@ def handle_module(gh: Gh, repo: str, module: str, frag: dict, degraded: str,
     return "\n".join(summary)
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None, runner=None) -> int:
     _force_utf8_streams()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -1261,8 +1264,10 @@ def main(argv: list[str] | None = None, runner=None) -> int:
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
-        with open(summary_path, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write("\n".join(lines) + "\n")
+        # The runner's file, named by $GITHUB_STEP_SUMMARY, not by a flag:
+        # flag=None, so a refusal does not point at a flag nobody typed.
+        write_operator_output(summary_path, "\n".join(lines) + "\n", flag=None,
+                              append=True)
     print("\n".join(lines))
 
     if gh.failures:

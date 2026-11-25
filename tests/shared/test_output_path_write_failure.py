@@ -753,6 +753,16 @@ ROWS: list[Row] = [
     # different errno, and is kept because an APPEND to an existing path is
     # this tool's normal case (the CI runner's $GITHUB_STEP_SUMMARY already
     # exists) — the shape that most resembles the real one.
+    # #3981: $GITHUB_OUTPUT, appended to; the step passes it as the flag.
+    R("dx/bench_verdict.py", "--github-output", "file", "operator",
+      lambda c, out: ["verdict", "--benchstat",
+                      str(REPO_ROOT / "tests" / "dx" / "fixtures" / "bench_verdict"
+                          / "deterministic.txt"),
+                      "--github-output", str(out)],
+      reach="a benchstat fixture in tests/dx/fixtures/bench_verdict; without "
+            "--ledger-base/--ledger-head no git is run",
+      out_name="gh_output",
+      shapes=("missing_parent", "parent_is_file", "target_is_dir")),
     R("dx/paired_trend_watch.py", "--summary-file", "file", "operator",
       lambda c, out: ["--dataset", str(PAIRED_DATASET), "--summary-file", str(out)],
       reach="the frozen six-night archival dataset in the repo; --dataset is "
@@ -3048,8 +3058,23 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "checkout, not an output. A refused target is held by "
         "tests/ops/test_workflow_path_filter.py "
         "(test_generate_judges_every_target_before_the_first_write).",
+    # #3981, eighteenth batch: the runner's $GITHUB_OUTPUT / $GITHUB_STEP_SUMMARY,
+    # appended to. The path comes from the environment, not from a flag, so the
+    # refusal names no flag (as dx/paired_trend_watch does for the same file).
+    "../ops/file_race_report.py":
+        "Appends its report to $GITHUB_STEP_SUMMARY. A refused target is held "
+        "by tests/ops/test_nightly_race_issue_policy.py "
+        "(test_an_unwritable_step_summary_is_rc2_one_line).",
+    "../ops/plan_race_shards.py":
+        "Appends `plan` / `merge` outputs to $GITHUB_OUTPUT. A refused target is "
+        "held by tests/ops/test_plan_race_shards.py "
+        "(test_an_unwritable_github_output_is_rc2_one_line).",
+    "dx/check_release_immutable.py":
+        "Appends the publish decision to $GITHUB_OUTPUT. A refused target is held "
+        "by tests/dx/test_check_release_immutable.py "
+        "(test_an_unwritable_github_output_is_rc2_one_line).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 34
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 37
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
