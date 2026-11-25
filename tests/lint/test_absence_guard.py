@@ -11,7 +11,7 @@ an optional chart must be AND-ed with that chart's presence check, declared
 once in `_lib_metric_sources.CHART_PRESENCE` (kube-state-metrics, never `up`:
 `up` disappears exactly when the scrape target is lost, the failure the
 absence alert exists to catch). "AND-ed" is judged on the PromQL AST
-(promql_parser): a presence check joined by `or`, or merely present elsewhere
+(Prometheus' parse tree, #4215): a presence check joined by `or`, or merely present elsewhere
 in the expression, filters nothing and does not count. An expression the
 parser cannot read fails the check (fail closed). The literal anchor keeps the
 scan non-vacuous; the declaration itself is pinned against the rendered charts
@@ -67,7 +67,7 @@ def test_every_optional_chart_absence_is_guarded():
         scanned += 1
         expr = str(rule.get("expr", ""))
         name = rule.get("alert") or rule.get("record")
-        problems = ms.unguarded_absences(expr)
+        problems = ms.unguarded_absences(tree)
         if problems:
             unguarded.append((pack, name, problems))
         elif _reads_optional_absence(tree):

@@ -2349,7 +2349,6 @@ da-tools migrate <input_file> [options]
 | `--triage` | Triage mode: output only CSV report | false |
 | `--interactive` | Ask user when uncertain | false |
 | `--no-prefix` | Disable custom_ prefix (not recommended) | false |
-| `--no-ast` | Force old regex engine | false |
 | `--prefix <PREFIX>` | Custom metric prefix | `custom_` |
 | `--no-dictionary` | Disable heuristic dictionary matching | false |
 

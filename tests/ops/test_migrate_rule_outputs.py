@@ -1,6 +1,6 @@
 """Tests for migrate_rule.py output writers + CLI orchestrator.
 
-The existing test_migrate_ast.py covers the AST helpers (extract_metrics_ast,
+The existing test_migrate_ast.py covers the parse-tree helpers (parse_expr,
 rewrite_expr_tenant_label, etc.). This file fills the audit-flagged gap (Top 5 #5):
 the CLI orchestrator + the file-writing / report-rendering layer that takes
 MigrationResult objects to disk.
@@ -12,7 +12,7 @@ Covers:
   - write_outputs: file generation across status buckets
   - print_dry_run / print_triage: stdout shape
   - main(): --dry-run / --triage / default / --no-prefix / --no-dictionary /
-    --no-ast / missing input / empty groups / YAML error
+    --no-ast refused / missing input / empty groups / YAML error
 """
 from __future__ import annotations
 
@@ -519,11 +519,9 @@ class TestRenderReport:
     def test_golden_single_perfect(self):
         r = _perfect_user_selected(
             "CPU", recording_rules=[{"record": "r1", "expr": "max(cpu)"}])
-        # engine label is environment-dependent (promql-parser present or not).
-        engine = "AST" if mr.HAS_AST else "regex"
         expected = (
             "=" * 60 + "\n"
-            + f"遷移報告 (Migration Report) — v4 ({engine} engine)\n"
+            + "遷移報告 (Migration Report)\n"
             + "=" * 60 + "\n\n"
             + "總規則數: 1\n"
             + "  ✅ 完美解析: 1\n"
@@ -847,20 +845,16 @@ class TestMain:
         mr.main()
         assert called["loaded"] is False
 
-    def test_no_ast_warns_when_promql_parser_missing(
-        self, monkeypatch, tmp_path, capsys, cli_argv,
-    ):
-        # Force HAS_AST=False so the warning branch fires under --no-ast=False.
-        # (We deliberately do NOT pass --no-ast — the warn fires only when
-        # the user wanted AST but parser is missing.)
+    def test_no_ast_is_refused(self, tmp_path, capsys, cli_argv):
+        """#4215: there is one reading of PromQL (Prometheus' parse tree), so
+        the flag that chose the regex engine is gone: argparse refuses it (rc 2)."""
         f = tmp_path / "in.yaml"
         f.write_text(self.SIMPLE_YAML, encoding="utf-8")
-        out_dir = tmp_path / "out"
-        monkeypatch.setattr(mr, "HAS_AST", False)
-        cli_argv("migrate_rule.py", str(f), "-o", str(out_dir), "--dry-run")
-        mr.main()
-        err = capsys.readouterr().err
-        assert "promql-parser" in err
+        cli_argv("migrate_rule.py", str(f), "-o", str(tmp_path / "out"), "--dry-run", "--no-ast")
+        with pytest.raises(SystemExit) as exc:
+            mr.main()
+        assert exc.value.code == 2
+        assert "--no-ast" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -973,7 +967,7 @@ def test_migrated_alerts_carry_the_maintenance_label_and_canonical_tail():
     spec.loader.exec_module(grd)
     assert migrate_rule.MAINTENANCE_TAIL == grd.MAINTENANCE_TAIL
     rule = {"alert": "X", "expr": "mysql_up > 5", "labels": {"severity": "warning"}}
-    parsed = {"op": ">", "lhs": "mysql_up"}
+    parsed = migrate_rule.parse_expr("mysql_up > 0")
     alert, _ = migrate_rule._build_alert_rule(rule, "X", parsed, "tenant:x:max",
                                                "tenant:alert_threshold:x", "custom_")
     assert alert["labels"]["maintenance"] == grd.MUTE

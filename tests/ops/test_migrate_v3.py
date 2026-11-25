@@ -99,7 +99,7 @@ def test_lookup_dictionary_none_dict():
 def test_parse_expr_simple_gt():
     """測試簡單大於。"""
     result = migrate_rule.parse_expr(
-        "mysql_global_status_threads_connected > 100", use_ast=False)
+        "mysql_global_status_threads_connected > 100")
     assert result is not None
     assert result["op"] == ">"
     assert result["val"] == "100"
@@ -108,7 +108,7 @@ def test_parse_expr_simple_gt():
 
 def test_parse_expr_simple_lt():
     """測試簡單小於。"""
-    result = migrate_rule.parse_expr("mysql_up < 1", use_ast=False)
+    result = migrate_rule.parse_expr("mysql_up < 1")
     assert result is not None
     assert result["op"] == "<"
     assert result["val"] == "1"
@@ -116,8 +116,7 @@ def test_parse_expr_simple_lt():
 def test_parse_expr_complex_rate():
     """測試複雜 rate 表達式。"""
     result = migrate_rule.parse_expr(
-        "rate(mysql_global_status_slow_queries[5m]) > 0.1",
-        use_ast=False)
+        "rate(mysql_global_status_slow_queries[5m]) > 0.1")
     assert result is not None
     assert result["is_complex"] is True
     assert result["val"] == "0.1"
@@ -125,26 +124,26 @@ def test_parse_expr_complex_rate():
 def test_parse_expr_unparseable_no_threshold():
     """測試無閾值的無法解析表達式。"""
     result = migrate_rule.parse_expr(
-        "absent(mysql_up)", use_ast=False)
+        "absent(mysql_up)")
     assert result is None
 
 def test_parse_expr_semantic_break_absent():
     """測試語義中斷 absent。"""
     result = migrate_rule.parse_expr(
-        "absent(mysql_up) > 0", use_ast=False)
+        "absent(mysql_up) > 0")
     assert result is None
 
 def test_parse_expr_eq_operator():
     """測試等於運算子。"""
     result = migrate_rule.parse_expr(
-        "mysql_up == 0", use_ast=False)
+        "mysql_up == 0")
     assert result is not None
     assert result["op"] == "=="
 
 def test_parse_expr_scientific_notation():
     """測試科學記號。"""
     result = migrate_rule.parse_expr(
-        "metric > 1e6", use_ast=False)
+        "metric > 1e6")
     assert result is not None
     assert result["val"] == "1e6"
 
@@ -183,7 +182,7 @@ def test_process_rule_perfect_simple():
         "expr": "mysql_connections > 100",
         "labels": {"severity": "warning"},
     }
-    result = migrate_rule.process_rule(rule, prefix="custom_", use_ast=False)
+    result = migrate_rule.process_rule(rule, prefix="custom_")
     assert result is not None
     assert result.status == "perfect"
     assert result.triage_action == "auto"
@@ -199,7 +198,7 @@ def test_process_rule_complex_with_rate():
         "expr": "rate(mysql_slow_queries[5m]) > 0.1",
         "labels": {"severity": "warning"},
     }
-    result = migrate_rule.process_rule(rule, prefix="custom_", use_ast=False)
+    result = migrate_rule.process_rule(rule, prefix="custom_")
     assert result is not None
     assert result.status == "complex"
     assert result.triage_action == "review"
@@ -212,7 +211,7 @@ def test_process_rule_unparseable():
         "expr": "absent(mysql_up)",
         "labels": {"severity": "critical"},
     }
-    result = migrate_rule.process_rule(rule, prefix="custom_", use_ast=False)
+    result = migrate_rule.process_rule(rule, prefix="custom_")
     assert result is not None
     assert result.status == "unparseable"
     assert result.triage_action == "skip"
@@ -234,7 +233,7 @@ def test_process_rule_golden_match():
         "labels": {"severity": "warning"},
     }
     result = migrate_rule.process_rule(
-        rule, prefix="custom_", dictionary=dictionary, use_ast=False)
+        rule, prefix="custom_", dictionary=dictionary)
     assert result.triage_action == "use_golden"
     assert result.dict_match is not None
 
@@ -245,7 +244,7 @@ def test_process_rule_no_prefix():
         "expr": "my_metric > 10",
         "labels": {"severity": "warning"},
     }
-    result = migrate_rule.process_rule(rule, prefix="", use_ast=False)
+    result = migrate_rule.process_rule(rule, prefix="")
     assert "my_metric" in result.tenant_config
     # Alert name should NOT have "Custom" prefix
     assert result.alert_rules[0]["alert"] == "TestNoPrefix"
@@ -257,13 +256,13 @@ def test_process_rule_critical_severity_key():
         "expr": "my_metric > 200",
         "labels": {"severity": "critical"},
     }
-    result = migrate_rule.process_rule(rule, prefix="custom_", use_ast=False)
+    result = migrate_rule.process_rule(rule, prefix="custom_")
     assert "custom_my_metric_critical" in result.tenant_config
 
 def test_process_rule_no_alert_name_returns_none():
     """測試無告警名稱回傳 None。"""
     rule = {"expr": "metric > 1"}
-    result = migrate_rule.process_rule(rule, use_ast=False)
+    result = migrate_rule.process_rule(rule)
     assert result is None
 
 def test_process_rule_shadow_labels_with_prefix():
@@ -273,7 +272,7 @@ def test_process_rule_shadow_labels_with_prefix():
         "expr": "metric > 5",
         "labels": {"severity": "warning"},
     }
-    result = migrate_rule.process_rule(rule, prefix="custom_", use_ast=False)
+    result = migrate_rule.process_rule(rule, prefix="custom_")
     labels = result.alert_rules[0].get("labels", {})
     assert labels.get("source") == "legacy"
     assert labels.get("migration_status") == "shadow"

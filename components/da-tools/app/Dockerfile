@@ -28,7 +28,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 # extension: `--only-binary` makes a missing musllinux wheel fail the build
 # instead of looking for a Rust toolchain this stage does not have.
 RUN pip install --no-cache-dir --only-binary=rpds-py \
-        PyYAML==6.0.3 promql-parser==0.10.0 \
+        PyYAML==6.0.3 \
         jsonschema==4.26.0 jsonschema-specifications==2025.9.1 \
         referencing==0.37.0 rpds-py==2026.9.1 attrs==26.1.0 && \
     python -m pip uninstall -y pip

@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""test_migrate_ast.py — AST Migration Engine pytest 測試套件 (Phase 11)。
+"""test_migrate_ast.py — 遷移引擎讀 PromQL 的方式（#4215：Prometheus 的語法樹）。
 
-驗證 promql-parser AST 引擎的核心功能:
-  1. Metric name 精準提取 (vs regex blacklist)
+驗證:
+  1. Metric name 從語法樹讀（`_lib_consumer_read.promql_metric_names`）
   2. Prefix injection (custom_ 前綴)
-  3. Tenant label injection (tenant=~".+")
+  3. Tenant label 依 selector 的 byte 位置注入（tenant=~".+"）
   4. 巢狀/複雜 PromQL 正確性 (and/or/unless, offset, subquery)
-  5. Graceful degradation (AST 失敗降級為 regex)
-  6. Roundtrip validation (改寫後的 PromQL 仍可 parse)
-  7. End-to-end process_rule 整合
+  5. 改寫後的 PromQL 仍被 Prometheus 的 parser 接受；拒收的運算式點名 raise
+  6. End-to-end process_rule 整合
 
 用法:
   python3 -m pytest tests/ops/test_migrate_ast.py -v
-  python3 tests/ops/test_migrate_ast.py  # 直接執行
 """
 
 import os
@@ -22,53 +20,54 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 import pytest
 import yaml
 
-# Add scripts/tools to path
-
+import _lib_consumer_read  # noqa: E402
 import migrate_rule  # noqa: E402
 
-# Check if AST is available
-HAS_AST = migrate_rule.HAS_AST
 
-# 單一共用 skip 標記：需要 promql-parser 的測試掛 @requires_ast。
-# 注意不可改成 module-level pytestmark —— 本檔約半數測試（regex fallback、
-# dict lookup、suppression pairing 等）刻意在沒裝 promql-parser 時也要跑。
-requires_ast = pytest.mark.skipif(not HAS_AST, reason="promql-parser not installed")
+def _names(expr):
+    """The metrics *expr* reads, off its parse tree."""
+    return _lib_consumer_read.promql_metric_names([expr], raise_refused=True)[0]
 
 
-@requires_ast
+def _breaks(expr):
+    """Whether *expr* calls a semantic-break function (SEMANTIC_BREAK_FUNCS)."""
+    return bool(migrate_rule._calls(migrate_rule._tree_of(expr)) & migrate_rule.SEMANTIC_BREAK_FUNCS)
+
+
+def _rewrite(expr, metrics):
+    """*expr* with every selector reading *metrics* given `tenant=~".+"`."""
+    return migrate_rule.rewrite_expr_tenant_label(expr, migrate_rule._tree_of(expr), set(metrics))
+
+
 def test_ast_simple_metric():
     """測試簡單 metric 名稱。"""
-    result = migrate_rule.extract_metrics_ast("mysql_up > 0")
+    result = _names("mysql_up > 0")
     assert result == ["mysql_up"]
 
-@requires_ast
 def test_ast_metric_with_labels():
     """測試帶標籤的 metric。"""
-    result = migrate_rule.extract_metrics_ast(
+    result = _names(
         'mysql_up{job="mysql", instance=~"10.0.*:3306"} == 0'
     )
     assert result == ["mysql_up"]
 
-@requires_ast
 def test_ast_rate_wrapped():
     """測試 rate() 包裹的 metric（regex 容易誤取）。"""
-    result = migrate_rule.extract_metrics_ast(
+    result = _names(
         "rate(http_requests_total[5m]) > 100"
     )
     assert result == ["http_requests_total"]
 
-@requires_ast
 def test_ast_nested_functions():
     """測試多層巢狀函式。"""
-    result = migrate_rule.extract_metrics_ast(
+    result = _names(
         "sum by (user) (rate(mysql_global_status_queries[5m] offset 1h))"
     )
     assert result == ["mysql_global_status_queries"]
 
-@requires_ast
 def test_ast_compound_and():
     """測試 and 複合表達式（多個 metric）。"""
-    result = migrate_rule.extract_metrics_ast(
+    result = _names(
         "(mysql_global_status_threads_connected > 100) "
         "and (mysql_global_status_threads_running > 50)"
     )
@@ -77,52 +76,33 @@ def test_ast_compound_and():
         "mysql_global_status_threads_running",
     ]
 
-@requires_ast
 def test_ast_compound_or_unless():
     """測試 or/unless 複合表達式。"""
-    result = migrate_rule.extract_metrics_ast(
+    result = _names(
         "metric_a > 1 or metric_b > 2 unless metric_c > 3"
     )
     assert "metric_a" in result
     assert "metric_b" in result
     assert "metric_c" in result
 
-@requires_ast
 def test_ast_histogram_quantile():
     """測試 histogram_quantile 加 le 標籤。"""
-    result = migrate_rule.extract_metrics_ast(
+    result = _names(
         'histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))'
     )
     assert result == ["http_request_duration_seconds_bucket"]
 
-@requires_ast
 def test_ast_binary_arithmetic():
     """測試算術運算中的 metric。"""
-    result = migrate_rule.extract_metrics_ast(
+    result = _names(
         "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes > 1e9"
     )
     assert "node_memory_MemTotal_bytes" in result
     assert "node_memory_MemAvailable_bytes" in result
 
-def test_ast_fallback_on_invalid():
-    """測試無效 PromQL 回傳空 list（降級為 regex）。"""
-    result = migrate_rule.extract_metrics_ast("this is not PromQL {{{}}")
-    assert result == []
-
-def test_ast_extract_all_metrics_uses_ast():
-    """測試 extract_all_metrics() 優先使用 AST。"""
-    result = migrate_rule.extract_all_metrics(
-        "rate(my_counter_total[5m]) > 10"
-    )
-    assert "my_counter_total" in result
-    # 不應包含 "rate" (regex 版本可能包含)
-    assert "rate" not in result
-
-
-@requires_ast
 def test_ast_dimension_labels():
     """測試維度標籤提取。"""
-    result = migrate_rule.extract_label_matchers_ast(
+    result = migrate_rule.extract_label_matchers(
         'redis_connected_clients{db="0", role="master"} > 100'
     )
     assert len(result) == 1
@@ -130,10 +110,9 @@ def test_ast_dimension_labels():
     assert "db" in result[0]["labels"]
     assert "role" in result[0]["labels"]
 
-@requires_ast
 def test_ast_skip_infrastructure_labels():
     """測試跳過基礎設施標籤（job/instance/namespace）。"""
-    result = migrate_rule.extract_label_matchers_ast(
+    result = migrate_rule.extract_label_matchers(
         'mysql_up{job="mysql", instance="10.0.0.1:3306", queue="tasks"} == 0'
     )
     # Should only have "queue", not "job" or "instance"
@@ -143,31 +122,28 @@ def test_ast_skip_infrastructure_labels():
             assert "instance" not in r["labels"]
 
 
-@requires_ast
 def test_ast_absent_detected():
     """測試 absent 函數偵測。"""
-    assert migrate_rule.detect_semantic_break_ast(
+    assert _breaks(
         'absent(mysql_up{job="mysql"})'
     ) is True
 
-@requires_ast
 def test_ast_predict_linear_detected():
     """測試 predict_linear 函數偵測。"""
-    assert migrate_rule.detect_semantic_break_ast(
+    assert _breaks(
         'predict_linear(node_filesystem_free_bytes[1h], 4*3600) < 0'
     ) is True
 
-@requires_ast
 def test_ast_normal_not_detected():
     """測試正常表達式不偵測為語義中斷。"""
-    assert migrate_rule.detect_semantic_break_ast(
+    assert _breaks(
         'rate(http_requests_total[5m]) > 100'
     ) is False
 
 
 def test_tenant_inject_into_existing_labels():
     """測試在現有標籤中注入租戶。"""
-    result = migrate_rule.rewrite_expr_tenant_label(
+    result = _rewrite(
         'mysql_up{job="mysql"} > 0',
         ["mysql_up"]
     )
@@ -176,7 +152,7 @@ def test_tenant_inject_into_existing_labels():
 
 def test_tenant_inject_bare_metric():
     """測試在裸露 metric 中注入租戶。"""
-    result = migrate_rule.rewrite_expr_tenant_label(
+    result = _rewrite(
         "mysql_up > 0",
         ["mysql_up"]
     )
@@ -184,105 +160,80 @@ def test_tenant_inject_bare_metric():
 
 def test_tenant_inject_multiple_metrics():
     """測試多個 metric 的租戶注入。"""
-    result = migrate_rule.rewrite_expr_tenant_label(
+    result = _rewrite(
         "(metric_a > 10) and (metric_b > 20)",
         ["metric_a", "metric_b"]
     )
     # Both metrics should have tenant label
     assert result.count('tenant=~".+"') == 2
 
-@requires_ast
 def test_tenant_inject_validates_reparse():
     """測試注入租戶標籤後仍可 parse。"""
-    result = migrate_rule.rewrite_expr_tenant_label(
+    result = _rewrite(
         'mysql_up{job="mysql"} > 0',
         ["mysql_up"]
     )
-    import promql_parser
-    ast = promql_parser.parse(result)
+    ast = migrate_rule._tree_of(result)
     assert ast is not None
 
-@requires_ast
 def test_tenant_inject_complex_nested():
     """測試巢狀函式中的租戶標籤注入。"""
-    result = migrate_rule.rewrite_expr_tenant_label(
+    result = _rewrite(
         "sum by (user) (rate(mysql_queries[5m] offset 1h))",
         ["mysql_queries"]
     )
     assert 'tenant=~".+"' in result
-    import promql_parser
-    ast = promql_parser.parse(result)
+    ast = migrate_rule._tree_of(result)
     assert ast is not None
 
 
-@requires_ast
 def test_killer_compound_and_binary():
     """測試複合 and 運算（Case 1）。"""
     expr = ("(mysql_global_status_threads_connected > 100) "
             "and (mysql_global_status_threads_running > 50)")
-    metrics = migrate_rule.extract_metrics_ast(expr)
+    metrics = _names(expr)
     assert len(metrics) == 2
     assert "mysql_global_status_threads_connected" in metrics
     assert "mysql_global_status_threads_running" in metrics
 
-@requires_ast
 def test_killer_complex_label_regex():
     """測試複雜 label matcher（Case 2）。"""
     expr = 'mysql_up{job="mysql", instance=~"10.0.*:3306"} == 0'
-    metrics = migrate_rule.extract_metrics_ast(expr)
+    metrics = _names(expr)
     assert metrics == ["mysql_up"]
 
     # Tenant injection roundtrip
-    rewritten = migrate_rule.rewrite_expr_tenant_label(expr, ["mysql_up"])
-    import promql_parser
-    ast = promql_parser.parse(rewritten)
+    rewritten = _rewrite(expr, ["mysql_up"])
+    ast = migrate_rule._tree_of(rewritten)
     assert ast is not None
 
-@requires_ast
 def test_killer_aggregation_offset_time_window():
     """測試聚合 + 時間窗 + offset（Case 3）。"""
     expr = "sum by (user) (rate(mysql_global_status_queries[5m] offset 1h))"
-    metrics = migrate_rule.extract_metrics_ast(expr)
+    metrics = _names(expr)
     assert metrics == ["mysql_global_status_queries"]
 
     # Tenant injection preserves structure
-    rewritten = migrate_rule.rewrite_expr_tenant_label(expr, metrics)
+    rewritten = _rewrite(expr, metrics)
     assert 'tenant=~".+"' in rewritten
-    import promql_parser
-    ast = promql_parser.parse(rewritten)
-    # Verify prettify roundtrip
-    pretty = ast.prettify()
-    assert "offset" in pretty
-    assert "5m" in pretty
+    migrate_rule._tree_of(rewritten)  # Prometheus accepts it
+    assert "[5m] offset 1h" in rewritten
 
 
-@requires_ast
 def test_walk_unary_expr():
     """測試一元表達式走訪：-metric_a。"""
-    import promql_parser
-    ast = promql_parser.parse("-my_metric")
-    vs_list = list(migrate_rule._walk_vector_selectors(ast))
-    assert len(vs_list) == 1
-    assert vs_list[0].name == "my_metric"
+    selectors = migrate_rule._selectors(migrate_rule._tree_of("-my_metric"))
+    assert [migrate_rule._selector_metric(n) for n in selectors] == ["my_metric"]
 
-@requires_ast
 def test_walk_paren_expr():
     """測試括號表達式走訪：(metric_a > 0)。"""
-    import promql_parser
-    ast = promql_parser.parse("(my_metric > 0)")
-    vs_list = list(migrate_rule._walk_vector_selectors(ast))
-    assert len(vs_list) == 1
-    assert vs_list[0].name == "my_metric"
+    selectors = migrate_rule._selectors(migrate_rule._tree_of("(my_metric > 0)"))
+    assert [migrate_rule._selector_metric(n) for n in selectors] == ["my_metric"]
 
-@requires_ast
 def test_walk_matrix_selector():
     """測試矩陣選擇器走訪：metric[5m]。"""
-    import promql_parser
-    ast = promql_parser.parse("rate(my_counter[5m])")
-    vs_list = list(migrate_rule._walk_vector_selectors(ast))
-    assert len(vs_list) == 1
-    assert vs_list[0].name == "my_counter"
-
+    selectors = migrate_rule._selectors(migrate_rule._tree_of("rate(my_counter[5m])"))
+    assert [migrate_rule._selector_metric(n) for n in selectors] == ["my_counter"]
 
 def test_e2e_simple_rule_with_ast():
     """測試簡單規則：AST 引擎應產出正確的三件套。"""
@@ -292,7 +243,7 @@ def test_e2e_simple_rule_with_ast():
         "labels": {"severity": "warning"},
     }
     result = migrate_rule.process_rule(
-        rule, prefix="custom_", dictionary={}, use_ast=True
+        rule, prefix="custom_", dictionary={}
     )
     assert result is not None
     assert result.status == "perfect"
@@ -301,10 +252,9 @@ def test_e2e_simple_rule_with_ast():
     assert len(result.recording_rules) == 2
     assert len(result.alert_rules) == 1
 
-    # Recording rule LHS should contain tenant label if AST is available
+    # Recording rule LHS carries the tenant label
     rec_expr = result.recording_rules[0]["expr"]
-    if HAS_AST:
-        assert "tenant" in rec_expr
+    assert "tenant" in rec_expr
 
 def test_e2e_complex_rule_with_ast():
     """測試複雜規則：rate() 包裹。"""
@@ -314,26 +264,12 @@ def test_e2e_complex_rule_with_ast():
         "labels": {"severity": "critical"},
     }
     result = migrate_rule.process_rule(
-        rule, prefix="custom_", dictionary={}, use_ast=True
+        rule, prefix="custom_", dictionary={}
     )
     assert result is not None
     assert result.status == "complex"
     # base_key should be the actual metric, not "rate"
     assert "custom_mysql_global_status_queries_critical" in result.tenant_config
-
-def test_e2e_no_ast_fallback():
-    """測試 use_ast=False 時應使用舊版 regex 引擎。"""
-    rule = {
-        "alert": "TestSimple",
-        "expr": "my_metric > 50",
-        "labels": {"severity": "warning"},
-    }
-    result = migrate_rule.process_rule(
-        rule, prefix="custom_", dictionary={}, use_ast=False
-    )
-    assert result is not None
-    assert result.status == "perfect"
-    assert "custom_my_metric" in result.tenant_config
 
 def test_e2e_golden_standard_skip():
     """測試字典命中黃金標準：不加 prefix，建議 use_golden。"""
@@ -351,7 +287,7 @@ def test_e2e_golden_standard_skip():
         "labels": {"severity": "warning"},
     }
     result = migrate_rule.process_rule(
-        rule, prefix="custom_", dictionary=dictionary, use_ast=True
+        rule, prefix="custom_", dictionary=dictionary
     )
     assert result is not None
     assert result.triage_action == "use_golden"
@@ -364,38 +300,28 @@ def test_e2e_semantic_break_returns_none():
         "labels": {"severity": "critical"},
     }
     result = migrate_rule.process_rule(
-        rule, prefix="custom_", dictionary={}, use_ast=True
+        rule, prefix="custom_", dictionary={}
     )
     assert result is not None
     assert result.status == "unparseable"
 
 
-@requires_ast
 def test_parse_all_metrics_simple():
     """測試簡單表達式的所有 metrics。"""
-    parsed = migrate_rule.parse_expr("mysql_connections > 100", use_ast=True)
+    parsed = migrate_rule.parse_expr("mysql_connections > 100")
     assert parsed is not None
     assert parsed["all_metrics"] == ["mysql_connections"]
 
-@requires_ast
 def test_parse_all_metrics_compound():
     """測試複合表達式的所有 metrics。"""
     parsed = migrate_rule.parse_expr(
-        "(metric_a - metric_b) / metric_c > 0.5", use_ast=True
+        "(metric_a - metric_b) / metric_c > 0.5"
     )
     assert parsed is not None
     assert "metric_a" in parsed["all_metrics"]
     assert "metric_b" in parsed["all_metrics"]
     assert "metric_c" in parsed["all_metrics"]
 
-def test_parse_all_metrics_no_ast():
-    """測試 use_ast=False 時 all_metrics 為空。"""
-    parsed = migrate_rule.parse_expr("mysql_up > 0", use_ast=False)
-    assert parsed is not None
-    assert parsed["all_metrics"] == []
-
-
-@requires_ast
 def test_write_outputs_ast_path():
     """測試 AST 引擎產出：recording rule LHS 應包含租戶標籤。"""
     import tempfile
@@ -406,7 +332,7 @@ def test_write_outputs_ast_path():
         "labels": {"severity": "warning"},
     }
     result = migrate_rule.process_rule(
-        rule, prefix="custom_", dictionary={}, use_ast=True
+        rule, prefix="custom_", dictionary={}
     )
     assert result is not None
 
@@ -427,55 +353,31 @@ def test_write_outputs_ast_path():
         assert "custom_mysql_connections" in agg_rule["record"]
 
 
-def test_degrade_extract_metrics_ast_without_lib():
-    """測試當 HAS_AST=False 時，extract_metrics_ast 回傳空。"""
-    orig = migrate_rule.HAS_AST
-    try:
-        migrate_rule.HAS_AST = False
-        result = migrate_rule.extract_metrics_ast("mysql_up > 0")
-        assert result == []
-    finally:
-        migrate_rule.HAS_AST = orig
-
-def test_degrade_extract_all_metrics_fallback():
-    """測試 extract_all_metrics 降級為 regex 仍能提取 metric。"""
-    orig = migrate_rule.HAS_AST
-    try:
-        migrate_rule.HAS_AST = False
-        result = migrate_rule.extract_all_metrics("mysql_up > 0")
-        assert "mysql_up" in result
-    finally:
-        migrate_rule.HAS_AST = orig
-
-
-@requires_ast
 def test_nested_absent_in_rate():
     """測試巢狀 Call 中的 absent：absent(rate(x[5m]))。"""
     # absent 接受 vector，rate 接受 matrix — 這不是合法 PromQL，
     # 但 _walk_calls 應能遍歷巢狀 Call 找到 absent
     # 使用合法的表達式：absent(rate(x[5m]))
-    assert migrate_rule.detect_semantic_break_ast(
+    assert _breaks(
         'absent(rate(http_requests_total[5m]))'
     ) is True
 
-@requires_ast
 def test_deeply_nested_predict_linear():
     """測試深層巢狀：sum(predict_linear(x[1h], 3600))。"""
-    assert migrate_rule.detect_semantic_break_ast(
+    assert _breaks(
         'sum(predict_linear(node_filesystem_free_bytes[1h], 3600))'
     ) is True
 
-@requires_ast
 def test_no_break_in_nested_safe_funcs():
     """測試巢狀安全函數無中斷：sum(rate(x[5m]))。"""
-    assert migrate_rule.detect_semantic_break_ast(
+    assert _breaks(
         'sum(rate(http_requests_total[5m]))'
     ) is False
 
 
 def test_tenant_edge_same_metric_multiple_occurrences():
     """測試同一 metric 多次出現：每處都應注入租戶。"""
-    result = migrate_rule.rewrite_expr_tenant_label(
+    result = _rewrite(
         'my_metric{a="1"} / my_metric{b="2"}',
         ["my_metric"]
     )
@@ -483,21 +385,48 @@ def test_tenant_edge_same_metric_multiple_occurrences():
     assert result.count('tenant=~".+"') == 2
 
 def test_tenant_edge_same_metric_bare_and_labeled():
-    """測試同一 metric 同時帶/不帶標籤（已知限制）。
+    """同一 metric 同時帶/不帶標籤：兩處都注入（#4215：依 selector 的位置插入；
+    regex 時代只注入帶標籤的那處，裸露的那處讀到所有租戶）。"""
+    result = _rewrite('my_metric > on() group_left my_metric{a="1"}', ["my_metric"])
+    assert result == 'my_metric{tenant=~".+"} > on() group_left my_metric{tenant=~".+",a="1"}'
 
-    已知限制：if/else 邏輯假設同一 metric 的所有出現形式一致。
-    當 Pattern 1 (帶 label) 命中時，裸露的 metric 不會被注入 tenant。
-    實際場景中，recording rule 的 LHS 通常只有一種形式，此限制影響小。
-    """
-    result = migrate_rule.rewrite_expr_tenant_label(
-        'my_metric > on() group_left my_metric{a="1"}',
-        ["my_metric"]
-    )
-    # Known limitation: only the labeled occurrence gets injected
-    # because the if/else branch only applies one pattern type per metric
-    assert result.count('tenant=~".+"') >= 1
-    assert 'tenant=~".+",a="1"' in result
 
+@pytest.mark.parametrize("expr,want", [
+    # a string literal spelling the metric is not a selector
+    ('label_replace(up, "a", "up", "", "")', 'label_replace(up{tenant=~".+"}, "a", "up", "", "")'),
+    # a name given as a `__name__` matcher
+    ('{__name__="x"} > 1', '{tenant=~".+",__name__="x"} > 1'),
+    # whitespace between name and `{`, and an empty `{}`
+    ('x {a="1"} > 2', 'x {tenant=~".+",a="1"} > 2'),
+    ('x{} > 1', 'x{tenant=~".+"} > 1'),
+    # range, offset and a multibyte label value before the selector
+    ('x{db="日本"} + rate(y[5m] offset 1h) > 1',
+     'x{tenant=~".+",db="日本"} + rate(y{tenant=~".+"}[5m] offset 1h) > 1'),
+    # a comment inside the expression
+    ('x # c\n  > 0', 'x{tenant=~".+"} # c\n  > 0'),
+    # a comment between the name and its `{`, and inside an empty `{}`
+    ('x # note\n{a="b"} > 1', 'x # note\n{tenant=~".+",a="b"} > 1'),
+    ('x{ # c\n} > 1', 'x{tenant=~".+" # c\n} > 1'),
+])
+def test_tenant_inject_by_position(expr, want):
+    """#4215: the tenant matcher goes in at each selector's byte offset."""
+    metrics = _names(expr)
+    assert _rewrite(expr, metrics) == want
+
+
+def test_an_expression_the_parser_refuses_raises_naming_it():
+    """#4215: Prometheus' parser decides; a refusal names the expression."""
+    with pytest.raises(_lib_consumer_read.InputRefused, match="this is not PromQL"):
+        _names("this is not PromQL {{{}}")
+
+
+def test_every_semantic_break_function_is_one_prometheus_knows():
+    """The policy list names only functions the deployed Prometheus parses
+    (`da-read promql-names`): an unknown one is refused at the rule loader
+    already, so listing it would only be a stale entry (holt_winters)."""
+    names = sorted(migrate_rule.SEMANTIC_BREAK_FUNCS)
+    known = _lib_consumer_read.promql_names(names)
+    assert all(known), [n for n, k in zip(names, known) if not k]
 
 def test_dict_load_from_nonexistent_dir():
     """測試不存在的目錄回傳空 dict。"""
@@ -542,7 +471,7 @@ def test_write_outputs_basic():
         "labels": {"severity": "warning"},
     }
     result = migrate_rule.process_rule(
-        rule, prefix="custom_", dictionary={}, use_ast=False
+        rule, prefix="custom_", dictionary={}
     )
     assert result is not None
 
@@ -585,7 +514,7 @@ def test_write_triage_csv_structure():
         "labels": {"severity": "warning"},
     }
     result = migrate_rule.process_rule(
-        rule, prefix="custom_", dictionary={}, use_ast=False
+        rule, prefix="custom_", dictionary={}
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -612,10 +541,10 @@ def _make_suppression_pair(prefix="custom_", base_metric="mysql_connections",
         "labels": {"severity": "critical"},
     }
     warn_r = migrate_rule.process_rule(
-        warn_rule, prefix=prefix, dictionary={}, use_ast=True
+        warn_rule, prefix=prefix, dictionary={}
     )
     crit_r = migrate_rule.process_rule(
-        crit_rule, prefix=prefix, dictionary={}, use_ast=True
+        crit_rule, prefix=prefix, dictionary={}
     )
     return [warn_r, crit_r]
 
@@ -650,7 +579,7 @@ def test_suppress_no_pairing_warning_only():
         "labels": {"severity": "warning"},
     }
     results = [migrate_rule.process_rule(
-        warn_rule, prefix="custom_", dictionary={}, use_ast=True
+        warn_rule, prefix="custom_", dictionary={}
     )]
     n = migrate_rule.apply_auto_suppression(results)
     assert n == 0
@@ -665,7 +594,7 @@ def test_suppress_no_pairing_critical_only():
         "labels": {"severity": "critical"},
     }
     results = [migrate_rule.process_rule(
-        crit_rule, prefix="custom_", dictionary={}, use_ast=True
+        crit_rule, prefix="custom_", dictionary={}
     )]
     n = migrate_rule.apply_auto_suppression(results)
     assert n == 0
@@ -684,9 +613,9 @@ def test_suppress_no_pairing_different_metrics():
     }
     results = [
         migrate_rule.process_rule(
-            warn_rule, prefix="custom_", dictionary={}, use_ast=True),
+            warn_rule, prefix="custom_", dictionary={}),
         migrate_rule.process_rule(
-            crit_rule, prefix="custom_", dictionary={}, use_ast=True),
+            crit_rule, prefix="custom_", dictionary={}),
     ]
     n = migrate_rule.apply_auto_suppression(results)
     assert n == 0
@@ -786,3 +715,98 @@ def test_suppress_no_prefix_pairing():
     # v1.2.0: 驗證 metric_group label（不再檢查 PromQL 修改）
     warn_labels = results[0].alert_rules[0]["labels"]
     assert warn_labels["metric_group"] == "mysql_connections"
+
+
+# --- #4215: what the text reading got wrong, read off the parse tree ---------
+
+def test_a_multi_line_alert_is_split():
+    """The regex split did not cross lines: every multi-line legacy alert was
+    `unparseable`."""
+    parsed = migrate_rule.parse_expr("sum by (job) (\n  rate(x_total[5m])\n) > 3\n")
+    assert parsed is not None
+    assert (parsed["op"], parsed["val"], parsed["base_key"]) == (">", "3", "x_total")
+
+
+def test_a_label_value_does_not_make_a_selector_complex():
+    """`-` or `[` inside a label value made the text reading call it complex."""
+    parsed = migrate_rule.parse_expr('x{job="a-b", re=~"[0-9]+"} > 1')
+    assert parsed["is_complex"] is False
+
+
+def test_guess_aggregation_reads_calls_and_division_off_the_tree():
+    # a `rate(` and a `/` inside label values are text, not a call or division
+    assert migrate_rule.guess_aggregation("x_gauge", 'x_gauge{q="rate(a)/b"}')[0] == "max"
+    assert migrate_rule.guess_aggregation("x_gauge", "rate(x_gauge[5m])")[0] == "sum"
+    assert migrate_rule.guess_aggregation("x_gauge", "x_gauge / y")[1].startswith("包含除法")
+
+
+def test_a_bare_selector_pins_nothing():
+    """`x{db="a"} + x`: the bare `x` reads every db, so db is not pinned (the
+    text reading only looked at the `{...}` it found)."""
+    assert migrate_rule.static_label_values('x{db="a"} + x') == {}
+    assert migrate_rule.static_label_values('x{db="a"} + x{db="a"}') == {"db": "a"}
+
+
+@pytest.mark.parametrize("threshold", ["0x1F", "5m", "Inf", "NaN", "1_000"])
+def test_a_threshold_the_threshold_file_cannot_hold_is_unparseable(threshold):
+    """#4215 review: PromQL accepts these numbers, the threshold file and
+    da-guard do not — writing failed late and the whole run produced nothing."""
+    assert migrate_rule.parse_expr(f"x > {threshold}") is None
+
+
+@pytest.mark.parametrize("threshold", ["1", "0.5", "1e3", "-1", "+1"])
+def test_a_plain_threshold_is_kept_as_written(threshold):
+    assert migrate_rule.parse_expr(f"x > {threshold}")["val"] == threshold
+
+
+def test_a_selector_with_no_fixed_name_is_flagged_for_review():
+    """No `__name__=` to pin: no tenant matcher can go in, so the recording rule
+    reads every tenant — the result says so instead of shipping it silently."""
+    rule = {"alert": "A", "expr": 'x / {job="a"} > 1', "labels": {"severity": "warning"}}
+    result = migrate_rule.process_rule(rule, prefix="custom_", dictionary={})
+    assert result.triage_action == "review"
+    assert any('{job="a"}' in n for n in result.notes)
+
+
+# --- #4298 review ------------------------------------------------------------
+
+def test_a_multi_line_recording_rule_renders_as_loadable_yaml():
+    """A multi-line LHS (it migrates now) is written as a literal block: a plain
+    scalar put its later lines at column 0 and the file did not load."""
+    rule = {"alert": "A", "expr": "sum by (job) (\n  rate(x_total[5m])\n) > 3",
+            "labels": {"severity": "warning"}}
+    result = migrate_rule.process_rule(rule, prefix="custom_", dictionary={})
+    doc = yaml.safe_load(migrate_rule.render_recording_rules([result]))
+    exprs = [r["expr"] for r in doc["groups"][0]["rules"]]
+    assert any("rate(x_total{tenant=~\".+\"}[5m])" in e and "\n" in e for e in exprs)
+
+
+@pytest.mark.parametrize("threshold", ["012", "-012", "00"])
+def test_an_octal_looking_threshold_is_unparseable(threshold):
+    """Prometheus reads `012` as octal (10); float() would write 12."""
+    assert migrate_rule.parse_expr(f"x > {threshold}") is None
+
+
+@pytest.mark.parametrize("expr", [
+    '{__name__="legacy metric"} > 1',   # no bare selector spells it
+    '{service="api"} > 1',              # no name at all: no shared unknown key
+])
+def test_a_rule_whose_key_cannot_be_derived_is_unparseable(expr):
+    assert migrate_rule.parse_expr(expr) is None
+
+
+def test_an_unnamed_selector_note_keeps_the_golden_verdict():
+    dictionary = {"mysql_connections": {"golden_rule": "MariaDBHighConnections", "rule_pack": "mariadb"}}
+    rule = {"alert": "A", "expr": '(mysql_connections or {job="a"}) > 100',
+            "labels": {"severity": "warning"}}
+    result = migrate_rule.process_rule(rule, prefix="custom_", dictionary=dictionary)
+    assert result.triage_action == "use_golden"
+    assert any('{job="a"}' in n for n in result.notes)
+
+
+def test_a_tree_too_deep_to_walk_is_refused_and_named_not_a_crash():
+    deep = "(" * 1200 + "x" + ")" * 1200
+    trees = _lib_consumer_read.promql_shape_each([deep, "y > 2"])
+    assert isinstance(trees[0], _lib_consumer_read.InputRefused)
+    assert "too deeply" in str(trees[0])
+    assert trees[1]["kind"] == "binary"

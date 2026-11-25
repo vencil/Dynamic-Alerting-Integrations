@@ -13,42 +13,36 @@ lang: en
 
 ---
 
-## Architecture: AST-Informed String Surgery
+## Architecture: read the parse tree, insert by position
 
 ```mermaid
 flowchart LR
-    A["Original PromQL<br/>string"] --> B["promql_parser<br/>.parse()"]
-    B -->|"read-only AST"| C["walk_ast()<br/>Collect VectorSelector<br/>nodes"]
-    C --> D["rewrite_expr_tenant_label()<br/>tenant label injection"]
-    D --> E["Reparse +<br/>prettify()"]
-    E -->|"✅ Valid"| F["Output<br/>Rewritten PromQL"]
-    B -->|"❌ Parse fails"| G["Fallback<br/>Regex path"]
-    E -->|"❌ Reparse fails"| G
+    A["Original rule file"] --> B["da-read prometheus-rules<br/>(Prometheus' rule loader)"]
+    B --> C["da-read promql-shape<br/>(the whole file read into parse trees at once)"]
+    C --> D["Read off the tree: threshold, metrics,<br/>label matchers, semantic-break functions"]
+    D --> E["rewrite_expr_tenant_label()<br/>inject tenant at each selector's byte offset"]
+    E --> F["Read again: does Prometheus accept it?"]
+    F -->|"✅"| G["Output rewritten PromQL"]
+    F -->|"❌"| H["rc 2, naming the expression"]
 
-    style F fill:#c8e6c9,stroke:#2e7d32
-    style G fill:#fff3e0,stroke:#e65100
+    style G fill:#c8e6c9,stroke:#2e7d32
+    style H fill:#ffcdd2,stroke:#c62828
 ```
 
-**Why not full AST rewrite?** The `promql-parser` (Rust PyO3, v0.7.0) AST is read-only — node attributes cannot be modified and re-serialized. The string surgery approach is safer (preserves original expression structure), simpler (no custom PromQL serializer needed), and verifiable (reparse confirms correctness).
+An expression is read only by Prometheus' own parser (`da-read`, the same code the deployed Prometheus runs), never scanned as text: the rule file goes through the rule loader first, then every alert's expression is read into its parse tree in one run. The threshold is the right side of a root `LHS <comparison> number`; the metrics are the names each selector pins with a `__name__` equality matcher. Multi-line expressions, comments and whitespace between a name and `{` read the same, and words inside label values or string literals are never taken for metrics or functions.
+
+**Why not re-serialize the whole tree?** Inserting `tenant=~".+"` at each selector's position in the original keeps the rest of the expression (layout, comments, parentheses) as written; the result is read again, and an expression Prometheus does not accept ends the run with rc 2, naming it, instead of falling back to the original — that would ship a recording rule with no tenant restriction.
 
 ## Core Capabilities
 
 | Capability | Description |
 |------------|-------------|
-| `extract_metrics_ast()` | Precise AST-based metric name identification, replacing regex + blacklist approach |
-| `extract_label_matchers_ast()` | Extracts all label matchers (including `=~` regex matchers) |
-| `rewrite_expr_tenant_label()` | `tenant=~".+"` label injection, ensuring tenant isolation |
-| `detect_semantic_break_ast()` | Detects `absent()` / `predict_linear()` and other semantic-breaking functions |
+| `parse_expr()` | Splits LHS, comparison operator and threshold off the parse tree; a root that is no comparison, or a semantic-break function, makes the rule unparseable |
+| `extract_label_matchers()` | The business-dimension labels each selector pins with `=` (job / instance / namespace and the like excluded) |
+| `rewrite_expr_tenant_label()` | Injects `tenant=~".+"` by position: after `{` where there is one, `{tenant=~".+"}` after the name where there is not, and after `{` for a bare `{__name__="x"}` |
+| `SEMANTIC_BREAK_FUNCS` | Functions that do not migrate (`absent()`, `predict_linear()`, ...); a test holds every name to one the deployed Prometheus knows |
 
-## Graceful Degradation
-
-The migration engine employs a progressive degradation strategy:
-
-1. **AST path** (default): Used when `promql-parser` is available and the expression parses successfully
-2. **Regex path** (fallback): Automatically activated when `promql-parser` is not installed or a specific expression fails to parse
-3. **Forced regex**: CLI `--no-ast` flag bypasses AST for debugging or comparison
-
-Degradation does not affect output format — both paths produce the same three-piece suite (recording rules + threshold normalization + alert rules).
+An expression Prometheus' parser refuses ends the run with rc 2 when the rule file is read; there is no fallback path.
 
 ## Enterprise Migration Workflow
 
