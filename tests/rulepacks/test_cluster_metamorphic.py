@@ -45,8 +45,6 @@ Not covered (so it does not look covered):
     another (its scopes are {cluster, flat}: TenantExporterAbsent) is
     replayed as the shipped tests have it — every one of them declares the
     kind alone, so its alerts are the per-tenant ones.
-  * a pack the lint's baseline still lists (a rule that does not keep the
-    label yet): a replay that differs there is an expected failure, not a pass.
   * an alert no shipped test makes FIRE is replayed to no effect.
     `test_what_the_replay_reaches` counts them, so the number is on record
     and does not grow unseen.
@@ -218,11 +216,6 @@ def _replay(doc: dict, records: dict, alerts: dict, clusters: "list[str]", src: 
     return out, len(kept)
 
 
-def _rule_files(src: Path) -> "set[str]":
-    doc = yaml.safe_load(src.read_text(encoding="utf-8"))
-    return {Path(f).name for f in doc.get("rule_files") or []}
-
-
 def _under_rule_packs(doc: dict, src: Path) -> bool:
     packs = (ROOT / "rule-packs").resolve()
     files = [(src.parent / f).resolve() for f in doc.get("rule_files") or []]
@@ -254,14 +247,6 @@ def _run(src: Path, clusters: "list[str]", scopes, tmp_path: Path) -> "tuple[int
 @pytest.mark.parametrize("src", TESTS, ids=[p.name for p in TESTS])
 def test_replay_with_cluster_label(src, clusters, scopes, tmp_path):
     rc, output, _kept = _run(src, clusters, scopes, tmp_path)
-    if rc == 0:
-        return
-    if rc != 0:
-        listed = _rule_files(src) & set(cci.load_baseline())
-        if listed:
-            # the lint's own list of rules that do not keep the label yet: the
-            # replay differing there is that debt, seen as behaviour
-            pytest.xfail(f"{sorted(listed)} still in cluster_identity_baseline.yaml")
     assert rc == 0, (
         f"{src.name} replayed in {clusters} differs for {sorted(_failing_alerts(output)) or '?'}:"
         f"\n{output[-3000:]}")

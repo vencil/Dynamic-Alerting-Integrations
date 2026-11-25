@@ -36,9 +36,10 @@ EXIT-LOCKED (same discipline as check_threshold_reachability.KNOWN_UNWIRED):
 a grandfathered pair that gets fixed, or stops being a detected pair, is a
 HARD error — the list can only shrink, so it stays empty.
 
-GROUP NAMESPACE (#3692): severity dedup pairs alerts by `metric_group` within a
-tenant only (`equal: ["metric_group"]`), so a group is one namespace across
-every rule pack a tenant runs. Over T1 (the source packs, one file per pack)
+GROUP NAMESPACE (#3692): severity dedup pairs alerts by tenant and
+`metric_group` — and by `da_cluster` when both alerts carry it (the two rules
+of _grar_routes.build_dedup_inhibit_rules) — never by rule pack, so a group is
+one namespace across every rule pack a tenant runs. Over T1 (the source packs, one file per pack)
 three more checks, all computed — no list to keep:
   - GROUP-COLLISION: a value carried by alerts of two rule packs. A tenant
     running both has one pack's critical mute the other's warning (measured
@@ -51,6 +52,53 @@ three more checks, all computed — no list to keep:
   - NO-DEDUP-GROUP: a value with no critical member or no warning member in
     its pack (the dedup inhibit mutes `severity="warning"` only). It suppresses nothing, so it is only a second, unrelated use
     of the label (a routing handle) — and dedup is what the label is for.
+
+GROUP CLUSTER SCOPE (#1200): the two dedup rules are "both alerts carry
+`da_cluster`, equal on it" and "neither carries it". An alert with the label
+and one without never pair. So within one `metric_group` of one pack the
+warning and the critical members must have the same cluster scope:
+  - SCOPE-MISMATCH: the members' results differ — one is per cluster
+    (`cluster`: its series carry `da_cluster`), another is not (`flat`) — or
+    one alert's own `or` sides differ. On a Prometheus whose series carry the
+    label the per-cluster warning is then not suppressed by the tenant-wide
+    critical (and the other way round a tenant-wide warning is muted only by
+    the cluster whose id happens to equal the evaluating Prometheus').
+  - SCOPE-NOT-JUDGED: a member's scope could not be determined: its
+    expression has a side that is a scalar, the scope rows do not line up
+    with the rules read here, or the alert's own `labels:` name `da_cluster`
+    (any value — blank, static or templated). A rule's labels are applied
+    after the expression is evaluated and overwrite what it computed (a blank
+    value removes the label), so they rewrite the very identity Alertmanager
+    pairs on, and no template is taken to be harmless. A scope the lint
+    cannot DETERMINE is this failure, never a pass; shapes it determines
+    WRONGLY are listed under "Not judged" below.
+All `cluster` passes; all `flat` passes too — when one Prometheus evaluates
+both alerts they get the same external label (or none) and one of the two
+rules pairs them. What a member's result carries is check_cluster_identity's
+judgement of the expression as Prometheus parses it (`alert_result_scopes`),
+never the PromQL text and never the `# da_cluster: tenant-wide` declarations:
+a rule that declares an inner tenant-wide read can still output the cluster
+(MariaDBNoPrimary). `info` members are not held to it — the inhibit neither
+reads them as a source nor mutes them. Over T1 only, like the namespace
+checks (T2 is the generated copy); the platform pack is in T1 and is read,
+it simply carries no `metric_group` today. Not over the compiler's
+`slo_{{…}}` groups nor anything migrate writes for a customer — those
+outputs are not in this tree and are pinned by their own tests
+(custom_alert_compile_test.go, tests/ops/test_migrate_per_cluster.py).
+
+Not judged (the scope check passes these, and Alertmanager sees otherwise):
+the scope is check_cluster_identity's, so what that lint does not read
+(its docstring, "Not judged") is not read here either. Three shapes are
+known to be mis-determined, each pinned as such by
+test_documented_scope_limits_are_still_limits:
+  * `label_replace(v, "da_cluster", "", "", "")` — the lint says cluster;
+    the label is erased, the alert reaches Alertmanager without it.
+  * `absent(m{da_cluster="east"})` — the lint says flat; `absent` hands on
+    its equality matchers, the alert carries `da_cluster="east"`.
+  * an `or` below the top of the expression with sides of different scope,
+    `(per-cluster or max by (tenant) (other)) > 5` — the lint says cluster;
+    the rule also yields a series without the label. (Only the `or` sides
+    at the TOP of an expression are judged apart.)
 
 SCOPE NOTE (deliberate non-gate): the WS2a S2 or-masking scan is NOT gated
 here or anywhere — its same-label-set `or` heuristic needs human judgment
@@ -77,6 +125,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_validation import i18n_text  # noqa: E402
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
+import check_cluster_identity  # noqa: E402  (#1200: what an alert's result carries)
 
 CRITICAL_SUFFIX = "Critical"
 
@@ -189,6 +238,104 @@ def group_namespace_errors(by_pack: dict[str, dict[str, list[str]]]) -> list[str
     return errors
 
 
+# The inhibit's source is `severity="critical"`, its target `severity="warning"`
+# (_grar_routes.build_dedup_inhibit_rules): only these members pair.
+_DEDUP_SEVERITIES = ("warning", "critical")
+NOT_JUDGED = "not judged"
+#: In a row's scopes when the alert's own `labels:` name the cluster label:
+#: whatever the expression computed, the rule overwrites it.
+LABELS_SET_CLUSTER = "labels-set-cluster"
+_LABELS_SET_TEXT = f"{NOT_JUDGED} (its `labels:` set `{check_cluster_identity.CLUSTER_LABEL}`)"
+
+
+def collect_group_scopes(
+        root: Path = PROJECT_ROOT) -> list[tuple[str, str, str, str, frozenset]]:
+    """[(pack file name, metric_group, alert, severity, result scopes)] for
+    every T1 alert that carries a group (the compiler's `slo_{{…}}` left out,
+    as in `collect_groups_by_pack`). The scopes are check_cluster_identity's
+    (`alert_result_scopes`), attached by the rule's place in its file; a rule
+    with no row there, or a row of another name, gets `{None}` — not judged.
+    An alert whose own `labels:` name `da_cluster` gets `{LABELS_SET_CLUSTER}`:
+    the rule overwrites what its expression computed."""
+    files = T1_SOURCE.files_under(root)
+    results = _lib_consumer_read.prometheus_rule_file_results(files)
+    _lib_consumer_read.require_read(results)
+    judged = {(file, nth): (name, scopes) for file, nth, name, scopes
+              in check_cluster_identity.alert_result_scopes(root)}
+    rows: list[tuple[str, str, str, str, frozenset]] = []
+    for path, rf in zip(files, results):
+        pack, nth = Path(path).name, -1
+        doc = rf.documents[0] or {}
+        for g in doc.get("groups") or []:
+            for r in g.get("rules") or []:
+                nth += 1
+                if "alert" not in r:
+                    continue
+                labels = r.get("labels") or {}
+                mg = labels.get("metric_group")
+                if not isinstance(mg, str) or not mg or mg.startswith("slo_{{"):
+                    continue
+                name, scopes = judged.get((pack, nth), (None, frozenset({None})))
+                if name != str(r["alert"]):
+                    scopes = frozenset({None})
+                if check_cluster_identity.CLUSTER_LABEL in labels:
+                    scopes = frozenset({LABELS_SET_CLUSTER})
+                rows.append((pack, mg, str(r["alert"]), str(labels.get("severity", "")), scopes))
+    return rows
+
+
+def _scope_text(scopes: frozenset) -> str:
+    known = {check_cluster_identity.CLUSTER, check_cluster_identity.FLAT}
+    if LABELS_SET_CLUSTER in scopes:
+        return _LABELS_SET_TEXT
+    if not scopes or not scopes <= known:
+        return NOT_JUDGED
+    return "+".join(sorted(scopes))
+
+
+def dedup_members(rows: list[tuple[str, str, str, str, frozenset]],
+                  ) -> dict[tuple[str, str], list[tuple[str, str, str]]]:
+    """{(pack, metric_group): [(alert, severity, scope text)]} — the warning
+    and critical members the scope check judges, in file order."""
+    groups: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
+    for pack, mg, alert, severity, scopes in rows:
+        if severity in _DEDUP_SEVERITIES:
+            groups.setdefault((pack, mg), []).append((alert, severity, _scope_text(scopes)))
+    return groups
+
+
+def group_scope_errors(rows: list[tuple[str, str, str, str, frozenset]]) -> list[str]:
+    """SCOPE-MISMATCH / SCOPE-NOT-JUDGED (see GROUP CLUSTER SCOPE)."""
+    errors: list[str] = []
+    for (pack, mg), members in sorted(dedup_members(rows).items()):
+        texts = {text for _a, _s, text in members}
+        listed = ", ".join(f"{a} [{sev}] = {text}" for a, sev, text in members)
+        if _LABELS_SET_TEXT in texts:
+            errors.append(
+                f"SCOPE-NOT-JUDGED: {pack}: metric_group {mg!r}: {listed} — an alert's own "
+                f"`labels:` set `{check_cluster_identity.CLUSTER_LABEL}`. A rule's labels "
+                "overwrite what its expression computed (a blank value removes the label), so "
+                "they rewrite the identity Alertmanager pairs warning and critical on, and "
+                "whether severity dedup pairs these alerts cannot be judged (this is not a "
+                "pass). Drop the label from `labels:` and let the expression carry the "
+                "cluster, or take the alert out of the group. (#1200)")
+        elif NOT_JUDGED in texts:
+            errors.append(
+                f"SCOPE-NOT-JUDGED: {pack}: metric_group {mg!r}: {listed} — the cluster scope "
+                "of a member could not be determined, so whether severity dedup pairs these "
+                "alerts is unknown (this is not a pass). Write the alert so its result is a "
+                "vector check_cluster_identity can judge, or take it out of the group. (#1200)")
+        elif len(texts) > 1 or any("+" in t for t in texts):
+            errors.append(
+                f"SCOPE-MISMATCH: {pack}: metric_group {mg!r}: {listed} — severity dedup "
+                "pairs two alerts only when both results carry `da_cluster` or neither does, "
+                "so here a critical does not suppress the warning in a tenant's clusters "
+                "(ADR-001, ADR-006). Give every warning/critical member the same grouping — "
+                "keep `da_cluster` in each result (`by (tenant, da_cluster, …)`), every `or` "
+                "side included — or move the tenant-wide alert to a group of its own. (#1200)")
+    return errors
+
+
 def detect_pairs(alerts: dict[str, dict]) -> dict[str, str]:
     """Return {base_name: verdict} for every detected upgrade pair.
 
@@ -223,6 +370,7 @@ def run_check(
     alerts: dict[str, dict] | None = None,
     known_ungrouped: dict[str, str] | None = None,
     groups_by_pack: dict[str, dict[str, list[str]]] | None = None,
+    group_scopes: list[tuple[str, str, str, str, frozenset]] | None = None,
 ) -> dict[str, list[str]]:
     """Return {errors, infos}. errors fail --ci; infos are report-only.
 
@@ -234,11 +382,15 @@ def run_check(
         known_ungrouped = KNOWN_UNGROUPED
     if groups_by_pack is None:
         groups_by_pack = collect_groups_by_pack()
+    if group_scopes is None:
+        group_scopes = collect_group_scopes()
 
     verdicts = detect_pairs(alerts)
     violating = {b: v for b, v in verdicts.items() if v != "PASS"}
 
     errors: list[str] = group_namespace_errors(groups_by_pack)
+    errors += group_scope_errors(group_scopes)
+    judged = dedup_members(group_scopes)
     infos: list[str] = []
 
     # NEW violating pairs — a fresh severity-dedup hole.
@@ -273,7 +425,8 @@ def run_check(
                 "it from KNOWN_UNGROUPED."
             )
 
-    return {"errors": errors, "infos": infos}
+    return {"errors": errors, "infos": infos,
+            "scope_judged": (len(judged), sum(len(m) for m in judged.values()))}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -304,6 +457,7 @@ def main(argv: list[str] | None = None) -> int:
 
     errors = result["errors"]
     infos = result["infos"]
+    n_groups, n_members = result.get("scope_judged", (0, 0))
 
     for msg in infos:
         print(f"INFO: {msg}", file=sys.stderr)
@@ -313,14 +467,16 @@ def main(argv: list[str] | None = None) -> int:
     if errors:
         print(
             f"\n{len(errors)} metric-group pair violation(s) — TRK-339/#1200.\n"
-            "An ungrouped upgrade pair double-notifies (severity-dedup "
-            "inert). See scripts/tools/lint/check_metric_group_pairs.py.",
+            "An ungrouped upgrade pair, or a group whose members differ in "
+            "cluster scope, double-notifies (severity-dedup inert). See "
+            "scripts/tools/lint/check_metric_group_pairs.py.",
             file=sys.stderr)
         return EXIT_VIOLATION if args.ci else EXIT_OK
 
     print(
         f"✅ metric-group pairs OK — {len(infos)} known-ungrouped "
-        "(grandfathered), 0 new drift.",
+        "(grandfathered), 0 new drift; cluster scope judged for "
+        f"{n_groups} group(s) / {n_members} warning+critical member(s).",
         file=sys.stderr)
     return EXIT_OK
 
