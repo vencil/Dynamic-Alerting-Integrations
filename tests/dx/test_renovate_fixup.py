@@ -202,3 +202,138 @@ def test_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
     assert fx.main() == 0
     assert "nothing was written" in capsys.readouterr().out
     assert before == {rel: (_REPO / rel).read_bytes() for rel in before}
+
+
+# ── #3981: the writes go through the artifact entry ────────────────────────
+
+def test_a_refused_target_is_rc2_one_line(tmp_path, monkeypatch, capsys):
+    """A write the entry refuses ends at `main` as rc 2 and one line naming
+    the file, where the bare `write_text` raised into the crash handler.
+    The go/make steps are stubbed; the image-mirror step runs for real on a
+    copy whose mirror is stale."""
+    from _lib_output import OutputWriteError
+    repo = tmp_path / "repo"
+    for rel in (fx.PLATFORM_DATA, fx.IMAGES_JS):
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_bytes((_REPO / rel).read_bytes())
+    images = json.loads((repo / fx.PLATFORM_DATA).read_text(encoding="utf-8"))["images"]
+    key = sorted(images)[0]
+    images[key] = images[key] + "-stale-for-test"
+    data = json.loads((repo / fx.PLATFORM_DATA).read_text(encoding="utf-8"))
+    data["images"] = images
+    (repo / fx.PLATFORM_DATA).write_text(json.dumps(data), encoding="utf-8")
+    refused = []
+
+    def refuse(path, text, **kw):
+        refused.append(path)
+        raise OutputWriteError(path, OSError(13, "Permission denied"))
+    monkeypatch.setattr(fx, "write_repo_artifact", refuse)
+    monkeypatch.setattr(fx, "_repo_root", lambda: repo)
+    monkeypatch.setattr(fx.shutil, "which", lambda tool: "/bin/true")
+    monkeypatch.setattr(fx, "_run", lambda *a, **k: None)
+    for step in ("deployed_tags", "fix_proxy_library", "fix_federation_compose",
+                 "fix_trylocal_compose"):
+        monkeypatch.setattr(fx, step, lambda *a, **k: None)
+    monkeypatch.setattr(sys, "argv", ["renovate_fixup.py"])
+    before = (repo / fx.IMAGES_JS).read_bytes()
+    with pytest.raises(SystemExit) as exc:
+        fx.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert refused == [repo / fx.IMAGES_JS]
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot write {repo / fx.IMAGES_JS}: Permission denied (errno 13)"
+        " — internal output path, this is a bug or an unwritable workspace"], err
+    assert (repo / fx.IMAGES_JS).read_bytes() == before
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFO on this platform")
+def test_a_file_that_is_not_regular_is_refused_before_the_read(tmp_path):
+    """A FIFO blocked the read forever; now it is a FixupError (rc 2)."""
+    import signal
+    if not hasattr(signal, "SIGALRM"):
+        pytest.skip("no SIGALRM on this platform")
+    fifo = tmp_path / "compose.yaml"
+    os.mkfifo(fifo)
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(fx.FixupError, match="not a regular file"):
+            fx._read(fifo)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+
+
+def test_a_file_that_is_not_utf8_is_a_fixup_error(tmp_path):
+    """A UnicodeDecodeError is a ValueError: it went to the crash handler."""
+    bad = tmp_path / "compose.yaml"
+    bad.write_bytes(b"\xff\xfe")
+    with pytest.raises(fx.FixupError, match="not UTF-8"):
+        fx._read(bad)
+
+
+def _stub_the_run(monkeypatch, repo):
+    ran = []
+    monkeypatch.setattr(fx, "_repo_root", lambda: repo)
+    monkeypatch.setattr(fx.shutil, "which", lambda tool: "/bin/true")
+    monkeypatch.setattr(fx, "_run", lambda cmd, *a, **k: ran.append(cmd))
+    for step in ("deployed_tags", "fix_proxy_library", "fix_image_mirror"):
+        monkeypatch.setattr(fx, step, lambda *a, **k: None)
+    monkeypatch.setattr(sys, "argv", ["renovate_fixup.py"])
+    return ran
+
+
+def test_both_compose_files_are_computed_before_either_is_written(tmp_path, monkeypatch, capsys):
+    """#3981: the federation compose was written before the try-local one was
+    even read, so a try-local file that could not be read left the
+    federation one changed. Now: rc 2 and neither is written."""
+    repo = tmp_path / "repo"
+    fed = repo / fx.FEDERATION_COMPOSE
+    fed.parent.mkdir(parents=True, exist_ok=True)
+    fed.write_text("old\n", encoding="utf-8")
+    tl = repo / fx.TRY_LOCAL_COMPOSE
+    tl.parent.mkdir(parents=True, exist_ok=True)
+    tl.write_bytes(b"\xff\xfe")
+    _stub_the_run(monkeypatch, repo)
+    monkeypatch.setattr(fx, "fix_federation_compose", lambda *a, **k: (fed, "new\n"))
+    assert fx.main() == 2
+    assert "not UTF-8" in capsys.readouterr().err
+    assert fed.read_text(encoding="utf-8") == "old\n"
+
+
+def test_a_refused_target_stops_the_run_before_its_first_step(tmp_path, monkeypatch, capsys):
+    """#3981: every file the run rewrites is judged before STEP 1 — here the
+    image mirror is a directory, which the bare run met only at STEP 5,
+    after the compose files had been rewritten and the go/make steps run."""
+    repo = tmp_path / "repo"
+    (repo / fx.IMAGES_JS).mkdir(parents=True)
+    ran = _stub_the_run(monkeypatch, repo)
+    wrote = []
+    monkeypatch.setattr(fx, "fix_federation_compose", lambda *a, **k: wrote.append(1))
+    with pytest.raises(SystemExit) as exc:
+        fx.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot write {repo / fx.IMAGES_JS}: not a regular file"
+        " — internal output path, this is a bug or an unwritable workspace"], err
+    assert ran == [] and wrote == []
+
+
+def test_the_compose_step_returns_its_rewrite_and_writes_nothing(tmp_path, deployed):
+    """#3981: `fix_federation_compose` hands its rewrite back for `main` to
+    write after the try-local one is computed; it writes nothing itself."""
+    repo = tmp_path / "repo"
+    fed = repo / fx.FEDERATION_COMPOSE
+    fed.parent.mkdir(parents=True, exist_ok=True)
+    fed.write_bytes((_REPO / fx.FEDERATION_COMPOSE).read_bytes())
+    before = fed.read_bytes()
+    bumped = {**deployed, "prom/prometheus": "v9.9.9"}
+    got = fx.fix_federation_compose(repo, bumped, dry_run=False)
+    assert got is not None and got[0] == fed and "prom/prometheus:v9.9.9" in got[1]
+    assert fed.read_bytes() == before
+    assert fx.fix_federation_compose(repo, bumped, dry_run=True) is None

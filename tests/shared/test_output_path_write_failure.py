@@ -2983,8 +2983,29 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "`--fix` rewrites the docs the checks reported; the flag is a switch, "
         "not a path. A refused target is held by tests/lint/test_validate_docs_versions.py "
         "(test_a_target_the_artifact_entry_refuses_is_rc2_one_line).",
+    # #3981, twelfth batch.
+    "_lib_exporter_presence.py":
+        "`--write` rewrites the rule packs under `--root`, the repository root it "
+        "reads them from; a bad root fails on that read, before any write. A "
+        "refused pack is held by tests/rulepacks/test_exporter_presence.py "
+        "(test_a_refused_pack_leaves_the_other_stale_packs_alone).",
+    "dx/migrate_ssot_language.py":
+        "`--execute` rewrites the frontmatter and nav links of the pairs its plan "
+        "renamed; `--directory` only narrows the plan. A refused target is held by "
+        "tests/dx/test_migrate_ssot_language.py "
+        "(test_a_refused_target_is_rc2_one_line).",
+    "dx/renovate_fixup.py":
+        "Rewrites fixed repo files (the federation and try-local compose files, "
+        "the portal image mirror); `--dry-run` is a switch. A refused target is "
+        "held by tests/dx/test_renovate_fixup.py "
+        "(test_a_refused_target_is_rc2_one_line).",
+    "dx/scaffold_lint.py":
+        "Writes the new lint, its test and the hook entry at paths derived from "
+        "`--name`, which is a name, not a path. A refused target is held by "
+        "tests/dx/test_scaffold_lint.py "
+        "(test_a_refused_target_writes_nothing_and_is_rc2_one_line).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 24
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 28
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
