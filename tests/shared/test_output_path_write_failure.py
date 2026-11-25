@@ -3009,8 +3009,14 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "fixed repo files; its flags are switches. A refused target is held by "
         "tests/dx/test_generate_platform_data.py "
         "(test_a_refused_fallback_leaves_the_data_file_alone).",
+    # #3981, fifteenth batch.
+    "dx/bump_docs.py":
+        "Rewrites the version and count references its rules name, and the "
+        "CHANGELOG stubs; its flags are versions and switches, not paths. A "
+        "refused target is held by tests/dx/test_bump_docs.py "
+        "(test_init_changelog_writes_neither_when_one_is_refused).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 29
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 30
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

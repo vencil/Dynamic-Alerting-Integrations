@@ -56,7 +56,6 @@ Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
 import argparse
 import os
 import re
-import stat
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -73,6 +72,9 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "lint"))
 from _lib_compat import SEMVER_PATTERN, try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    OutputWriteError, check_repo_artifact, exit_on_output_write_error, is_special_file,
+    write_repo_artifact)
 from _lib_toolcount import count_by_subdir, count_scope  # noqa: E402
 from _version_patterns import (  # noqa: E402
     DOCS_TREE_SYMLINK_ALIASES,
@@ -1533,6 +1535,57 @@ def _build_count_rules():
     return rules
 
 
+def _read_target(path: Path) -> str:
+    """A rule target's text (#3981). A file that is not regular is refused
+    before the read (a FIFO would block it); a read error or non-UTF-8 text
+    is ``OutputWriteError(action="read")``, rc 2 at `main`, not the crash
+    handler. The stdin-tolerant test: `--check` only reads."""
+    if is_special_file(path):
+        raise OutputWriteError(path, OSError(None, "not a regular file"), action="read")
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise OutputWriteError(path, exc, action="read") from exc
+    except UnicodeDecodeError as exc:  # a ValueError: the crash handler's, before
+        raise OutputWriteError(path, OSError(None, f"not UTF-8 ({exc.reason})"),
+                               action="read") from exc
+
+
+class _Staged:
+    """The repo files one run rewrites, read once and written last (#3981).
+
+    Several rules can rewrite one file, and one file can be reached under two
+    names (a symlink): texts are keyed by ``(st_dev, st_ino)`` so every rule
+    edits the same accumulated text. :meth:`read` refuses a file that is not
+    regular and turns a read error or non-UTF-8 text into
+    ``OutputWriteError(action="read")`` (:func:`_read_target`). :meth:`commit` judges every changed
+    target with ``check_repo_artifact`` before the first is written, then
+    writes them through ``write_repo_artifact``.
+    """
+
+    def __init__(self):
+        self._paths, self._original, self._text = {}, {}, {}
+
+    def read(self, path: Path) -> str:
+        st = os.stat(path)  # every caller has checked exists() first
+        key = (st.st_dev, st.st_ino)
+        if key not in self._text:
+            text = _read_target(path)
+            self._paths[key], self._original[key], self._text[key] = path, text, text
+        return self._text[key]
+
+    def set(self, path: Path, text: str) -> None:
+        st = os.stat(path)
+        self._text[(st.st_dev, st.st_ino)] = text
+
+    def commit(self) -> None:
+        changed = [k for k in self._text if self._text[k] != self._original[k]]
+        for key in changed:
+            check_repo_artifact(self._paths[key])
+        for key in changed:
+            write_repo_artifact(self._paths[key], self._text[key])
+
+
 def apply_count_updates(check_only=False, dry_run=False, verbose=False):
     """Apply count replacement rules across docs.
 
@@ -1545,6 +1598,7 @@ def apply_count_updates(check_only=False, dry_run=False, verbose=False):
     """
     rules = _build_count_rules()
     changes = []
+    staged = _Staged()
 
     for rule in rules:
         if not rule.get("source_ok", True):
@@ -1575,7 +1629,7 @@ def apply_count_updates(check_only=False, dry_run=False, verbose=False):
                             f"target is gone."))
             continue
 
-        content = fpath.read_text(encoding="utf-8")
+        content = staged.read(fpath)
         pattern = rule["pattern"]
         replacement = rule["replacement"](None)
 
@@ -1603,10 +1657,10 @@ def apply_count_updates(check_only=False, dry_run=False, verbose=False):
             if dry_run:
                 diff_detail = f"[dry-run] {diff_detail}"
             changes.append(("UPDATE", rule["desc"], diff_detail))
-            if not check_only and not dry_run:
-                fpath.write_text(new_content, encoding="utf-8", newline="\n")
-                os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+            staged.set(fpath, new_content)
 
+    if not check_only and not dry_run:
+        staged.commit()
     return changes
 
 
@@ -1615,12 +1669,14 @@ def apply_count_updates(check_only=False, dry_run=False, verbose=False):
 # ---------------------------------------------------------------------------
 
 def read_current_versions():
-    """Read current versions from source-of-truth files."""
+    """Read current versions from source-of-truth files. These are also rule
+    targets, so they are read through `_read_target` (#3981): a FIFO, a read
+    error or non-UTF-8 text is rc 2, one line, in every mode."""
     versions = {}
 
     # Exporter version from Chart.yaml (version = appVersion = exporter version)
     if CHART_YAML.exists():
-        content = CHART_YAML.read_text(encoding="utf-8")
+        content = _read_target(CHART_YAML)
         m = re.search(r'^appVersion:\s*"(' + _SEMVER + ')"', content, re.MULTILINE)
         if m:
             versions["exporter"] = m.group(1)
@@ -1633,7 +1689,7 @@ def read_current_versions():
     # _build_platform_rules() above.
     claude_md = REPO_ROOT / "CLAUDE.md"
     if claude_md.exists():
-        content = claude_md.read_text(encoding="utf-8")
+        content = _read_target(claude_md)
         m = re.search(
             r"Multi-Tenant Dynamic Alerting 平台 \(v([0-9]+\.[0-9]+[^)]*)\)",
             content,
@@ -1643,13 +1699,13 @@ def read_current_versions():
 
     # da-tools version from VERSION file
     if DA_TOOLS_VERSION.exists():
-        ver = DA_TOOLS_VERSION.read_text(encoding="utf-8").strip()
+        ver = _read_target(DA_TOOLS_VERSION).strip()
         if re.match(r"^" + _SEMVER + "$", ver):
             versions["tools"] = ver
 
     # Portal version from da-portal Chart.yaml (version == appVersion).
     if DA_PORTAL_CHART_YAML.exists():
-        content = DA_PORTAL_CHART_YAML.read_text(encoding="utf-8")
+        content = _read_target(DA_PORTAL_CHART_YAML)
         m = re.search(
             r'^appVersion:\s*"(' + _SEMVER + ')"', content, re.MULTILINE
         )
@@ -1668,7 +1724,7 @@ def read_current_versions():
     # `--what-if` just printed "version not found in source-of-truth" and
     # moved on with no effect on the exit code (#1407).
     if TENANT_API_CHART_YAML.exists():
-        content = TENANT_API_CHART_YAML.read_text(encoding="utf-8")
+        content = _read_target(TENANT_API_CHART_YAML)
         m = re.search(
             r'^version:\s*"?(' + _SEMVER + ')"?', content, re.MULTILINE
         )
@@ -2078,6 +2134,7 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
     """
     rules = _expand_glob_rules(rules)
     changes = []
+    staged = _Staged()
     # glob_id -> [total matches across the expansion, desc]
     glob_hits = {}
 
@@ -2114,7 +2171,7 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
             changes.append(("SKIP", rule["desc"], f"file not found: {rule['file']}"))
             continue
 
-        content = fpath.read_text(encoding="utf-8")
+        content = staged.read(fpath)
 
         if rule.get("whole_file"):
             # A whole-file rule owns the file outright, so its contribution to
@@ -2125,8 +2182,7 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                 diff_detail = f"{content.strip()} → {new_content.strip()}"
                 changes.append(("UPDATE", rule["desc"], diff_detail))
                 if not check_only and not dry_run:
-                    fpath.write_text(new_content, encoding="utf-8", newline="\n")
-                    os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                    staged.set(fpath, new_content)
             else:
                 changes.append(("OK", rule["desc"], "already up to date"))
             continue
@@ -2149,8 +2205,7 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                                 f"{len(old_values)} occurrence(s): "
                                 f"{sorted(set(old_values))[0]} → {new_value}"))
                 if not check_only and not dry_run:
-                    fpath.write_text(new_content, encoding="utf-8", newline="\n")
-                    os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                    staged.set(fpath, new_content)
             else:
                 changes.append(("OK", rule["desc"], "already up to date"))
             continue
@@ -2210,8 +2265,7 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                 diff_detail = f"[dry-run] {diff_detail}"
             changes.append(("UPDATE", rule["desc"], diff_detail))
             if not check_only and not dry_run:
-                fpath.write_text(new_content, encoding="utf-8", newline="\n")
-                os.chmod(fpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                staged.set(fpath, new_content)
         else:
             changes.append(("OK", rule["desc"], "already up to date"))
 
@@ -2232,6 +2286,8 @@ def apply_rules(rules, new_version, check_only=False, dry_run=False):
                 f"shape really lives, or delete the rule with a stated "
                 f"reason."))
 
+    if not check_only and not dry_run:
+        staged.commit()
     return changes
 
 
@@ -2252,6 +2308,11 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
         targets.append("en")
 
     today = date.today().isoformat()  # Local date — intentional for release notes
+    # #3981: every changelog is computed and judged before the first is
+    # written, then written through the artifact entry.
+    staged = _Staged()
+    creates = []   # (path, text): a CHANGELOG.en.md that does not exist yet
+    messages = []
 
     for target_lang in targets:
         if target_lang == "zh":
@@ -2291,19 +2352,15 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
                     "\n"
                     "# Changelog\n"
                 )
-                changelog.write_text(initial + stub + "\n",
-                                     encoding="utf-8", newline="\n")
-                os.chmod(changelog,
-                         stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
-                         | stat.S_IROTH)
-                print(f"✅ Created {changelog.name} with v{version} stub "
-                      f"({today})")
+                creates.append((changelog, initial + stub + "\n"))
+                messages.append(f"✅ Created {changelog.name} with v{version} stub "
+                                f"({today})")
                 continue
             else:
                 print(f"ERROR: {changelog} not found", file=sys.stderr)
                 sys.exit(EXIT_CALLER_ERROR)
 
-        content = changelog.read_text(encoding="utf-8")
+        content = staged.read(changelog)
 
         # Insert after front matter (after second ---) and first blank line
         fm_end = 0
@@ -2320,12 +2377,19 @@ def _init_changelog_entry(version: str, lang: str = "zh"):
             insert_pos = first_heading
 
         new_content = content[:insert_pos] + stub + content[insert_pos:]
-        changelog.write_text(new_content, encoding="utf-8", newline="\n")
-        os.chmod(changelog,
-                 stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
-                 | stat.S_IROTH)
-        print(f"✅ Inserted v{version} stub into {changelog.name} "
-              f"({today})")
+        # Staged, not listed: CHANGELOG.en.md may be a link to CHANGELOG.md,
+        # and both stubs must land in the one text.
+        staged.set(changelog, new_content)
+        messages.append(f"✅ Inserted v{version} stub into {changelog.name} "
+                        f"({today})")
+
+    for path, _text in creates:
+        check_repo_artifact(path)
+    staged.commit()  # judges every changed target before its first write
+    for path, text in creates:
+        write_repo_artifact(path, text)
+    for msg in messages:
+        print(msg)
 
 
 _SCOPE_HINT = ("(it is matched against each rule's \"file\" / \"glob_dir\" "
@@ -2664,6 +2728,7 @@ def _check_datools_pin_capability(new_ver: str) -> int:
         command_map, tool_files, new_ver)
 
 
+@exit_on_output_write_error
 def main():
     """CLI entry point: 版號一致性管理工具."""
     try_utf8_stdout()
@@ -2969,7 +3034,7 @@ def main():
                     print(f"       MISSING: file not found: {rule['file']}")
                     continue
 
-                content = fpath.read_text(encoding="utf-8")
+                content = _read_target(fpath)
                 pattern = rule["pattern"]
                 replacement = rule["replacement"](ver)
 

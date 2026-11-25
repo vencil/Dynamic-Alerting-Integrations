@@ -235,14 +235,6 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/dx/bench_verdict.py": {
         "main open(w) [ci_env_file]": 1,
     },
-    "scripts/tools/dx/bump_docs.py": {
-        "_init_changelog_entry .write_text [artifact]": 2,
-        "_init_changelog_entry os.chmod [artifact]": 2,
-        "apply_count_updates .write_text [artifact]": 1,
-        "apply_count_updates os.chmod [artifact]": 1,
-        "apply_rules .write_text [artifact]": 3,
-        "apply_rules os.chmod [artifact]": 3,
-    },
     "scripts/tools/dx/bump_playbook_versions.py": {
         "apply_bump .write_bytes [artifact]": 1,
     },
@@ -299,7 +291,7 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 65
+_DEBT_CEILING = 53
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
