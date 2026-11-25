@@ -323,3 +323,17 @@ def test_an_asset_whose_upload_did_not_complete_is_not_present(env, monkeypatch,
     assert _assets(monkeypatch, cmds, files) == 1
     assert not any(c[:3] == ["gh", "release", "upload"] for c in cmds.calls)
     assert "not fully uploaded" in capsys.readouterr().err
+
+
+# ── $GITHUB_OUTPUT through the operator entry (#3981) ────────────────────────
+
+def test_an_unwritable_github_output_is_rc2_one_line(env, tmp_path, monkeypatch, capsys):
+    """The write comes after the publish, through check_release_immutable's
+    write_output: was a traceback ('unexpected internal error'). A directory
+    stands in for the unwritable file."""
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path))
+    with pytest.raises(SystemExit) as caught:
+        _run_image(monkeypatch, fx.Registry(), Commands())
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert f"cannot write {tmp_path}" in err and "Traceback" not in err

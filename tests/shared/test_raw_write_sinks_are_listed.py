@@ -197,9 +197,6 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/ops/bench_synth_tenants.py": {
         "cmd_inject .write_text [operator]": 1,
     },
-    "scripts/ops/file_race_report.py": {
-        "main open(w) [ci_env_file]": 1,
-    },
     "scripts/ops/inject_default_key.py": {
         "inject .mkdir [operator]": 1,
         "inject .write_text [operator]": 2,
@@ -209,7 +206,6 @@ DEBT: dict[str, dict[str, int]] = {
         "main .write_text [operator]": 1,
     },
     "scripts/ops/plan_race_shards.py": {
-        "_write_github_output open(w) [ci_env_file]": 1,
         "fetch_timings .mkdir [operator]": 1,
         "fetch_timings .write_text [operator]": 1,
         "main .mkdir [operator]": 1,
@@ -224,12 +220,6 @@ DEBT: dict[str, dict[str, int]] = {
         "download_artifact .mkdir [work_dir]": 1,
         "download_artifact .write_text [work_dir]": 1,
         "main .mkdir [operator]": 1,
-    },
-    "scripts/tools/dx/bench_verdict.py": {
-        "main open(w) [ci_env_file]": 1,
-    },
-    "scripts/tools/dx/check_release_immutable.py": {
-        "write_output open(w) [ci_env_file]": 1,
     },
     "scripts/tools/dx/measure_judgement_budget.py": {
         "judge os.mkdir [work_dir]": 1,
@@ -270,7 +260,7 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 44
+_DEBT_CEILING = 40
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
