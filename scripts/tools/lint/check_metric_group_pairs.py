@@ -63,10 +63,15 @@ warning and the critical members must have the same cluster scope:
     label the per-cluster warning is then not suppressed by the tenant-wide
     critical (and the other way round a tenant-wide warning is muted only by
     the cluster whose id happens to equal the evaluating Prometheus').
-  - SCOPE-NOT-JUDGED: a member's scope could not be determined (its
-    expression has a side that is a scalar, or the scope rows do not line up
-    with the rules read here). Reported as a failure of its own: "could not
-    judge" is never read as "same".
+  - SCOPE-NOT-JUDGED: a member's scope could not be determined: its
+    expression has a side that is a scalar, the scope rows do not line up
+    with the rules read here, or the alert's own `labels:` name `da_cluster`
+    (any value — blank, static or templated). A rule's labels are applied
+    after the expression is evaluated and overwrite what it computed (a blank
+    value removes the label), so they rewrite the very identity Alertmanager
+    pairs on, and no template is taken to be harmless. A scope the lint
+    cannot DETERMINE is this failure, never a pass; shapes it determines
+    WRONGLY are listed under "Not judged" below.
 All `cluster` passes; all `flat` passes too — when one Prometheus evaluates
 both alerts they get the same external label (or none) and one of the two
 rules pairs them. What a member's result carries is check_cluster_identity's
@@ -75,10 +80,25 @@ never the PromQL text and never the `# da_cluster: tenant-wide` declarations:
 a rule that declares an inner tenant-wide read can still output the cluster
 (MariaDBNoPrimary). `info` members are not held to it — the inhibit neither
 reads them as a source nor mutes them. Over T1 only, like the namespace
-checks (T2 is the generated copy; the T2-only platform pack is not judged
-here), and not over the compiler's `slo_{{…}}` groups nor anything migrate
-writes for a customer — those outputs are not in this tree and are pinned by
-their own tests (custom_alert_compile_test.go, tests/ops/test_migrate_per_cluster.py).
+checks (T2 is the generated copy); the platform pack is in T1 and is read,
+it simply carries no `metric_group` today. Not over the compiler's
+`slo_{{…}}` groups nor anything migrate writes for a customer — those
+outputs are not in this tree and are pinned by their own tests
+(custom_alert_compile_test.go, tests/ops/test_migrate_per_cluster.py).
+
+Not judged (the scope check passes these, and Alertmanager sees otherwise):
+the scope is check_cluster_identity's, so what that lint does not read
+(its docstring, "Not judged") is not read here either. Three shapes are
+known to be mis-determined, each pinned as such by
+test_documented_scope_limits_are_still_limits:
+  * `label_replace(v, "da_cluster", "", "", "")` — the lint says cluster;
+    the label is erased, the alert reaches Alertmanager without it.
+  * `absent(m{da_cluster="east"})` — the lint says flat; `absent` hands on
+    its equality matchers, the alert carries `da_cluster="east"`.
+  * an `or` below the top of the expression with sides of different scope,
+    `(per-cluster or max by (tenant) (other)) > 5` — the lint says cluster;
+    the rule also yields a series without the label. (Only the `or` sides
+    at the TOP of an expression are judged apart.)
 
 SCOPE NOTE (deliberate non-gate): the WS2a S2 or-masking scan is NOT gated
 here or anywhere — its same-label-set `or` heuristic needs human judgment
@@ -222,6 +242,10 @@ def group_namespace_errors(by_pack: dict[str, dict[str, list[str]]]) -> list[str
 # (_grar_routes.build_dedup_inhibit_rules): only these members pair.
 _DEDUP_SEVERITIES = ("warning", "critical")
 NOT_JUDGED = "not judged"
+#: In a row's scopes when the alert's own `labels:` name the cluster label:
+#: whatever the expression computed, the rule overwrites it.
+LABELS_SET_CLUSTER = "labels-set-cluster"
+_LABELS_SET_TEXT = f"{NOT_JUDGED} (its `labels:` set `{check_cluster_identity.CLUSTER_LABEL}`)"
 
 
 def collect_group_scopes(
@@ -230,7 +254,9 @@ def collect_group_scopes(
     every T1 alert that carries a group (the compiler's `slo_{{…}}` left out,
     as in `collect_groups_by_pack`). The scopes are check_cluster_identity's
     (`alert_result_scopes`), attached by the rule's place in its file; a rule
-    with no row there, or a row of another name, gets `{None}` — not judged."""
+    with no row there, or a row of another name, gets `{None}` — not judged.
+    An alert whose own `labels:` name `da_cluster` gets `{LABELS_SET_CLUSTER}`:
+    the rule overwrites what its expression computed."""
     files = T1_SOURCE.files_under(root)
     results = _lib_consumer_read.prometheus_rule_file_results(files)
     _lib_consumer_read.require_read(results)
@@ -252,12 +278,16 @@ def collect_group_scopes(
                 name, scopes = judged.get((pack, nth), (None, frozenset({None})))
                 if name != str(r["alert"]):
                     scopes = frozenset({None})
+                if check_cluster_identity.CLUSTER_LABEL in labels:
+                    scopes = frozenset({LABELS_SET_CLUSTER})
                 rows.append((pack, mg, str(r["alert"]), str(labels.get("severity", "")), scopes))
     return rows
 
 
 def _scope_text(scopes: frozenset) -> str:
     known = {check_cluster_identity.CLUSTER, check_cluster_identity.FLAT}
+    if LABELS_SET_CLUSTER in scopes:
+        return _LABELS_SET_TEXT
     if not scopes or not scopes <= known:
         return NOT_JUDGED
     return "+".join(sorted(scopes))
@@ -280,7 +310,16 @@ def group_scope_errors(rows: list[tuple[str, str, str, str, frozenset]]) -> list
     for (pack, mg), members in sorted(dedup_members(rows).items()):
         texts = {text for _a, _s, text in members}
         listed = ", ".join(f"{a} [{sev}] = {text}" for a, sev, text in members)
-        if NOT_JUDGED in texts:
+        if _LABELS_SET_TEXT in texts:
+            errors.append(
+                f"SCOPE-NOT-JUDGED: {pack}: metric_group {mg!r}: {listed} — an alert's own "
+                f"`labels:` set `{check_cluster_identity.CLUSTER_LABEL}`. A rule's labels "
+                "overwrite what its expression computed (a blank value removes the label), so "
+                "they rewrite the identity Alertmanager pairs warning and critical on, and "
+                "whether severity dedup pairs these alerts cannot be judged (this is not a "
+                "pass). Drop the label from `labels:` and let the expression carry the "
+                "cluster, or take the alert out of the group. (#1200)")
+        elif NOT_JUDGED in texts:
             errors.append(
                 f"SCOPE-NOT-JUDGED: {pack}: metric_group {mg!r}: {listed} — the cluster scope "
                 "of a member could not be determined, so whether severity dedup pairs these "

@@ -324,7 +324,7 @@ _PER_CLUSTER = "max by (tenant, da_cluster) (db_up) == 0"
 _TENANT_WIDE = 'max by (tenant) (user_threshold{metric="x"}) > 1'
 
 
-def _pack(tmp_path, warning, critical, above_critical=""):
+def _pack(tmp_path, warning, critical, above_critical="", critical_labels="", extra=""):
     (tmp_path / "rule-packs").mkdir()
     (tmp_path / "rule-packs" / "rule-pack-x.yaml").write_text(
         "groups:\n- name: g\n  rules:\n"
@@ -333,7 +333,8 @@ def _pack(tmp_path, warning, critical, above_critical=""):
         "    labels:\n      severity: warning\n      metric_group: x_load\n"
         f"{above_critical}"
         f"  - alert: XDown\n    expr: {critical}\n"
-        "    labels:\n      severity: critical\n      metric_group: x_load\n",
+        "    labels:\n      severity: critical\n      metric_group: x_load\n"
+        f"{critical_labels}{extra}",
         encoding="utf-8")
     return gate.collect_group_scopes(tmp_path)
 
@@ -417,3 +418,73 @@ def test_shipped_declared_tenant_wide_alert_still_outputs_the_cluster():
     assert ("MariaDBNoPrimary", "critical", "cluster") in members, members
     declared, _malformed = gate.check_cluster_identity.declarations()
     assert any(f == "rule-pack-mariadb.yaml" for f, _n in declared)
+
+
+_PER_INSTANCE = "max by (tenant, da_cluster, instance) (db_up) > {n}"
+
+
+@pytest.mark.usefixtures("da_read_env")
+@pytest.mark.parametrize("value", ['""', '"lab"', '"{{ $labels.da_cluster }}"'],
+                         ids=["blank", "static", "templated"])
+def test_member_whose_own_labels_set_the_cluster_is_not_judged(tmp_path, value):
+    """Both expressions are per cluster, and the critical's `labels:` name
+    `da_cluster`: the rule overwrites what the expression computed (blank
+    removes the label — promtool shows the critical without it and the
+    warning with it), so the pair's scope is not the expressions'. Any value
+    counts: a template is not proved harmless."""
+    rows = _pack(tmp_path, _PER_INSTANCE.format(n=1), _PER_INSTANCE.format(n=5),
+                 critical_labels=f"      da_cluster: {value}\n")
+    errs = gate.group_scope_errors(rows)
+    assert _verdicts(rows) == ["SCOPE-NOT-JUDGED"], errs
+    assert "XHigh [warning] = cluster" in errs[0]
+    assert "XDown [critical] = not judged (its `labels:` set `da_cluster`)" in errs[0]
+    assert "overwrite what its expression computed" in errs[0] and "not a pass" in errs[0]
+
+
+@pytest.mark.usefixtures("da_read_env")
+def test_labels_that_set_the_cluster_outside_a_group_are_left_alone(tmp_path):
+    """An alert with no metric_group (and an info member) takes no part in
+    dedup: its labels are not this check's to judge."""
+    rows = _pack(tmp_path, _PER_CLUSTER, _PER_CLUSTER, extra=(
+        "  - alert: XAlone\n    expr: vector(1)\n"
+        "    labels:\n      severity: critical\n      da_cluster: lab\n"
+        "  - alert: XNote\n    expr: vector(1)\n"
+        "    labels:\n      severity: info\n      metric_group: x_load\n      da_cluster: lab\n"))
+    assert "XAlone" not in {r[2] for r in rows}
+    assert _verdicts(rows) == [], gate.group_scope_errors(rows)
+
+
+_LIMIT_DECLARED = ("  # da_cluster: tenant-wide by-drops-cluster (tenant) — "
+                   "the fallback metric is read tenant-wide on purpose\n")
+
+
+@pytest.mark.usefixtures("da_read_env")
+@pytest.mark.parametrize("warning, critical, above_critical, lint_says", [
+    # the label is erased: at Alertmanager the critical has no da_cluster
+    (_PER_CLUSTER, 'label_replace(max by (tenant, da_cluster) (db_up), "da_cluster", "", "", "") > 5',
+     "", ("cluster", "cluster")),
+    # absent() hands on its equality matchers: the warning carries da_cluster="east"
+    ('absent(db_up{tenant="t", da_cluster="east"})', "max by (tenant) (db_up) > 5",
+     _LIMIT_DECLARED, ("flat", "flat")),
+    # an `or` below the top: the critical also yields a series without da_cluster
+    (_PER_CLUSTER, "(max by (tenant, da_cluster) (db_up) or max by (tenant) (db_other)) > 5",
+     _LIMIT_DECLARED, ("cluster", "cluster")),
+], ids=["label_replace-erases", "absent-with-cluster-matcher", "or-below-the-top"])
+def test_documented_scope_limits_are_still_limits(tmp_path, warning, critical,
+                                                  above_critical, lint_says):
+    """⚠ These verdicts are WRONG, and documented as such: the lint's
+    docstring ("Not judged") names each of the three shapes as passing here
+    while Alertmanager sees a pair that does not match. This test pins the
+    list, not the behaviour. If it goes red because the lint now judges one
+    of them (SCOPE-MISMATCH / SCOPE-NOT-JUDGED), that is an improvement:
+    remove the shape from the docstring's list and from ADR-001, and move its
+    case to the tests of what IS judged."""
+    rows = _pack(tmp_path, warning, critical, above_critical=above_critical)
+    assert gate.check_cluster_identity.findings(tmp_path) == {}
+    assert gate.check_cluster_identity.stale_declarations(tmp_path) == []
+    assert tuple(text for _a, _s, text in gate.dedup_members(rows)[
+        ("rule-pack-x.yaml", "x_load")]) == lint_says
+    assert _verdicts(rows) == [], gate.group_scope_errors(rows)
+    for shape in ('label_replace(v, "da_cluster", "", "", "")', 'absent(m{da_cluster="east"})',
+                  "(per-cluster or max by (tenant) (other)) > 5"):
+        assert shape in gate.__doc__, f"the Not judged list no longer names {shape}"
