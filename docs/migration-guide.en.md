@@ -116,7 +116,7 @@ The three ConfigMap injection paths (Helm / kubectl / GitOps): [threshold-export
 
 ### 4. Convert Existing Rules (da-tools migrate)
 
-Teams with legacy Prometheus alert rules use the auto-conversion tool (v4 — dual AST + regex engine; falls back to regex when PromQL AST parsing fails):
+Teams with legacy Prometheus alert rules use the auto-conversion tool (PromQL is read into Prometheus' own parse tree; a rule file its parser refuses ends the run with rc 2 — there is no fallback):
 
 ```bash
 da-tools migrate /data/legacy-rules.yml --dry-run            # Preview
@@ -132,7 +132,7 @@ The tool automatically handles:
 - **Aggregation-mode heuristic**: 6 heuristic rules guess `sum` / `max` automatically and emit an ASCII warning box asking the user to confirm
 - **Per-cluster aggregation**: the generated recording rule is `<sum|max> by(tenant, da_cluster) (…)`. On a Prometheus holding several clusters' data, migrated rules are evaluated per cluster (`sum` / `max` no longer merge one tenant's clusters) and alerts carry `da_cluster`; on a single Prometheus whose series have no `da_cluster`, the result is what it was; this does not cover a rule whose own aggregation already drops `tenant` (`sum(rate(x))`, `sum by(instance) (…)`), which yields no per-tenant value before or after migration. A `by(...)` / `on(...)` the original expression wrote itself goes in as written; one that names an identity label without `da_cluster` is flagged for a human decision (see [`migration-engine.en.md`](migration-engine.en.md)). The v2.9.0 image still generates `by(tenant)` <!-- image-caveat: v2.9.0 -->
 
-AST engine depth (why `promql-parser` beats regex) + the full heuristic rule set + Auto-Suppression pairing logic: [`migration-engine.en.md`](migration-engine.en.md). CLI flag matrix: [`cli-reference.md#migrate`](cli-reference.md#migrate). Three-piece-set deployment locations (ConfigMap merge vs independent mount): [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
+How the migration engine reads PromQL (Prometheus' own parse tree, never the text) + the full heuristic rule set + Auto-Suppression pairing logic: [`migration-engine.en.md`](migration-engine.en.md). CLI flag matrix: [`cli-reference.md#migrate`](cli-reference.md#migrate). Three-piece-set deployment locations (ConfigMap merge vs independent mount): [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
 
 ### 5. Deploy threshold-exporter
 
@@ -409,7 +409,7 @@ Offboarding effects: threshold-exporter clears thresholds on next reload (30s) �
 | **Tool & Engine Reference** | |
 | [`migration-toolkit-installation.md`](migration-toolkit-installation.en.md) (three delivery paths + cosign keyless verification) | ⭐⭐⭐ |
 | [`cli-reference.md`](./cli-reference.md) (all `da-tools` commands + flag matrix) | ⭐⭐⭐ |
-| [AST Migration Engine Architecture](./migration-engine.en.md) (promql-parser + heuristics + Auto-Suppression) | ⭐⭐ |
+| [AST Migration Engine Architecture](./migration-engine.en.md) (Prometheus' parse tree + heuristics + Auto-Suppression) | ⭐⭐ |
 | [VictoriaMetrics Integration](integration/victoriametrics-integration.en.md) (VM stack integration walkthrough) | ⭐⭐ |
 | **Role Quick Starts** | |
 | [Tenant Quick Start](getting-started/for-tenants.en.md) | ⭐⭐ |

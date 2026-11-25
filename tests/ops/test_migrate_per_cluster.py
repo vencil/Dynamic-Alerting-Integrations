@@ -14,8 +14,8 @@ migrate_rule 產生的 metric 側 recording rule 因此改成
    `on(tenant) group_left`、維護的 `unless on(tenant)` 不變。
 2. 原式子自己寫的 `by(...)`／`on(...)` 照抄、不改寫（與 main 逐位元組相同）：
    要不要補叢集 label 取決於配對的兩邊是否都帶它，工具看不出來。點名身分
-   label 卻沒有叢集 label 的，由 AST 偵測並在既有的註記管道標出來請人確認；
-   沒有 AST 時說「沒檢查」，不是什麼都不說。
+   label 卻沒有叢集 label 的，從 Prometheus 的語法樹（`da-read promql-shape`）
+   偵測，並在既有的註記管道標出來請人確認。
 3. `{{ $labels.da_cluster }}` 照留；`{{ $labels.instance }}` 照舊改寫。
 4. `check_cluster_identity` 自己的判定：沒有原式子自帶分組的形狀是零
    finding（把分組改回 `by(tenant)` 就有 finding：不是空集合上的綠燈）；
@@ -61,12 +61,13 @@ needs_promtool = pytest.mark.skipif(_PROMTOOL is None, reason="promtool not on P
 # 產生：與 main() 相同的步驟，純函式、不寫檔
 # ---------------------------------------------------------------------------
 
-def generate(rules, *, prefix="custom_", use_ast=True, mod=mr):
+def generate(rules, *, prefix="custom_", mod=mr):
     """(results, recording rules 文字, alert rules 文字)：*rules* 是傳統規則的
     list，經 process_rule → 配對 → critical 改讀 base → render，如同 main()。
     *mod* 是 migrate_rule 模組（另一個版本的產生器也能餵同一組輸入）。"""
-    results = [r for r in (mod.process_rule(rule, prefix=prefix, dictionary={},
-                                            use_ast=use_ast) for rule in rules) if r]
+    trees = mod.read_trees([rule["expr"] for rule in rules])
+    results = [r for r in (mod.process_rule(rule, prefix=prefix, dictionary={}, tree=tree)
+                           for rule, tree in zip(rules, trees)) if r]
     mod.apply_auto_suppression(results)
     mod.route_unpaired_critical_to_base(results)
     return (results, mod.render_recording_rules(results, prefix),
@@ -80,10 +81,9 @@ def _rule(alert, expr, severity="warning", **annotations):
     return rule
 
 
-#: 每一種 migrate_rule 會產出規則的輸入形狀：六個比較運算子、兩種聚合模式
-#: （sum：rate／_total；max：其餘）、算術、原式子自帶配對或分組、被 parse 成
-#: 「LHS op 數字」的複合規則（and／or／unless）、warning＋critical 配對、
-#: 只有 critical（改讀 base 閾值列）。
+#: 每一種 migrate_rule 會產出規則的輸入形狀（沒有自帶身分分組的）：六個比較
+#: 運算子、兩種聚合模式（sum：rate／_total；max：其餘）、算術、不點名身分
+#: label 的分組與配對、warning＋critical 配對、只有 critical（改讀 base 閾值列）。
 PLAIN_RULES = [
     _rule("Gt", "app_connections > 100"),
     _rule("Ge", "app_threads >= 10"),
@@ -103,9 +103,6 @@ PLAIN_RULES = [
           "max by(instance, da_cluster) (app_heap_usage) "
           "/ on(instance, da_cluster) app_heap_limit_usage > 0.9"),
     _rule("StringMatcher", 'app_notes_count{note="sum by(instance) on(pod)"} > 3'),
-    _rule("CompoundAnd", "app_and_lag > 5 and app_y_lag > 3"),
-    _rule("CompoundOr", "app_or_lag > 5 or app_z_lag > 3"),
-    _rule("CompoundUnless", "app_unless_lag > 5 unless app_w_lag > 3"),
     _rule("PairWarn", "app_replica_lag > 10"),
     _rule("PairCrit", "app_replica_lag > 60", severity="critical"),
     _rule("OnlyCrit", "app_backlog_queue > 500", severity="critical"),
@@ -142,6 +139,11 @@ EMITTING_RULES = PLAIN_RULES + [rule for rule, _groupings in GROUPED_RULES]
 #: migrate_rule 不產出規則、只給 LLM prompt 的輸入：absent() 類、沒有數字
 #: 閾值的向量比較、bool 修飾、整條包在括號裡、predict_linear。
 MANUAL_RULES = [
+    # 根節點是 and／or／unless，不是「比較、右邊是數字」（#4215 起不再被切成
+    # `a > 5 and b` 對 3）
+    _rule("CompoundAnd", "app_and_lag > 5 and app_y_lag > 3"),
+    _rule("CompoundOr", "app_or_lag > 5 or app_z_lag > 3"),
+    _rule("CompoundUnless", "app_unless_lag > 5 unless app_w_lag > 3"),
     _rule("Absent", "absent(app_up) == 1"),
     _rule("AbsentBare", "absent(app_up)"),
     _rule("VectorCompare", "app_x > app_y"),
@@ -160,10 +162,9 @@ def test_the_grouping_spells_the_cluster_label_once():
     assert mr.METRIC_GROUPING == "by(tenant, da_cluster)"
 
 
-@pytest.mark.parametrize("use_ast", [True, False], ids=["ast", "no-ast"])
 @pytest.mark.parametrize("prefix", ["custom_", ""], ids=["prefix", "no-prefix"])
-def test_every_metric_side_rule_is_per_cluster_and_the_rest_is_per_tenant(use_ast, prefix):
-    results, _rec, _alerts = generate(EMITTING_RULES, prefix=prefix, use_ast=use_ast)
+def test_every_metric_side_rule_is_per_cluster_and_the_rest_is_per_tenant(prefix):
+    results, _rec, _alerts = generate(EMITTING_RULES, prefix=prefix)
     assert len(results) == len(EMITTING_RULES)
     for r in results:
         metric_rule, threshold_rule = r.recording_rules
@@ -249,8 +250,7 @@ def test_the_original_expression_goes_in_as_written():
 @pytest.mark.parametrize("rule,groupings", GROUPED_RULES, ids=lambda v: v.get("alert")
                          if isinstance(v, dict) else None)
 def test_a_grouping_that_names_an_identity_without_the_cluster_gets_the_note(rule, groupings):
-    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
-    assert r.cluster_grouping_checked is True
+    r = mr.process_rule(rule, prefix="custom_", dictionary={})
     assert r.cluster_groupings == groupings
     note = mr.cluster_grouping_note(groupings)
     assert "\n" not in note and "、".join(groupings) in note and "da_cluster" in note
@@ -261,8 +261,7 @@ def test_a_grouping_that_names_an_identity_without_the_cluster_gets_the_note(rul
 
 @pytest.mark.parametrize("rule", PLAIN_RULES, ids=lambda r: r["alert"])
 def test_other_expressions_are_checked_and_get_no_note(rule):
-    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
-    assert r.cluster_grouping_checked is True
+    r = mr.process_rule(rule, prefix="custom_", dictionary={})
     assert r.cluster_groupings == []
     assert not any("da_cluster" in n for n in r.notes)
 
@@ -275,61 +274,38 @@ def test_the_note_reaches_the_report_the_rule_file_the_tenant_file_notes_and_the
     assert recording.count(note) == 1   # 不掛在閾值那一條、也不掛在別的規則上
     report = mr.render_report(results)
     assert report.count(f"    ⚠️ {note}\n") == 1
-    assert mr.CLUSTER_GROUPING_NOT_CHECKED not in report
     mr.print_dry_run(results)
     assert capsys.readouterr().out.count(f"     ⚠️ {note}\n") == 1
     assert results[0].notes == [note]   # tenant_config_entry 把 notes 寫成 📖 註解
 
 
-@pytest.mark.parametrize("how", ["no-ast-flag", "no-parser"])
-def test_without_the_ast_the_check_is_reported_as_not_made(how, monkeypatch):
-    """「沒檢查」與「檢查了、沒有」分得開：沒有註記，但報告說沒檢查。"""
-    if how == "no-parser":
-        monkeypatch.setattr(mr, "HAS_AST", False)
-    use_ast = how != "no-ast-flag"
-    assert mr.groupings_without_cluster("a / on(instance) b") == (
-        None if how == "no-parser" else ["on(instance)"])
-    results, recording, _alerts = generate([rule for rule, _g in GROUPED_RULES], use_ast=use_ast)
-    for r in results:
-        assert r.cluster_grouping_checked is False
-        assert r.cluster_groupings == [] and r.notes == []
-    assert "⚠️ 原式子的" not in recording
-    report = mr.render_report(results)
-    assert f"  ⚠️ {mr.CLUSTER_GROUPING_NOT_CHECKED}：{len(results)} 條\n" in report
-    # 檢查過的那一次不說這句話
-    monkeypatch.undo()
-    checked, _rec, _al = generate([rule for rule, _g in GROUPED_RULES])
-    assert mr.CLUSTER_GROUPING_NOT_CHECKED not in mr.render_report(checked)
-
-
-def test_an_expression_the_parser_refuses_is_not_checked():
-    assert mr.groupings_without_cluster("sum by(instance (x") is None
+def _lhs_tree(expr):
+    return mr.read_trees([expr])[0]
 
 
 def test_a_quoted_label_name_stays_on_one_line_of_the_note():
-    found = mr.groupings_without_cluster('sum by(pod, "a\\nb") (x)')
+    found = mr.groupings_without_cluster(_lhs_tree('sum by(pod, "a\\nb") (x)'))
     assert found == ['by(pod, "a\\nb")']
     assert "\n" not in mr.cluster_grouping_note(found)
 
 
-def test_the_cli_says_once_that_the_check_was_not_made(tmp_path):
+def test_there_is_no_unchecked_path_left():
+    """語法樹一律由 Prometheus 的 parser 讀（#4215）：產出規則的每一條都有樹，
+    沒有「沒檢查」這種狀態；`--no-ast` 已移除。"""
+    assert not hasattr(mr, "CLUSTER_GROUPING_NOT_CHECKED")
+    assert not hasattr(mr.MigrationResult("A", "perfect"), "cluster_grouping_checked")
+
+
+def test_the_note_does_not_change_the_exit_code(tmp_path):
     rules = tmp_path / "rules.yml"
     rules.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [
         rule for rule, _g in GROUPED_RULES[:3]]}]}), encoding="utf-8")
-    tool = str(_TOOLS / "ops" / "migrate_rule.py")
-
-    def run(*flags):
-        return subprocess.run([sys.executable, tool, str(rules), "--dry-run", "--no-dictionary",
-                               *flags], capture_output=True, text=True, encoding="utf-8",
-                              timeout=120)
-    without = run("--no-ast")
-    assert without.returncode == 0, without.stderr
-    assert without.stderr.count(f"[WARN] {mr.CLUSTER_GROUPING_NOT_CHECKED}\n") == 1
-    assert "⚠️ 原式子的" not in without.stdout
-    with_ast = run()
-    assert with_ast.returncode == 0, with_ast.stderr   # 註記不改結束碼
-    assert mr.CLUSTER_GROUPING_NOT_CHECKED not in with_ast.stderr
-    assert with_ast.stdout.count("⚠️ 原式子的 on(instance) 沒有 da_cluster") == 3
+    proc = subprocess.run(
+        [sys.executable, str(_TOOLS / "ops" / "migrate_rule.py"), str(rules), "--dry-run",
+         "--no-dictionary"], capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.count("⚠️ 原式子的 on(instance) 沒有 da_cluster") == 3
+    assert "未檢查" not in proc.stdout + proc.stderr
 
 
 def test_the_identity_labels_are_the_lints():
@@ -355,7 +331,7 @@ def test_the_cluster_label_survives_and_instance_is_still_rewritten():
 
 def test_a_rule_that_only_reads_the_cluster_label_is_not_reported_as_rewritten():
     rule = _rule("Conn", "app_connections > 100", where="{{ $labels.da_cluster }}")
-    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
+    r = mr.process_rule(rule, prefix="custom_", dictionary={})
     assert r.dropped_label_refs == []
     assert r.alert_rules[0]["annotations"] == {"where": "{{ $labels.da_cluster }}"}
     assert "⚠️ 原 annotation" not in mr.render_alert_rules([r], "custom_")
@@ -374,13 +350,11 @@ def _lint_tree(root: Path, recording: str, alerts: str) -> Path:
 
 
 @pytest.mark.usefixtures("da_read_env")
-@pytest.mark.parametrize("use_ast", [True, False], ids=["ast", "no-ast"])
 @pytest.mark.parametrize("prefix", ["custom_", ""], ids=["prefix", "no-prefix"])
-def test_the_lint_finds_nothing_in_rules_without_a_grouping_of_their_own(
-        tmp_path, use_ast, prefix):
+def test_the_lint_finds_nothing_in_rules_without_a_grouping_of_their_own(tmp_path, prefix):
     import check_cluster_identity as cid
     results, recording, alerts = generate(PLAIN_RULES + MANUAL_RULES,
-                                          prefix=prefix, use_ast=use_ast)
+                                          prefix=prefix)
     root = _lint_tree(tmp_path / "now", recording, alerts)
     judged = cid._judged(root)
     emitted = [r for r in results if r.alert_rules]
@@ -543,20 +517,10 @@ SINGLE_PROMETHEUS_CASES = {
         threshold("app_queue_jobs_total", 100),
         threshold("app_connections", 100),
     ], {"CustomQueueJobs": [], "CustomConns": []}),
-    "compound": ([
-        _rule("And", "app_and_lag > 5 and app_y_lag > 3", value="{{ $value }}"),
-        _rule("Or", "app_or_lag > 5 or app_z_lag > 3", value="{{ $value }}"),
-        _rule("Unless", "app_unless_lag > 5 unless app_w_lag > 3", value="{{ $value }}"),
-        _rule("Pair", _PAIR_EXPR, value="{{ $value }}"),
-    ], [
-        series("app_and_lag", 10, instance="i1"), series("app_y_lag", 1, instance="i1"),
-        series("app_or_lag", 1, instance="i1"), series("app_z_lag", 4, instance="i1"),
-        series("app_unless_lag", 10, instance="i1"),
+    "pair": ([_rule("Pair", _PAIR_EXPR, value="{{ $value }}")], [
         series("app_hit_ratio", 0.9, instance="i1"), series("app_weight", 1, instance="i1"),
-        threshold("app_and_lag", 3), threshold("app_or_lag", 3),
-        threshold("app_unless_lag", 3), threshold("app_hit_ratio", 0.8),
-    ], {"CustomAnd": [alert(10)], "CustomOr": [alert(4)], "CustomUnless": [alert(10)],
-        "CustomPair": [alert(0.9)]}),
+        threshold("app_hit_ratio", 0.8),
+    ], {"CustomPair": [alert(0.9)]}),
 }
 
 
@@ -584,30 +548,6 @@ def test_thresholds_and_maintenance_stay_one_per_tenant(tmp_path):
     assert_alerts(tmp_path / "maintenance", _MAX_RULE, both + [
         {"series": 'user_state_filter{filter="maintenance",tenant="t1"}', "values": "1x10"},
     ], {"CustomConns": []})
-
-
-@needs_promtool
-def test_compound_rules_are_judged_inside_one_cluster(tmp_path):
-    """兩個叢集各有一台位址相同的實例（`i1`）。and／or／unless 的另一邊只取同一個
-    叢集的序列（預設配對比的是全部 label，含叢集）；沒有一條因為多了一個叢集
-    而求值失敗（promtool 把規則求值錯誤當成失敗）。"""
-    rules = SINGLE_PROMETHEUS_CASES["compound"][0][:3]
-    east, west = {"da_cluster": "east", "instance": "i1"}, {"da_cluster": "west", "instance": "i1"}
-    assert_alerts(tmp_path, rules, [
-        # and：west 沒有另一邊的序列
-        series("app_and_lag", 10, **east), series("app_y_lag", 1, **east),
-        series("app_and_lag", 20, **west),
-        # or：east 走左邊、west 走右邊
-        series("app_or_lag", 10, **east),
-        series("app_or_lag", 1, **west), series("app_z_lag", 4, **west),
-        # unless：east 被自己叢集的另一邊消掉
-        series("app_unless_lag", 10, **east), series("app_w_lag", 1, **east),
-        series("app_unless_lag", 20, **west),
-        threshold("app_and_lag", 3), threshold("app_or_lag", 3),
-        threshold("app_unless_lag", 3),
-    ], {"CustomAnd": [alert(10, "east")],
-        "CustomOr": [alert(10, "east"), alert(4, "west")],
-        "CustomUnless": [alert(20, "west")]})
 
 
 @needs_promtool

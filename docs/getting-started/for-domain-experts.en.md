@@ -231,7 +231,7 @@ Checks (the built-in policy's values: [custom-rule-governance §4.1](../custom-r
 - Labels results keep: `preserved_labels` (`without(tenant)`, `sum by (a)`, an ungrouped `sum(…)` and other spellings that drop tenant are refused, judged on Prometheus' parse tree)
 - Required labels: `required_labels`
 - Range vector cap `max_range_duration`; rule-group `interval` cap `max_evaluation_interval`
-- WARN (does not fail CI) when an `owner` or `expiry` label is missing
+- ERROR when an alert of a tenant's rule file lacks an `owner` or `expiry` annotation (written as a label too; the expiry as `YYYY-MM-DD`)
 
 A naming-convention check is not implemented yet, and the policy file has no such setting. Cardinality is guarded by the platform's Cardinality Guard; for trend forecasting see Cardinality Forecasting below.
 

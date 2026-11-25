@@ -244,7 +244,7 @@ class TestBlindIsNotClean:
     gate that is green because nobody is looking — rebuilt inside the gate.
 
     ⚠️ Not hypothetical: this check's CI leg installs a subset of the 51 tools'
-    dependencies, and one of them (``promql-parser``) is not stdlib.
+    dependencies, and one of them (``pyyaml``) is not stdlib.
     """
 
     def test_a_command_that_fails_to_load_is_blind_not_unscoreable(

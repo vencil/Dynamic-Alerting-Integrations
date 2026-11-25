@@ -2978,8 +2978,13 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "includes the tool names; the flag is a switch, not a path. A write that "
         "fails is held by tests/lint/test_check_includes_sync.py "
         "(test_a_stub_that_cannot_be_written_is_rc2_one_line).",
+    # #3981, eleventh batch.
+    "lint/validate_docs_versions.py":
+        "`--fix` rewrites the docs the checks reported; the flag is a switch, "
+        "not a path. A refused target is held by tests/lint/test_validate_docs_versions.py "
+        "(test_a_target_the_artifact_entry_refuses_is_rc2_one_line).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 23
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 24
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

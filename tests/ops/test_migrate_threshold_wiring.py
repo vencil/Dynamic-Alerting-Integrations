@@ -54,7 +54,7 @@ def test_split_threshold_key_matches_the_exporter(key, component, metric):
 
 def _process(expr, severity="warning", prefix="custom_"):
     rule = {"alert": "T", "expr": expr, "labels": {"severity": severity}}
-    return mr.process_rule(rule, prefix=prefix, dictionary={}, use_ast=True)
+    return mr.process_rule(rule, prefix=prefix, dictionary={})
 
 
 def _threshold_expr(result):
@@ -142,7 +142,7 @@ def test_defaults_snippet_never_carries_a_critical_or_dimensional_key():
         {"alert": "W", "expr": 'mysql_x{queue="tasks"} > 5', "labels": {"severity": "warning"}},
         {"alert": "C", "expr": 'mysql_x{queue="tasks"} > 9', "labels": {"severity": "critical"}},
     ]
-    results = [mr.process_rule(r, prefix="custom_", dictionary={}, use_ast=True) for r in rules]
+    results = [mr.process_rule(r, prefix="custom_", dictionary={}) for r in rules]
     assert any(r.dim_hints for r in results)
     defaults = yaml.safe_load(mr.render_defaults_snippet(results))["defaults"]
     assert defaults == {"custom_mysql_x": 5}

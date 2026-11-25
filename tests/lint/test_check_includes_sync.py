@@ -361,6 +361,9 @@ def _as_another_user(shape, argv):
     inc = d / "includes"
     inc.mkdir()
     (inc / "a.md").write_text("# 規則包\n", encoding="utf-8")
+    # The mode a checkout gives, not the umask's: under `umask 077` root made
+    # it 0600 and uid 65534 failed on the read, not on the write (#3981).
+    (inc / "a.md").chmod(0o644)
     d.chmod(0o755)
     inc.chmod(0o755)
     shape(inc, bool(prefix))
@@ -393,7 +396,21 @@ def _remove_the_other_users_dirs():
         shutil.rmtree(d, ignore_errors=True)
 
 
-def test_a_stub_that_cannot_be_written_is_rc2_one_line():
+@pytest.fixture(params=[None, 0o077], ids=["default-umask", "umask-077"])
+def umask(request):
+    """Each other-uid case also under `umask 077` (#3981): the helper's
+    files must not take their mode from the creator's umask."""
+    if request.param is None:
+        yield
+        return
+    old = os.umask(request.param)
+    try:
+        yield
+    finally:
+        os.umask(old)
+
+
+def test_a_stub_that_cannot_be_written_is_rc2_one_line(umask):
     """The includes directory takes no new file: rc 2, one line naming the
     stub, where a bare write ended in the crash handler (`unexpected internal
     error (PermissionError)`)."""
@@ -409,7 +426,7 @@ def test_a_stub_that_cannot_be_written_is_rc2_one_line():
     assert not stub.exists()
 
 
-def test_an_include_that_cannot_be_read_is_rc2_one_line():
+def test_an_include_that_cannot_be_read_is_rc2_one_line(umask):
     """An include the user may not read (EACCES), where the read ended in
     the crash handler (`unexpected internal error (PermissionError)`)."""
     def shape(inc, privileged):

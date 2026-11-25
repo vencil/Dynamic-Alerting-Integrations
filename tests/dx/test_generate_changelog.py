@@ -678,8 +678,9 @@ class TestLintWiring:
         """⛔ Registered is not the same as reachable — blind review measured
         that gap on this very change.
 
-        The `Lint` job names each hook it runs, and both automated
-        `validate_all.py` callers pass an explicit `--only` allow-list. A hook
+        The `Lint` job names each hook it runs, and the automated
+        `validate_all.py` caller (`make lint-docs`; docs-ci's `drift-checks`
+        was a second one until #4224) passes an explicit `--only` allow-list. A hook
         or a registry row absent from those lists never executes in CI, exits
         0, and reports nothing: the defect class this ticket is about.
         """
@@ -687,7 +688,7 @@ class TestLintWiring:
         ci = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         assert "pre-commit run changelog-format --all-files" in ci
 
-        for rel in (("Makefile",), (".github", "workflows", "docs-ci.yaml")):
+        for rel in (("Makefile",),):
             text = repo.joinpath(*rel).read_text(encoding="utf-8")
             only = [ln for ln in text.splitlines() if "--only " in ln]
             assert only, f"no --only line in {rel}"
@@ -1030,7 +1031,7 @@ class TestEveryCiCallerFetchesThePrBase:
                 assert any(self.FETCH in r for r in runs), (
                     f"{rel[-1]}::{job_name} runs the changelog lint without fetching "
                     f"origin/$GITHUB_BASE_REF; on a PR the cap exits 2 there")
-        assert sorted(hits) == ["drift-checks", "lint", "lint-docs"], hits
+        assert sorted(hits) == ["lint", "lint-docs"], hits
 
 
 def _pr_shaped_repo(tmp_path, monkeypatch, entry: str, *,

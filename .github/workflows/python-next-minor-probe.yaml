@@ -15,7 +15,7 @@ name: Python next-minor readiness probe
 #      container); on musl the packages the alpine images install, read from
 #      the Dockerfiles' `pip install` lines (never listed here) under the same
 #      constraints. A dependency without a wheel would need a compiler
-#      (promql-parser is Rust) in CI and in every image.
+#      (rpds-py is Rust) in CI and in every image.
 #   2. Docker Hub has python:<next>-alpine3.23 (the images' base).
 #   3. actions/python-versions lists a stable <next>.x (what setup-python installs).
 # Ready + scheduled run → one issue (an open one with the same title is reused).

@@ -540,7 +540,8 @@ def _orphan_ids(proc: subprocess.CompletedProcess) -> object:
 
 _EXCLUDE_PACK = ("groups:\n- name: g\n  rules:\n  - alert: {name}\n"
                  "    expr: up{{tenant=\"t\"}} == 0\n"
-                 "    labels: {{tenant: t, severity: warning, owner: o, expiry: '2030-01-01'}}\n")
+                 "    labels: {{tenant: t, severity: warning}}\n"
+                 "    annotations: {{owner: o, expiry: '2030-01-01'}}\n")
 
 
 def _exclude_tree(tmp: Path) -> str:

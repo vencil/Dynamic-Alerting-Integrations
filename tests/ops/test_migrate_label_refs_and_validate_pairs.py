@@ -100,7 +100,7 @@ def test_process_rule_reports_the_rewrite():
     rule = {"alert": "HighConn", "expr": "mysql_global_status_threads_connected > 100",
             "labels": {"severity": "warning"},
             "annotations": {"summary": "on {{ $labels.instance }}"}}
-    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
+    r = mr.process_rule(rule, prefix="custom_", dictionary={})
     assert r.dropped_label_refs == ["instance"]
     assert any("instance" in n and "$labels.tenant" in n for n in r.notes)
     out = mr.render_alert_rules([r], "custom_")
@@ -117,7 +117,7 @@ def test_alert_rules_with_quotes_and_templated_labels_parse_back():
                        "who": "{{ $labels.tenant }}"},
             "annotations": {"summary": 'Conn {{ $value | printf "%.1f" }} \\ ok',
                             "zh": "連線數過高"}}
-    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
+    r = mr.process_rule(rule, prefix="custom_", dictionary={})
     doc = yaml.safe_load(mr.render_alert_rules([r], "custom_"))
     got = doc["groups"][0]["rules"][0]
     assert got["annotations"] == rule["annotations"]
@@ -288,7 +288,7 @@ def test_every_label_value_is_a_double_quoted_scalar():
     as None and 8 — sees the original string. No reader is guessed at."""
     rule = {"alert": "X", "expr": "up == 0",
             "labels": {"a": "null", "b": "010", "c": "warning", "d": "true"}}
-    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
+    r = mr.process_rule(rule, prefix="custom_", dictionary={})
     out = mr.render_alert_rules([r], "custom_")
     for k, v in rule["labels"].items():
         assert f'          {k}: "{v}"\n' in out
