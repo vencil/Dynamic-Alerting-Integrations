@@ -35,6 +35,7 @@ sys.path.insert(0, str(REPO / "scripts" / "tools"))
 sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
 import validate_config as vc  # noqa: E402
 from _grar_parse import load_tenant_tree  # noqa: E402
+from _grar_render import PLATFORM_ROUTE_COUNT  # noqa: E402
 from _grar_render import (  # noqa: E402
     merge_generated, assemble_configmap, load_base_config)
 from _grar_render import load_base_config_file  # noqa: E402  (#3797: by path)
@@ -174,7 +175,7 @@ def test_assembly_puts_the_bases_root_receiver_below_the_enforced_routes(tmp_pat
     last = routes[-1]
     assert "matchers" not in last and last["receiver"] == base["route"]["receiver"], last
     assert all(str(r.get("receiver", "")).startswith("platform-enforced-")
-               for r in routes[4:-1]), routes
+               for r in routes[PLATFORM_ROUTE_COUNT:-1]), routes
 
 
 def test_apply_merge_pins_the_cluster_root(tmp_path):

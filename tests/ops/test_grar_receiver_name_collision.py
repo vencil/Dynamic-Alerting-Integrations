@@ -224,13 +224,13 @@ class TestBaseShadowing:
         assert "Traceback" not in err, err
 
     def test_platform_placeholder_names_in_base_are_not_shadowing(self, tmp_path):
-        """These four are injected only if absent — a richer base definition
+        """These five are injected only if absent — a richer base definition
         (watchdog-heartbeat's url_file) is the intended shape."""
         d = self._tree(tmp_path)
         placeholders = sorted(render._platform_placeholder_receiver_names())
         assert set(placeholders) == {
             "custom-alerts-firehose", "watchdog-heartbeat",
-            "synthetic-receiver", "sentinel-sinkhole"}, placeholders
+            "synthetic-receiver", "sentinel-sinkhole", "migrated-alerts-shadow"}, placeholders
         base = self._base(tmp_path, [
             {"name": n, "webhook_configs": [{"url": f"https://p.example.com/{n}"}]}
             for n in placeholders])

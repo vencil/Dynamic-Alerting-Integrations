@@ -48,6 +48,7 @@ from generate_alertmanager_routes import (
     assemble_configmap,
     generate_inhibit_rules,
     generate_routes,
+    _build_migrated_alert_routes,
     load_base_config,
     load_tenant_tree,
 )
@@ -333,6 +334,9 @@ def _build_enforced_am_yml() -> str:
     }
     routes, receivers, warnings = generate_routes(
         routing_configs, enforced_routing=enforced, tenants=())
+    # #4277: the first demo tenant has cut over its migrated alerts; the other
+    # is still in shadow.
+    routes = routes + _build_migrated_alert_routes([_DEMO_TENANTS[0]])[0]
     # receiver 建置若被 WARN+skip，下面的路由斷言會驗到殘缺樹 → 前提先擋。
     blocking = [w for w in warnings if "skipping" in w or "blocked" in w]
     assert not blocking, f"synthetic config unexpectedly degraded: {blocking}"
@@ -356,8 +360,9 @@ class TestEnforcedRoutingGuardrails:
 
     Synthetic tree（_inject_custom_alert_isolation 注入後）：
       routes[0..3]  Watchdog / custom（含 demo children）/ probe / sentinel
-      routes[4]     platform-enforced（severity="critical"，continue:true）
-      routes[5..]   tenant="demo-*" 主 route；demo-blue 的 routes 底下掛
+      routes[4]     migrated 影子（component="migrated"，tenant!~ 已切換的 demo-blue；#4277）
+      routes[5]     platform-enforced（severity="critical"，continue:true）
+      routes[6..]   tenant="demo-*" 主 route；demo-blue 的 routes 底下掛
                     tenant-demo-blue-override-0（alertname 專屬 override，
                     #2252 起為子路由，繼承主 route 的 timing / group_by）
     """
@@ -428,6 +433,30 @@ class TestEnforcedRoutingGuardrails:
             "tenant": tenant,
             "severity": "critical",
         }, f"tenant-{tenant}")
+
+    def test_a_shadow_tenants_migrated_alert_reaches_no_one(self, enforced_etc):
+        """分支：migrated 影子路由（#4277，continue:false）擋在 enforced 之前。
+
+        影子期新舊規則並存：還沒切換的租戶，其 component="migrated" 告警只進
+        不通知的 migrated-alerts-shadow——連 critical 也不進 NOC、不進租戶
+        channel，否則同一件事會 page 兩次。
+        """
+        _assert_routed(enforced_etc, {
+            "alertname": "LegacyDiskFull",
+            "component": "migrated",
+            "tenant": _DEMO_TENANTS[1],
+            "severity": "critical",
+        }, "migrated-alerts-shadow")
+
+    def test_a_cut_over_tenants_migrated_alert_routes_like_its_others(self, enforced_etc):
+        """分支：`_routing_migrated: active` 的租戶被 tenant!~ 排除在影子路由外，
+        之後與它的一般告警走同一條路：NOC（critical）＋租戶主 route。"""
+        _assert_routed(enforced_etc, {
+            "alertname": "LegacyDiskFull",
+            "component": "migrated",
+            "tenant": _DEMO_TENANTS[0],
+            "severity": "critical",
+        }, f"platform-enforced,tenant-{_DEMO_TENANTS[0]}")
 
     def test_watchdog_heartbeat_never_dual_delivers_to_noc(self, enforced_etc):
         """分支：Watchdog index-0 優先權 vs enforced match-critical。

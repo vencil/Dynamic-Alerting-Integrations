@@ -1112,6 +1112,46 @@ def _build_custom_alert_routes(tenant_names: list[str] | None = None,
     return [route], [{"name": "custom-alerts-firehose"}]
 
 
+#: #4277: the receiver migrated alerts of a tenant still in shadow end at —
+#: name-only, so it notifies no one; the alerts stay visible in Alertmanager.
+MIGRATED_SHADOW_RECEIVER = "migrated-alerts-shadow"
+
+
+def _build_migrated_alert_routes(active_tenants: "Iterable[str]" = ()
+                                 ) -> tuple[list[dict], list[dict]]:
+    """The migrated-alerts shadow route + its receiver (#4277).
+
+    migrate-rule writes the tenant's legacy rules back as they were, each
+    labelled ``component="migrated"``; while the old rules still run beside
+    them (the shadow period), their alerts must page no one. This route takes
+    every such alert to ``migrated-alerts-shadow`` (name-only) — except a
+    tenant whose ``_routing_migrated`` is ``active``: a ``tenant!~`` matcher
+    leaves its alerts to the rest of the tree, so after cutover they route
+    exactly as the tenant's other alerts do (its own route, the enforced NOC
+    route, the root). Nothing of the tenant's routing is copied here: there
+    is one place it is written.
+
+    The merge (``merge_generated(..., migrated_active=)``, through
+    ``_inject_custom_alert_isolation``) builds it from the tenant tree's
+    ``migrated_active`` and pins it at index 4, after the sentinel sink and
+    AHEAD of the enforced NOC route (``continue: true``, matcher-less) —
+    without it a shadow alert would reach the NOC — and adds its name-only
+    receiver. A merge given no set: every tenant in shadow.
+    """
+    matchers = ['component="migrated"']
+    active = sorted(set(active_tenants))
+    if active:
+        matchers.append(
+            f'tenant!~"{_matcher_quoted("|".join(_regex_literal(t) for t in active))}"')
+    route = {
+        "matchers": matchers,
+        "group_by": ["tenant", "alertname"],
+        "receiver": MIGRATED_SHADOW_RECEIVER,
+        "continue": False,
+    }
+    return [route], [{"name": MIGRATED_SHADOW_RECEIVER}]
+
+
 def _build_watchdog_route() -> tuple[list[dict], list[dict]]:
     """Build the platform-static Watchdog liveness route + heartbeat receiver.
 

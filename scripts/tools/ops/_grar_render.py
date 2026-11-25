@@ -54,6 +54,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Callable, NamedTuple
 
 import yaml
@@ -64,6 +65,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
+    _build_migrated_alert_routes,
     _build_sentinel_sinkhole_route)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#3276)
@@ -139,11 +141,21 @@ def _main_tenant_routes(routes: list[dict]) -> dict[str, dict]:
     return tenants
 
 
-def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Prepend the four platform-static top-of-tree routes — the Watchdog liveness
+#: How many platform routes ``_inject_custom_alert_isolation`` prepends —
+#: Watchdog, custom isolation, synthetic probe, sentinel sink and (#4277) the
+#: migrated-alerts shadow route. ``merge_generated`` keeps exactly these ahead
+#: of the enforced routes.
+PLATFORM_ROUTE_COUNT = 5
+
+
+def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict], *,
+                                   migrated_active: "Iterable[str]" = (),
+                                   ) -> tuple[list[dict], list[dict]]:
+    """Prepend the five platform-static top-of-tree routes — the Watchdog liveness
     route (index 0, ADR-025 §1 / #838), the Custom Alerts isolation route (index 1,
     #741 S7/S8), the synthetic-probe sinkhole route (index 2, ADR-025 interop), then
-    the sentinel sinkhole route (index 3, #1095) — plus their receivers, so the
+    the sentinel sinkhole route (index 3, #1095), and the migrated-alerts
+    shadow route (index 4, #4277) — plus their receivers, so the
     final ConfigMap always pins them AHEAD of the enforced NOC route and they
     survive the route-REPLACE that --apply performs on route.routes.
 
@@ -187,9 +199,16 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) ->
     def _is_sentinel_sink(r: dict) -> bool:
         return 'component="sentinel"' in r.get("matchers", [])
 
+    def _is_migrated(r: dict) -> bool:
+        return 'component="migrated"' in r.get("matchers", [])
+
+    # #4277: the migrated-alerts shadow route, built from *migrated_active*
+    # (the tenants whose `_routing_migrated` is `active`; none: every tenant
+    # in shadow). One already in *routes* is stale — dropped with the rest.
+    mig_routes, mig_receivers = _build_migrated_alert_routes(migrated_active)
     rest = [r for r in (routes or [])
             if not _is_watchdog(r) and not _is_custom(r) and not _is_probe(r)
-            and not _is_sentinel_sink(r)]
+            and not _is_sentinel_sink(r) and not _is_migrated(r)]
     # #1092 0-pre: rebuild the custom route AFTER filtering, from the surviving
     # main tenant routes — the dropped stale custom route never contributes
     # children, so the subtree always mirrors this run's tenant set.
@@ -199,11 +218,12 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) ->
     # Order is load-bearing + pinned for determinism: Watchdog (0) → Custom (1) →
     # synthetic-probe (2) → sentinel sink (3), all ahead of the enforced NOC
     # match-all. The four matchers are mutually exclusive so none shadows another.
-    out_routes = wd_routes + cust_routes + probe_routes + sent_routes + rest
+    out_routes = wd_routes + cust_routes + probe_routes + sent_routes + mig_routes + rest
+    assert len(out_routes) - len(rest) == PLATFORM_ROUTE_COUNT
 
     have = {r["name"] for r in (receivers or [])}
     add_recv = [r for r in (wd_receivers + cust_receivers + probe_receivers
-                            + sent_receivers)
+                            + sent_receivers + mig_receivers)
                 if r["name"] not in have]
     out_receivers = list(receivers or []) + add_recv
     return out_routes, out_receivers
@@ -678,7 +698,8 @@ def _platform_placeholder_receiver_names() -> frozenset[str]:
     names = set()
     for _routes, recvs in (_build_watchdog_route(), _build_custom_alert_routes([]),
                            _build_synthetic_probe_route(),
-                           _build_sentinel_sinkhole_route()):
+                           _build_sentinel_sinkhole_route(),
+                           _build_migrated_alert_routes()):
         names.update(r["name"] for r in recvs)
     return frozenset(names)
 
@@ -832,14 +853,15 @@ def assert_base_has_no_dedup_rule(base: object, where: str = "the base config",
 
 def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
                     inhibit_rules: list[dict] | None, *,
-                    strict: bool = False) -> dict:
+                    strict: bool = False,
+                    migrated_active: "Iterable[str]" = ()) -> dict:
     """*base* (a SOURCE config, ``assert_base_is_a_source``) with this run's
     routing merged in (#1211 gap 2). *base* is not modified.
 
     Routes — ``route.routes`` becomes, in this order:
 
-    1. the four platform routes (Watchdog, custom isolation, synthetic
-       probe, sentinel sink; ``_inject_custom_alert_isolation``) and the
+    1. the five platform routes (Watchdog, custom isolation, synthetic
+       probe, sentinel sink, migrated shadow; ``_inject_custom_alert_isolation``) and the
        enforced NOC route(s) (``continue: true``) — ahead of everything, so
        no route of the base can take their alerts first;
     2. the base's own top-level routes, in the base's order — except one to a
@@ -877,12 +899,14 @@ def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
     # receiver that leaves the field out.
     assert_base_global_inherits_no_credentials(merged)
 
-    routes, receivers = _inject_custom_alert_isolation(routes, receivers)
+    routes, receivers = _inject_custom_alert_isolation(
+        routes, receivers, migrated_active=migrated_active)
     placeholders = _platform_placeholder_receiver_names()
 
     root = dict(merged.get("route") or {})
-    head = routes[:4] + [r for r in routes[4:] if _is_enforced_route(r)]
-    tail = [r for r in routes[4:] if not _is_enforced_route(r)]
+    n = PLATFORM_ROUTE_COUNT
+    head = routes[:n] + [r for r in routes[n:] if _is_enforced_route(r)]
+    tail = [r for r in routes[n:] if not _is_enforced_route(r)]
     own = [r for r in (root.get("routes") or []) if not _routes_to(r, placeholders)]
     if any(str(r.get("receiver", "")).startswith("platform-enforced-") for r in head):
         # #2519: the root's place, below the enforced routes (see docstring).
@@ -942,15 +966,17 @@ def dump_output_yml(merged: dict) -> str:
 
 
 def assemble_alertmanager_yml(base: dict, routes: list[dict], receivers: list[dict],
-                              inhibit_rules: list[dict], strict: bool = False) -> str:
+                              inhibit_rules: list[dict], strict: bool = False, *,
+                              migrated_active: "Iterable[str]" = ()) -> str:
     """``merge_generated`` rendered as alertmanager.yml (``--output-alertmanager``)."""
     return dump_output_yml(
-        merge_generated(base, routes, receivers, inhibit_rules, strict=strict))
+        merge_generated(base, routes, receivers, inhibit_rules, strict=strict,
+                        migrated_active=migrated_active))
 
 
 def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                        namespace: str = "monitoring", configmap_name: str = "alertmanager-config",
-                       strict: bool = False) -> str:
+                       strict: bool = False, *, migrated_active: "Iterable[str]" = ()) -> str:
     """``assemble_alertmanager_yml`` wrapped as a Kubernetes ConfigMap
     (``--output-configmap``): ``data.alertmanager.yml`` is that text, and
     ``data.alertmanager.base.yml`` the source it was rendered from — the same
@@ -958,7 +984,8 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
     ``--apply``-ed later without losing its source (#1211 gap 2)."""
     return configmap_manifest(configmap_name, namespace, {
         AM_CONFIGMAP_KEY: assemble_alertmanager_yml(
-            base, routes, receivers, inhibit_rules, strict=strict),
+            base, routes, receivers, inhibit_rules, strict=strict,
+            migrated_active=migrated_active),
         AM_BASE_CONFIGMAP_KEY: dump_alertmanager_yml(base),
     })
 
@@ -1523,7 +1550,8 @@ def _reload_alertmanager(namespace: str) -> bool:
 
 def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict], namespace: str, configmap_name: str, strict: bool = False,
                        judge_merged: Callable[[dict], list[str]] | None = None, *,
-                       show_loader_reason: bool = False) -> bool:
+                       show_loader_reason: bool = False,
+                       migrated_active: "Iterable[str]" = ()) -> bool:
     """Merge generated routing config into existing Alertmanager ConfigMap and reload.
 
     Applies tenant routing configuration directly to a running Alertmanager cluster.
@@ -1624,7 +1652,7 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
                     f"the '{AM_CONFIGMAP_KEY}' it adopts: put your own config without "
                     "them under that key), then run --apply again."))
         existing = merge_generated(existing, routes, receivers, inhibit_rules,
-                                   strict=strict)
+                                   strict=strict, migrated_active=migrated_active)
     except ValueError as exc:
         raise AlertmanagerConfigInvariantViolated(str(exc)) from exc
     data = {AM_CONFIGMAP_KEY: dump_output_yml(existing)}
