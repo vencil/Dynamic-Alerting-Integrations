@@ -20,6 +20,10 @@
 #     sensitivity the rule had; only "cannot see a burst" is fixed.
 #   - t-reset: 16 deadlocks, then the counter restarts (5016 → 0, a PostgreSQL
 #     restart or pg_stat_reset), then 8 more. increase() counts 24 → no alert.
+#   - t-under / t-over: a steady 29.6 and 30.4 per 5m (1.48 and 1.52 per 15s scrape).
+#     On a steady counter neither engine has anything to extrapolate, so this
+#     pins the threshold itself: 29.6 is silent, 30.4 fires (shown as "30"). It is also what the
+#     former `rate5m > 0.1` did for the same input — the sensitivity is unchanged.
 #   - t-multi: clusters east and west, burst only in west → exactly one alert,
 #     carrying da_cluster=west. t-maint: the same burst under maintenance → none.
 #
@@ -48,8 +52,11 @@ tests:
       - eval_time: 7m15s
         alertname: PostgreSQLHighDeadlocks
         exp_alerts: []
-      # Burst ended at 6m30s; +1m30s.
-      - eval_time: 8m
+      # `for: 1m` served. Not asserted at 7m30s: the alert reads a recording rule
+      # in another group, and which group is evaluated first at 6m30s is not
+      # fixed, so the alert sees the count at 6m30s or one evaluation later. At
+      # 7m45s it fires either way; with `for: 1m30s` it would not.
+      - eval_time: 7m45s
         alertname: PostgreSQLHighDeadlocks
         exp_alerts: &burst_alert
           - exp_labels:
@@ -66,6 +73,10 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
+      # Burst ended at 6m30s; +1m30s.
+      - eval_time: 8m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts: *burst_alert
       # The whole burst is still inside the 5m window.
       - eval_time: 10m
         alertname: PostgreSQLHighDeadlocks
@@ -197,6 +208,33 @@ tests:
               platform_summary_zh: "[] t-multi：偵測到死鎖 — 應用層鎖競爭"
               description: "60 deadlocks in the last 5 minutes"
               description_zh: "過去 5 分鐘 60 次死鎖"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── 8. The threshold is 30 per 5 minutes: steady 29.6 silent, steady 30.4 fires ──
+  - interval: 15s
+    name: deadlocks-threshold-is-30-per-5m
+    input_series:
+      - series: 'pg_stat_database_deadlocks{tenant="t-under", datname="app"}'
+        values: '100+1.48x120'
+      - series: 'pg_stat_database_deadlocks{tenant="t-over", datname="app"}'
+        values: '100+1.52x120'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PostgreSQLHighDeadlocks
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              tenant: t-over
+            exp_annotations:
+              summary: "Deadlocks detected on t-over"
+              summary_zh: "t-over 偵測到死鎖"
+              platform_summary: "[] t-over: deadlocks detected — application-level lock contention"
+              platform_summary_zh: "[] t-over：偵測到死鎖 — 應用層鎖競爭"
+              description: "30 deadlocks in the last 5 minutes"
+              description_zh: "過去 5 分鐘 30 次死鎖"
               runbook_url: ""
               owner: ""
               tier: ""

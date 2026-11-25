@@ -46,8 +46,11 @@ groups:
 
       # Deadlocks in the last 5 minutes — a COUNT, not a per-second rate (#4033).
       # Summed over the cluster's databases (pg_stat_database_deadlocks is one
-      # counter per datname). increase() absorbs counter resets (PostgreSQL
-      # restart, pg_stat_reset): a drop is read as a restart from zero.
+      # counter per datname). A counter that restarts from zero (PostgreSQL
+      # restart, pg_stat_reset) adds nothing. A counter that JUMPS to another
+      # non-zero value does: Prometheus cannot tell that from deadlocks, so a
+      # failover or an exporter re-pointed at a node with its own statistics can
+      # raise PostgreSQLHighDeadlocks once, for under 5 minutes.
       - record: tenant:pg_deadlocks:increase5m
         expr: sum by(tenant, da_cluster) (increase(pg_stat_database_deadlocks[5m]))
 
@@ -211,7 +214,9 @@ groups:
       # constant (no tenant key) — numerically the former 0.1/s × 300 s (#4033).
       # The number compared is Prometheus' extrapolated increase(): a burst that
       # lands inside the window can read about 5% above the raw count at a 15s
-      # scrape (300/285), so a raw 29–30 sits on the edge.
+      # scrape (300/285; more at longer scrape intervals), so a raw count a few
+      # below 30 can already fire. VictoriaMetrics does not extrapolate and
+      # compares the raw count (docs/integration/victoriametrics-integration.md §3.1).
       - alert: PostgreSQLHighDeadlocks
         expr: |
           tenant:pg_deadlocks:increase5m > 30
