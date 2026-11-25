@@ -152,6 +152,9 @@ from pathlib import Path
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
 import _lib_exitcodes  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    check_repo_artifact, ensure_dir, exit_on_output_write_error, is_special_file,
+    write_repo_artifact)
 from paths_filter_glob import (  # noqa: E402
     Unmodelled,
     covers,
@@ -342,6 +345,12 @@ def parse_workflow(text: str, where: str) -> dict:
 
 
 def load_workflow(path: Path) -> dict:
+    if is_special_file(os.fspath(path)):
+        # A FIFO here would block the read below — and `generate` rewrites
+        # this file (#3981).
+        raise _caller_error(
+            f"{path.name} is not a regular file, so it was NOT checked — "
+            "fix it, do not skip it.")
     try:
         text = path.read_bytes().decode("utf-8")
     except (UnicodeDecodeError, OSError) as exc:
@@ -633,6 +642,11 @@ def load_trace(root: Path, workflow: str) -> dict:
     format the retired Python tracer wrote (a `go` list per job): its `files`
     were what Python loaded, not what the job read."""
     path = trace_path(root, workflow)
+    if is_special_file(os.fspath(path)):
+        raise _caller_error(
+            f"{path.relative_to(root).as_posix()} is not a regular file, so it "
+            "is not a trace file `workflow_path_filter.py record` wrote. Delete "
+            "it, then `record` each of its jobs again.")
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
         jobs = doc["jobs"]
@@ -1106,8 +1120,8 @@ def _write_job_record(root: Path, traced: "Traced", job: str, record: dict) -> P
     doc["workflow"] = traced.name
     doc["jobs"][job] = record
     path = trace_path(root, traced.name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(dump_trace(doc), encoding="utf-8", newline="\n")
+    ensure_dir(path.parent)
+    write_repo_artifact(path, dump_trace(doc))
     return path
 
 
@@ -1312,9 +1326,13 @@ def cmd_generate(args: argparse.Namespace) -> int:
             findings += pattern_findings(result, path.name, tracked, seen)
     findings += _ledger_findings(traced_names, gated, seen)
     # Every workflow has been read and every region placed by now: a caller
-    # error above leaves the tree as it was.
+    # error above leaves the tree as it was. Every target is judged before the
+    # first write (#3981), and each is named as it is written, so a write
+    # refused part-way leaves the earlier ones named.
+    for path, _data, _label in writes:
+        check_repo_artifact(path)
     for path, data, label in writes:
-        path.write_bytes(data)
+        write_repo_artifact(path, data)
         print(f"wrote {label}")
     if findings:
         print(f"{len(findings)} finding(s):", file=sys.stderr)
@@ -1332,6 +1350,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Keep a workflow's on.pull_request.paths in step with what its jobs read.")

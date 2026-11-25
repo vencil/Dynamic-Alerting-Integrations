@@ -91,6 +91,9 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
 )
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    OutputWriteError, check_repo_artifact, ensure_dir, exit_on_output_write_error,
+    write_repo_artifact)
 
 REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", ".."))
 
@@ -108,7 +111,7 @@ SSOT_PATHS_MAP = ".agents/paths-map.json"
 OUT_CURSOR = ".cursor/skills"
 OUT_COPILOT = ".github/instructions"
 PATHS_PREFIX = "vibe-paths-"
-PATHS_MAP_VALIDATOR = "scripts/session-guards/paths_map.py"
+PATHS_MAP_VALIDATOR = "scripts/session-guards/_paths_map_schema.py"
 
 # Every directory this generator owns outright (walked for stale files).
 OUT_ROOTS = (OUT_SKILLS, OUT_ROLES, OUT_CURSOR, OUT_COPILOT)
@@ -249,7 +252,9 @@ def paths_map_entries():
     """The validated entry list of `.agents/paths-map.json`.
 
     Validation is borrowed from the hook that consumes the same file
-    (`paths_map.validate_map`), so the generator and the runtime reader cannot
+    (`_paths_map_schema.validate_map`, which the hook imports too — the
+    schema module, never the hook, whose import declares the hook protocol
+    for the whole process), so the generator and the runtime reader cannot
     disagree about what a well-formed map is. Raises FileNotFoundError when
     either file is absent and ValueError when the map is malformed.
     """
@@ -508,25 +513,51 @@ def diff_against_disk(plan):
     return missing, stale, extra
 
 
+# Generated artefacts ship 0644, the same mode every sibling generator sets
+# (dev-rules §5 SAST; gated by tests/shared/test_sast.py). Without it the
+# adapter inherits whatever umask the regenerating host had, and the mode
+# difference shows up as repo churn on the next machine.
+ADAPTER_MODE = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH
+
+
+def _up_to_date(abs_path, data):
+    """Whether *abs_path* already holds *data* with ADAPTER_MODE. Called
+    after `check_repo_artifact`, so a file that is there is a regular one;
+    anything unreadable is "not up to date" and the write that follows
+    reports it."""
+    try:
+        if stat.S_IMODE(os.stat(abs_path).st_mode) != ADAPTER_MODE:
+            return False
+        with open(abs_path, "rb") as fh:
+            return fh.read() == data
+    except OSError:
+        return False
+
+
 def write_outputs(plan):
+    """Write every adapter that differs from *plan*, then remove the stale
+    ones. Returns the removed paths; each written one is printed as it is
+    written, so a write refused part-way leaves the earlier ones named."""
+    # Every target is judged BEFORE any directory is created or any file
+    # written (#3981): `makedirs` follows a symlinked ancestor, and a
+    # directory created outside the tree, or a file written before a later
+    # target is refused, is not undone by refusing afterwards.
+    targets = []
     for dest_rel, data in sorted(plan.items()):
-        # Validate BEFORE creating the parent: makedirs follows a symlinked
-        # ancestor, and a directory created outside the tree is not undone by
-        # refusing the file write afterwards.
         abs_path = assert_writable_target(dest_rel)
-        os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
-        with open(abs_path, "wb") as fh:
-            fh.write(data)
-        # Generated artefacts ship 0644, the same mode every sibling generator
-        # sets (dev-rules §5 SAST; gated by tests/shared/test_sast.py). Without
-        # it the adapter inherits whatever umask the regenerating host had, and
-        # the mode difference shows up as repo churn on the next machine.
-        os.chmod(abs_path,
-                 stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        check_repo_artifact(abs_path)
+        targets.append((dest_rel, abs_path, data))
+    for dest_rel, abs_path, data in targets:
+        if _up_to_date(abs_path, data):
+            continue
+        ensure_dir(os.path.dirname(abs_path) or ".")
+        write_repo_artifact(abs_path, data, mode=ADAPTER_MODE)
+        print(f"   wrote {dest_rel}")
     removed = []
     for dest_rel in sorted(existing_outputs() - set(plan)):
-        os.remove(os.path.join(REPO_ROOT, dest_rel))
+        _remove(os.remove, os.path.join(REPO_ROOT, dest_rel))
         removed.append(dest_rel)
+        print(f"   removed stale adapter: {dest_rel}")
     # An emptied skill dir left behind would still be discovered by the vendor.
     for out_root in OUT_ROOTS:
         for dirpath, dirs, files in os.walk(os.path.join(REPO_ROOT, out_root),
@@ -534,8 +565,18 @@ def write_outputs(plan):
             rel = os.path.relpath(dirpath, REPO_ROOT).replace(os.sep, "/")
             if (not files and not dirs and dirpath != os.path.join(REPO_ROOT, out_root)
                     and owns(rel + "/x")):  # never prune a vendor dir we do not own
-                os.rmdir(dirpath)
+                _remove(os.rmdir, dirpath)
     return removed
+
+
+def _remove(remove, path):
+    """*remove*(*path*); a refusal is the write class (rc 2, one line), like
+    the writes beside it — the stale adapters removed before it are already
+    named."""
+    try:
+        remove(path)
+    except OSError as exc:
+        raise OutputWriteError(path, exc, action="remove") from exc
 
 
 def build_parser():
@@ -553,6 +594,7 @@ def build_parser():
     return parser
 
 
+@exit_on_output_write_error
 def main(argv=None):
     try_utf8_stdout()
     args = build_parser().parse_args(argv)
@@ -589,9 +631,8 @@ def main(argv=None):
     except UnsafePath as exc:
         print(f"ERROR: refusing to write — {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
-    print(f"✅ Wrote {len(plan)} adapter file(s) from the .agents/ SSOT")
-    for item in removed:
-        print(f"   removed stale adapter: {item}")
+    print(f"✅ {len(plan)} adapter file(s) in step with the .agents/ SSOT"
+          + (f"; {len(removed)} stale one(s) removed" if removed else ""))
     return EXIT_OK
 
 

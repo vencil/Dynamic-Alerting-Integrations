@@ -3036,8 +3036,20 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "damaged; the flag is a switch. A refused target is held by "
         "tests/lint/test_check_head_blob_hygiene.py "
         "(test_fix_refused_target_writes_nothing).",
+    # #3981, seventeenth batch.
+    "dx/gen_agent_adapters.py":
+        "Projects the .agents/ SSOT into the vendor adapter files and AGENTS.md, "
+        "fixed repo files; its flags are switches. A refused target is held by "
+        "tests/dx/test_gen_agent_adapters.py "
+        "(test_an_adapter_that_is_a_fifo_is_rc2_and_nothing_is_written).",
+    "../ops/workflow_path_filter.py":
+        "`generate` rewrites the traced workflows and their trace files, and "
+        "`record` / `merge` the trace file: paths under --root, which names a "
+        "checkout, not an output. A refused target is held by "
+        "tests/ops/test_workflow_path_filter.py "
+        "(test_generate_judges_every_target_before_the_first_write).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 32
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 34
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

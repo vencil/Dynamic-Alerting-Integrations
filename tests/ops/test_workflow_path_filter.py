@@ -1096,7 +1096,10 @@ def _repo_with_the_tools(tmp_path: Path, monkeypatch) -> Path:
                 "scripts/ops/paths_filter_glob.py", "scripts/tools/_lib_exitcodes.py",
                 "scripts/tools/_lib_compat.py",
                 # #4111: the workflow is read with the strict YAML reading
-                "scripts/tools/_lib_yaml_strict.py"):
+                "scripts/tools/_lib_yaml_strict.py",
+                # #3981: the writes go through the artifact entry
+                "scripts/tools/_lib_output.py", "scripts/tools/_lib_label.py",
+                "scripts/tools/_lib_atomic_write.py"):
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, repo / rel)
     _git(repo, "init", "-q")
@@ -1163,7 +1166,10 @@ def test_the_generated_steps_measure_and_assert_end_to_end(
                              "scripts/ops/workflow_path_filter.py",
                              "scripts/tools/_lib_compat.py",
                              "scripts/tools/_lib_exitcodes.py",
-                             "scripts/tools/_lib_yaml_strict.py"} == block
+                             "scripts/tools/_lib_yaml_strict.py",
+                             "scripts/tools/_lib_output.py",
+                             "scripts/tools/_lib_label.py",
+                             "scripts/tools/_lib_atomic_write.py"} == block
 
     # Second run: green.
     for script in (reset, job, check):
@@ -1567,3 +1573,139 @@ def test_the_matcher_agrees_with_picomatch_on_every_real_pattern_and_file() -> N
     assert paths_filter_glob.covers("*zfoo", "zfoo")
     assert paths_filter_glob.covers("za/*zx*", "za/zx")
     assert not paths_filter_glob.covers("za/*", "za")
+
+
+# ── writes through the artifact entry (#3981) ───────────────────────────────
+
+def _stale_trace_and_drifted_region(repo: Path, tmp_path: Path) -> None:
+    """A tree where `generate` has two targets: the trace file (an entry for
+    a file that is gone) and the workflow (its region loses that entry)."""
+    _record_and_generate(repo, tmp_path / "t")
+    _git(repo, "rm", "-q", "-f", "zlib/zopened.txt")
+
+
+def test_generate_judges_every_target_before_the_first_write(
+        repo: Path, tmp_path: Path, monkeypatch, capsys) -> None:
+    """A target refused at the judgement leaves the ones ahead of it unwritten."""
+    import _lib_output
+    _stale_trace_and_drifted_region(repo, tmp_path)
+    capsys.readouterr()
+    trace_before = _trace_file(repo).read_bytes()
+    workflow_before = _workflow(repo).read_bytes()
+    real = wpf.check_repo_artifact
+
+    def refuse_the_workflow(path, **kw):
+        if Path(path).name == WORKFLOW:
+            raise _lib_output.OutputWriteError(path, PermissionError(13, "Permission denied"))
+        return real(path, **kw)
+    monkeypatch.setattr(wpf, "check_repo_artifact", refuse_the_workflow)
+    with pytest.raises(SystemExit) as caught:
+        _main(repo, "generate")
+    assert caught.value.code == 2
+    assert _trace_file(repo).read_bytes() == trace_before
+    assert _workflow(repo).read_bytes() == workflow_before
+    out, err = capsys.readouterr()
+    assert "wrote" not in out
+    assert "cannot write" in err and "Traceback" not in err
+
+
+def test_a_write_refused_part_way_is_rc2_and_names_what_was_written(
+        repo: Path, tmp_path: Path, monkeypatch, capsys) -> None:
+    """Refused at the write itself (#4250: an unwritable file passes the
+    judgement): rc 2, one line, and the target written before it is named."""
+    import _lib_output
+    _stale_trace_and_drifted_region(repo, tmp_path)
+    capsys.readouterr()
+    real = wpf.write_repo_artifact
+
+    def refuse_the_workflow(path, data, **kw):
+        if Path(path).name == WORKFLOW:
+            raise _lib_output.OutputWriteError(path, PermissionError(13, "Permission denied"))
+        real(path, data, **kw)
+    monkeypatch.setattr(wpf, "write_repo_artifact", refuse_the_workflow)
+    with pytest.raises(SystemExit) as caught:
+        _main(repo, "generate")
+    assert caught.value.code == 2
+    out, err = capsys.readouterr()
+    assert f"wrote .github/path-traces/{WORKFLOW}.json" in out
+    assert "Permission denied" in err and "Traceback" not in err
+
+
+def test_record_whose_write_is_refused_is_rc2_one_line(
+        repo: Path, tmp_path: Path, monkeypatch, capsys) -> None:
+    import _lib_output
+    state = tmp_path / "t"
+    _measure(repo, state)
+
+    def refuse(path, data, **kw):
+        raise _lib_output.OutputWriteError(path, PermissionError(13, "Permission denied"))
+    monkeypatch.setattr(wpf, "write_repo_artifact", refuse)
+    with pytest.raises(SystemExit) as caught:
+        _main(repo, "record", *_job_args(state))
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "cannot write" in err and "Traceback" not in err
+    assert not _trace_file(repo).exists()
+
+
+def _no_hang(call):
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        return call()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+
+
+def test_a_workflow_that_is_a_fifo_is_a_caller_error_not_a_hang(
+        repo: Path, tmp_path: Path) -> None:
+    """`generate` reads every workflow before it rewrites the traced ones."""
+    _record_and_generate(repo, tmp_path / "t")
+    other = repo / ".github/workflows/zother.yaml"
+    os.mkfifo(other)
+    trace_before = _trace_file(repo).read_bytes()
+    for argv in (("generate",), ("generate", "--check")):
+        with pytest.raises(CallerError, match="is not a regular file"):
+            _no_hang(lambda: _main(repo, *argv))
+    assert _trace_file(repo).read_bytes() == trace_before
+
+
+def test_a_trace_file_that_is_a_fifo_is_a_caller_error_not_a_hang(
+        repo: Path, tmp_path: Path) -> None:
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    _trace_file(repo).unlink()
+    os.mkfifo(_trace_file(repo))
+    for argv in (("generate",), ("record", *_job_args(state))):
+        with pytest.raises(CallerError, match="is not a regular file"):
+            _no_hang(lambda: _main(repo, *argv))
+
+
+def test_generate_rewrites_a_workflow_with_the_mode_a_checkout_gives(
+        repo: Path, tmp_path: Path) -> None:
+    """The entry's mode: 0644, or 0755 for a file with the owner's execute
+    bit — not the 0600 the file had."""
+    import stat
+    _stale_trace_and_drifted_region(repo, tmp_path)
+    _workflow(repo).chmod(0o600)
+    _trace_file(repo).chmod(0o755)
+    assert _main(repo, "generate") == 0
+    assert stat.S_IMODE(_workflow(repo).stat().st_mode) == 0o644
+    assert stat.S_IMODE(_trace_file(repo).stat().st_mode) == 0o755
+
+
+def test_record_rewrites_the_trace_file_with_the_mode_a_checkout_gives(
+        repo: Path, tmp_path: Path) -> None:
+    import stat
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    _trace_file(repo).chmod(0o600)
+    assert _main(repo, "record", *_job_args(state)) == 0
+    assert stat.S_IMODE(_trace_file(repo).stat().st_mode) == 0o644

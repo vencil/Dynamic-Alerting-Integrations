@@ -219,13 +219,6 @@ DEBT: dict[str, dict[str, int]] = {
     },
     "scripts/ops/workflow_path_filter.py": {
         "cmd_assert .write_text [operator]": 1,
-        "cmd_generate .write_bytes [artifact]": 1,
-        # Where `record` and `merge` both write the trace file (#3756): the
-        # two sites that were `cmd_record`'s, moved. `merge` is a second
-        # CALLER of the same raw sinks — this ledger counts sinks, not
-        # callers, so that did not show here.
-        "_write_job_record .mkdir [artifact]": 1,
-        "_write_job_record .write_text [artifact]": 1,
     },
     "scripts/tools/dx/analyze_bench_history.py": {
         "download_artifact .mkdir [work_dir]": 1,
@@ -237,11 +230,6 @@ DEBT: dict[str, dict[str, int]] = {
     },
     "scripts/tools/dx/check_release_immutable.py": {
         "write_output open(w) [ci_env_file]": 1,
-    },
-    "scripts/tools/dx/gen_agent_adapters.py": {
-        "write_outputs open(w) [artifact]": 1,
-        "write_outputs os.chmod [artifact]": 1,
-        "write_outputs os.makedirs [artifact]": 1,
     },
     "scripts/tools/dx/measure_judgement_budget.py": {
         "judge os.mkdir [work_dir]": 1,
@@ -282,7 +270,7 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 50
+_DEBT_CEILING = 44
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
@@ -787,7 +775,7 @@ def test_the_two_lists_sum_per_site():
     assert listed(debt, registered) == {"scripts/x.py": Counter({"main .write_text": 3})}
 
 
-@pytest.mark.parametrize("rel", ["scripts/tools/dx/gen_agent_adapters.py",
+@pytest.mark.parametrize("rel", ["scripts/tools/dx/analyze_bench_history.py",
                                  "scripts/tools/lint/check_iac_helm.py",
                                  "scripts/session-guards/session-init.py"])
 def test_the_scan_reaches_each_kind_of_tree(rel):
