@@ -788,3 +788,173 @@ class TestWizardChartVersions:
             mod.main()
         assert ei.value.code == 1
         assert "ERROR: synthetic chart" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# #3981: both outputs are judged before either is written, through the entry
+# ---------------------------------------------------------------------------
+def _outputs_in(tmp_path, monkeypatch, mod):
+    out, fallback = tmp_path / "platform-data.json", tmp_path / "data" / "fallback.json"
+    out.write_bytes(mod.OUTPUT_PATH.read_bytes())
+    monkeypatch.setattr(mod, "OUTPUT_PATH", out)
+    monkeypatch.setattr(mod, "FALLBACK_PATH", fallback)
+    return out, fallback
+
+
+def test_a_refused_fallback_leaves_the_data_file_alone(tmp_path, monkeypatch, capsys, cli_argv):
+    """The fallback's path is a directory: refused before the data file ahead
+    of it is written — rc 2, one line — where the bare writes rewrote the
+    data file and then ended in the crash handler (IsADirectoryError)."""
+    mod = _load_module()
+    out, fallback = _outputs_in(tmp_path, monkeypatch, mod)
+    fallback.mkdir(parents=True)
+    before = out.read_bytes()
+    cli_argv("generate_platform_data")
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot write {fallback}: not a regular file"
+        " — internal output path, this is a bug or an unwritable workspace"], err
+    assert out.read_bytes() == before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_the_outputs_get_the_mode_a_checkout_would_give(tmp_path, monkeypatch, cli_argv):
+    """Through `write_repo_artifact`: a new fallback is 0644 under `umask 077`
+    (a bare write gave 0600 before the chmod), and an executable data file
+    keeps 0755 (the forced chmod made it 0644)."""
+    import os
+    mod = _load_module()
+    out, fallback = _outputs_in(tmp_path, monkeypatch, mod)
+    out.chmod(0o755)
+    cli_argv("generate_platform_data")
+    old = os.umask(0o077)
+    try:
+        mod.main()
+    finally:
+        os.umask(old)
+    assert fallback.stat().st_mode & 0o777 == 0o644
+    assert out.stat().st_mode & 0o777 == 0o755
+
+
+def test_check_on_a_data_file_that_is_a_fifo_is_rc2_not_a_hang(tmp_path, monkeypatch, capsys,
+                                                                cli_argv):
+    """`--check` read the data file with no guard: a FIFO blocked forever."""
+    import os
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    mod = _load_module()
+    out, _fallback = _outputs_in(tmp_path, monkeypatch, mod)
+    out.unlink()
+    os.mkfifo(out)
+    cli_argv("generate_platform_data", "--check")
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(60)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            mod.main()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert f"cannot read {out}: not a regular file" in err and len(err.strip().splitlines()) == 1, err
+
+
+def test_check_on_a_fallback_that_is_not_utf8_is_rc2_one_line(tmp_path, monkeypatch, capsys,
+                                                               cli_argv):
+    """A UnicodeDecodeError is a ValueError: it ended in the crash handler."""
+    mod = _load_module()
+    _out, fallback = _outputs_in(tmp_path, monkeypatch, mod)
+    fallback.parent.mkdir(parents=True)
+    fallback.write_bytes(b"\xff")
+    cli_argv("generate_platform_data", "--check")
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot read {fallback}: not UTF-8 (invalid start byte)"
+        " — internal path, this is a bug or an unreadable workspace"], err
+
+
+@pytest.mark.parametrize("text", ["garbage", "[1]"])
+def test_release_check_on_a_data_file_that_is_not_the_generators_is_outdated(
+        text, tmp_path, monkeypatch, capsys, cli_argv):
+    """`--check --release-charts` on text that is not JSON, or JSON that is
+    not an object: rc 1 (a file the generator did not write), where it ended
+    in the crash handler (JSONDecodeError / TypeError)."""
+    mod = _load_module()
+    out, _fallback = _outputs_in(tmp_path, monkeypatch, mod)
+    out.write_text(text, encoding="utf-8")
+    cli_argv("generate_platform_data", "--check", "--release-charts")
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 1, capsys.readouterr()
+
+
+def test_a_read_error_on_an_artifact_is_the_read_direction_error(tmp_path, monkeypatch):
+    """An OSError on the read (EACCES cannot be denied to root, so it is
+    raised) is OutputWriteError(action="read"): rc 2 at `main`. A missing
+    file stays FileNotFoundError for the callers that report it as such."""
+    mod = _load_module()
+    from _lib_output import OutputWriteError
+    target = tmp_path / "platform-data.json"
+    target.write_text("{}", encoding="utf-8")
+
+    def denied(self, *a, **k):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(Path, "read_text", denied)
+    with pytest.raises(OutputWriteError) as exc:
+        mod._read_artifact(target)
+    assert exc.value.action == "read" and exc.value.path == str(target)
+
+
+@pytest.mark.parametrize("argv", [[], ["--dry-run"]])
+def test_a_data_file_that_is_a_fifo_is_rc2_not_a_hang_when_writing(argv, tmp_path, monkeypatch,
+                                                                    capsys, cli_argv):
+    """Writing and `--dry-run` read the data file for its `charts` block:
+    a FIFO there blocked forever."""
+    import os
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    mod = _load_module()
+    out, fallback = _outputs_in(tmp_path, monkeypatch, mod)
+    out.unlink()
+    os.mkfifo(out)
+    cli_argv("generate_platform_data", *argv)
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(60)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            mod.main()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert f"cannot read {out}: not a regular file" in err and len(err.strip().splitlines()) == 1, err
+    assert not fallback.exists()
+
+
+def test_each_output_gets_its_own_content(tmp_path, monkeypatch, cli_argv):
+    """The data file holds the build and the fallback is built from it — not
+    one target's text written into the other."""
+    import json
+    mod = _load_module()
+    out, fallback = _outputs_in(tmp_path, monkeypatch, mod)
+    cli_argv("generate_platform_data")
+    mod.main()
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert "totals" in data and "charts" in data
+    assert fallback.read_text(encoding="utf-8") == mod.encode_json(mod.build_fallback(data)) + "\n"
