@@ -410,6 +410,23 @@ def test_the_rules_the_lint_flags_are_the_rules_that_carry_the_note(tmp_path):
     assert kinds == {"by-drops-cluster", "on-drops-cluster"}
 
 
+@pytest.mark.usefixtures("da_read_env")
+def test_a_migrated_warning_critical_pair_has_one_group_and_one_cluster_scope(tmp_path):
+    """配成一對的 warning／critical 帶同一個 metric_group，兩條告警的結果也
+    同樣逐叢集：Alertmanager 的去重只配「兩邊都帶 da_cluster」或「兩邊都不帶」
+    的告警，一條逐叢集、一條整個租戶就不會互相抑制。遷移產物不在 repo 的規則
+    樹裡，`check_metric_group_pairs` 平常讀不到，這裡拿同一個判定去讀它。"""
+    import check_metric_group_pairs as pairs
+    _results, recording, alerts = generate([
+        _rule("Conns", "app_connections > 100"),
+        _rule("ConnsCritical", "app_connections > 200", severity="critical")])
+    rows = pairs.collect_group_scopes(_lint_tree(tmp_path, recording, alerts))
+    members = pairs.dedup_members(rows)
+    assert list(members.values()) == [[("CustomConns", "warning", "cluster"),
+                                       ("CustomConnsCritical", "critical", "cluster")]], rows
+    assert pairs.group_scope_errors(rows) == []
+
+
 # ---------------------------------------------------------------------------
 # 5. promtool：產生出來的規則在兩個叢集上
 # ---------------------------------------------------------------------------

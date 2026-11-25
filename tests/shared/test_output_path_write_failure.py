@@ -2863,12 +2863,6 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "not a path. A write that fails is held by "
         "tests/ops/test_threshold_recommend.py "
         "(test_generate_observed_map_that_cannot_be_written_is_exit_2).",
-    "lint/check_cluster_identity.py":
-        "`--generate` rewrites the committed "
-        "`tests/rulepacks/cluster_identity_baseline.yaml`; the flag is a switch, "
-        "not a path. A write that fails is held by "
-        "tests/lint/test_check_cluster_identity.py "
-        "(test_generate_that_cannot_write_the_baseline_is_exit_2).",
     # #3981: the four generators that called the atomic writer directly and
     # go through the artifact entry now. None takes a path: each rewrites
     # documents the repository names.
@@ -2984,7 +2978,7 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "not a path. A refused target is held by tests/lint/test_validate_docs_versions.py "
         "(test_a_target_the_artifact_entry_refuses_is_rc2_one_line).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 24
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 23
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

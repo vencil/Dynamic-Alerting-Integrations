@@ -10,11 +10,17 @@ when it landed were fixed by #1199 (TRK-338). Each test pins one branch:
   - MISSING_BOTH / MISSING_ONE / VALUE_MISMATCH all fail --ci when new
   - the KNOWN_UNGROUPED exit-lock fires when a grandfathered pair is fixed
     or stops being detected
+  - within one metric_group the warning and critical members have one
+    cluster scope (#1200): cluster/cluster and flat/flat pass, mixed is
+    SCOPE-MISMATCH, an undeterminable scope is SCOPE-NOT-JUDGED, and the
+    shipped tree is judged non-vacuously
 """
 from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = REPO_ROOT / "scripts" / "tools" / "lint" / "check_metric_group_pairs.py"
@@ -226,3 +232,188 @@ def test_only_the_compilers_slo_template_is_left_out(tmp_path):
         "      metric_group: 'x_{{ $labels.db }}'\n", encoding="utf-8")
     errs = _ns(gate.collect_groups_by_pack(tmp_path))
     assert [e for e in errs if e.startswith("NO-DEDUP-GROUP")], errs
+
+
+# ── #1200: one metric_group, one cluster scope ────────────────────────────
+#
+# The two dedup inhibit rules pair "both alerts carry da_cluster" and
+# "neither does"; a per-cluster warning and a tenant-wide critical never
+# pair. The scope of a member is check_cluster_identity's judgement of its
+# RESULT, never the `# da_cluster: tenant-wide` declarations.
+
+_C, _F = gate.check_cluster_identity.CLUSTER, gate.check_cluster_identity.FLAT
+
+
+def _rows(*members, pack="rule-pack-x.yaml", group="x_load"):
+    """(alert, severity, scopes) → the rows `collect_group_scopes` returns."""
+    return [(pack, group, a, sev, frozenset(sc)) for a, sev, sc in members]
+
+
+def _verdicts(rows):
+    return [e.split(":", 1)[0] for e in gate.group_scope_errors(rows)]
+
+
+def test_members_all_per_cluster_are_clean():
+    assert _verdicts(_rows(("XHigh", "warning", {_C}), ("XDown", "critical", {_C}))) == []
+
+
+def test_members_all_tenant_wide_are_clean():
+    """flat/flat is allowed: one Prometheus gives both alerts the same
+    external label (or none), and one of the two rules pairs them."""
+    assert _verdicts(_rows(("XHigh", "warning", {_F}), ("XDown", "critical", {_F}))) == []
+
+
+def test_per_cluster_warning_with_tenant_wide_critical_is_a_mismatch():
+    errs = gate.group_scope_errors(
+        _rows(("XHigh", "warning", {_C}), ("XDown", "critical", {_F})))
+    assert len(errs) == 1 and errs[0].startswith("SCOPE-MISMATCH"), errs
+    # the message names the pack, the group, and each alert with its scope
+    for part in ("rule-pack-x.yaml", "'x_load'", "XHigh [warning] = cluster",
+                 "XDown [critical] = flat", "da_cluster"):
+        assert part in errs[0], (part, errs[0])
+    assert _verdicts(_rows(("XHigh", "warning", {_F}),
+                           ("XDown", "critical", {_C}))) == ["SCOPE-MISMATCH"]
+
+
+def test_alert_whose_or_sides_differ_is_a_mismatch_by_itself():
+    """Every member reads {cluster, flat}: the set over the group is one
+    value, and the group is still broken — each alert fires both ways."""
+    rows = _rows(("XHigh", "warning", {_C, _F}), ("XDown", "critical", {_C, _F}))
+    errs = gate.group_scope_errors(rows)
+    assert _verdicts(rows) == ["SCOPE-MISMATCH"] and "cluster+flat" in errs[0], errs
+
+
+@pytest.mark.parametrize("unjudged", [{None}, set(), {_C, None}, {"something-new"}])
+def test_scope_that_could_not_be_judged_is_a_failure_that_says_so(unjudged):
+    """Paired with a member of ANY scope, and with itself: never "same"."""
+    for other in ({_C}, {_F}, unjudged):
+        rows = _rows(("XHigh", "warning", other), ("XDown", "critical", unjudged))
+        errs = gate.group_scope_errors(rows)
+        assert _verdicts(rows) == ["SCOPE-NOT-JUDGED"], errs
+        assert "XDown [critical] = not judged" in errs[0] and "not a pass" in errs[0]
+
+
+def test_info_member_is_not_held_to_the_scope():
+    """The inhibit's source is critical and its target warning: an info
+    alert neither mutes nor is muted, whatever its result carries."""
+    rows = _rows(("XHigh", "warning", {_C}), ("XDown", "critical", {_C}),
+                 ("XNote", "info", {_F}))
+    assert _verdicts(rows) == []
+    assert gate.dedup_members(rows) == {
+        ("rule-pack-x.yaml", "x_load"): [("XHigh", "warning", "cluster"),
+                                         ("XDown", "critical", "cluster")]}
+
+
+def test_groups_are_judged_per_pack_and_per_group():
+    rows = (_rows(("AHigh", "warning", {_C}), ("ADown", "critical", {_C}), group="a")
+            + _rows(("BHigh", "warning", {_F}), ("BDown", "critical", {_F}), group="b"))
+    assert _verdicts(rows) == []
+
+
+def test_run_check_reports_scope_errors_and_what_it_judged():
+    rows = _rows(("XHigh", "warning", {_C}), ("XDown", "critical", {_F}))
+    result = gate.run_check(alerts={}, known_ungrouped={}, groups_by_pack={},
+                            group_scopes=rows)
+    assert [e.split(":", 1)[0] for e in result["errors"]] == ["SCOPE-MISMATCH"]
+    assert result["scope_judged"] == (1, 2)
+
+
+# Through the real readers: the rule loader, Prometheus' parser, the lint's judge.
+
+_PER_CLUSTER = "max by (tenant, da_cluster) (db_up) == 0"
+_TENANT_WIDE = 'max by (tenant) (user_threshold{metric="x"}) > 1'
+
+
+def _pack(tmp_path, warning, critical, above_critical=""):
+    (tmp_path / "rule-packs").mkdir()
+    (tmp_path / "rule-packs" / "rule-pack-x.yaml").write_text(
+        "groups:\n- name: g\n  rules:\n"
+        "  - record: x:helper\n    expr: max by (tenant, da_cluster) (db_up)\n"
+        f"  - alert: XHigh\n    expr: {warning}\n"
+        "    labels:\n      severity: warning\n      metric_group: x_load\n"
+        f"{above_critical}"
+        f"  - alert: XDown\n    expr: {critical}\n"
+        "    labels:\n      severity: critical\n      metric_group: x_load\n",
+        encoding="utf-8")
+    return gate.collect_group_scopes(tmp_path)
+
+
+@pytest.mark.usefixtures("da_read_env")
+@pytest.mark.parametrize("warning, critical, want", [
+    (_PER_CLUSTER, _PER_CLUSTER, []),
+    (_TENANT_WIDE, _TENANT_WIDE, []),
+    (_PER_CLUSTER, _TENANT_WIDE, ["SCOPE-MISMATCH"]),
+    (_TENANT_WIDE, _PER_CLUSTER, ["SCOPE-MISMATCH"]),
+    # a recorded per-cluster series aggregated to the tenant
+    (_PER_CLUSTER, "max by (tenant) (x:helper) == 0", ["SCOPE-MISMATCH"]),
+    # one `or` side without the cluster
+    (_PER_CLUSTER, f"({_PER_CLUSTER}) or ({_TENANT_WIDE})", ["SCOPE-MISMATCH"]),
+    # a scalar has no labels to judge
+    (_PER_CLUSTER, "time()", ["SCOPE-NOT-JUDGED"]),
+])
+def test_scope_of_a_synthetic_pack(tmp_path, warning, critical, want):
+    rows = _pack(tmp_path, warning, critical)
+    assert [r[2:4] for r in rows] == [("XHigh", "warning"), ("XDown", "critical")]
+    assert _verdicts(rows) == want, gate.group_scope_errors(rows)
+
+
+@pytest.mark.usefixtures("da_read_env")
+def test_scope_is_the_result_not_the_tenant_wide_declaration(tmp_path):
+    """A declaration excuses an inner grouping for check_cluster_identity; it
+    says nothing about what the rule OUTPUTS. Both directions:
+
+    * the MariaDBNoPrimary shape — an inner `count by (tenant)` declared, the
+      result `by (tenant, da_cluster)` — is per cluster and pairs;
+    * a critical declared tenant-wide whose result has lost the cluster does
+      not pair with a per-cluster warning, declared or not."""
+    declared = ("  # da_cluster: tenant-wide by-drops-cluster (tenant) — "
+                "asked of all the tenant's clusters on purpose\n")
+    inner = ("count by (tenant, da_cluster) (db_up) "
+             "and on (tenant) count by (tenant) (db_up == 1)")
+    rows = _pack(tmp_path, _PER_CLUSTER, inner, above_critical=declared)
+    assert gate.check_cluster_identity.findings(tmp_path) == {}, "the declaration must be live"
+    assert _verdicts(rows) == [], gate.group_scope_errors(rows)
+
+    other = tmp_path / "other"
+    other.mkdir()
+    rows = _pack(other, _PER_CLUSTER, "max by (tenant) (db_up) == 0", above_critical=declared)
+    assert gate.check_cluster_identity.findings(other) == {}, "the declaration must be live"
+    assert _verdicts(rows) == ["SCOPE-MISMATCH"], gate.group_scope_errors(rows)
+
+
+@pytest.mark.usefixtures("da_read_env")
+def test_rule_whose_scope_row_does_not_line_up_is_not_judged(tmp_path, monkeypatch):
+    """The scopes are attached by a rule's place in its file. A row of
+    another name there, or none, is "not judged" — never a borrowed scope."""
+    monkeypatch.setattr(gate.check_cluster_identity, "alert_result_scopes",
+                        lambda root=None: [("rule-pack-x.yaml", 1, "Other", frozenset({_C}))])
+    rows = _pack(tmp_path, _PER_CLUSTER, _PER_CLUSTER)
+    assert [r[4] for r in rows] == [frozenset({None}), frozenset({None})]
+    assert _verdicts(rows) == ["SCOPE-NOT-JUDGED"]
+
+
+def test_shipped_tree_scope_check_is_not_vacuous():
+    """Guard of the guard: the check judged real groups of the shipped packs,
+    each member got a scope of its own (cluster or flat — none "not judged"),
+    and every group the namespace check reads was judged here too."""
+    rows = gate.collect_group_scopes()
+    judged = gate.dedup_members(rows)
+    n_members = sum(len(m) for m in judged.values())
+    assert len(judged) > 0 and n_members > 0, "no metric_group judged for cluster scope"
+    assert gate.run_check()["scope_judged"] == (len(judged), n_members)
+    texts = {text for members in judged.values() for _a, _s, text in members}
+    assert texts and texts <= {"cluster", "flat"}, texts
+    by_pack = gate.collect_groups_by_pack()
+    assert set(judged) == {(pack, mg) for pack, groups in by_pack.items() for mg in groups}
+    assert gate.group_scope_errors(rows) == []
+
+
+def test_shipped_declared_tenant_wide_alert_still_outputs_the_cluster():
+    """MariaDBNoPrimary declares an inner tenant-wide read and is a critical
+    member of `mariadb_liveness`: its RESULT is per cluster, like the
+    warning it suppresses. Reading the declaration instead would flag it."""
+    members = gate.dedup_members(gate.collect_group_scopes())[
+        ("rule-pack-mariadb.yaml", "mariadb_liveness")]
+    assert ("MariaDBNoPrimary", "critical", "cluster") in members, members
+    declared, _malformed = gate.check_cluster_identity.declarations()
+    assert any(f == "rule-pack-mariadb.yaml" for f, _n in declared)
