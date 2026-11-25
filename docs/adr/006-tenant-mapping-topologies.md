@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-03-16
-updated_at: 2026-11-24
+updated_at: 2026-11-25
 ---
 # ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N)
 
@@ -28,6 +28,8 @@ updated_at: 2026-11-24
 2026-11-23 修訂：租戶自助告警（`Custom_*`）逐叢集判定，只有 `absence` recipe 維持整個租戶；`da-tools byo-check prometheus` 與 `da-tools onboard` 也指出沒設 `da_cluster` 的 Prometheus。
 
 2026-11-24 修訂：改寫為現行行為。決策不變。補上兩項限制：產生的 1:N 映射規則不在平台附的 Prometheus 部署裡，平台的規則包也不讀映射後的序列。
+
+2026-11-25 修訂：同一個 `metric_group` 的 warning 與 critical 必須有相同的叢集範圍，由 CI 檢查；「多叢集同租戶」哪些逐叢集、哪些不逐叢集改寫為現況，補上 `MariaDBNoPrimary` 與 `da-tools migrate` 兩項限制。
 
 ## 決策
 
@@ -104,7 +106,7 @@ ERROR: validation failed — fix errors above before generating rules
 
 **同一個租戶可以出現在多個叢集。每台 Prometheus 用一個 external label `da_cluster` 說明自己在哪個叢集；凡是以租戶 exporter 序列為輸入的規則，聚合與比對都以（tenant、da_cluster）為單位，告警也逐叢集各發一次。**
 
-這是 N:1 裡「多叢集同租戶、DR 對（主站與備援站各一套）」的契約。規則包、Alertmanager 的 warning／critical 去重、exporter 缺席告警、Kubernetes 的兩項「設定了卻沒有對應資料」檢查、租戶自助告警（`Custom_*`，`absence` recipe 除外）都已逐叢集；還沒逐叢集的檢查列在「後果與已知限制」，追蹤於 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
+這是 N:1 裡「多叢集同租戶、DR 對（主站與備援站各一套）」的契約。逐叢集的有：規則包、Alertmanager 的 warning／critical 去重、exporter 缺席告警（租戶逐叢集宣告時，第 6 點）、Kubernetes 的兩項「設定了卻沒有對應資料」檢查、租戶自助告警（`Custom_*`，`absence` recipe 除外）。工具方面，`da-tools federation-check`、`byo-check`、`onboard` 會指出沒設 `da_cluster` 的 Prometheus（第 7 點）；`diagnose`、`backtest`、`threshold-recommend` 逐叢集判定，`migrate` 產生的規則逐叢集聚合。不逐叢集的部分列在「後果與已知限制」。
 
 #### 契約
 
@@ -112,11 +114,11 @@ ERROR: validation failed — fix errors above before generating rules
 2. **叢集 ID。** 在整個平台內唯一，每個叢集一個、不隨時間改變；同一個叢集裡的 Prometheus 副本（HA 對）用同一個值。已經照 [Federation 整合指南](../integration/federation-integration.md) 設了 `external_labels.cluster` 的部署，`da_cluster` 用同一個值、與它並列。
 3. **閾值仍是租戶一份。** 閾值、維護狀態、租戶 metadata 由 threshold-exporter 送出，一個租戶一組，不分叢集。這些序列若是從別的叢集 federate 上來，身上也會帶 `da_cluster`；規則一律先以 `by(tenant)` 收成一份，再用 `on(tenant) group_left` 套到該租戶的每個叢集（`group_left` 表示右邊一條序列可以配左邊多條），所以帶不帶結果相同。前提是各叢集送上來的閾值內容一致。
 4. **規則的寫法。** 輸入是租戶 exporter 序列的聚合，`by(...)` 只要含 `tenant`、`instance`、`pod`、`namespace`、`node` 任一個，就必須同時含 `da_cluster`。兩邊都是這類序列的配對（`on(...)`）也一樣。`check_cluster_identity.py`（pre-commit）讀規則的語法樹檢查這一點；刻意跨叢集看的規則，在規則正上方寫 `# da_cluster: tenant-wide <finding 種類> (<labels>) — <理由>` 宣告，例如 `TenantExporterReplicaDown`。
-5. **告警帶 `da_cluster`。** 送到 Alertmanager 的告警都有這個 label：規則算出來的告警若已經帶著（它讀的序列來自哪個叢集），就是那個值；沒有的，Prometheus 送出時補上自己的 external label，也就是「評估這條規則的那台 Prometheus 所在的叢集」。Alertmanager 的 warning／critical 去重（[ADR-001](./001-severity-dedup-via-inhibit.md)）把它納入，兩個叢集的同名告警互不壓制。通知的分組（`group_by`，決定哪些告警合成同一則通知）預設不變：同一條告警在幾個叢集同時觸發時是一則通知，裡面裝著各叢集的告警；會不會逐條列出告警與它的 `da_cluster`，取決於接收端用的模板（見已知限制）。要每個叢集各收一則的部署或租戶，把 `da_cluster` 加進自己的 `group_by`。租戶自助告警（`Custom_*`）例外：它們走另一條分組固定為 `[tenant, alertname]` 的路由，租戶的 `group_by` 對它們不適用。只讀 threshold-exporter 序列的告警（例如「租戶沒設定閾值」）帶的是後一種值：它講的是整個租戶，label 上的叢集只代表是哪一台算出來的。
+5. **告警帶 `da_cluster`。** 送到 Alertmanager 的告警都有這個 label：規則算出來的告警若已經帶著（它讀的序列來自哪個叢集），就是那個值；沒有的，Prometheus 送出時補上自己的 external label，也就是「評估這條規則的那台 Prometheus 所在的叢集」。Alertmanager 的 warning／critical 去重（[ADR-001](./001-severity-dedup-via-inhibit.md)）把它納入，兩個叢集的同名告警互不壓制。去重只把「兩則都帶 `da_cluster`」或「兩則都不帶」的告警配成一對，所以同一個 `metric_group` 裡的 warning 與 critical 必須有相同的叢集範圍：規則算出來的結果都帶 `da_cluster`，或都不帶。一條逐叢集、另一條講整個租戶時，在序列帶 `da_cluster` 的 Prometheus 上兩則配不成對，critical 觸發時 warning 照樣通知。`check_metric_group_pairs.py`（pre-commit）對規則包裡每個 `metric_group` 的 warning 與 critical 檢查這一點，叢集範圍的判定與 `check_cluster_identity.py` 是同一套；兩條都不帶是允許的，同一台 Prometheus 評估時它們送出去帶的是同一個值（或都沒有），照樣成對。通知的分組（`group_by`，決定哪些告警合成同一則通知）預設不變：同一條告警在幾個叢集同時觸發時是一則通知，裡面裝著各叢集的告警；會不會逐條列出告警與它的 `da_cluster`，取決於接收端用的模板（見已知限制）。要每個叢集各收一則的部署或租戶，把 `da_cluster` 加進自己的 `group_by`。租戶自助告警（`Custom_*`）例外：它們走另一條分組固定為 `[tenant, alertname]` 的路由，租戶的 `group_by` 對它們不適用。只讀 threshold-exporter 序列的告警（例如「租戶沒設定閾值」）帶的是後一種值：它講的是整個租戶，label 上的叢集只代表是哪一台算出來的。
 6. **「該有卻沒有」逐叢集判定。** 租戶可以在設定裡宣告自己預期出現在哪些叢集；有宣告時，任一個宣告的叢集沒有回報就告警。沒宣告時，只要在至少一個叢集出現就算存在。宣告的位置是租戶頂層的 `_expected_exporters`（見 [ADR-010](./010-multi-tenant-grouping.md)），它列出租戶跑哪些種類的 exporter：條目只寫種類（`mariadb`）就是沒宣告叢集；寫成 `種類@叢集`（`mariadb@edge-a`）就是宣告「這個叢集要有這一種 exporter 在回報」，其中叢集是該叢集 Prometheus 的 `da_cluster` 值。同一個種類只能擇一寫法，兩種並寫會被拒收。叢集 ID 只能用英數字與 `.`、`_`、`-`（英數字開頭與結尾，最長 63 個字元，大小寫有別）；`da_cluster` 的值含其他字元（例如 `/`、`:`）的叢集目前無法逐叢集宣告。逐叢集的缺席告警（`TenantExporterAbsent`）帶的 `da_cluster` 就是宣告的那個叢集。平台沒有叢集清單，不檢查宣告的叢集是否存在：叢集 ID 打錯時，結果是對那個不存在的叢集發缺席告警。
 7. **沒設 `da_cluster` 的 Prometheus 在上線時被指出來。** `da-tools federation-check edge` 讀實際那台 Prometheus 的設定，`external_labels.da_cluster` 沒有值時 `edge_cluster_identity` 這項檢查失敗；`da-tools byo-check prometheus` 同樣讀實際載入的設定，沒有值時 `cluster_identity` 這項檢查失敗、結束碼 1（同一輪有呼叫錯誤時是 2）；對著回 404 的查詢層（Thanos Querier、VictoriaMetrics）時這項略過，要用 `federation-check edge` 逐台檢查。`da-tools onboard --scrape-config` 分析既有的 `prometheus.yml` 時，沒有值會在 stderr 印出 WARN，並寫進 `scrape-analysis.yaml` 的 `cluster_identity`（`set`、`missing`，檔案沒有 `global` 段時是 `unknown`）。本 repo 自己的 Prometheus 設定由 `check_scrape_reachability.py` 檢查同一件事（`CLUSTER-IDENTITY`）。這些檢查都只看一個地方，不需要推算 relabel 的結果。
 
-這些條款由下列測試守住：`tests/rulepacks/rule-pack-cluster-masking_test.yaml`（一個叢集健康、另一個故障時只對故障的叢集告警）、`tests/rulepacks/test_cluster_metamorphic.py`（每個規則包測試加上叢集 label 重跑）與 `tests/dx/fixtures/custom_alerts_promtool/per_cluster.yaml`（每一種自助告警 recipe 在兩個叢集上的結果）守第 4 點；`tests/alertmanager-inhibit/inhibit_semantics_test.go` 守第 5 點的去重；`tests/rulepacks/rule-pack-liveness-per-cluster_test.yaml` 與 `components/threshold-exporter/app/pkg/config/expected_exporters_test.go` 守第 6 點；`tests/ops/test_federation_check.py`、`tests/ops/test_byo_check.py`、`tests/ops/test_onboard_platform.py` 與 `tests/lint/test_check_scrape_reachability.py` 守第 7 點。
+這些條款由下列測試守住：`tests/rulepacks/rule-pack-cluster-masking_test.yaml`（一個叢集健康、另一個故障時只對故障的叢集告警）、`tests/rulepacks/test_cluster_metamorphic.py`（每個規則包測試加上叢集 label 重跑）與 `tests/dx/fixtures/custom_alerts_promtool/per_cluster.yaml`（每一種自助告警 recipe 在兩個叢集上的結果）守第 4 點；`tests/alertmanager-inhibit/inhibit_semantics_test.go` 守第 5 點的去重，`tests/lint/test_check_metric_group_pairs.py` 守同一個 `metric_group` 的叢集範圍一致；`tests/rulepacks/rule-pack-liveness-per-cluster_test.yaml` 與 `components/threshold-exporter/app/pkg/config/expected_exporters_test.go` 守第 6 點；`tests/ops/test_federation_check.py`、`tests/ops/test_byo_check.py`、`tests/ops/test_onboard_platform.py` 與 `tests/lint/test_check_scrape_reachability.py` 守第 7 點。
 
 #### 範例
 
@@ -234,7 +236,7 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 - **沒有 `da_cluster` 的存在序列，對每個宣告的叢集都算存在。** 上一項的另一面：中央 Prometheus 若自己也直接抓租戶 exporter，那份本地序列會讓所有宣告的叢集都不告警。要逐叢集判定，就在那個抓取 job 上寫 `da_cluster`。
 - **「設定了卻沒有對應資料」的兩項 Kubernetes 檢查逐叢集判定，不需要宣告。** 「設了自訂 recipe 的磁碟告警卻沒有對應資料」（`CustomRecipeDiskInert`）以（租戶、叢集）為單位：租戶在某個叢集有 Pod 在跑、那個叢集卻沒有它的磁碟資料，就對那個叢集告警，別的叢集有資料不算數；租戶沒有 Pod 在跑的叢集不告警。「設了依版本區分的閾值卻沒有版本資料」（`VersionAwareThresholdInert`）以叢集為單位：設了這種閾值的租戶有 Pod、卻完全沒有 Pod label 資料的叢集各發一則。它只看容器 CPU 的版本閾值；只設了 memory 版本閾值的租戶不在這條告警的範圍內（它的閾值同樣會因為沒有 Pod label 而不生效，但這條告警不會指出來）。只跑其他租戶的叢集不告警，那裡沒有要套用的版本閾值。兩條告警都帶 `da_cluster`，annotation 會寫出是哪個叢集。在序列都沒有 `da_cluster` 的單一 Prometheus 上，設了版本閾值的租戶全都沒有 Pod 時，`VersionAwareThresholdInert` 不響，即使別的租戶有 Pod、也沒有 Pod label 資料；租戶的第一個 Pod 出現後才會響。帶 `da_cluster` 的情形由 `tests/rulepacks/rule-pack-kubernetes-sentinels-per-cluster_test.yaml` 守住，單一 Prometheus 的情形由 `tests/rulepacks/rule-pack-kubernetes-sentinel_test.yaml` 的案例 F、F2 守住。
 - **這兩項檢查假設同一個叢集的兩種資料帶同一個 `da_cluster`。** 兩種資料指的是「有 Pod 在跑」與它要對照的那一種（磁碟資料、Pod label 資料）；它們經過同一台 Prometheus，所以要嘛都帶、要嘛都不帶。假設不成立時，結果可能是誤報，也可能是漏報。誤報：一種帶 `da_cluster`、另一種不帶，或同一個叢集同時經由帶 label 的 federation 與不帶 label 的本地抓取進來、而對照的資料只在其中一條路徑上，告警會對其實正常的叢集響（不分叢集時不響）。漏報：對照的資料以「另一個叢集」的身分進來時會替它消掉告警。例如叢集 A 的 Pod 資料不帶 label、也真的沒有 Pod label 資料，而叢集 B 的 Pod label 資料不帶 label，B 的資料就被當成 A 的。這裡刻意不採用「沒有 `da_cluster` 的資料替每個叢集都算數」的寬鬆規則（exporter 缺席告警有這條）：那樣中央 Prometheus 自己抓的叢集有資料時，會遮住另一個真的缺資料的叢集。中央自己抓的叢集（不帶 label）與 federate 上來的叢集（帶 label）並存時，兩邊各自判定，結果正確。
-- **還沒逐叢集的檢查。** 「多個租戶的 exporter 同時缺席」的彙總告警（`MassExporterOutage`）以（租戶、種類）為單位計數，一個種類宣告了幾個叢集都算一組，規則算出的告警不帶 `da_cluster`（到 Alertmanager 時只帶評估它那台 Prometheus 的叢集），不會指出是哪個叢集大量缺席。租戶自助告警的 `absence` recipe 不分叢集（見上）。「同租戶還有健康的抓取目標、但其中一個掛了」的告警（`TenantExporterReplicaDown`）刻意維持跨叢集比對：只寫種類的租戶某個叢集整個掛掉時，只要那個叢集的抓取目標仍被發現、讀到 `up=0`，那是唯一的訊號。目標本身已經不在（例如 Service 被移除）時這條告警也不會響，而只寫種類的租戶因為另一個叢集有回應，exporter 缺席告警（`TenantExporterAbsent`）同樣不響：這種情形沒有任何訊號，要逐叢集宣告才有。進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
+- **不逐叢集的部分。** 「多個租戶的 exporter 同時缺席」的彙總告警（`MassExporterOutage`）以（租戶、種類）為單位計數，一個種類宣告了幾個叢集都算一組，規則算出的告警不帶 `da_cluster`（到 Alertmanager 時只帶評估它那台 Prometheus 的叢集），不會指出是哪個叢集大量缺席。租戶自助告警的 `absence` recipe 不分叢集（見上）。「同租戶還有健康的抓取目標、但其中一個掛了」的告警（`TenantExporterReplicaDown`）刻意維持跨叢集比對：只寫種類的租戶某個叢集整個掛掉時，只要那個叢集的抓取目標仍被發現、讀到 `up=0`，那是唯一的訊號。目標本身已經不在（例如 Service 被移除）時這條告警也不會響，而只寫種類的租戶因為另一個叢集有回應，exporter 缺席告警（`TenantExporterAbsent`）同樣不響：這種情形沒有任何訊號，要逐叢集宣告才有。「租戶沒有可寫的 primary」的告警（`MariaDBNoPrimary`）逐叢集各發，但其中「這個租戶在別的叢集有沒有可寫節點」刻意跨叢集看：一組複寫橫跨兩個叢集（primary 在一邊、replica 在另一邊）時，只有 replica 的那個叢集不必告警。代價是兩個叢集各有一組獨立的複寫時，一個叢集失去 primary、而它還有 replica 的 IO thread 連著來源，另一個叢集的 primary 會讓它不告警。`da-tools migrate` 只把自己產生的外層聚合寫成逐叢集；原規則自己寫的 `by(...)`／`on(...)` 照抄，其中點名 `tenant`、`instance`、`pod`、`namespace`、`node` 卻沒有 `da_cluster` 的，會在報告與產生的規則檔標出來，要不要補由人判斷。
 - **維護模式是整個租戶。** 無法只對一個叢集進維護。
 - **各叢集不能有不同的閾值。** 同一個租戶在所有叢集用同一組閾值。
 - **通知預設不按叢集拆。** 平台不附通知模板，看到的是 Alertmanager 內建模板的輸出。兩個叢集同時觸發時，email 內文、PagerDuty 的 details、webhook payload 逐條列出告警與它的 `da_cluster`；單行標題是 `[FIRING:2] <告警名> <租戶> (<其他共同 label>)`，沒有叢集（只有一個叢集觸發時，標題會帶出叢集，因為那時它是整組共同的 label）。內建的 Slack 模板只有標題、沒有內文，兩個叢集同時觸發時看不出是哪兩個，要用逐條列出告警的自訂模板。PagerDuty 一組是一個 incident，所有叢集都恢復後才 resolve。預設不改的原因：租戶的 route 帶不帶 `group_by`，看部署的 `_routing_defaults`、routing profile 與租戶自己的 `_routing` 合起來最後有沒有值（`da-tools init` 產生的 `_defaults.yaml` 有給）；最後沒有值的租戶（哪一層都沒給，或租戶把它寫成 `null` 或空列表蓋掉）才沿用根 route 的分組，所以改平台預設值只會影響到這一部分租戶，不是全部；另一個原因是下面的第一項代價。
@@ -269,5 +271,5 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 - [ADR-024](024-version-aware-threshold-via-dimensional-label.md) — 自助告警與基礎設施指標
 - [Federation 整合指南](../integration/federation-integration.md)
 - [BYO Alertmanager 整合指南](../integration/byo-alertmanager-integration.md)
-- [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097) — 尚未逐叢集的檢查
+- [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097) — 多叢集同租戶的討論與實作紀錄
 - [Prometheus Recording Rules](https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/)

@@ -17,15 +17,15 @@ Pinned contracts
 6. a recorded series has the scope of the rule that records it, through a
    chain of rules.
 7. `up` follows its `job`; a metric nobody classified is held to the contract.
-8. the baseline is a two-way ratchet: a new finding fails, a healed one fails,
-   `--generate` then check passes.
+8. a finding fails and there is nowhere to list it: no baseline file is read
+   and `--generate` is not a flag.
 9. a per-cluster series joined to a one-per-tenant series `on (tenant)`
    must be the "many" side (`group_left`); without it Prometheus refuses the
    match as soon as there are two clusters.
 10. two rules of one name with the same finding are counted, so fixing one
     changes the entry.
-11. the shipped tree equals its baseline, and the scan read the real rule
-    packs (the baseline is meant to end empty, so it cannot be the evidence).
+11. the shipped tree has no finding, and the scan read the real rule packs
+    ("no finding" alone cannot be the evidence).
 """
 from __future__ import annotations
 
@@ -389,11 +389,12 @@ def test_same_named_rules_are_counted_together(tmp_path, monkeypatch):
                             ("XDown", "max by (tenant) (x_up) == 0")])
     assert cid.findings(root) == {"rule-pack-x.yaml": ["g / XDown: by-drops-cluster (tenant) ×2"]}
     monkeypatch.setattr(cid, "PROJECT_ROOT", root)
-    monkeypatch.setattr(cid, "BASELINE", root / "baseline.yaml")
-    assert cid.generate() == cid.EXIT_OK and cid.check() == cid.EXIT_OK
+    assert cid.check() == cid.EXIT_VIOLATION
     _tree_rewrite = (root / "rule-packs" / "rule-pack-x.yaml")
     _tree_rewrite.write_text(_tree_rewrite.read_text(encoding="utf-8").replace(
         "max by (tenant) (x_up) == 0", "max by (tenant, da_cluster) (x_up) == 0", 1), encoding="utf-8")
+    # fixing one of the two changes the entry: the other does not hide behind it
+    assert cid.findings(root) == {"rule-pack-x.yaml": ["g / XDown: by-drops-cluster (tenant)"]}
     assert cid.check() == cid.EXIT_VIOLATION
 
 
@@ -504,9 +505,6 @@ def test_a_declaration_that_excuses_nothing_fails(tmp_path, monkeypatch, capsys,
     root = _declared_tree(tmp_path, comment, expr, between)
     assert any(says in x for x in cid.stale_declarations(root))
     monkeypatch.setattr(cid, "PROJECT_ROOT", root)
-    monkeypatch.setattr(cid, "BASELINE", root / "baseline.yaml")
-    (root / "baseline.yaml").write_text(
-        yaml.safe_dump({"findings": cid.findings(root)}), encoding="utf-8")
     assert cid.check() == cid.EXIT_VIOLATION
     assert "excuse nothing" in capsys.readouterr().out
 
@@ -549,33 +547,37 @@ def test_a_declaration_not_directly_above_a_rule_fails(tmp_path):
     assert cid.findings(tmp_path) == {"rule-pack-x.yaml": ["g / XNoPrimary: by-drops-cluster (tenant)"]}
 
 
-def test_baseline_is_a_two_way_ratchet(tmp_path, monkeypatch, capsys):
+def test_a_finding_fails_and_there_is_nowhere_to_list_it(tmp_path, monkeypatch, capsys):
+    """The check is "zero findings". The baseline file it once compared with
+    is gone: a file at that path listing the finding changes nothing — the
+    rule keeps the cluster (or declares its tenant-wide read), or it fails."""
     root = _tree(tmp_path, [("XDown", "max by (tenant) (x_up) == 0")])
     monkeypatch.setattr(cid, "PROJECT_ROOT", root)
-    monkeypatch.setattr(cid, "BASELINE", root / "baseline.yaml")
     assert cid.check() == cid.EXIT_VIOLATION
-    assert "+ rule-pack-x.yaml: g / XDown: by-drops-cluster (tenant)" in capsys.readouterr().out
-    assert cid.generate() == cid.EXIT_OK and cid.check() == cid.EXIT_OK
+    out = capsys.readouterr().out
+    assert "+ rule-pack-x.yaml: g / XDown: by-drops-cluster (tenant)" in out
+    assert "da_cluster: tenant-wide" in out, "the message names the in-place declaration"
+    listed = root / "tests" / "rulepacks" / "cluster_identity_baseline.yaml"
+    listed.parent.mkdir(parents=True)
+    listed.write_text(yaml.safe_dump({"findings": cid.findings(root)}), encoding="utf-8")
+    assert cid.check() == cid.EXIT_VIOLATION
     capsys.readouterr()
     (root / "rule-packs" / "rule-pack-x.yaml").write_text(
         "groups:\n  - name: g\n    rules:\n      - alert: XDown\n"
         "        expr: max by (tenant, da_cluster) (x_up) == 0\n", encoding="utf-8")
-    assert cid.check() == cid.EXIT_VIOLATION
-    assert "- rule-pack-x.yaml: g / XDown: by-drops-cluster (tenant)" in capsys.readouterr().out
+    assert cid.check() == cid.EXIT_OK
 
 
-def test_generate_that_cannot_write_the_baseline_is_exit_2(tmp_path, monkeypatch, capsys):
-    """A baseline that cannot be written is "could not run" (2), never a
-    traceback and never a green `--generate` that left the old list."""
-    root = _tree(tmp_path, [("XDown", "max by (tenant) (x_up) == 0")])
-    blocked = root / "baseline.yaml"
-    blocked.mkdir()                       # a directory where the file goes
-    monkeypatch.setattr(cid, "PROJECT_ROOT", root)
-    monkeypatch.setattr(cid, "BASELINE", blocked)
+def test_generate_is_not_a_flag_and_no_baseline_is_shipped(monkeypatch, capsys):
+    """`--generate` wrote the list of allowed findings; with the list gone the
+    flag is refused by name (argparse's 2), not accepted and ignored."""
     monkeypatch.setattr(sys, "argv", ["check_cluster_identity.py", "--generate"])
-    assert cid.main() == cid.EXIT_CANNOT_RUN
-    assert "cannot run" in capsys.readouterr().err
-    assert blocked.is_dir()
+    with pytest.raises(SystemExit) as exc:
+        cid.main()
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --generate" in capsys.readouterr().err
+    assert not (cid.PROJECT_ROOT / "tests" / "rulepacks" / "cluster_identity_baseline.yaml").exists()
+    assert not any(hasattr(cid, name) for name in ("load_baseline", "generate", "BASELINE"))
 
 
 def test_an_empty_tree_cannot_run(tmp_path):
@@ -585,11 +587,11 @@ def test_an_empty_tree_cannot_run(tmp_path):
         cid.findings(tmp_path)
 
 
-def test_shipped_tree_equals_its_baseline_and_the_scan_is_not_vacuous():
-    """The baseline is meant to end empty (#4097), so "the list holds rule X"
-    cannot be what shows the check looked at the real tree: the number of
-    rules it read is."""
+def test_shipped_tree_has_no_finding_and_the_scan_is_not_vacuous():
+    """"No finding" cannot be what shows the check looked at the real tree:
+    the number of rules it read is."""
     assert cid.check() == cid.EXIT_OK
+    assert cid.findings() == {}
     rules = cid._rules(cid.PROJECT_ROOT)
     assert len(rules) > 300, f"only {len(rules)} rules read from the rule packs"
     assert {r[0] for r in rules} >= {"rule-pack-db2.yaml", "rule-pack-kubernetes.yaml",
@@ -608,7 +610,7 @@ def test_every_job_the_shipped_rules_read_up_under_is_classified():
 
 def test_every_compiled_recipe_keeps_the_cluster_and_absence_says_it_does_not(tmp_path, da_guard_env):
     """The shipped custom-alert pack is compiled from this repo's conf.d, which
-    declares two recipes; the baseline being empty says nothing about the
+    declares two recipes; that pack having no finding says nothing about the
     other five. The example tree declares all seven (and `==`), so its
     compiled pack is judged here: nothing in it drops the cluster but the
     absence cores, and those carry the compiler's own tenant-wide
