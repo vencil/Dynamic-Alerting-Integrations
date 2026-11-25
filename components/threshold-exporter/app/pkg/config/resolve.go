@@ -479,8 +479,10 @@ func expiryHonoured(key string, defaults map[string]float64) bool {
 //
 // base and both maps are canonical (#1231). The base's invalid-window WARN
 // is its own phase's, not repeated here (resolveValue with no logf).
-func familyHeadOff(base string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time) bool {
-	return familyHeadOffSplit(base, defaults, overrides, now, now)
+//
+// `expires:` is read where c decided it (expiryReadAt, #4263).
+func (c *ThresholdConfig) familyHeadOff(base string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time) bool {
+	return familyHeadOffSplit(base, defaults, overrides, c.expiryReadAt(now), now)
 }
 
 // familyHeadOffSplit is familyHeadOff with the expiry read at expiryAt and
@@ -537,16 +539,23 @@ type FamilyView struct {
 	defaults  map[string]float64
 	overrides map[string]ScheduledValue
 	dims      map[string][]string
+	// decided is the build's instant when it decided `expires:`
+	// (expiryReadAt, #4263): `expires:` is read there, whatever expiryAt.
+	decided time.Time
 }
 
 // FamilyView is tenant's FamilyView.
 func (c *ThresholdConfig) FamilyView(tenant string) FamilyView {
 	overrides, _ := canonicalizeOverrides(c.Tenants[tenant])
-	return FamilyView{defaults: canonicalizeDefaults(c.Defaults), overrides: overrides, dims: c.Dimensions}
+	return FamilyView{defaults: canonicalizeDefaults(c.Defaults), overrides: overrides, dims: c.Dimensions,
+		decided: c.expiryReadAt(time.Time{})}
 }
 
 func (v FamilyView) headOff(key string, expiryAt, valueAt time.Time) bool {
 	canon, _ := CanonicalKeyFor(key)
+	if !v.decided.IsZero() {
+		expiryAt = v.decided
+	}
 	return familyHeadOffSplit(canon, v.defaults, v.overrides, expiryAt, valueAt)
 }
 
@@ -561,6 +570,9 @@ func (v FamilyView) SwitchedOffWithBase(key string, expiryAt, valueAt time.Time)
 	if !ok && dimensionalRowRead(canon, v.dims) {
 		base, _, _ = parseKeyWithLabels(canon)
 		ok = true
+	}
+	if !v.decided.IsZero() {
+		expiryAt = v.decided
 	}
 	return ok && familyHeadOffSplit(base, v.defaults, v.overrides, expiryAt, valueAt)
 }
@@ -623,7 +635,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			// verdict below.
 			rec.claim(metricKey)
 		}
-		if exists && headLive(metricKey, defaults, sv, now) { // familyHeadOff's rule
+		if exists && headLive(metricKey, defaults, sv, c.expiryReadAt(now)) { // familyHeadOff's rule
 			override := sv.resolveValue(now, logf)
 			if rec != nil {
 				rec.noteInvalidWindows(tenant, metricKey, sv)
@@ -953,7 +965,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		// #3046: the base switched off switches its critical tier off. Asked
 		// after the value is read, so an unreadable value is reported
 		// whatever the base does.
-		if familyHeadOff(baseKey, defaults, overrides, now) {
+		if c.familyHeadOff(baseKey, defaults, overrides, now) {
 			if rec != nil {
 				rec.note(tenant, key, NotServedBaseDisabled)
 			}
@@ -982,7 +994,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		if _, read := criticalRowRead(key, defaults); !read || !finiteThreshold(rv) {
 			continue
 		}
-		if familyHeadOff(baseKey, defaults, overrides, now) {
+		if c.familyHeadOff(baseKey, defaults, overrides, now) {
 			continue
 		}
 		component, metric := parseMetricKey(baseKey)
@@ -1037,7 +1049,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		base, _, _ := parseKeyWithLabels(key)
 		off, asked := headOff[base]
 		if !asked {
-			off = familyHeadOff(base, defaults, overrides, now)
+			off = c.familyHeadOff(base, defaults, overrides, now)
 			headOff[base] = off
 			if off && rec != nil {
 				rec.claim(base)
@@ -1051,7 +1063,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		}
 		// The tenant's own value is served below, unless it has expired and
 		// the root serves one in its place (lapsesToRoot).
-		if sv, own := overrides[key]; own && (!isThresholdExpired(sv, now) || !lapsesToRoot(key, defaults)) {
+		if sv, own := overrides[key]; own && (!isThresholdExpired(sv, c.expiryReadAt(now)) || !lapsesToRoot(key, defaults)) {
 			continue
 		}
 		if familyOff(key) {
@@ -1072,7 +1084,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		// An expired value gives way to the root's only where the root
 		// serves one (lapsesToRoot: a finite number, #4263); with none it is
 		// served past `expires:` (PREVENT #656).
-		if isThresholdExpired(sv, now) && lapsesToRoot(key, defaults) {
+		if isThresholdExpired(sv, c.expiryReadAt(now)) && lapsesToRoot(key, defaults) {
 			continue // the default above is served
 		}
 		rows = c.appendDimensionalRow(rows, tenant, key, sv, familyOff(key), now, sink, logf, rec)
@@ -1481,10 +1493,10 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAtLogf(now time.Time, logf fun
 	// #4263: a config built from a tree decided its `expires:` where it
 	// merged them (decideExpiry): the values that give way, at any layer.
 	if c.expiry != nil {
-		for _, e := range c.expiry.events {
-			e.Expired = now.After(e.Expires)
-			result = append(result, e)
-		}
+		// Expired is the build's reading: a value expiring after it turns
+		// with the rebuild, so two values of one key never both read
+		// expired (one series twice fails the whole Gather).
+		result = append(result, c.expiry.events...)
 		// An `expires:` that does not parse never takes effect (fail-open)
 		// and names no event; it is logged, as before the decision moved.
 		for tenant, overrides := range c.Tenants {

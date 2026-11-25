@@ -138,3 +138,40 @@ func TestThresholdExpiry_FlatEditMergesWhole(t *testing.T) {
 		t.Errorf("after the edit: rows %v, want the profile's 70", got)
 	}
 }
+
+// #4263: single-file mode loads the unchanged file again once its config no
+// longer answers for the clock — here the clock set back before the
+// `expires:` the load saw pass.
+func TestThresholdExpiry_SingleFileTickSeesTheClockSetBack(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := "defaults:\n  redis_connected_clients: 70\n" +
+		"tenants:\n  tx:\n    redis_connected_clients:\n      default: \"5\"\n      expires: \"2026-01-01T01:00:00Z\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewConfigManager(path)
+	t.Cleanup(m.Close)
+	fc := clockwork.NewFakeClockAt(time.Date(2026, 1, 1, 2, 0, 0, 0, time.UTC))
+	m.SetClock(fc)
+	m.SetLogger(log.New(io.Discard, "", 0))
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	served := func() string {
+		for _, r := range m.GetConfig().ResolveAt(fc.Now()) {
+			if r.Tenant == "tx" && r.Component == "redis" {
+				return strconv.FormatFloat(r.Value, 'g', -1, 64)
+			}
+		}
+		return ""
+	}
+	if got := served(); got != "70" {
+		t.Fatalf("after expiry: %s, want the root's 70", got)
+	}
+	fc.Advance(-2 * time.Hour)
+	m.tickOnce()
+	if got := served(); got != "5" {
+		t.Errorf("clock set back before expires: %s, want the tenant's 5", got)
+	}
+}

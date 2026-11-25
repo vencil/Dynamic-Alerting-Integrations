@@ -354,3 +354,65 @@ func TestExpiry_TenantAPIMergeStacksEveryPlatformFile(t *testing.T) {
 		t.Errorf("tenant-api %v, /metrics %v, want both the earlier file's 70", api, metrics)
 	}
 }
+
+// #4263: a config read past its ValidUntil — between the next `expires:`
+// and the rebuild that follows it — keeps answering for the instant it was
+// built at: the value it served, not a lapse to the root the merge never
+// decided, and no expiry event turning a second time.
+func TestExpiry_PastValidUntilTheBuiltInstantStands(t *testing.T) {
+	t.Parallel()
+	built := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	later := built.Add(2 * time.Hour)
+	cfg := loadTreeAt(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+		"_profiles.yaml": "profiles:\n  p:\n    mysql_connections:\n      default: \"90\"\n      expires: \"2026-01-01T01:00:00Z\"\n",
+		"t.yaml": "tenants:\n  tx:\n    _profile: p\n    mysql_connections:\n      default: \"95\"\n" +
+			"      expires: \"2025-12-31T00:00:00Z\"\n",
+	}, built)
+	if cfg.ValidAt(later) {
+		t.Fatal("fixture: the config claims to answer past the profile's expires:")
+	}
+	if got := strings.Join(offRows(cfg, "tx", "mysql", later), "|"); !strings.Contains(got, "mysql_connections warning 90") {
+		t.Errorf("read past ValidUntil: %s, want the profile's 90 the build served (not the root's 80)", got)
+	}
+	expired := 0
+	for _, e := range cfg.ResolveThresholdExpiriesAt(later) {
+		if e.Tenant == "tx" && e.Expired {
+			expired++
+		}
+	}
+	if expired != 1 {
+		t.Errorf("%d expired events for one key past ValidUntil, want 1 (two identical ones fail the whole Gather)", expired)
+	}
+}
+
+// #4263: DescribedTenants keeps both spellings a tenant writes and serves
+// (renamed_shadowed is reported on them), and puts the served spelling in
+// place of a written one the merge left out.
+func TestExpiry_DescribedTenantsSpellings(t *testing.T) {
+	t.Parallel()
+	const retired = "mysql_cpu"
+	canon, _ := CanonicalKeyFor(retired)
+	cfg := loadTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  " + canon + ": 50\n",
+		"_profiles.yaml": "profiles:\n  p:\n    " + canon + ": \"70\"\n",
+		"t.yaml": "tenants:\n  tx:\n    " + canon + ": \"9\"\n    " + retired + ": \"8\"\n" +
+			"    pg_connections: \"60\"\n  ty:\n    _profile: p\n    " + retired + ":\n      default: \"5\"\n" +
+			"      expires: \"2020-01-01T00:00:00Z\"\n    pg_connections: \"61\"\n",
+	})
+	for i := 0; i < 20; i++ { // map order: the result must not depend on it
+		d := cfg.DescribedTenants()
+		if _, a := d["tx"][canon]; !a {
+			t.Fatalf("tx: %s missing from %v", canon, d["tx"])
+		}
+		if _, b := d["tx"][retired]; !b {
+			t.Fatalf("tx: %s missing from %v (both spellings are written and served)", retired, d["tx"])
+		}
+		if v, ok := d["ty"][canon]; !ok || v.Default != "70" {
+			t.Fatalf("ty: %s = %+v %v, want the profile's 70 served in the expired line's place", canon, v, ok)
+		}
+		if _, gone := d["ty"][retired]; gone {
+			t.Fatalf("ty: the expired %s is described beside the %s it gave way to", retired, canon)
+		}
+	}
+}

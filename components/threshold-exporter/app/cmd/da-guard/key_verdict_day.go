@@ -141,7 +141,7 @@ func servedDay(cfg *config.ThresholdConfig, at time.Time,
 				continue
 			}
 			// The schedule as written: a piece's value is fixed, so it has none.
-			e.DeadEntries = deadEntriesOf(cfg.WrittenTenants()[tenant], undeliverable[tenant], k)
+			e.DeadEntries = deadEntriesOf(cfg.DescribedTenants()[tenant], undeliverable[tenant], k)
 			tv.Keys[k] = e
 		}
 	}
@@ -177,7 +177,7 @@ func pieceReading(part *config.ThresholdConfig, tenant string, at time.Time,
 	}
 	view := part.FamilyView(tenant)
 	// #4263: keys are the tenant's lines as written (served_values' rule).
-	tv.Keys = servedKeys(tv, part.WrittenTenants()[tenant], undeliverable, at, recordedReasons(part, tenant, at),
+	tv.Keys = servedKeys(tv, part.DescribedTenants()[tenant], undeliverable, at, recordedReasons(part, tenant, at),
 		func(k string) bool { return view.SwitchedOffWithBase(k, at, at) })
 	addRootRefused(tv, overrides, rootRefused)
 	addRootDisabled(tv, part, tenant, at)

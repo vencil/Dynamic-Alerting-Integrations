@@ -464,3 +464,22 @@ func TestServedValues_DisableEffectsCountTheUnsetNotice(t *testing.T) {
 		}
 	}
 }
+
+// #4263: the `disable` /metrics serves is the one described — a profile's
+// `disable` an expired tenant value gave way to is effective and listed as
+// disabled, as it is with that tenant line deleted.
+func TestServedValues_DisableEffectsDescribeWhatIsServed(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  redis_memory: 50\n",
+		"_profiles.yaml": "profiles:\n  p:\n    redis_memory: disable\n",
+		"a.yaml": "tenants:\n  a:\n    _profile: p\n    redis_memory:\n      default: \"5\"\n" +
+			"      expires: \"2020-01-01T00:00:00Z\"\n",
+	}
+	code, doc, _, stderr := servedWith(t, files, "2026-07-01T03:00:00Z", "--disable-effects")
+	mustOK(t, code, stderr)
+	e, ok := doc.Tenants["a"].Keys["redis_memory"]
+	if !ok || e.Reason != keyReasonDisabled || e.Disable != disableEffective {
+		t.Errorf("redis_memory: %+v (listed %v), want reason %q and disable %q — the profile's, served", e, ok, keyReasonDisabled, disableEffective)
+	}
+}

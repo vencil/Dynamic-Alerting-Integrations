@@ -42,8 +42,8 @@ type expiryState struct {
 	honoured map[string]map[string]bool
 	events   []ResolvedThresholdExpiry
 	// written is the tenants' merged maps of the whole tree, before
-	// `expires:` was decided (WrittenTenants); nil when nothing was decided
-	// away.
+	// `expires:` was decided (DescribedTenants); nil when nothing was
+	// decided away.
 	written map[string]map[string]ScheduledValue
 }
 
@@ -76,19 +76,38 @@ func (c *ThresholdConfig) ValidAt(t time.Time) bool {
 	return st.validUntil.IsZero() || t.Before(st.validUntil)
 }
 
-// WrittenTenants is the tenants' merged maps as the tree writes them, every
-// time-boxed value in place whether or not it has expired: what a reader
-// that describes the tenant's own lines reads (da-guard's disable effects
-// and key verdicts) — Tenants is what is served at the instant (#4263). It is
-// Tenants itself when the build decided nothing away.
-func (c *ThresholdConfig) WrittenTenants() map[string]map[string]ScheduledValue {
-	if c == nil || c.expiry == nil || c.expiry.written == nil {
-		if c == nil {
-			return nil
-		}
+// DescribedTenants is, per tenant, the lines a reader that describes the
+// tenant's own lines reads (da-guard's disable effects, key verdicts, the
+// served keys): every value the instant serves (Tenants), and beside it
+// every value the merge left out because its `expires:` passed — the line
+// is still written (#4263). Where both name one threshold, the served one is
+// described. Tenants itself when the build decided nothing away.
+func (c *ThresholdConfig) DescribedTenants() map[string]map[string]ScheduledValue {
+	if c == nil {
+		return nil
+	}
+	if c.expiry == nil || c.expiry.written == nil {
 		return c.Tenants
 	}
-	return c.expiry.written
+	out := make(map[string]map[string]ScheduledValue, len(c.expiry.written))
+	for tenant, written := range c.expiry.written {
+		m := make(map[string]ScheduledValue, len(written))
+		for k, v := range written {
+			m[k] = v
+		}
+		served := c.Tenants[tenant]
+		var buf [2]string
+		for k, v := range served {
+			for _, sp := range otherSpellings(k, &buf) {
+				if _, servedToo := served[sp]; !servedToo {
+					delete(m, sp) // the written spelling the served one replaces
+				}
+			}
+			m[k] = v
+		}
+		out[tenant] = m
+	}
+	return out
 }
 
 // ValidUntil is the first `expires:` of the tree after the instant the
@@ -504,4 +523,16 @@ func eachUnparsedExpiry(overrides map[string]ScheduledValue, f func(key, text st
 		}
 		f(key, sv.Expiry.Expires, err)
 	}
+}
+
+// expiryReadAt is the instant a reader of c reads `expires:` at when it
+// resolves at now: the build's instant when the build decided them — past
+// its ValidUntil c keeps answering for that instant until the rebuild
+// replaces it, instead of lapsing a value to the root the merge never chose
+// (#4263) — else now.
+func (c *ThresholdConfig) expiryReadAt(now time.Time) time.Time {
+	if c != nil && c.expiry != nil && !c.expiry.at.IsZero() {
+		return c.expiry.at
+	}
+	return now
 }

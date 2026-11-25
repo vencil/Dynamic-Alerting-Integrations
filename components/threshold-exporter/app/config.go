@@ -2123,7 +2123,10 @@ func (m *ConfigManager) tickOnce() {
 	changed := hash != m.lastHash
 	m.mu.RUnlock()
 
-	if changed {
+	// #4263: an unchanged file is loaded again once the committed config no
+	// longer answers for the clock (its next `expires:`, or the clock set
+	// back before the last one).
+	if changed || m.expiredCommit() {
 		m.getLogger().Printf("Config changed, reloading...")
 		if err := m.Load(); err != nil {
 			m.getLogger().Printf("ERROR: failed to reload config: %v", err)
