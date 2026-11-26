@@ -248,11 +248,13 @@ REGISTERED: dict[str, dict[str, int]] = {
         "_try_atomic os.replace [entry]": 1,
         "_try_atomic tempfile.mkstemp [entry]": 1,
         # #4106: the in-place fallback's write, its pre-check beside the
-        # target, and the put-back of the old bytes (or the empty file).
+        # target, the exclusive create of a file that is not there yet, and
+        # the put-back of the old bytes (or the empty file).
+        "_create_new os.fdopen [entry]": 2,  # text, and bytes as given
         "_preflight_beside os.fdopen [entry]": 2,  # text, and bytes as given
         "_preflight_beside tempfile.mkstemp [entry]": 1,
         "_put_back .write_bytes [entry]": 1,
-        "_put_back open(w) [entry]": 2,  # the old bytes not fitting; unreadable
+        "_put_back open(w) [entry]": 1,  # the old bytes not fitting, or unreadable
         "_write_content .write_bytes [entry]": 1,  # #3981: bytes as given
         "_write_content .write_text [entry]": 1,
         "_write_in_place os.chmod [entry]": 1,

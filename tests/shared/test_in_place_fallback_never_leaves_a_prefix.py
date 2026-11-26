@@ -152,3 +152,62 @@ def test_the_preflight_writes_through_its_descriptor_not_the_name(tmp_path, monk
     law._preflight_beside(tmp_path / "artifact.yaml", "content\n", opts)
     law._preflight_beside(tmp_path / "artifact.bin", b"\x00bytes", opts)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_pipe_behind_dev_stdout_is_written_not_read(tmp_path):
+    """#4324: reading the old bytes first must not reach a pipe — a read of
+    the pipe behind `/dev/stdout` waits for input that never comes. Written
+    as before #4106: no scratch file, no read, no put-back."""
+    if not os.path.exists("/dev/stdout"):
+        pytest.skip("no /dev/stdout")
+    code = (f"import sys; sys.path.insert(0, {str(TOOLS)!r})\n"
+            "import _lib_atomic_write as law\n"
+            "law.atomic_write_text('/dev/stdout', 'through the pipe\\n')\n")
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace",
+                          timeout=30, env=_env(), cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "through the pipe\n"
+
+
+def test_a_file_created_by_someone_else_meanwhile_is_never_touched(tmp_path, monkeypatch):
+    """CodeRabbit on #4324: "no file" is true only when it was looked at. A
+    file another process creates before the write must be neither written
+    nor removed: the create is exclusive, so it fails, naming the target."""
+    sys.path.insert(0, str(TOOLS))
+    import _lib_atomic_write as law
+    from _lib_output import OutputWriteError
+
+    target = tmp_path / "artifact.yaml"
+    target.write_text("THEIRS\n", encoding="utf-8")
+    monkeypatch.setattr(law, "_read_old", lambda _out: None)  # looked before it existed
+    opts = law._Opts("utf-8", "\n", 0o644, "--out", False)
+    with pytest.raises(OutputWriteError) as info:
+        law._write_in_place(target, "OURS\n", opts, set_mode=True)
+    assert info.value.path == str(target)
+    assert target.read_text(encoding="utf-8") == "THEIRS\n"
+
+
+def test_the_preflight_runs_beside_the_file_the_write_reaches(tmp_path, monkeypatch):
+    """Blind review on #4324: through a symlink, the write lands in the
+    target's directory — perhaps another filesystem than the link's. The
+    pre-check must measure that one: beside the link it refuses a write that
+    fits (the link's filesystem full) and passes one that does not."""
+    sys.path.insert(0, str(TOOLS))
+    import tempfile
+    import _lib_atomic_write as law
+
+    (tmp_path / "links").mkdir()
+    (tmp_path / "data").mkdir()
+    link = tmp_path / "links" / "artifact.yaml"
+    symlink_or_skip(tmp_path / "data" / "artifact.yaml", link)
+    seen = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording(*a, **k):
+        seen.append(Path(k["dir"]).resolve())
+        return real_mkstemp(*a, **k)
+    monkeypatch.setattr(law.tempfile, "mkstemp", recording)
+    opts = law._Opts("utf-8", "\n", 0o644, "--out", False)
+    law._preflight_beside(link, "content\n", opts)
+    assert seen == [(tmp_path / "data").resolve()]

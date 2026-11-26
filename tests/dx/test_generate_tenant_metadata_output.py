@@ -838,13 +838,23 @@ class TestSameResultAsInPlace:
             raise PermissionError(errno.EACCES, "Permission denied",
                                   str(tmp_path / ".meta.json.xyz.tmp"))
 
+        real_open = os.open
+
         def write_text(self, *a, **k):
             if str(self) == str(out):
                 raise PermissionError(errno.EACCES, "Permission denied", str(out))
             return real_write_text(self, *a, **k)
 
+        def create(path, flags, *a, **k):
+            # #4106: no file yet ⇒ the fallback creates it exclusively with
+            # os.open, in the directory this case cannot write either.
+            if os.fspath(path) == os.path.realpath(out) and flags & os.O_CREAT:
+                raise PermissionError(errno.EACCES, "Permission denied", str(out))
+            return real_open(path, flags, *a, **k)
+
         monkeypatch.setattr(tempfile, "mkstemp", denied)
         monkeypatch.setattr(Path, "write_text", write_text)
+        monkeypatch.setattr(os, "open", create)
         rc = _run(monkeypatch, confd, out)
         err_lines = capsys.readouterr().err.strip().splitlines()
 

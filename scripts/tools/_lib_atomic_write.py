@@ -198,7 +198,11 @@ def _preflight_beside(out: Path, content: Union[str, bytes], opts: _Opts) -> Non
     is met before *out* is truncated. A directory this run cannot create a
     file in is skipped: there the old bytes are the only fallback."""
     try:
-        fd, scratch = tempfile.mkstemp(prefix=".", suffix=".preflight", dir=out.parent or ".")
+        # Beside the file the write reaches — through a symlink, its target's
+        # directory, which may be on another filesystem than the link's
+        # (blind review on #4324).
+        fd, scratch = tempfile.mkstemp(prefix=".", suffix=".preflight",
+                                       dir=os.path.dirname(os.path.realpath(out)))
     except OSError:
         return
     try:
@@ -223,43 +227,91 @@ def _preflight_beside(out: Path, content: Union[str, bytes], opts: _Opts) -> Non
 
 #: The old bytes of a target this run can write but not read.
 _UNREADABLE = object()
+#: What stands at the target is not a regular file (a pipe, a terminal, a
+#: device): it has no old bytes to keep, and reading it could block.
+_NOT_REGULAR = object()
+
+
+def _read_old(out: Path) -> object:
+    """The bytes at *out* before an in-place write: ``bytes``, ``None`` (no
+    file), ``_UNREADABLE`` (write-only) or ``_NOT_REGULAR``. Opened without
+    blocking and checked through the descriptor, so a FIFO or terminal put
+    there since the caller's stat is never read (#4324: ``read_bytes`` on a
+    pipe behind ``/dev/stdout`` waited for input that never came)."""
+    # O_BINARY: on Windows `os.open` is text mode without it (CRLF and 0x1A
+    # rewritten); mkstemp adds it itself.
+    flags = (os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_BINARY", 0))
+    try:
+        fd = os.open(out, flags)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return _UNREADABLE
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return _NOT_REGULAR
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    except OSError:
+        return _UNREADABLE
+    finally:
+        os.close(fd)
+
+
+def _create_new(out: Path, content: Union[str, bytes], opts: _Opts) -> None:
+    """No file at *out*: create it exclusively — at the link's target when
+    *out* is a dangling symlink — and write through the descriptor. When the
+    write fails, the file this call created is removed, and only that one:
+    a file someone else created there in the meantime makes the create fail
+    with EEXIST and is never touched (CodeRabbit on #4324)."""
+    target = os.path.realpath(out)
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_BINARY", 0))  # see _read_old
+    try:
+        fd = os.open(target, flags, 0o666)
+    except OSError as exc:
+        raise _output_error(out, exc, opts, previous_kept=True) from exc
+    made = os.fstat(fd)
+    try:
+        if isinstance(content, bytes):
+            handle = os.fdopen(fd, "wb")
+        else:
+            handle = os.fdopen(fd, "w", encoding=opts.encoding, newline=opts.newline)  # line-ending: ignore
+        with handle:
+            handle.write(content)
+    except OSError as exc:
+        removed = False
+        try:
+            now = os.lstat(target)
+            if (now.st_dev, now.st_ino) == (made.st_dev, made.st_ino):
+                os.unlink(target)
+                removed = True
+        except OSError:
+            pass
+        raise _output_error(out, exc, opts, previous_kept=removed) from exc
 
 
 def _put_back(out: Path, old: object) -> bool:
-    """After a failed in-place write: the old bytes back (True), or else an
-    empty file — never the prefix of the new content (False). No old file:
-    remove the prefix this run created, and only that — through a dangling
-    symlink that is the file at the link's target, and the link itself stays
+    """After a failed in-place write over an existing file: the old bytes
+    back (True), or else an empty file — never the prefix of the new content
     (False). Old bytes that could not be read: empty."""
-    if old is _UNREADABLE:
-        old = b""
+    if old is not _UNREADABLE:
         try:
-            with open(out, "wb"):
-                pass
+            out.write_bytes(old)  # type: ignore[arg-type]
+            return True
         except OSError:
             pass
-        return False
-    if old is None:
-        # Nothing resolved at `out` before the write, so a regular file there
-        # now is the one this write created — at the link's target when `out`
-        # is a dangling symlink (CodeRabbit on #4324). Remove that file, never
-        # the link: `realpath` names the file, not the link.
-        if os.path.isfile(out):
-            try:
-                os.unlink(os.path.realpath(out))
-            except OSError:
-                pass
-        return False
     try:
-        out.write_bytes(old)
-        return True
-    except OSError:
-        try:
-            with open(out, "wb"):
-                pass
-        except OSError:
+        with open(out, "wb"):
             pass
-        return False
+    except OSError:
+        pass
+    return False
 
 
 def _write_in_place(out: Path, content: Union[str, bytes], opts: _Opts, *,
@@ -273,31 +325,42 @@ def _write_in_place(out: Path, content: Union[str, bytes], opts: _Opts, *,
     rc 2 would be false. Silent when the mode is already the one asked for.
     Any other chmod failure still raises.
     """
+    # *set_mode* is the caller's "a regular file, or none" (`regular`). A
+    # pipe, a terminal, a device or a directory is written as before #4106:
+    # there are no old bytes to keep, a scratch file beside `/dev/stdout`
+    # means nothing, and reading it first could block (#4324).
+    if not set_mode:
+        try:
+            _write_content(out, content, opts)
+        except OSError as exc:
+            raise _output_error(out, exc, opts, previous_kept=False) from exc
+        return
     # #4106: an in-place write that fails half way leaves the first part of
     # the NEW content — the shape a reader most easily takes for valid. So:
     # (1) the new content is first written in full to a scratch file beside
     # the target, and a refusal there (EFBIG, ENOSPC, EDQUOT) is raised with
     # the target untouched — #2082's "fail and keep the old file" for this
-    # path too; (2) the old bytes are read before the target is opened, and
-    # a failure while writing it puts them back; (3) only when that also
-    # fails is the target left empty, as the operator entry leaves one. A
-    # kill between the truncate and the end of the write still leaves a
-    # prefix: no code runs then.
+    # path too; (2) no file yet: it is created exclusively and, on failure,
+    # removed only if it is still the one created; (3) a file: its old bytes
+    # are read before it is opened, and a failure while writing it puts them
+    # back; (4) only when that also fails is it left empty, as the operator
+    # entry leaves one. A kill between the truncate and the end of the write
+    # still leaves a prefix: no code runs then.
     _preflight_beside(out, content, opts)
     # A file this run may write but not read (mode 0200) was written before
     # #4106 and still is: its old bytes are unknown, so a failed write leaves
     # it empty rather than putting anything back (blind review).
-    try:
-        old = out.read_bytes() if out.exists() else None
-    except OSError:
-        old = _UNREADABLE
-    try:
-        _write_content(out, content, opts)
-    except OSError as exc:
-        kept = _put_back(out, old)
-        raise _output_error(out, exc, opts, previous_kept=kept) from exc
-    if not set_mode:
-        return
+    old = _read_old(out)
+    if old is None:
+        _create_new(out, content, opts)
+    else:
+        try:
+            _write_content(out, content, opts)
+        except OSError as exc:
+            kept = False if old is _NOT_REGULAR else _put_back(out, old)
+            raise _output_error(out, exc, opts, previous_kept=kept) from exc
+        if old is _NOT_REGULAR:
+            return  # no chmod on what we did not create
     try:
         os.chmod(out, opts.mode)
     except OSError as exc:
