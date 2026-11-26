@@ -206,7 +206,19 @@ def assert_step_run(workflow: str, job: str) -> str:
     return (f"python3 -I {ATIME_TOOL} finish {STATE_ARG} && "
             "python3 scripts/ops/workflow_path_filter.py assert "
             f"--workflow {workflow} --job {job} "
-            f'{STATE_ARG} --out "$RUNNER_TEMP/path-trace.json" --leg "{LEG_EXPR}"')
+            f'{STATE_ARG} --out "$RUNNER_TEMP/{TRACE_FILE}" --leg "{LEG_EXPR}"')
+
+
+# The file the assert step writes, and the path the upload step after it must
+# give: the same file, in the expression syntax `with:` takes.
+TRACE_FILE = "path-trace.json"
+UPLOAD_PATH = "${{ runner.temp }}/" + TRACE_FILE
+# Environment variables that change what git or the assert step's Python do
+# without appearing in any `run:` text: `GIT_CONFIG_*` / `GIT_CONFIG_PARAMETERS`
+# set `core.trustctime` (then the next git command reads every tracked file),
+# `PYTHON*` changes what `python3` imports.
+GIT_CONFIG_ENV_PREFIX = "GIT_CONFIG"
+PYTHON_ENV_PREFIX = "PYTHON"
 
 
 # Which run of the job this is, as GitHub numbers it: `<index>/<total>`, `0/1`
@@ -888,20 +900,51 @@ class Traced:
         recording); both are exactly the generated steps; no `continue-on-error`
         and no `defaults.run.shell` stands between their exit code and the
         job's; and no other `run:` mentions the git setting `reset` holds.
-        NOT checked: whether the job runs at all — a job-level `if:` that
-        never holds, or `on.pull_request.branches`/`types` that never match a
-        PR (no run, so no assertion); what a `uses:` step does to git config;
-        and whether the `--out` file is uploaded (an upload placed before the
-        assert step finds no file and only warns).
+        Whether the job runs on a PR at all (#3756): no job-level `if:`;
+        `on.pull_request` holds `paths` only (`branches`/`types` that never
+        match a PR mean no run, so no assertion) and there is no
+        `pull_request_target` (it runs on the BASE, so it measures the wrong
+        tree); a matrix is a literal, non-empty `include` list with no
+        `exclude`. The `--out` file is uploaded: exactly one step follows the
+        assert step, an upload of that file under the same `if:`. No
+        `GIT_CONFIG*` key in any `env:` (it sets `core.trustctime` where no
+        `run:` text shows it) and no `PYTHON*` key in the workflow's or the
+        job's `env:` (the assert step's `python3` would import under it).
+        NOT checked: a step skipped by its own `if:` (a legitimate branch of
+        the job: it reads nothing, and that is what is recorded); what a
+        `uses:` step does to git config.
         """
         workflow = self.workflow if workflow is None else workflow
         errors = []
+        events = workflow.get("on", workflow.get(True))
+        events = events if isinstance(events, dict) else {}
+        if "pull_request_target" in events:
+            errors.append(
+                f"{self.name}: triggers on `pull_request_target`, which runs on "
+                "the base branch — the job would measure the base, not the PR")
+        pull_request = events.get("pull_request")
+        if isinstance(pull_request, dict):
+            narrowing = sorted(k for k in pull_request if k != "paths")
+            if narrowing:
+                errors.append(
+                    f"{self.name}: `on.pull_request` narrows the trigger by "
+                    f"{', '.join(narrowing)}; a PR it does not match runs no job, "
+                    "so nothing is asserted — the path gate is `paths` alone")
+        errors += _env_errors(self.name, "the workflow", workflow.get("env"))
         jobs = workflow.get("jobs")
         jobs = jobs if isinstance(jobs, dict) else {}
         for job_id, job in jobs.items():
             where = f"{self.name}: job `{job_id}`"
             job = job if isinstance(job, dict) else {}
             steps = _steps(job)
+            if "if" in job:
+                errors.append(f"{where} has a job-level `if:`; when it does not "
+                              "hold, the job is skipped and nothing is asserted")
+            errors += _matrix_errors(where, job.get("strategy"))
+            errors += _env_errors(where, "the job", job.get("env"))
+            for i, step in enumerate(steps):
+                errors += _env_errors(f"{where}: step {i + 1}", "the step",
+                                      step.get("env"), python=False)
             if job.get("continue-on-error"):
                 errors.append(f"{where} sets `continue-on-error`, so an "
                               "uncovered file would not fail it")
@@ -947,6 +990,7 @@ class Traced:
                             f"{where}: step {i + 1} comes after the assert step "
                             "and what it reads is not checked. Only "
                             f"`uses: {UPLOAD_ACTION}…` steps may follow it")
+                errors += _upload_errors(where, steps[assert_at[0] + 1:])
             for scope, holder in (("the workflow", workflow), ("the job", job)):
                 defaults = holder.get("defaults")
                 run_defaults = defaults.get("run") if isinstance(defaults, dict) else None
@@ -975,6 +1019,57 @@ class Traced:
                     f"{TRACES}/{self.name}.json holds a trace for job "
                     f"`{job_id}`, which {self.name} does not define")
         return errors
+
+
+def _env_errors(where: str, scope: str, env: object, *, python: bool = True) -> list[str]:
+    """`GIT_CONFIG*` keys anywhere, and `PYTHON*` keys where the assert step
+    inherits them (the workflow's and the job's `env:`)."""
+    keys = [str(k) for k in env] if isinstance(env, dict) else []
+    errors = [f"{where}: {scope}'s `env:` sets `{k}`, which can set "
+              f"`{TRUSTCTIME}` where no `run:` text shows it"
+              for k in keys if k.upper().startswith(GIT_CONFIG_ENV_PREFIX)]
+    if python:
+        errors += [f"{where}: {scope}'s `env:` sets `{k}`, which changes what "
+                   "the assert step's `python3` runs" for k in keys
+                   if k.upper().startswith(PYTHON_ENV_PREFIX)]
+    return errors
+
+
+def _matrix_errors(where: str, strategy: object) -> list[str]:
+    """A matrix is a literal, non-empty `include` list: an expression, an
+    `exclude`, or an empty list can leave no leg, and no leg asserts."""
+    if strategy is None:
+        return []
+    matrix = strategy.get("matrix") if isinstance(strategy, dict) else None
+    if matrix is None:
+        return []
+    include = matrix.get("include") if isinstance(matrix, dict) else None
+    if (not isinstance(matrix, dict) or set(matrix) != {"include"}
+            or not isinstance(include, list) or not include):
+        return [f"{where}: its matrix must be a literal, non-empty `include` "
+                "list (no `exclude`, no other axis, no expression) — a matrix "
+                "that leaves no leg runs no assertion"]
+    return []
+
+
+def _upload_errors(where: str, after: list[dict]) -> list[str]:
+    """Exactly one step after the assert step: the upload of its `--out` file,
+    under the assert step's own `if:` (so a failed assertion still uploads
+    the trace a re-record needs)."""
+    if len(after) != 1:
+        return [f"{where}: exactly one step must follow the assert step — the "
+                f"upload of `{UPLOAD_PATH}` (found {len(after)})"]
+    step = after[0]
+    with_ = step.get("with") if isinstance(step.get("with"), dict) else {}
+    errors = []
+    if step.get("if") != ASSERT_STEP_IF:
+        errors.append(f"{where}: the upload step's `if:` must be `{ASSERT_STEP_IF}`, "
+                      "as the assert step's — the trace of a failed assertion is "
+                      "the one a re-record needs")
+    if with_.get("path") != UPLOAD_PATH:
+        errors.append(f"{where}: the upload step must upload `{UPLOAD_PATH}` — the "
+                      f"assert step's `--out` (it uploads {with_.get('path')!r})")
+    return errors
 
 
 # ── dead and unmodelled patterns, every workflow ────────────────────────────
