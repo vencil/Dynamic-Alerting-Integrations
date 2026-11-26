@@ -85,6 +85,13 @@ jobs:
       - run: python3 ztool/zmain.py
       # BEGIN GENERATED path-trace-assert job=zjob
       # END GENERATED path-trace-assert
+      - name: Upload the trace
+        if: "${{ !cancelled() }}"
+        uses: actions/upload-artifact@v7
+        with:
+          name: path-trace-zflow-zjob
+          path: ${{ runner.temp }}/path-trace.json
+          if-no-files-found: warn
 """
 MAIN = """\
 import os, subprocess, sys
@@ -305,7 +312,7 @@ def test_generate_writes_the_union_and_touches_nothing_else(
     # …and the two steps are in the job, parsed.
     steps = yaml.safe_load(after)["jobs"]["zjob"]["steps"]
     assert [s.get("name") for s in steps] == [
-        None, wpf.ENV_STEP_NAME, None, wpf.ASSERT_STEP_NAME]
+        None, wpf.ENV_STEP_NAME, None, wpf.ASSERT_STEP_NAME, "Upload the trace"]
     assert steps[1]["run"] == wpf.ENV_STEP_RUN and " reset --state " in steps[1]["run"]
     assert " finish --state " in steps[3]["run"]
     assert " && python3 scripts/ops/workflow_path_filter.py assert " in steps[3]["run"]
@@ -573,6 +580,38 @@ ASSERT_ONCE = "generated assert step exactly once, unchanged (found 0)"
     (TOOL_STEP, "      - run: |\n          # leaves core.trustctime alone\n"
                 "          python3 ztool/zmain.py\n",
      "step 3's `run:` mentions `core.trustctime`"),
+    # ── the job runs on every PR the path gate admits (#3756) ──
+    ("  zjob:\n", "  zjob:\n    if: false\n", "job `zjob` has a job-level `if:`"),
+    ("  pull_request:\n    paths:\n", "  pull_request:\n    types: [labeled]\n    paths:\n",
+     "`on.pull_request` narrows the trigger by types"),
+    ("  pull_request:\n    paths:\n", "  pull_request:\n    branches: [nowhere]\n    paths:\n",
+     "`on.pull_request` narrows the trigger by branches"),
+    ("  workflow_dispatch:\n", "  workflow_dispatch:\n  pull_request_target:\n",
+     "triggers on `pull_request_target`"),
+    ("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    strategy:\n      matrix:\n"
+     "        include: [{n: a}]\n        exclude: [{n: a}]\n",
+     "its matrix must be a literal, non-empty `include` list"),
+    ("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    strategy:\n      matrix: "
+     "${{ fromJSON(needs.plan.outputs.m) }}\n",
+     "its matrix must be a literal, non-empty `include` list"),
+    # ── the trace is uploaded: one step, that file, under the assert's `if:` ──
+    ("          path: ${{ runner.temp }}/path-trace.json\n",
+     "          path: ${{ github.workspace }}\n", "the upload step must upload"),
+    ('        if: "${{ !cancelled() }}"\n', '        if: "${{ success() }}"\n',
+     "the upload step's `if:` must be"),
+    ("      - name: Upload the trace\n", "      - name: Upload the trace\n"
+     "        uses: actions/upload-artifact@v7\n      - name: Upload it twice\n",
+     "exactly one step must follow the assert step"),
+    # ── no environment variable that changes git or the assert's Python ──
+    ("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    env:\n      GIT_CONFIG_COUNT: '1'\n",
+     "sets `GIT_CONFIG_COUNT`"),
+    (TOOL_STEP, "      - run: python3 ztool/zmain.py\n        env:\n          GIT_CONFIG_PARAMETERS: x\n",
+     "sets `GIT_CONFIG_PARAMETERS`"),
+    ("jobs:\n", "env:\n  PYTHONPATH: /x\njobs:\n",
+     "sets `PYTHONPATH`, which changes what the assert step's `python3` runs"),
+    # An `env:` the runner expands from an expression cannot be read (CodeRabbit).
+    (TOOL_STEP, TOOL_STEP.rstrip("\n") + "\n        env: ${{ fromJSON(needs.plan.outputs.env) }}\n",
+     "step 3: the step's `env:` is not a literal mapping"),
 ])
 def test_a_job_that_only_looks_wired_is_a_finding(
         repo: Path, tmp_path: Path, capsys, old: str, new: str, message: str) -> None:
@@ -594,10 +633,12 @@ def test_a_wired_job_has_no_wiring_finding_and_each_rule_reports_once(
     _record_and_generate(repo, tmp_path / "t")
     traced = wpf.Traced(repo, _workflow(repo), wpf.tracked_files(repo))
     assert traced.wiring_errors() == []
-    # An artifact upload after the assert step is the one thing allowed there,
-    # and `defaults.run` without a `shell` changes nothing the rule is about.
+    # The upload's own keys besides `if`/`path` (name, if-no-files-found,
+    # retention) are free, and `defaults.run` without a `shell` changes
+    # nothing the rule is about.
     allowed = yaml.safe_load(_workflow(repo).read_text(encoding="utf-8"))
-    allowed["jobs"]["zjob"]["steps"].append({"uses": "actions/upload-artifact@v7"})
+    allowed["jobs"]["zjob"]["steps"][-1]["with"]["retention-days"] = 3
+    allowed["jobs"]["zjob"]["steps"][-1]["name"] = "Upload"
     allowed["jobs"]["zjob"]["defaults"] = {"run": {"working-directory": "."}}
     assert traced.wiring_errors(allowed) == []
     doc = yaml.safe_load(_workflow(repo).read_text(encoding="utf-8"))

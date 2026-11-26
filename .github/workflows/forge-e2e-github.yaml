@@ -5,10 +5,12 @@ name: Forge E2E — GitHub (post-merge)
 # (#615, deterministic protocol) with real api.github.com behaviour: Link-header
 # pagination, true permission 403, full PR round-trip.
 #
-# ⛔ SECURITY: runs on same-repo events ONLY — post-merge push to main + manual
-# dispatch. NEVER `pull_request` / `pull_request_target` — a forge write-PAT in
-# a fork-influenced workflow is a classic pwn-request (token exfil). `on: push`
-# never fires for fork PRs, so fork contributors are unaffected and unblocked.
+# ⛔ SECURITY: NEVER `pull_request_target` — it runs with the repository's
+# secrets on a fork's PR, and a forge write-PAT in a fork-influenced workflow is
+# a classic pwn-request (token exfil). `pull_request` (below) is safe: GitHub
+# withholds secrets from fork PRs, so the job sees no token and skips. As a
+# traced workflow, `workflow_path_filter.py generate --check` refuses a
+# `pull_request_target` trigger here (#3756).
 
 on:
   # per-PR (same-repo) + post-merge. `pull_request` (NOT `_target`) is safe:
