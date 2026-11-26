@@ -55,6 +55,17 @@ _GIT_ENV = {
 }
 
 
+# A git hook that runs pytest exports these; git in a fixture repository (and
+# the workflow steps run here, `git worktree add` among them) must not follow
+# them out of it — `git add -A` would stage into the caller's index.
+_GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                      "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_PREFIX")
+
+
+def _without_git_location(env) -> dict[str, str]:
+    return {k: v for k, v in env.items() if k not in _GIT_LOCATION_VARS}
+
+
 def _workflow() -> dict:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
@@ -75,6 +86,18 @@ def _conf_d() -> str:
     return _job()["env"]["CONF_D"]
 
 
+def test_the_trigger_names_exactly_the_tree_it_diffs() -> None:
+    """#3756: the work item is the one conf.d tree `CONF_D` names (the tool
+    picks no file by glob), and the trigger's topic entry is that tree. The
+    two are one value written twice; a moved tree must move both, and no
+    other conf.d tree may start a run that diffs only this one."""
+    paths = _workflow()[True]["pull_request"]["paths"]
+    tree = f"{_conf_d()}/**"
+    assert tree in paths, f"{tree} is not in on.pull_request.paths: a change to the tree it diffs does not start it"
+    others = [p for p in paths if "conf.d" in p and p != tree]
+    assert others == [], f"paths name another conf.d tree the run does not diff: {others}"
+
+
 def _run_step(step: dict, cwd: Path, env: dict) -> tuple[subprocess.CompletedProcess, dict]:
     """Run `step`'s script as the runner would; return the process and the
     step's `$GITHUB_OUTPUT` as a dict."""
@@ -87,7 +110,7 @@ def _run_step(step: dict, cwd: Path, env: dict) -> tuple[subprocess.CompletedPro
     proc = subprocess.run(
         [*_RUNNER_BASH, str(script)], cwd=cwd, capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=300, check=False,
-        env={**os.environ, **_GIT_ENV, "CONF_D": _conf_d(),
+        env={**_without_git_location(os.environ), **_GIT_ENV, "CONF_D": _conf_d(),
              "GITHUB_OUTPUT": str(out_file), **env})
     outputs = {}
     for line in out_file.read_text(encoding="utf-8").splitlines():
@@ -172,7 +195,7 @@ def test_no_base_time_means_no_run(tmp_path, stub_python) -> None:
 # ── the base step: the merge-base, its time, or a red step ───────────────
 
 def _git(cwd: Path, *args: str, date: str | None = None) -> str:
-    env = {**os.environ, **_GIT_ENV}
+    env = {**_without_git_location(os.environ), **_GIT_ENV}
     if date:
         env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = date
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
