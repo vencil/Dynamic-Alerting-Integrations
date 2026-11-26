@@ -585,7 +585,7 @@ def _one_rule_pack_dir(tmp: Path) -> str:
 def _git_repo_with_one_commit(tmp: Path) -> Path:
     repo = tmp / "repo"
     repo.mkdir()
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+    env = {**_tool_env(), "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
            "GIT_CONFIG_NOSYSTEM": "1"}
     for argv in (["git", "init", "-q"],
@@ -1281,7 +1281,7 @@ def _traced_repo(tmp: Path) -> Path:
         (repo / "zlib" / "a.txt").write_text("a\n", encoding="utf-8")
         for argv in (["init", "-q"], ["add", "-A"]):
             subprocess.run(["git", *argv], cwd=repo, check=True, capture_output=True,
-                           timeout=TIMEOUT_S, stdin=subprocess.DEVNULL)
+                           timeout=TIMEOUT_S, stdin=subprocess.DEVNULL, env=_tool_env())
         (tmp / "wpf-state.json").write_text(json.dumps({
             "root": os.path.realpath(repo),
             "segments": [{"files": ["zlib/a.txt"], "replaced": [], "gone": []}],
@@ -1364,10 +1364,18 @@ RUNNER_FILE_VARS = ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "GITHUB_ENV",
                     "GITHUB_PATH", "GITHUB_STATE")
 
 
+# The variables that point git at a repository. A git hook that runs pytest
+# exports them; a tool or a fixture's git here must not follow them out of
+# the fixture (`git add -A` would stage into the caller's index).
+GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                     "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_PREFIX")
+
+
 def _tool_env() -> dict[str, str]:
     """The environment a tool runs in here: this process's, less the
-    runner's step files, in UTF-8."""
-    env = {k: v for k, v in os.environ.items() if k not in RUNNER_FILE_VARS}
+    runner's step files and git's location variables, in UTF-8."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in RUNNER_FILE_VARS + GIT_LOCATION_VARS}
     return {**env, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 
 
@@ -1392,8 +1400,11 @@ def test_a_tool_run_here_never_sees_the_runners_step_files(monkeypatch, tmp_path
     runner's step files, even when this process has them set."""
     for name in RUNNER_FILE_VARS:
         monkeypatch.setenv(name, str(tmp_path / name))
+    for name in GIT_LOCATION_VARS:
+        monkeypatch.setenv(name, str(tmp_path / name))
     env = _tool_env()
     assert not set(RUNNER_FILE_VARS) & set(env)
+    assert not set(GIT_LOCATION_VARS) & set(env)
     assert env["PYTHONUTF8"] == "1"
 
 
