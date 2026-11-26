@@ -113,7 +113,8 @@ cp -r "$FIXTURE_SOURCE_DIR/." fixture/active/conf.d/
 # until its text changes, and a hand-curated source tree may hold any mode.
 # Without this the exporter skips every unreadable tenant file with only a
 # log WARN. The fixture is synthetic, nothing secret. (inject_default_key
-# below writes 0644 itself: a conf.d file is a repo artifact, #3981.)
+# below writes 0644 itself, 0755 only for a file that had the owner's
+# execute bit: a conf.d file is a repo artifact, #3981.)
 chmod -R a+rX fixture/active/conf.d
 
 # Register `bench_trigger` in the active root _defaults.yaml — the

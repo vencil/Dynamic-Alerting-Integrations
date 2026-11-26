@@ -225,7 +225,18 @@ def _run_cli(*args: str, cwd: Path, fsize: int | None = None):
         [sys.executable, str(TOOL_PATH), *args], capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=60,
         preexec_fn=limit if fsize is not None else None, cwd=cwd,
-        env={**os.environ, "PYTHONUTF8": "1"})
+        env={**_env_for(fsize), "PYTHONUTF8": "1"})
+
+
+def _env_for(fsize: int | None) -> dict[str, str]:
+    """This process's environment; under a file-size limit, without the
+    subprocess-coverage variables — coverage's own atexit save would hit the
+    same limit and print a second traceback, which is not the tool's."""
+    import os
+    if fsize is None:
+        return dict(os.environ)
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith(("COV_CORE_", "COVERAGE_"))}
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX resource limits")
@@ -273,3 +284,15 @@ def test_a_rewritten_file_is_0644_as_conf_d_files_are(tmp_path):
     proc = _run_cli(str(target), "bench_trigger", "50", cwd=tmp_path)
     assert proc.returncode == 0, proc.stderr
     assert oct(target.stat().st_mode & 0o777) == oct(0o644)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_a_rewritten_file_with_the_owner_execute_bit_is_0755(tmp_path):
+    """The artifact entry keeps the owner's execute bit: 0700 becomes 0755,
+    not 0644 (the changelog's two cases)."""
+    target = tmp_path / "_defaults.yaml"
+    target.write_text("defaults:\n  a: 1\n", encoding="utf-8")
+    target.chmod(0o700)
+    proc = _run_cli(str(target), "bench_trigger", "50", cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert oct(target.stat().st_mode & 0o777) == oct(0o755)

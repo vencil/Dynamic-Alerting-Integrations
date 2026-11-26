@@ -30,7 +30,7 @@ Exit codes:
     1  — usage error / a key or value refused
     2  — PATH cannot be written (one line naming PATH; an existing file
          keeps its bytes — the rewrite is atomic, 0644 as every conf.d
-         file, #3535 / #3981); a file that cannot be read or decoded is
+         file, 0755 if it had the owner's execute bit; #3535 / #3981); a file that cannot be read or decoded is
          rc 2 too, reported as an internal error
 """
 from __future__ import annotations
