@@ -247,8 +247,14 @@ REGISTERED: dict[str, dict[str, int]] = {
         "_try_atomic os.fdopen [entry]": 2,  # text, and bytes as given (#3981)
         "_try_atomic os.replace [entry]": 1,
         "_try_atomic tempfile.mkstemp [entry]": 1,
-        "_write_in_place .write_bytes [entry]": 1,  # #3981: bytes as given
-        "_write_in_place .write_text [entry]": 1,
+        # #4106: the in-place fallback's write, its pre-check beside the
+        # target, and the put-back of the old bytes (or the empty file).
+        "_preflight_beside os.fdopen [entry]": 2,  # text, and bytes as given
+        "_preflight_beside tempfile.mkstemp [entry]": 1,
+        "_put_back .write_bytes [entry]": 1,
+        "_put_back open(w) [entry]": 2,  # the old bytes not fitting; unreadable
+        "_write_content .write_bytes [entry]": 1,  # #3981: bytes as given
+        "_write_content .write_text [entry]": 1,
         "_write_in_place os.chmod [entry]": 1,
     },
     "scripts/tools/_lib_output.py": {

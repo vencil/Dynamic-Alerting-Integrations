@@ -176,14 +176,92 @@ def _output_error(out: Path, exc: OSError, opts: _Opts, *,
 def _warn_not_atomic(out: Path, why: str) -> None:
     print(
         f"WARN: {safe_label(str(out))}: {why}; writing it in place instead "
-        f"of atomically — an interrupted run can leave it truncated",
+        f"of atomically — a failed write keeps the old content, but a run "
+        f"killed mid-write can leave it partly written",
         file=sys.stderr,
     )
 
 
+def _write_content(out: Path, content: Union[str, bytes], opts: _Opts) -> None:
+    """Truncate *out* and write *content* the way the entry writes it."""
+    # `newline` is atomic_write_text's own parameter, default "\n" —
+    # pinned by test_line_ending_policy::test_atomic_write_text_defaults_to_lf.
+    if isinstance(content, bytes):  # #3981: bytes go out exactly as given
+        out.write_bytes(content)
+    else:
+        out.write_text(content, encoding=opts.encoding, newline=opts.newline)  # line-ending: ignore
+
+
+def _preflight_beside(out: Path, content: Union[str, bytes], opts: _Opts) -> None:
+    """#4106: write *content* in full to a scratch file in *out*'s directory
+    and remove it, so a limit the write would hit (file size, space, quota)
+    is met before *out* is truncated. A directory this run cannot create a
+    file in is skipped: there the old bytes are the only fallback."""
+    try:
+        fd, scratch = tempfile.mkstemp(prefix=".", suffix=".preflight", dir=out.parent or ".")
+    except OSError:
+        return
+    try:
+        # Through the descriptor mkstemp returned, never the name again: in a
+        # directory others can write, the name could be swapped for a symlink
+        # in between (blind review) — the same reason `_try_atomic` writes
+        # through its fd.
+        if isinstance(content, bytes):
+            handle = os.fdopen(fd, "wb")
+        else:
+            handle = os.fdopen(fd, "w", encoding=opts.encoding, newline=opts.newline)  # line-ending: ignore
+        with handle:
+            handle.write(content)
+    except OSError as exc:
+        raise _output_error(out, exc, opts, previous_kept=True) from exc
+    finally:
+        try:
+            os.unlink(scratch)
+        except OSError:
+            pass
+
+
+#: The old bytes of a target this run can write but not read.
+_UNREADABLE = object()
+
+
+def _put_back(out: Path, old: object, *, had_name: bool) -> bool:
+    """After a failed in-place write: the old bytes back (True), or else an
+    empty file — never the prefix of the new content (False). No old file:
+    remove the prefix this run created, and only that — a name that was there
+    before (a dangling symlink) stays (False). Old bytes that could not be
+    read: empty."""
+    if old is _UNREADABLE:
+        old = b""
+        try:
+            with open(out, "wb"):
+                pass
+        except OSError:
+            pass
+        return False
+    if old is None:
+        if not had_name and os.path.isfile(out) and not os.path.islink(out):
+            try:
+                os.unlink(out)
+            except OSError:
+                pass
+        return False
+    try:
+        out.write_bytes(old)
+        return True
+    except OSError:
+        try:
+            with open(out, "wb"):
+                pass
+        except OSError:
+            pass
+        return False
+
+
 def _write_in_place(out: Path, content: Union[str, bytes], opts: _Opts, *,
                     set_mode: bool) -> None:
-    """The pre-#2082 writer: truncate, write, chmod. Only for the fallbacks.
+    """The pre-#2082 writer, for the fallbacks only: truncate, write, chmod —
+    with #4106's pre-check and put-back around the write (see below).
 
     #2128 S1: a ``chmod`` refused with EPERM AFTER the write succeeded — the
     file belongs to someone else (root-owned 0666, a non-root run) — is a
@@ -191,15 +269,32 @@ def _write_in_place(out: Path, content: Union[str, bytes], opts: _Opts, *,
     rc 2 would be false. Silent when the mode is already the one asked for.
     Any other chmod failure still raises.
     """
+    # #4106: an in-place write that fails half way leaves the first part of
+    # the NEW content — the shape a reader most easily takes for valid. So:
+    # (1) the new content is first written in full to a scratch file beside
+    # the target, and a refusal there (EFBIG, ENOSPC, EDQUOT) is raised with
+    # the target untouched — #2082's "fail and keep the old file" for this
+    # path too; (2) the old bytes are read before the target is opened, and
+    # a failure while writing it puts them back; (3) only when that also
+    # fails is the target left empty, as the operator entry leaves one. A
+    # kill between the truncate and the end of the write still leaves a
+    # prefix: no code runs then.
+    _preflight_beside(out, content, opts)
+    # A file this run may write but not read (mode 0200) was written before
+    # #4106 and still is: its old bytes are unknown, so a failed write leaves
+    # it empty rather than putting anything back (blind review).
     try:
-        # `newline` is atomic_write_text's own parameter, default "\n" —
-        # pinned by test_line_ending_policy::test_atomic_write_text_defaults_to_lf.
-        if isinstance(content, bytes):  # #3981: bytes go out exactly as given
-            out.write_bytes(content)
-        else:
-            out.write_text(content, encoding=opts.encoding, newline=opts.newline)  # line-ending: ignore
+        old = out.read_bytes() if out.exists() else None
+    except OSError:
+        old = _UNREADABLE
+    # Whether a name was there at all — a dangling symlink is "no old bytes"
+    # but must not be removed on failure (test_a_dangling_symlink_…).
+    had_name = os.path.lexists(out)
+    try:
+        _write_content(out, content, opts)
     except OSError as exc:
-        raise _output_error(out, exc, opts, previous_kept=False) from exc
+        kept = _put_back(out, old, had_name=had_name)
+        raise _output_error(out, exc, opts, previous_kept=kept) from exc
     if not set_mode:
         return
     try:
