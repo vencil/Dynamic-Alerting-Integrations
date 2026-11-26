@@ -554,8 +554,13 @@ def test_nlink_zero_takes_the_atomic_path(mod, target, monkeypatch):
             raise AssertionError("in-place write for st_nlink == 0")
         return real_write_text(self, *a, **k)
 
+    def in_place(*_a, **_k):
+        # #4106: the in-place fallback no longer goes through Path.write_text.
+        raise AssertionError("in-place write for st_nlink == 0")
+
     monkeypatch.setattr(os, "stat", fake_stat)
     monkeypatch.setattr(Path, "write_text", write_text)
+    monkeypatch.setattr(mod, "_write_in_place", in_place)
     ino = real_stat(target).st_ino
     mod.atomic_write_text(target, NEW)
     monkeypatch.undo()
