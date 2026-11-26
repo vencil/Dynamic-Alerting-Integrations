@@ -1290,10 +1290,25 @@ def _tool_env() -> dict[str, str]:
     return {**env, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 
 
+@pytest.fixture(autouse=True)
+def _runner_step_files_as_on_ci(monkeypatch, tmp_path_factory):
+    """Every test here runs as it would on a CI runner: the step-file
+    variables are set, to files outside any test's directory. Off CI they
+    are unset, so a run site that hands a tool `os.environ` as it stands
+    would leak only on CI (a reader that appends to $GITHUB_OUTPUT is
+    reported as a write no flag gave). After the test, none of the files
+    may hold anything."""
+    runner = tmp_path_factory.mktemp("runner-step-files")
+    for name in RUNNER_FILE_VARS:
+        monkeypatch.setenv(name, str(runner / name))
+    yield
+    written = sorted(f.name for f in runner.iterdir() if f.stat().st_size)
+    assert not written, f"a tool run here wrote to the runner's step files: {written}"
+
+
 def test_a_tool_run_here_never_sees_the_runners_step_files(monkeypatch, tmp_path):
-    """Off CI these variables are unset, so a leak would only show there: a
-    reader that appends to $GITHUB_OUTPUT (`plan_race_shards plan`) is
-    reported as a write no flag gave. Pinned here with them set."""
+    """The environment `_run` and the read-back give a tool holds none of the
+    runner's step files, even when this process has them set."""
     for name in RUNNER_FILE_VARS:
         monkeypatch.setenv(name, str(tmp_path / name))
     env = _tool_env()
