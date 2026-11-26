@@ -1155,6 +1155,22 @@ ROWS: list[Row] = [
       cwd=lambda c: REPO_ROOT,
       readers=lambda c, out: [["plan", "--timings-dir", str(out.parent)]],
       shapes=("parent_is_file", "target_is_dir")),
+    # #3981, twenty-first batch: `timings --input` (this tool) loads the
+    # merged stream whole, as `parse_go_test_json --input` does.
+    R("../ops/plan_race_shards.py", "--output", "file", "artifact",
+      lambda c, out: ["merge", "--module", "m", "--shards", "0",
+                      "--raw-dir", str(_race_shard_dir(c.tmp)), "--output", str(out)],
+      reach="`merge` over one complete shard (its stream and its rc file); offline",
+      out_name="race-raw-m.jsonl", variant="merge",
+      readers=lambda c, out: [["timings", "--input", str(out),
+                               "--output", str(out.parent / "timings-read.json")]],
+      shapes=("parent_is_file", "target_is_dir")),
+    # A conf.d file: a repo artifact (#3535); the rerun reads it back.
+    R("../ops/inject_default_key.py", "PATH", "file", "artifact",
+      lambda c, out: [str(out), "bench_trigger", "50"],
+      reach="creates `_defaults.yaml` with the one key; offline",
+      out_name="_defaults.yaml",
+      shapes=("parent_is_file", "target_is_dir")),
     # Artifact: `cleanup` reads the keys back to know what to remove.
     R("../ops/bench_synth_tenants.py", "--state-file", "file", "artifact",
       lambda c, out: ["inject", "--tenants", "1", "--state-file", str(out)],
@@ -1217,6 +1233,17 @@ def _fake_kubectl_env(tmp: Path) -> dict[str, str]:
                    encoding="utf-8", newline="\n")
     exe.chmod(0o755)
     return {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
+def _race_shard_dir(tmp: Path) -> Path:
+    """A raw directory holding one complete shard `0` of module `m`: its
+    `go test -json` stream and its rc file."""
+    raw = tmp / "race-raw"
+    raw.mkdir(exist_ok=True)
+    (raw / "race-raw-m-0.jsonl").write_text(
+        '{"Action":"pass","Package":"p","Test":"T","Elapsed":0.1}\n', encoding="utf-8")
+    (raw / "race-rc-m-0").write_text("0\n", encoding="utf-8")
+    return raw
 
 
 def _bench_kubectl_env(tmp: Path) -> dict[str, str]:
@@ -4181,6 +4208,11 @@ UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
     # Held in process by
     # tests/ops/test_plan_race_shards.py (test_an_unwritable_github_output_is_rc2_one_line,
     # test_a_timings_file_that_cannot_be_written_names_the_flag).
+    # #3981, twenty-first batch: the rewrite of an existing `_defaults.yaml`
+    # that lacks the key (the row's control run creates the file). Held by
+    # tests/ops/test_inject_default_key.py
+    # (test_an_existing_file_that_cannot_be_replaced_is_rc2_one_line).
+    ("../ops/inject_default_key.py", "inject", "write_repo_artifact"): 1,
     ("../ops/plan_race_shards.py", "_write_github_output", "write_operator_output"): 1,
     ("../ops/plan_race_shards.py", "fetch_timings", "ensure_dir"): 1,
     ("../ops/plan_race_shards.py", "fetch_timings", "write_repo_artifact"): 1,

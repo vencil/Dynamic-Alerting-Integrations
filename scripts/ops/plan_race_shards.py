@@ -408,24 +408,27 @@ def merge(module: str, shard_ids: list[str], raw_dir: Path, output: Path) -> dic
     """
     missing: list[str] = []
     rcs: list[int] = []
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("wb") as out:
-        for sid in shard_ids:
-            raw = raw_dir / RAW_FILE_TMPL.format(module=module, shard=sid)
-            rc_path = raw_dir / RC_FILE_TMPL.format(module=module, shard=sid)
-            try:
-                rc = int(rc_path.read_text(encoding="utf-8").strip())
-            except (OSError, ValueError):
-                missing.append(sid)
-                continue
-            if not raw.is_file():
-                missing.append(sid)
-                continue
-            rcs.append(rc)
-            data = raw.read_bytes()
-            out.write(data)
-            if data and not data.endswith(b"\n"):
-                out.write(b"\n")
+    parts: list[bytes] = []
+    for sid in shard_ids:
+        raw = raw_dir / RAW_FILE_TMPL.format(module=module, shard=sid)
+        rc_path = raw_dir / RC_FILE_TMPL.format(module=module, shard=sid)
+        try:
+            rc = int(rc_path.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            missing.append(sid)
+            continue
+        if not raw.is_file():
+            missing.append(sid)
+            continue
+        rcs.append(rc)
+        data = raw.read_bytes()
+        parts.append(data)
+        if data and not data.endswith(b"\n"):
+            parts.append(b"\n")
+    # #3981: `timings --input` (this tool) and `parse_go_test_json --input`
+    # load the merged stream whole: the artifact entry, the bytes as they are.
+    ensure_dir(output.parent, flag="--output")
+    write_repo_artifact(output, b"".join(parts), flag="--output")
     rc = next((r for r in rcs if r != 0), 0)
     complete = bool(shard_ids) and not missing
     if missing:
