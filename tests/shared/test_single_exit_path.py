@@ -523,8 +523,8 @@ def _guard_fault(tree: ast.Module) -> tuple[int, str] | None:
 
     ⚠️ Not seen: rebinding through `globals()` / `setattr` on the module, a
     `sys.modules` entry planted before the import, or a module that defines
-    its own function under an _ENTRY_DECORATORS name (one does, as a no-op
-    fallback: generate_rule_pack_split.py)."""
+    its own function under an _ENTRY_DECORATORS name (none does today;
+    generate_rule_pack_split.py's no-op fallback went in #3981)."""
     guards = [n for n in tree.body if _is_main_guard(n)]
     tests = [n for n in ast.walk(tree) if _is_main_test(n)]
     if len(guards) != 1 or len(tests) != 1:

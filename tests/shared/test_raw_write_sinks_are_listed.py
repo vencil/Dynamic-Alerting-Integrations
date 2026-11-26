@@ -235,10 +235,6 @@ DEBT: dict[str, dict[str, int]] = {
         "read_tree open(w) [work_dir]": 1,
         "read_tree os.chmod [work_dir]": 1,
     },
-    "scripts/tools/ops/generate_rule_pack_split.py": {
-        "_safe_mkdir .mkdir [operator]": 1,
-        "process_rule_packs open(w) [operator]": 1,
-    },
     "scripts/tools/ops/generator_service.py": {
         "Service._new_job_dir os.mkdir [work_dir]": 1,
         "Service._new_self_check_dir os.mkdir [work_dir]": 1,
@@ -253,7 +249,7 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 35
+_DEBT_CEILING = 33
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
