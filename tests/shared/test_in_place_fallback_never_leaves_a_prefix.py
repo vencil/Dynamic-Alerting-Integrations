@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from _platform_fs import symlink_or_skip
+
 TOOLS = Path(__file__).resolve().parents[2] / "scripts" / "tools"
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32",
@@ -29,6 +31,8 @@ import _lib_atomic_write
 from _lib_output import OutputWriteError, write_repo_artifact
 if sys.argv[4] == "no-preflight":
     _lib_atomic_write._preflight_beside = lambda *a, **k: None
+if sys.argv[5:] == ["no-atomic"]:
+    _lib_atomic_write._try_atomic = lambda *a, **k: (False, "forced by the test")
 signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
 limit = int(sys.argv[3])
 resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
@@ -81,6 +85,25 @@ def test_when_the_old_bytes_do_not_fit_either_the_file_is_left_empty(tmp_path):
     content — an empty file, as the operator entry leaves."""
     target, _ = _rewrite_hard_linked(tmp_path, 10000, preflight=False)
     assert target.read_bytes() == b""
+
+
+def test_a_failed_write_through_a_dangling_symlink_leaves_no_prefix(tmp_path):
+    """CodeRabbit on #4324: a dangling symlink has no old bytes, and the
+    in-place write creates the file at the link's target. When that write
+    fails, the file it created goes and the link stays — no prefix behind
+    the link. (The atomic replace is forced off: it is the path a dangling
+    link normally takes.)"""
+    link = tmp_path / "artifact.yaml"
+    symlink_or_skip("real.yaml", link)
+    proc = subprocess.run(
+        [sys.executable, "-c", _CHILD, str(TOOLS), str(link), "4096",
+         "no-preflight", "no-atomic"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60, env=_env())
+    assert "refused:" in proc.stdout, (proc.stdout, proc.stderr)
+    assert link.is_symlink()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["artifact.yaml"], (
+        "the prefix the failed write created at the link's target was left")
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0,

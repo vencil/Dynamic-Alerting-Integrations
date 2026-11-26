@@ -225,12 +225,12 @@ def _preflight_beside(out: Path, content: Union[str, bytes], opts: _Opts) -> Non
 _UNREADABLE = object()
 
 
-def _put_back(out: Path, old: object, *, had_name: bool) -> bool:
+def _put_back(out: Path, old: object) -> bool:
     """After a failed in-place write: the old bytes back (True), or else an
     empty file — never the prefix of the new content (False). No old file:
-    remove the prefix this run created, and only that — a name that was there
-    before (a dangling symlink) stays (False). Old bytes that could not be
-    read: empty."""
+    remove the prefix this run created, and only that — through a dangling
+    symlink that is the file at the link's target, and the link itself stays
+    (False). Old bytes that could not be read: empty."""
     if old is _UNREADABLE:
         old = b""
         try:
@@ -240,9 +240,13 @@ def _put_back(out: Path, old: object, *, had_name: bool) -> bool:
             pass
         return False
     if old is None:
-        if not had_name and os.path.isfile(out) and not os.path.islink(out):
+        # Nothing resolved at `out` before the write, so a regular file there
+        # now is the one this write created — at the link's target when `out`
+        # is a dangling symlink (CodeRabbit on #4324). Remove that file, never
+        # the link: `realpath` names the file, not the link.
+        if os.path.isfile(out):
             try:
-                os.unlink(out)
+                os.unlink(os.path.realpath(out))
             except OSError:
                 pass
         return False
@@ -287,13 +291,10 @@ def _write_in_place(out: Path, content: Union[str, bytes], opts: _Opts, *,
         old = out.read_bytes() if out.exists() else None
     except OSError:
         old = _UNREADABLE
-    # Whether a name was there at all — a dangling symlink is "no old bytes"
-    # but must not be removed on failure (test_a_dangling_symlink_…).
-    had_name = os.path.lexists(out)
     try:
         _write_content(out, content, opts)
     except OSError as exc:
-        kept = _put_back(out, old, had_name=had_name)
+        kept = _put_back(out, old)
         raise _output_error(out, exc, opts, previous_kept=kept) from exc
     if not set_mode:
         return
