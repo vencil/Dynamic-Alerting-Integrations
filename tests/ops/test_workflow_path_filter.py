@@ -1718,3 +1718,47 @@ def test_record_rewrites_the_trace_file_with_the_mode_a_checkout_gives(
     _trace_file(repo).chmod(0o600)
     assert _main(repo, "record", *_job_args(state)) == 0
     assert stat.S_IMODE(_trace_file(repo).stat().st_mode) == 0o644
+
+
+# ── #3981: `assert --out` goes through the artifact entry ───────────────────
+
+def test_an_assert_out_that_cannot_be_written_is_rc2_one_line(
+        repo: Path, tmp_path: Path, capsys) -> None:
+    """`merge` loads each leg's `--out` whole, so it is an artifact: a file
+    where its directory should be is rc 2 and one line naming --out — it was
+    a `FileNotFoundError` / `NotADirectoryError` traceback."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    capsys.readouterr()
+    blocker = tmp_path / "afile"
+    blocker.write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        _main(repo, "assert", *_job_args(state), "--out", str(blocker / "trace.json"))
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "--out" in err and "Traceback" not in err
+    assert len([ln for ln in err.splitlines() if ln.startswith("ERROR")]) == 1
+
+
+def test_an_assert_out_in_a_missing_directory_is_made(
+        repo: Path, tmp_path: Path, capsys) -> None:
+    """The directory of --out is created, as `record` makes its trace's: a
+    leg's artifact path need not exist yet."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    out = tmp_path / "legs" / "0" / "trace.json"
+    assert _main(repo, "assert", *_job_args(state), "--out", str(out)) == 0
+    assert json.loads(out.read_text(encoding="utf-8"))["jobs"]["zjob"]
+
+
+def test_an_assert_out_to_stdout_is_refused(repo: Path, tmp_path: Path, capsys,
+                                            monkeypatch) -> None:
+    """`--out -` used to write a file named `-` in the cwd."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as caught:
+        _main(repo, "assert", *_job_args(state), "--out", "-")
+    assert caught.value.code == 2
+    assert "--out" in capsys.readouterr().err
+    assert not (tmp_path / "-").exists()

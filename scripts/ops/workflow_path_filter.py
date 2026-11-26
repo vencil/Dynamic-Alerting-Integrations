@@ -1075,9 +1075,13 @@ def cmd_assert(args: argparse.Namespace) -> int:
         raise _caller_error(f"--leg: {exc}.") from exc
     traced, read, record = _job_trace(args)
     if args.out:
-        Path(args.out).write_text(dump_trace(
+        # #3981: `merge` loads this file whole (each leg's), so it is the
+        # artifact entry: an unusable --out is rc 2 and one line naming it.
+        out = Path(args.out)
+        ensure_dir(out.parent, flag="--out")
+        write_repo_artifact(out, dump_trace(
             {"workflow": traced.name, "leg": args.leg, "jobs": {args.job: record}}),
-            encoding="utf-8", newline="\n")
+            flag="--out")
     uncovered = sorted(f for f in read if not on_paths_covers(traced.paths_now(), f))
     print(f"{traced.name} job `{args.job}`: {len(read)} tracked file(s) read "
           "(by access time).")
