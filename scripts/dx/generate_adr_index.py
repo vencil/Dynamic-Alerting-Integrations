@@ -57,7 +57,7 @@ sys.path.insert(0, str(_TOOLS_DX))
 sys.path.insert(0, str(_TOOLS_DX.parent))
 from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
-from _lib_io import check_repo_artifact, write_repo_artifact  # noqa: E402  (#3107 v2)
+from _lib_io import check_repo_artifact, write_repo_artifacts  # noqa: E402  (#3107 v2, #4250)
 # The frontmatter status vocabulary: the planning index's own set (#2664).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from generate_planning_index import STATUSES as PLANNING_STATUSES  # noqa: E402
@@ -347,7 +347,7 @@ def main() -> int:
         return 1
 
     targets = [(args.target, "adr/", "zh")] if args.target else list(DEFAULT_TARGETS)
-    stale, changed = [], []
+    stale, changed, pending = [], [], []
     # #2128: --target is named only when the operator gave it.
     flag = "--target" if args.target else None
     for target, prefix, lang in targets:
@@ -365,11 +365,16 @@ def main() -> int:
             return 2
         if new != current:
             stale.append(_display(target))
-            if args.write:
-                # #2128: rc 2 + one line naming the doc.
-                with output_write(target, flag=flag):
-                    write_repo_artifact(target, new, flag=flag)
-                changed.append(_display(target))
+            pending.append((target, new))
+
+    if args.write and pending:
+        # #4250: every doc is read, rendered and judged before the first is
+        # written — a sentinel missing from a later doc, or a read-only one,
+        # no longer leaves the earlier ones rewritten. #2128: rc 2 + one line
+        # naming the doc.
+        with output_write(pending[0][0], flag=flag):
+            write_repo_artifacts(pending, flag=flag)
+        changed.extend(_display(target) for target, _new in pending)
 
     if args.check:
         if not stale:
