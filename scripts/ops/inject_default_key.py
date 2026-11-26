@@ -27,7 +27,11 @@ Usage:
 
 Exit codes:
     0  — injected (or already present, no-op)
-    1  — usage error / non-numeric value / file unreadable
+    1  — usage error / a key or value refused
+    2  — PATH cannot be written (one line naming PATH; an existing file
+         keeps its bytes — the rewrite is atomic, 0644 as every conf.d
+         file, #3535 / #3981); a file that cannot be read or decoded is
+         rc 2 too, reported as an internal error
 """
 from __future__ import annotations
 
@@ -46,6 +50,11 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "tools" / "ops"))
 from _registry_lib import is_flat_key  # noqa: E402
 from _lib_validation import threshold_number, threshold_trim  # noqa: E402  (#3457)
+# #3981: a conf.d file is a repo artifact (owner ruling #3535: 0644, read by
+# the exporter as another uid), and a rerun reads it back ("already present").
+from _lib_output import (  # noqa: E402
+    check_repo_artifact, ensure_dir, exit_on_output_write_error, write_repo_artifact,
+)
 
 
 def _is_numeric_str(s: str) -> bool:
@@ -86,6 +95,9 @@ def inject(path: Path, key: str, value: str) -> int:
         )
         return 1
 
+    # A FIFO or a standard stream would block the read below, or be
+    # truncated by the write (#3981).
+    check_repo_artifact(path, flag="PATH")
     if path.exists():
         text = path.read_text(encoding="utf-8")
         # Idempotent: skip if key already present anywhere in file.
@@ -108,28 +120,27 @@ def inject(path: Path, key: str, value: str) -> int:
             # No `defaults:` block found — prepend a fresh one. Preserves
             # existing content.
             out = ["defaults:", f"  {key}: {threshold_trim(value)}", ""] + out
-        path.write_text("\n".join(out) + "\n", encoding="utf-8", newline="\n")
+        write_repo_artifact(path, "\n".join(out) + "\n", flag="PATH")
         print(
             f"[inject_default_key] registered {key}={value} in {path}"
         )
         return 0
 
     # File doesn't exist — create a minimal one.
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"defaults:\n  {key}: {threshold_trim(value)}\n",
-        encoding="utf-8", newline="\n",
-    )
+    ensure_dir(path.parent, flag="PATH")
+    write_repo_artifact(path, f"defaults:\n  {key}: {threshold_trim(value)}\n",
+                        flag="PATH")
     print(
         f"[inject_default_key] created {path} with {key}={value}"
     )
     return 0
 
 
+@exit_on_output_write_error
 def main(argv: list[str]) -> int:
     if len(argv) != 4:
         print(
-            "usage: inject_default_key.py <path> <key> <numeric_value>",
+            "usage: inject_default_key.py PATH KEY NUMERIC_VALUE",
             file=sys.stderr,
         )
         return 1

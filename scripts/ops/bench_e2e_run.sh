@@ -108,9 +108,12 @@ rm -rf fixture/active/conf.d
 mkdir -p fixture/active/conf.d
 cp -r "$FIXTURE_SOURCE_DIR/." fixture/active/conf.d/
 # The exporter reads this tree as another uid (distroless 65532) through the
-# compose mount, and generate_tenant_fixture.py creates its files 0600
-# (da-guard write, #3339): without this the exporter skips every unreadable
-# tenant file with only a log WARN. The fixture is synthetic, nothing secret.
+# compose mount, and `cp -r` keeps each file's mode: da-guard writes conf.d
+# files 0644 (#3535), but a file an earlier version wrote 0600 keeps that mode
+# until its text changes, and a hand-curated source tree may hold any mode.
+# Without this the exporter skips every unreadable tenant file with only a
+# log WARN. The fixture is synthetic, nothing secret. (inject_default_key
+# below writes 0644 itself: a conf.d file is a repo artifact, #3981.)
 chmod -R a+rX fixture/active/conf.d
 
 # Register `bench_trigger` in the active root _defaults.yaml — the

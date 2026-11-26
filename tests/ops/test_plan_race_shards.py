@@ -541,3 +541,49 @@ def test_timings_to_stdout_is_refused(tmp_path: Path, capsys) -> None:
     out, err = capsys.readouterr()
     assert out == ""
     assert "standard output" in err and "--output" in err
+
+
+def test_a_merged_stream_that_cannot_be_written_names_the_flag(tmp_path: Path) -> None:
+    """#3981: the merged stream goes through the artifact entry. A file where
+    the output's directory should be is the write class naming --output, not
+    a `FileExistsError` traceback; a directory at the output path too."""
+    import _lib_output
+    raw = tmp_path / "raw"
+    _shard(raw, "m", "1", ['{"Action":"pass"}'], 0)
+    (tmp_path / "afile").write_text("", encoding="utf-8")
+    with pytest.raises(_lib_output.OutputWriteError) as caught:
+        prs.merge("m", ["1"], raw, tmp_path / "afile" / "merged.jsonl")
+    assert caught.value.flag == "--output"
+    (tmp_path / "adir").mkdir()
+    with pytest.raises(_lib_output.OutputWriteError) as caught:
+        prs.merge("m", ["1"], raw, tmp_path / "adir")
+    assert caught.value.flag == "--output"
+
+
+def test_a_merged_stream_to_stdout_is_refused(tmp_path: Path, monkeypatch, capsys) -> None:
+    """#3981: `timings --input` loads the merged stream whole, so it is an
+    artifact, and `--output -` is rc 2 (it used to write a file named `-`)."""
+    raw = tmp_path / "raw"
+    _shard(raw, "m", "1", ['{"Action":"pass"}'], 0)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    with pytest.raises(SystemExit) as caught:
+        prs.main(["merge", "--module", "m", "--shards", "1", "--raw-dir", str(raw),
+                  "--output", "-"])
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "standard output" in err and "--output" in err
+    assert not (tmp_path / "-").exists()
+
+
+def test_the_merged_stream_keeps_its_bytes(tmp_path: Path) -> None:
+    """The bytes as the shards hold them: no decoding, a missing final
+    newline supplied between shards."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "race-raw-m-1.jsonl").write_bytes(b'{"a":"\xff"}')
+    (raw / "race-rc-m-1").write_text("0\n", encoding="utf-8")
+    _shard(raw, "m", "2", ['{"b":1}'], 0)
+    out = tmp_path / "o.jsonl"
+    prs.merge("m", ["1", "2"], raw, out)
+    assert out.read_bytes() == b'{"a":"\xff"}\n{"b":1}\n'
