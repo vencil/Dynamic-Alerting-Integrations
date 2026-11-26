@@ -585,7 +585,7 @@ def _one_rule_pack_dir(tmp: Path) -> str:
 def _git_repo_with_one_commit(tmp: Path) -> Path:
     repo = tmp / "repo"
     repo.mkdir()
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+    env = {**_tool_env(), "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
            "GIT_CONFIG_NOSYSTEM": "1"}
     for argv in (["git", "init", "-q"],
@@ -1171,6 +1171,17 @@ ROWS: list[Row] = [
       reach="creates `_defaults.yaml` with the one key; offline",
       out_name="_defaults.yaml",
       shapes=("parent_is_file", "target_is_dir")),
+    # #3981, twenty-second batch: `merge` loads each leg's `--out` whole.
+    R("../ops/workflow_path_filter.py", "--out", "file", "artifact",
+      lambda c, out: ["--root", str(_traced_repo(c.tmp)), "assert", "--workflow",
+                      "w.yaml", "--job", "zjob", "--state", str(c.tmp / "wpf-state.json"),
+                      "--out", str(out)],
+      reach="`assert` over a git checkout with one traced workflow and a finished "
+            "atime state naming one covered file; offline",
+      out_name="trace.json",
+      readers=lambda c, out: [["--root", str(_traced_repo(c.tmp)), "merge",
+                               "--workflow", "w.yaml", "--job", "zjob", str(out)]],
+      shapes=("parent_is_file", "target_is_dir")),
     # Artifact: `cleanup` reads the keys back to know what to remove.
     R("../ops/bench_synth_tenants.py", "--state-file", "file", "artifact",
       lambda c, out: ["inject", "--tenants", "1", "--state-file", str(out)],
@@ -1233,6 +1244,49 @@ def _fake_kubectl_env(tmp: Path) -> dict[str, str]:
                    encoding="utf-8", newline="\n")
     exe.chmod(0o755)
     return {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
+_TRACED_WORKFLOW = """\
+name: w
+on:
+  pull_request:
+    paths:
+      - "zlib/**"
+      # BEGIN GENERATED path-trace (do not edit)
+      # END GENERATED path-trace
+jobs:
+  zjob:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      # BEGIN GENERATED path-trace-env job=zjob
+      # END GENERATED path-trace-env
+      - run: "true"
+      # BEGIN GENERATED path-trace-assert job=zjob
+      # END GENERATED path-trace-assert
+"""
+
+
+def _traced_repo(tmp: Path) -> Path:
+    """A git checkout with one traced workflow (`w.yaml`, job `zjob`) and
+    one tracked file it covers, and beside it `wpf-state.json`: a finished
+    atime state naming that file as read — what `assert` needs, offline.
+    Made once per directory; the rows' argv and readers call it again."""
+    repo = tmp / "wpf-repo"
+    if not repo.is_dir():
+        (repo / ".github" / "workflows").mkdir(parents=True)
+        (repo / ".github" / "workflows" / "w.yaml").write_text(_TRACED_WORKFLOW,
+                                                               encoding="utf-8")
+        (repo / "zlib").mkdir()
+        (repo / "zlib" / "a.txt").write_text("a\n", encoding="utf-8")
+        for argv in (["init", "-q"], ["add", "-A"]):
+            subprocess.run(["git", *argv], cwd=repo, check=True, capture_output=True,
+                           timeout=TIMEOUT_S, stdin=subprocess.DEVNULL, env=_tool_env())
+        (tmp / "wpf-state.json").write_text(json.dumps({
+            "root": os.path.realpath(repo),
+            "segments": [{"files": ["zlib/a.txt"], "replaced": [], "gone": []}],
+            "files": {"zlib/a.txt": {}}, "finished": {"canary": "ok"}}), encoding="utf-8")
+    return repo
 
 
 def _race_shard_dir(tmp: Path) -> Path:
@@ -1310,10 +1364,18 @@ RUNNER_FILE_VARS = ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "GITHUB_ENV",
                     "GITHUB_PATH", "GITHUB_STATE")
 
 
+# The variables that point git at a repository. A git hook that runs pytest
+# exports them; a tool or a fixture's git here must not follow them out of
+# the fixture (`git add -A` would stage into the caller's index).
+GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                     "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_PREFIX")
+
+
 def _tool_env() -> dict[str, str]:
     """The environment a tool runs in here: this process's, less the
-    runner's step files, in UTF-8."""
-    env = {k: v for k, v in os.environ.items() if k not in RUNNER_FILE_VARS}
+    runner's step files and git's location variables, in UTF-8."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in RUNNER_FILE_VARS + GIT_LOCATION_VARS}
     return {**env, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 
 
@@ -1338,8 +1400,11 @@ def test_a_tool_run_here_never_sees_the_runners_step_files(monkeypatch, tmp_path
     runner's step files, even when this process has them set."""
     for name in RUNNER_FILE_VARS:
         monkeypatch.setenv(name, str(tmp_path / name))
+    for name in GIT_LOCATION_VARS:
+        monkeypatch.setenv(name, str(tmp_path / name))
     env = _tool_env()
     assert not set(RUNNER_FILE_VARS) & set(env)
+    assert not set(GIT_LOCATION_VARS) & set(env)
     assert env["PYTHONUTF8"] == "1"
 
 
@@ -2091,6 +2156,7 @@ VIA_OTHER_CLASS: dict[Key, str] = {
 #: hide a write, which is what the two-directional lists are for.
 SPAWNS: dict[Key, tuple[str, ...]] = {
     ("../ops/bench_synth_tenants.py", "--state-file"): ("da-guard", "kubectl"),
+    ("../ops/workflow_path_filter.py", "--out"): ("git",),
     ("../ops/configmap_assemble.py", "--output"): ("da-crdecode", "da-guard", "da-read", "kubectl", "python"),
     ("dx/compile_custom_alerts.py", "--out"): ("da-guard",),
     ("dx/describe_tenant.py", "-o/--output"): ("da-guard",),
@@ -3189,18 +3255,12 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "Appends its report to $GITHUB_STEP_SUMMARY. A refused target is held "
         "by tests/ops/test_nightly_race_issue_policy.py "
         "(test_an_unwritable_step_summary_is_rc2_one_line).",
-    "../ops/workflow_path_filter.py":
-        "`generate` rewrites the traced workflows and their trace files, and "
-        "`record` / `merge` the trace file: paths under --root, which names a "
-        "checkout, not an output. A refused target is held by "
-        "tests/ops/test_workflow_path_filter.py "
-        "(test_generate_judges_every_target_before_the_first_write).",
     "dx/check_release_immutable.py":
         "Appends the publish decision to $GITHUB_OUTPUT. A refused target is held "
         "by tests/dx/test_check_release_immutable.py "
         "(test_an_unwritable_github_output_is_rc2_one_line).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 36
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 35
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
@@ -4213,6 +4273,16 @@ UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
     # tests/ops/test_inject_default_key.py
     # (test_an_existing_file_that_cannot_be_replaced_is_rc2_one_line).
     ("../ops/inject_default_key.py", "inject", "write_repo_artifact"): 1,
+    # #3981, twenty-second batch: `generate` rewrites the traced workflows and
+    # their trace files, and `record` / `merge` the trace file — paths under
+    # --root, which names a checkout, not an output (flag=None). The row runs
+    # `assert --out`. Held by tests/ops/test_workflow_path_filter.py:
+    # `cmd_generate`'s by test_generate_judges_every_target_before_the_first_write,
+    # `_write_job_record`'s write by test_record_whose_write_is_refused_is_rc2_one_line
+    # (its `ensure_dir` has no refusal test of its own).
+    ("../ops/workflow_path_filter.py", "_write_job_record", "ensure_dir"): 1,
+    ("../ops/workflow_path_filter.py", "_write_job_record", "write_repo_artifact"): 1,
+    ("../ops/workflow_path_filter.py", "cmd_generate", "write_repo_artifact"): 1,
     ("../ops/plan_race_shards.py", "_write_github_output", "write_operator_output"): 1,
     ("../ops/plan_race_shards.py", "fetch_timings", "ensure_dir"): 1,
     ("../ops/plan_race_shards.py", "fetch_timings", "write_repo_artifact"): 1,
