@@ -489,11 +489,56 @@ def _scope_pathspecs() -> list[str]:
     return listing[0]
 
 
+# A git hook that runs pytest exports these; git here must not follow them
+# out of the repository it is pointed at (`git add -A` in a fixture would
+# stage into the caller's index).
+_GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                      "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_PREFIX")
+_GIT_ENV = {k: v for k, v in os.environ.items() if k not in _GIT_LOCATION_VARS}
+
+
 def _git(cwd: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", "-c", "core.quotePath=true", *args], cwd=cwd, check=True,
-        capture_output=True, timeout=60)
+        capture_output=True, timeout=60, env=_GIT_ENV)
     return proc.stdout.decode("utf-8", errors="surrogateescape")
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _topic_paths() -> list[str]:
+    """The `paths` entries that name the topic set — the `_*` files at any
+    depth. The rest of the list is the tool's own code (#3756, 11-14 ruling
+    point 2 is open on whether it stays)."""
+    paths = TestWorkflowContract._wf()[True]["pull_request"]["paths"]
+    topic = [p for p in paths if p.startswith("**/_")]
+    assert topic, "no `**/_…` entry in paths: the comparison below would be empty"
+    return topic
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+class TestTopicSetOverTheWholeTree:
+    """#3756: the trigger's topic entries and the scope step's pathspec are
+    one set written twice. The sampled cases above pin the casings no tracked
+    file has; this compares the two over EVERY file the repository tracks, so
+    a pathspec or an entry that drifts on any real file is red."""
+
+    def test_the_pathspec_lists_exactly_what_the_topic_entries_trigger(self):
+        tracked = [f for f in _git(_REPO_ROOT, "ls-files", "-z").split("\0") if f]
+        listed = {f for f in _git(_REPO_ROOT, "ls-files", "-z", "--",
+                                  *_scope_pathspecs()).split("\0") if f}
+        assert listed, "the pathspec lists no tracked file: nothing was compared"
+        topic = _topic_paths()
+        paths = TestWorkflowContract._wf()[True]["pull_request"]["paths"]
+        triggered = {f for f in tracked if _gh_paths_trigger(topic, f)}
+        assert listed - triggered == set(), (
+            "listed by the scope step but not triggered by the topic entries")
+        assert triggered - listed == set(), (
+            "triggered by the topic entries but not listed by the scope step")
+        # Every listed file starts the workflow through the WHOLE list too (a
+        # later negation in `paths` could take one back).
+        assert {f for f in listed if not _gh_paths_trigger(paths, f)} == set()
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
