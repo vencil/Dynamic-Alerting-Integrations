@@ -176,8 +176,9 @@ def _output_error(out: Path, exc: OSError, opts: _Opts, *,
 def _warn_not_atomic(out: Path, why: str) -> None:
     print(
         f"WARN: {safe_label(str(out))}: {why}; writing it in place instead "
-        f"of atomically — a failed write keeps the old content, but a run "
-        f"killed mid-write can leave it partly written",
+        f"of atomically — a failed write keeps the old content or leaves it "
+        f"empty, but a run killed mid-write (or an I/O error while emptying "
+        f"it) can leave it partly written",
         file=sys.stderr,
     )
 
@@ -282,7 +283,9 @@ def _create_new(out: Path, content: Union[str, bytes], opts: _Opts) -> None:
     same descriptor — never by its name: between a check of the name and an
     unlink, anyone who can write the directory could put another file there,
     and POSIX has no "unlink only if it is still this inode" (CodeRabbit on
-    #4324, a second time). An empty file, never the prefix of the content."""
+    #4324, a second time). An empty file — unless the truncate fails too
+    (an I/O error; shrinking a file to zero needs no space), when the prefix
+    may stay; the error says the file may now be incomplete either way."""
     target = os.path.realpath(out)
     flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
              | getattr(os, "O_BINARY", 0))  # see _read_old
@@ -301,7 +304,7 @@ def _create_new(out: Path, content: Union[str, bytes], opts: _Opts) -> None:
             handle.write(content)
     except BaseException as exc:
         # Any failure, an I/O error or not (an encoding the text cannot take,
-        # Ctrl-C): empty, never a prefix.
+        # Ctrl-C): empty — or, if even the truncate fails, as it was left.
         try:
             os.ftruncate(fd, 0)
         except OSError:
@@ -316,8 +319,9 @@ def _create_new(out: Path, content: Union[str, bytes], opts: _Opts) -> None:
 def _put_back(fd: int, old: object) -> bool:
     """After a failed in-place write over an existing file, through the
     descriptor that write used: the old bytes back (True), or else an empty
-    file — never the prefix of the new content (False). Old bytes that could
-    not be read, or were read from another file than the one opened: empty."""
+    file (False) — or, only if that truncate fails too (an I/O error), what
+    the failed write left. Old bytes that could not be read, or were read
+    from another file than the one opened: empty."""
     try:
         os.ftruncate(fd, 0)
     except OSError:

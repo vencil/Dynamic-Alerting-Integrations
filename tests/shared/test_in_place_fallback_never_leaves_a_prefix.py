@@ -378,3 +378,56 @@ def test_a_fifo_is_neither_read_nor_rewritten_as_a_file(tmp_path):
         assert os.read(reader, 100) == b""  # nothing was written through it
     finally:
         os.close(reader)
+
+
+@pytest.mark.parametrize("case", ["create", "rewrite"])
+def test_when_even_emptying_fails_the_error_says_the_file_may_be_incomplete(
+        tmp_path, monkeypatch, case):
+    """CodeRabbit on #4324: emptying through the descriptor can fail too (an
+    I/O error), and then a prefix may stay. That is never reported as "the
+    previous file is unchanged": the error says it may now be incomplete."""
+    import errno as _errno
+    law = _law()
+    OutputNoSpaceError = law.OutputNoSpaceError
+
+    target = tmp_path / "artifact.yaml"
+    if case == "rewrite":
+        target.write_text("OLD\n", encoding="utf-8")
+        old, read_from = law._read_old(target)
+    real_fdopen = os.fdopen
+
+    class HalfThenFull:
+        def __init__(self, fd, *a, **k):
+            self._h = real_fdopen(fd, *a, **k)
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            self._h.close()
+        def write(self, text):
+            self._h.write(text[: len(text) // 2])
+            self._h.flush()
+            raise OSError(_errno.ENOSPC, "No space left on device")
+
+    def eio(*_a):
+        raise OSError(_errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(law.os, "fdopen", HalfThenFull)
+    opts = law._Opts("utf-8", "\n", 0o644, "--out", False)
+    with pytest.raises(OutputNoSpaceError) as info:
+        if case == "create":
+            # the truncate only fails on the cleanup: the create needs none
+            monkeypatch.setattr(law.os, "ftruncate", eio)
+            law._create_new(target, "N" * 100, opts)
+        else:
+            calls = []
+            real_ftruncate = os.ftruncate
+
+            def first_ok_then_eio(fd, n):
+                calls.append(n)
+                if len(calls) == 1:  # the truncate before the write
+                    return real_ftruncate(fd, n)
+                raise OSError(_errno.EIO, "Input/output error")
+            monkeypatch.setattr(law.os, "ftruncate", first_ok_then_eio)
+            law._rewrite_existing(target, "N" * 100, opts, old, read_from)
+    assert info.value.previous_kept is False
+    assert "may now be incomplete" in str(info.value)
