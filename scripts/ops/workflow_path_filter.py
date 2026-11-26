@@ -1024,6 +1024,11 @@ class Traced:
 def _env_errors(where: str, scope: str, env: object, *, python: bool = True) -> list[str]:
     """`GIT_CONFIG*` keys anywhere, and `PYTHON*` keys where the assert step
     inherits them (the workflow's and the job's `env:`)."""
+    if env is not None and not isinstance(env, dict):
+        # An expression (`env: ${{ fromJSON(...) }}`) becomes a mapping only on
+        # the runner: what it sets cannot be read here, so it is refused.
+        return [f"{where}: {scope}'s `env:` is not a literal mapping ({env!r}); "
+                "what it sets cannot be checked here"]
     keys = [str(k) for k in env] if isinstance(env, dict) else []
     errors = [f"{where}: {scope}'s `env:` sets `{k}`, which can set "
               f"`{TRUSTCTIME}` where no `run:` text shows it"

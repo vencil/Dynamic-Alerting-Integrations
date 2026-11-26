@@ -609,6 +609,9 @@ ASSERT_ONCE = "generated assert step exactly once, unchanged (found 0)"
      "sets `GIT_CONFIG_PARAMETERS`"),
     ("jobs:\n", "env:\n  PYTHONPATH: /x\njobs:\n",
      "sets `PYTHONPATH`, which changes what the assert step's `python3` runs"),
+    # An `env:` the runner expands from an expression cannot be read (CodeRabbit).
+    (TOOL_STEP, TOOL_STEP.rstrip("\n") + "\n        env: ${{ fromJSON(needs.plan.outputs.env) }}\n",
+     "step 3: the step's `env:` is not a literal mapping"),
 ])
 def test_a_job_that_only_looks_wired_is_a_finding(
         repo: Path, tmp_path: Path, capsys, old: str, new: str, message: str) -> None:
