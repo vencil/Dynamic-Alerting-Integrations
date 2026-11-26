@@ -541,6 +541,10 @@ def check_writable_artifact(path: Any, *, flag: Optional[str] = None,
     It cannot see what only the write meets — a full disk, a quota, a mode
     changed after the check — and root passes every ``os.access``."""
     p = check_repo_artifact(path, flag=flag)
+    if not p:
+        # `realpath("")` is the working directory: an empty name would pass
+        # as "a new file in a writable directory" (CodeRabbit on #4326).
+        raise OutputWriteError(p, OSError(None, "an empty path names no file"), flag=flag)
     real = os.path.realpath(p)
     if os.path.lexists(real):
         if not os.access(real, os.W_OK):

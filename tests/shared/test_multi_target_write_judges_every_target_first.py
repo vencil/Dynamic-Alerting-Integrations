@@ -167,11 +167,33 @@ def test_a_full_disk_keeps_its_own_line_when_the_batch_stops(tmp_path, monkeypat
     assert isinstance(info.value.failed, _lib_atomic_write.OutputNoSpaceError)
 
 
-def test_the_batch_returns_what_it_wrote_and_keeps_each_mode(tmp_path):
+def test_the_batch_returns_what_it_wrote(tmp_path):
     a, b = tmp_path / "a.txt", tmp_path / "sub" / "b.sh"
     assert write_repo_artifacts([(a, "A\n"), (b, "B\n", 0o755)], make_dirs=True) == [str(a), str(b)]
     assert a.read_text(encoding="utf-8") == "A\n" and b.read_text(encoding="utf-8") == "B\n"
+
+
+def test_the_batch_keeps_each_items_mode(tmp_path):
+    """POSIX mode bits only (CodeRabbit on #4326): Windows `chmod` sets just
+    the read-only flag."""
+    from _platform_fs import require_posix_modes
+    require_posix_modes()
+    b = tmp_path / "b.sh"
+    write_repo_artifacts([(b, "B\n", 0o755)])
     assert b.stat().st_mode & 0o777 == 0o755
+
+
+def test_an_empty_path_in_the_batch_stops_it_before_the_first_write(tmp_path, monkeypatch):
+    """CodeRabbit on #4326: `realpath("")` is the working directory, so an
+    empty name passed as a new file there; the write then failed on it with
+    the earlier target already rewritten."""
+    monkeypatch.chdir(tmp_path)
+    first = tmp_path / "first.txt"
+    first.write_text("OLD\n", encoding="utf-8")
+    with pytest.raises(OutputWriteError) as info:
+        write_repo_artifacts([(first, "NEW\n"), ("", "NEW\n")])
+    assert not isinstance(info.value, OutputBatchStopped)
+    assert first.read_text(encoding="utf-8") == "OLD\n"
 
 
 # --- the generators moved to the batch ---------------------------------------
