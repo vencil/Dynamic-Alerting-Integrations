@@ -32,7 +32,7 @@ from _lib_compat import require_project_root  # noqa: E402  (#2852)
 # #3981 / #4223: the output entries without PyYAML — `--check` runs as a
 # pre-commit hook in an environment that has none.
 from _lib_output import (  # noqa: E402
-    OutputWriteError, check_repo_artifact, ensure_dir, is_special_file, write_repo_artifact)
+    OutputWriteError, is_special_file, write_repo_artifacts)
 
 SCHEMA_REL = "docs/schemas/tenant-config.schema.json"
 
@@ -90,22 +90,19 @@ def main() -> int:
         return 2
     targets = [(rel, repo / rel) for rel in OUT_RELS]
 
-    # Every copy is judged before it is read or the first is written
-    # (#3981): a FIFO there would block the read (`--check` too), a
-    # directory is no file to compare or replace. Only a copy that will be
-    # replaced must also not be this process's stdin / stdout / stderr:
-    # comparing one is harmless (`--check < copy`).
-    try:
-        for _rel, path in targets:
-            if args.check:
+    # `--check` judges every copy before it reads one (#3981): a FIFO there
+    # would block the read, a directory is no file to compare. Comparing
+    # this process's stdin is harmless (`--check < copy`). The write mode's
+    # judgement is write_repo_artifacts' own, below.
+    if args.check:
+        try:
+            for _rel, path in targets:
                 if is_special_file(path):
                     raise OutputWriteError(path, OSError(None, "not a regular file"),
                                            action="read")
-            else:
-                check_repo_artifact(path)
-    except OutputWriteError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 2
+        except OutputWriteError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
 
     if args.check:
         drift = False
@@ -125,18 +122,18 @@ def main() -> int:
         return 0
 
     try:
-        # Judged above, before the first write; a write that fails later —
-        # a directory that takes no new file — still leaves the copies
-        # before it rewritten.
-        for rel, path in targets:
-            ensure_dir(path.parent)
-            # The artifact entry writes LF on every platform (CRLF would
-            # taint the portal bundle's sourcemap; see gen_recipe_contract.py).
-            write_repo_artifact(path, generated)
-            print(f"WROTE: {rel}")
+        # Every copy is judged before the first is written (#4250): a
+        # read-only one, or a directory that takes no new file, stops the
+        # run with none rewritten. What only the write meets (a full disk)
+        # still can; the error then names the copies already written. The
+        # artifact entry writes LF on every platform (CRLF would taint the
+        # portal bundle's sourcemap; see gen_recipe_contract.py).
+        write_repo_artifacts([(path, generated) for _rel, path in targets], make_dirs=True)
     except OutputWriteError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+    for rel, _path in targets:
+        print(f"WROTE: {rel}")
     return 0
 
 

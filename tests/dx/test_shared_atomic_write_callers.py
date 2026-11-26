@@ -230,7 +230,7 @@ def _setup_recipe_contract(mod, mp, root, target):
 
 CALLERS: dict[str, Caller] = {
     "tenant_id_json": Caller(
-        "gen_tenant_id_json", "scripts/tools/dx/gen_tenant_id_json.py:135",
+        "gen_tenant_id_json", "scripts/tools/dx/gen_tenant_id_json.py:131",
         None, _setup_schema_json),
     "am_duration_json": Caller(
         "gen_am_duration_json", "scripts/tools/dx/gen_am_duration_json.py:138",
@@ -266,7 +266,7 @@ CALLERS: dict[str, Caller] = {
         "generate_byo_rulepack_table", "scripts/tools/dx/generate_byo_rulepack_table.py:284",
         None, _setup_byo),
     "adr_index": Caller(
-        "generate_adr_index", "scripts/dx/generate_adr_index.py:370", "--target",
+        "generate_adr_index", "scripts/dx/generate_adr_index.py:376", "--target",
         _setup_adr_index),
     "planning_index": Caller(
         "generate_planning_index", "scripts/dx/generate_planning_index.py:525", "--target",
@@ -781,4 +781,6 @@ def test_the_caller_table_is_the_surveyed_population():
         rel, line = caller.site.rsplit(":", 1)
         src = (REPO_ROOT / rel).read_text(encoding="utf-8").splitlines()
         window = "\n".join(src[int(line) - 1: int(line) + 12])
-        assert "atomic_write_text(" in window or "write_repo_artifact(" in window, caller.site
+        # #4250: a multi-target writer reaches it through the batch entry.
+        assert ("atomic_write_text(" in window or "write_repo_artifact(" in window
+                or "write_repo_artifacts(" in window), caller.site
