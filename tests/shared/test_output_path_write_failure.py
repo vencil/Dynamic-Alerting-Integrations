@@ -1275,9 +1275,35 @@ def _files_under(scope: Path) -> frozenset[str]:
                      if p.is_symlink() or not p.is_dir())
 
 
+# The runner's step files (GitHub Actions file commands). A tool that reads
+# one from the environment appends to it with no flag naming it: a run of
+# the tool here would write into the CI step's real outputs, and the audit
+# reports that write as one no flag gave. The test's runs are hermetic.
+RUNNER_FILE_VARS = ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "GITHUB_ENV",
+                    "GITHUB_PATH", "GITHUB_STATE")
+
+
+def _tool_env() -> dict[str, str]:
+    """The environment a tool runs in here: this process's, less the
+    runner's step files, in UTF-8."""
+    env = {k: v for k, v in os.environ.items() if k not in RUNNER_FILE_VARS}
+    return {**env, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
+
+def test_a_tool_run_here_never_sees_the_runners_step_files(monkeypatch, tmp_path):
+    """Off CI these variables are unset, so a leak would only show there: a
+    reader that appends to $GITHUB_OUTPUT (`plan_race_shards plan`) is
+    reported as a write no flag gave. Pinned here with them set."""
+    for name in RUNNER_FILE_VARS:
+        monkeypatch.setenv(name, str(tmp_path / name))
+    env = _tool_env()
+    assert not set(RUNNER_FILE_VARS) & set(env)
+    assert env["PYTHONUTF8"] == "1"
+
+
 def _run(row: Row, ctx: Ctx, out: Path, *,
          audit_log: Path | None = None) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    env = _tool_env()
     if row.env is not None:
         if os.name == "nt":
             pytest.skip(f"{row.id}: its fake executable is a POSIX launcher")
@@ -2219,7 +2245,7 @@ def _read_back(row: Row, tmp: Path, stub: str) -> tuple[list[str], list[str]]:
     if row.readers is not None:
         runs.extend(row.readers(Ctx(tmp, stub), out))
     ctx = Ctx(tmp, stub)
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    env = _tool_env()
     if row.env is not None:
         env.update(row.env(ctx))
     # What the control run wrote: the files it made, and for a file flag the
