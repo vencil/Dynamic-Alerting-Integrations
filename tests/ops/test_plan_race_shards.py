@@ -482,3 +482,62 @@ def test_a_github_output_that_is_a_fifo_is_rc2_not_a_hang(tmp_path: Path, monkey
         signal.alarm(0)
         signal.signal(signal.SIGALRM, prev)
     assert caught.value.code == 2
+
+
+def test_fetch_timings_into_an_unusable_out_dir_names_the_flag(tmp_path: Path) -> None:
+    """#3981: the directory is created through ensure_dir, so a path under a
+    file is the write class naming --out-dir (rc 2 at main), not a traceback."""
+    import _lib_output
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(_lib_output.OutputWriteError) as caught:
+        prs.fetch_timings("o/r", "w.yaml", "main", blocker / "out", ["a"], runner=_gh({}))
+    assert caught.value.flag == "--out-dir"
+
+
+def test_fetch_timings_cli_with_an_unusable_out_dir_is_rc2(tmp_path: Path, monkeypatch,
+                                                           capsys) -> None:
+    monkeypatch.setattr(prs, "_run", lambda args, cwd=None: subprocess.CompletedProcess(
+        args, 1, b"", b"no network"))
+    monkeypatch.setattr(prs.fetch_timings, "__defaults__", (prs._run,))
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        prs.main(["fetch-timings", "--repo", "o/r", "--workflow", "w.yaml",
+                  "--out-dir", str(blocker / "out")])
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "check the value given to --out-dir" in err and "Traceback" not in err
+
+
+def test_a_timings_file_that_cannot_be_written_names_the_flag(tmp_path: Path) -> None:
+    """#3981: the per-module file goes through the operator entry, naming
+    --out-dir; a target that is a directory is the write class, not a
+    traceback (the directory itself was created fine)."""
+    import _lib_output
+    runs = {"workflow_runs": [{"id": 1}]}
+    gh = _gh({
+        "repos/o/r/actions/workflows/w.yaml/runs": (0, json.dumps(runs).encode()),
+        "repos/o/r/actions/runs/1/artifacts": (0, json.dumps({"artifacts": [
+            {"id": 10, "name": "race-timings-tenant-api", "expired": False}]}).encode()),
+        "repos/o/r/actions/artifacts/10/zip": (0, _zip("race-timings-tenant-api.json",
+                                                       b'{"t/a": 7}')),
+    })
+    (tmp_path / "race-timings-tenant-api.json").mkdir()
+    with pytest.raises(_lib_output.OutputWriteError) as caught:
+        prs.fetch_timings("o/r", "w.yaml", "main", tmp_path, ["tenant-api"], runner=gh)
+    assert caught.value.flag == "--out-dir"
+
+
+def test_timings_to_stdout_is_refused(tmp_path: Path, capsys) -> None:
+    """#3981: `plan --timings-dir` loads the timings file whole, so it is an
+    artifact, and an artifact cannot be standard output: `--output -` is rc 2
+    (it used to write a file named `-`)."""
+    src = tmp_path / "in.jsonl"
+    src.write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        prs.main(["timings", "--input", str(src), "--output", "-"])
+    assert caught.value.code == 2
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "standard output" in err and "--output" in err
