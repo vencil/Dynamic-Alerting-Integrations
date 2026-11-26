@@ -4280,9 +4280,6 @@ WRITER_NAMES_USED_AS_VALUES: dict[tuple[str, str], tuple[int, str]] = {
         "surfaces of the threshold registry (fixed repo paths, no flag). The "
         "write is `write_repo_artifact`'s own frame on a stack, so the audit "
         "attributes it when a row runs it; none does today."),
-    ("ops/generate_rule_pack_split.py", "ensure_dir_or_die"): (
-        1, "a truth test (`if ensure_dir_or_die:`) choosing between it and the "
-        "bare `mkdir` of the import fallback, not a write."),
 }
 
 

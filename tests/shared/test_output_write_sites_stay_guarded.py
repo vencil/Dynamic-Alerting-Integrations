@@ -273,19 +273,8 @@ NOT_GUARDED: dict[str, str] = {
         "behaviour: an unwritable carrier means 'perturb the next one', not "
         "'the operator mistyped a flag'. Wrapping it would blame "
         "`--output-dir` for a failure on a path that flag never named.",
-    "scripts/tools/ops/generate_rule_pack_split.py:166":
-        "_safe_mkdir's no-_lib_python fallback. It runs only when the "
-        "`from _lib_python import ...` at the top of that file raised "
-        "ImportError, which (measured) means PyYAML is missing — and "
-        "`_lib_io`, where output_write lives, does a bare `import yaml`, so "
-        "the wrapper is unavailable in exactly this case. Wrapping it would "
-        "turn today's graceful 'PyYAML missing => per-pack error, rc=2' into "
-        "an ImportError traceback at rc=1 before argparse runs. Unlike "
-        "_safe_write's fallback (deleted in #1789 as unreachable), this arm "
-        "IS reached: it creates edge-rules/ and central-rules/ before any "
-        "pack is parsed.",
 }
-_NOT_GUARDED_CEILING = 2
+_NOT_GUARDED_CEILING = 1
 
 # ⚠️ **What NOT_GUARDED cannot hold, so it is written here instead.** The list
 # above is exit-locked against the SCANNER: every entry must name a line the

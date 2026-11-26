@@ -51,37 +51,23 @@ from _lib_label import safe_label  # noqa: E402
 import _lib_input  # noqa: E402  (#3755: what --rule-packs-dir selects; standard library only)
 from _lib_validation import output_dir_type  # noqa: E402  (#3107; standard library only)
 
+# #3981: the writers come from `_lib_output`, which loads with the standard
+# library only (pinned by
+# `test_the_output_entries_need_neither_pyyaml_nor_lib_constants`). So the
+# no-PyYAML run has them too: an unusable `--output-dir` is rc 2 and one line
+# naming the flag there as well, and there is no unwrapped fallback left.
+from _lib_output import (  # noqa: E402
+    ensure_dir_or_die, exit_on_output_write_error, open_operator_output,
+    write_operator_output_or_die,
+)
+
 try:
-    from _lib_python import (
-        detect_cli_lang, i18n_text, ensure_dir_or_die, write_operator_output_or_die,
-    )
-    from _lib_io import (  # (#1789, #3107)
-        exit_on_output_write_error, open_operator_output, output_write,
-    )
-    _SHARED_WRITERS = True
+    from _lib_python import detect_cli_lang, i18n_text
 except ImportError:
+    # `_lib_python` reaches `_lib_io`, which does a bare `import yaml`:
+    # without PyYAML the messages fall back to English.
     detect_cli_lang = None
     i18n_text = None
-    ensure_dir_or_die = None
-    _SHARED_WRITERS = False
-
-    # #1789: `_lib_io` is imported HERE, inside the guarded block, and not at
-    # module scope with the other `_lib_*` imports. It does a bare
-    # `import yaml`, so it is unimportable in exactly the situation this
-    # fallback exists for — a module-scope import of it would turn today's
-    # graceful "PyYAML missing ⇒ per-pack error, rc=2" into an ImportError
-    # traceback at rc=1 before argparse even runs (measured). The degraded
-    # path therefore keeps its OLD behaviour exactly: no wrapping, no rc
-    # change, the raw sink raises as it always did.
-    from contextlib import nullcontext as _nullcontext
-
-    def exit_on_output_write_error(fn):
-        """No-op stand-in: without `_lib_io` there is no error class to map."""
-        return fn
-
-    def output_write(path, *, flag, action="write"):
-        """No-op stand-in with the same signature (flag is keyword-only)."""
-        return _nullcontext()
 
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error, partial_answer)
@@ -109,61 +95,20 @@ def t(zh: str, en: str) -> str:
 
 
 def _safe_write(path: str, content: str):
-    """Write one split rule file through the shared writer.
+    """Write one split rule file through the operator entry.
 
-    #1641: every path written here descends from ``--output-dir``; through the
-    shared writer an unusable path is rc=2 + one line naming that flag, not
-    a traceback at rc=1 (which reads as "edge/central metric mismatch").
-
-    #3107: the shared writer is the operator entry
-    (``write_operator_output_or_die``) — opened by the kernel, ``0o600``.
-
-    #1789: the ``if <shared writer>: … else: Path(path).write_text(…)``
-    fallback that used to sit here is GONE, because the ``else`` arm was
-    unreachable and was therefore an unguarded raw sink that no test could
-    ever cover. The chain, measured rather than argued:
-
-    * the shared writers are missing (``_SHARED_WRITERS`` false) only when
-      the imports in that ``try`` raised ``ImportError``;
-    * the modules behind that facade are stdlib-only except ``_lib_io``,
-      which does a bare ``import yaml`` — so that ImportError means PyYAML is
-      missing (a missing tools directory cannot be the cause: the unguarded
-      ``_lib_compat`` / ``_lib_exitcodes`` imports would have killed the
-      module first);
-    * PyYAML missing also makes this module's own ``yaml`` ``None``, and
-      :func:`load_rule_pack` raises ``RuntimeError`` before returning;
-    * both call sites of this function are downstream of that call.
-
-    Verified by running the tool with ``yaml`` blocked at ``sys.meta_path``:
-    every pack fails with "YAML module not available, install PyYAML" and
-    neither ``_safe_write`` call is reached.
-
-    ⛔ The guard below is what makes that reasoning FALSIFIABLE rather than
-    load-bearing. If the chain above ever stops holding — an ImportError from
-    something other than a missing PyYAML — the bare call would be
-    a ``NameError`` traceback that says nothing about what is actually wrong.
+    #1641: every path written here descends from ``--output-dir``; an
+    unusable path is rc=2 + one line naming that flag, not a traceback at
+    rc=1 (which reads as "edge/central metric mismatch"). #3107: opened by
+    the kernel, ``0o600``.
     """
-    if not _SHARED_WRITERS:
-        raise RuntimeError(
-            "shared writer unavailable: the _lib_python import failed")
     write_operator_output_or_die(path, content, flag="--output-dir")
 
 
 def _safe_mkdir(path: Path):
-    """``mkdir -p``; same error shape as :func:`_safe_write`.
-
-    ⚠️ This one KEEPS its fallback: unlike ``_safe_write`` it runs BEFORE any
-    rule pack is parsed (``process_rule_packs`` creates the two output
-    subdirectories first), so the no-PyYAML run really does reach it — in the
-    experiment above ``edge-rules/`` and ``central-rules/`` were both created
-    with the shared writers unavailable. The arm is reachable, so it stays,
-    and it stays listed as a deliberate unguarded sink in
-    ``test_output_write_sites_stay_guarded.NOT_GUARDED``.
-    """
-    if ensure_dir_or_die:
-        ensure_dir_or_die(path, flag="--output-dir")
-    else:
-        path.mkdir(parents=True, exist_ok=True)
+    """``mkdir -p``; same error shape as :func:`_safe_write`. It runs before
+    any rule pack is parsed, so the no-PyYAML run reaches it too (#3981)."""
+    ensure_dir_or_die(path, flag="--output-dir")
 
 
 # ─ Metric extraction from PromQL expressions ────────────────────────────
@@ -715,28 +660,11 @@ def process_rule_packs(
     if not dry_run:
         report_file = output_path / "validation-report.json"
         # #3107: the report is an operator output like the split files —
-        # through the operator entry, opened by the kernel, 0o600 (it was a
-        # raw `open`, 0o644 under the usual umask). The bytes are `json.dump`'s
-        # as before: no trailing newline.
-        #
-        # ⚠️ The degraded no-PyYAML path keeps the raw `open` it always had:
-        # `_lib_io` cannot be imported there, so neither the entry nor a real
-        # `output_write` exists (the stand-in at the top of this file is a
-        # `nullcontext`), and this sink is UNGUARDED in that one case while
-        # `test_output_write_sites_stay_guarded` — which reads the source,
-        # not the import that won — still scores it guarded. The degraded run
-        # reaches here (every pack fails with "YAML module not available",
-        # `except Exception` records it, and the report is still written), so
-        # an unusable `--output-dir` is a raw traceback at rc=1 there.
-        # Accepted: the alternative is a module-scope `_lib_io` import,
-        # which is what the `try` above exists to avoid.
-        if _SHARED_WRITERS:
-            with open_operator_output(str(report_file), flag="--output-dir") as f:
-                json.dump(report, f, indent=2, ensure_ascii=False)
-        else:
-            with output_write(report_file, flag="--output-dir"):
-                with open(report_file, 'w', encoding='utf-8', newline='\n') as f:
-                    json.dump(report, f, indent=2, ensure_ascii=False)
+        # through the operator entry, opened by the kernel, 0o600. The bytes
+        # are `json.dump`'s: no trailing newline. The no-PyYAML run writes it
+        # too (every pack is an error there), through the same entry (#3981).
+        with open_operator_output(str(report_file), flag="--output-dir") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
 
     return report
 
