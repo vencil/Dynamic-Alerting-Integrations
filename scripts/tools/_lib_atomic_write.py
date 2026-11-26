@@ -232,12 +232,20 @@ _UNREADABLE = object()
 _NOT_REGULAR = object()
 
 
-def _read_old(out: Path) -> object:
-    """The bytes at *out* before an in-place write: ``bytes``, ``None`` (no
-    file), ``_UNREADABLE`` (write-only) or ``_NOT_REGULAR``. Opened without
-    blocking and checked through the descriptor, so a FIFO or terminal put
-    there since the caller's stat is never read (#4324: ``read_bytes`` on a
-    pipe behind ``/dev/stdout`` waited for input that never came)."""
+def _identity(st: os.stat_result) -> "tuple[int, ...]":
+    """Which file *st* describes, as far as two fstat calls can tell: the
+    inode number alone is reused at once on some filesystems (blind review on
+    #4324), so its change time and size go with it."""
+    return (st.st_dev, st.st_ino, st.st_ctime_ns, st.st_size)
+
+
+def _read_old(out: Path) -> "tuple[object, Optional[tuple[int, ...]]]":
+    """The bytes at *out* before an in-place write — ``bytes``, ``None`` (no
+    file), ``_UNREADABLE`` (write-only) or ``_NOT_REGULAR`` — and, for bytes,
+    the ``_identity`` of the file they were read from. Opened without blocking and
+    checked through the descriptor, so a FIFO or terminal put there since the
+    caller's stat is never read (#4324: ``read_bytes`` on a pipe behind
+    ``/dev/stdout`` waited for input that never came)."""
     # O_BINARY: on Windows `os.open` is text mode without it (CRLF and 0x1A
     # rewritten); mkstemp adds it itself.
     flags = (os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
@@ -245,30 +253,36 @@ def _read_old(out: Path) -> object:
     try:
         fd = os.open(out, flags)
     except FileNotFoundError:
-        return None
+        return None, None
     except OSError:
-        return _UNREADABLE
+        return _UNREADABLE, None
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return _NOT_REGULAR
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return _NOT_REGULAR, None
         chunks = []
         while True:
             chunk = os.read(fd, 1 << 20)
             if not chunk:
-                return b"".join(chunks)
+                return b"".join(chunks), _identity(st)
             chunks.append(chunk)
     except OSError:
-        return _UNREADABLE
+        return _UNREADABLE, None
     finally:
         os.close(fd)
 
 
 def _create_new(out: Path, content: Union[str, bytes], opts: _Opts) -> None:
     """No file at *out*: create it exclusively — at the link's target when
-    *out* is a dangling symlink — and write through the descriptor. When the
-    write fails, the file this call created is removed, and only that one:
-    a file someone else created there in the meantime makes the create fail
-    with EEXIST and is never touched (CodeRabbit on #4324)."""
+    *out* is a dangling symlink — and write through the descriptor. A file
+    someone else created there in the meantime makes the create fail with
+    EEXIST and is never touched (CodeRabbit on #4324).
+
+    When the write fails, the file this call created is emptied through the
+    same descriptor — never by its name: between a check of the name and an
+    unlink, anyone who can write the directory could put another file there,
+    and POSIX has no "unlink only if it is still this inode" (CodeRabbit on
+    #4324, a second time). An empty file, never the prefix of the content."""
     target = os.path.realpath(out)
     flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
              | getattr(os, "O_BINARY", 0))  # see _read_old
@@ -276,42 +290,96 @@ def _create_new(out: Path, content: Union[str, bytes], opts: _Opts) -> None:
         fd = os.open(target, flags, 0o666)
     except OSError as exc:
         raise _output_error(out, exc, opts, previous_kept=True) from exc
-    made = os.fstat(fd)
     try:
+        # A duplicate for the file object, so `fd` stays open for the
+        # truncate below after the `with` has closed (and flushed) the copy.
         if isinstance(content, bytes):
-            handle = os.fdopen(fd, "wb")
+            handle = os.fdopen(os.dup(fd), "wb")
         else:
-            handle = os.fdopen(fd, "w", encoding=opts.encoding, newline=opts.newline)  # line-ending: ignore
+            handle = os.fdopen(os.dup(fd), "w", encoding=opts.encoding, newline=opts.newline)  # line-ending: ignore
         with handle:
             handle.write(content)
-    except OSError as exc:
-        removed = False
+    except BaseException as exc:
+        # Any failure, an I/O error or not (an encoding the text cannot take,
+        # Ctrl-C): empty, never a prefix.
         try:
-            now = os.lstat(target)
-            if (now.st_dev, now.st_ino) == (made.st_dev, made.st_ino):
-                os.unlink(target)
-                removed = True
+            os.ftruncate(fd, 0)
         except OSError:
             pass
-        raise _output_error(out, exc, opts, previous_kept=removed) from exc
+        if isinstance(exc, OSError):
+            raise _output_error(out, exc, opts, previous_kept=False) from exc
+        raise
+    finally:
+        os.close(fd)
 
 
-def _put_back(out: Path, old: object) -> bool:
-    """After a failed in-place write over an existing file: the old bytes
-    back (True), or else an empty file — never the prefix of the new content
-    (False). Old bytes that could not be read: empty."""
-    if old is not _UNREADABLE:
-        try:
-            out.write_bytes(old)  # type: ignore[arg-type]
-            return True
-        except OSError:
-            pass
+def _put_back(fd: int, old: object) -> bool:
+    """After a failed in-place write over an existing file, through the
+    descriptor that write used: the old bytes back (True), or else an empty
+    file — never the prefix of the new content (False). Old bytes that could
+    not be read, or were read from another file than the one opened: empty."""
     try:
-        with open(out, "wb"):
-            pass
+        os.ftruncate(fd, 0)
     except OSError:
-        pass
-    return False
+        return False
+    if not isinstance(old, bytes):
+        return False
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        view = memoryview(old)
+        while view:
+            view = view[os.write(fd, view):]
+        return True
+    except OSError:
+        try:
+            os.ftruncate(fd, 0)
+        except OSError:
+            pass
+        return False
+
+
+def _rewrite_existing(out: Path, content: Union[str, bytes], opts: _Opts,
+                      old: object, read_from: Optional["tuple[int, ...]"]) -> bool:
+    """Rewrite the regular file at *out* in place — truncate, write, and on
+    failure put *old* back — all through ONE descriptor, never by the name
+    again: a file someone puts at the name meanwhile is not written over
+    with old bytes that are not its own (the shape CodeRabbit found twice on
+    #4324). False, having done nothing, when what is there now is not a
+    regular file: the caller writes it as one."""
+    flags = (os.O_WRONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_BINARY", 0))  # see _read_old
+    try:
+        fd = os.open(out, flags)
+    except OSError as exc:
+        raise _output_error(out, exc, opts, previous_kept=True) from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return False
+        if read_from != _identity(st):
+            old = _UNREADABLE  # the bytes read are another file's
+        try:
+            os.ftruncate(fd, 0)
+            # A duplicate for the file object, so `fd` stays open for the
+            # put-back after the `with` has closed (and flushed) the copy.
+            if isinstance(content, bytes):
+                handle = os.fdopen(os.dup(fd), "wb")
+            else:
+                handle = os.fdopen(os.dup(fd), "w", encoding=opts.encoding, newline=opts.newline)  # line-ending: ignore
+            with handle:
+                handle.write(content)
+        except OSError as exc:
+            kept = _put_back(fd, old)
+            raise _output_error(out, exc, opts, previous_kept=kept) from exc
+        except BaseException:
+            # Not an I/O error — an encoding the text cannot take, a bad
+            # encoding name, Ctrl-C — after the truncate: the old bytes go
+            # back all the same, and it goes on as it was (blind review).
+            _put_back(fd, old)
+            raise
+        return True
+    finally:
+        os.close(fd)
 
 
 def _write_in_place(out: Path, content: Union[str, bytes], opts: _Opts, *,
@@ -341,26 +409,27 @@ def _write_in_place(out: Path, content: Union[str, bytes], opts: _Opts, *,
     # the target, and a refusal there (EFBIG, ENOSPC, EDQUOT) is raised with
     # the target untouched — #2082's "fail and keep the old file" for this
     # path too; (2) no file yet: it is created exclusively and, on failure,
-    # removed only if it is still the one created; (3) a file: its old bytes
-    # are read before it is opened, and a failure while writing it puts them
-    # back; (4) only when that also fails is it left empty, as the operator
-    # entry leaves one. A kill between the truncate and the end of the write
-    # still leaves a prefix: no code runs then.
+    # emptied through its descriptor; (3) a file: its old bytes are read
+    # first, and it is rewritten — and on failure the old bytes put back —
+    # through one descriptor, never by name again; (4) only when that also
+    # fails is it left empty, as the operator entry leaves one. A kill
+    # between the truncate and the end of the write still leaves a prefix:
+    # no code runs then.
     _preflight_beside(out, content, opts)
     # A file this run may write but not read (mode 0200) was written before
     # #4106 and still is: its old bytes are unknown, so a failed write leaves
     # it empty rather than putting anything back (blind review).
-    old = _read_old(out)
+    old, read_from = _read_old(out)
     if old is None:
         _create_new(out, content, opts)
-    else:
+    elif old is _NOT_REGULAR or not _rewrite_existing(out, content, opts, old, read_from):
+        # Became a FIFO / device since the caller looked: write it as one,
+        # and no chmod on what we did not create.
         try:
             _write_content(out, content, opts)
         except OSError as exc:
-            kept = False if old is _NOT_REGULAR else _put_back(out, old)
-            raise _output_error(out, exc, opts, previous_kept=kept) from exc
-        if old is _NOT_REGULAR:
-            return  # no chmod on what we did not create
+            raise _output_error(out, exc, opts, previous_kept=False) from exc
+        return
     try:
         os.chmod(out, opts.mode)
     except OSError as exc:

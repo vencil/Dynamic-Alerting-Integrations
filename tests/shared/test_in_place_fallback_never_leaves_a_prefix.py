@@ -90,9 +90,9 @@ def test_when_the_old_bytes_do_not_fit_either_the_file_is_left_empty(tmp_path):
 def test_a_failed_write_through_a_dangling_symlink_leaves_no_prefix(tmp_path):
     """CodeRabbit on #4324: a dangling symlink has no old bytes, and the
     in-place write creates the file at the link's target. When that write
-    fails, the file it created goes and the link stays — no prefix behind
-    the link. (The atomic replace is forced off: it is the path a dangling
-    link normally takes.)"""
+    fails, the file it created is left empty and the link stays — no prefix
+    behind the link. (The atomic replace is forced off: it is the path a
+    dangling link normally takes.)"""
     link = tmp_path / "artifact.yaml"
     symlink_or_skip("real.yaml", link)
     proc = subprocess.run(
@@ -102,7 +102,7 @@ def test_a_failed_write_through_a_dangling_symlink_leaves_no_prefix(tmp_path):
         timeout=60, env=_env())
     assert "refused:" in proc.stdout, (proc.stdout, proc.stderr)
     assert link.is_symlink()
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["artifact.yaml"], (
+    assert (tmp_path / "real.yaml").read_bytes() == b"", (
         "the prefix the failed write created at the link's target was left")
 
 
@@ -180,7 +180,7 @@ def test_a_file_created_by_someone_else_meanwhile_is_never_touched(tmp_path, mon
 
     target = tmp_path / "artifact.yaml"
     target.write_text("THEIRS\n", encoding="utf-8")
-    monkeypatch.setattr(law, "_read_old", lambda _out: None)  # looked before it existed
+    monkeypatch.setattr(law, "_read_old", lambda _out: (None, None))  # looked before it existed
     opts = law._Opts("utf-8", "\n", 0o644, "--out", False)
     with pytest.raises(OutputWriteError) as info:
         law._write_in_place(target, "OURS\n", opts, set_mode=True)
@@ -211,3 +211,170 @@ def test_the_preflight_runs_beside_the_file_the_write_reaches(tmp_path, monkeypa
     opts = law._Opts("utf-8", "\n", 0o644, "--out", False)
     law._preflight_beside(link, "content\n", opts)
     assert seen == [(tmp_path / "data").resolve()]
+
+
+def test_a_failed_create_never_acts_on_the_name(tmp_path, monkeypatch):
+    """CodeRabbit on #4324: between checking the name and unlinking it,
+    another process can put its own file there. After a failed write the
+    file this call created is emptied through its descriptor; whatever now
+    stands at the name is not touched."""
+    sys.path.insert(0, str(TOOLS))
+    import _lib_atomic_write as law
+    from _lib_output import OutputWriteError
+
+    target = tmp_path / "artifact.yaml"
+    real_fdopen = os.fdopen
+
+    class SwappedThenFull:
+        """Writes half, then — as another process would — a file of its own
+        is renamed over the name, then the write fails."""
+        def __init__(self, fd, *a, **k):
+            self._h = real_fdopen(fd, *a, **k)
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            self._h.close()
+        def write(self, text):
+            self._h.write(text[: len(text) // 2])
+            self._h.flush()
+            theirs = tmp_path / "theirs.tmp"
+            theirs.write_text("THEIRS\n", encoding="utf-8")
+            os.replace(theirs, target)
+            raise OSError(27, "File too large")
+
+    monkeypatch.setattr(law.os, "fdopen", SwappedThenFull)
+    opts = law._Opts("utf-8", "\n", 0o644, "--out", False)
+    with pytest.raises(OutputWriteError):
+        law._create_new(target, "N" * 100, opts)
+    assert target.read_text(encoding="utf-8") == "THEIRS\n"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["artifact.yaml"]
+
+
+def test_a_failed_rewrite_puts_the_old_bytes_back_only_into_its_own_file(tmp_path, monkeypatch):
+    """The same shape for a file that was there: when the write fails, the
+    old bytes go back through the descriptor the write used. A file someone
+    renamed over the name meanwhile keeps its own bytes; the file that was
+    written — still reachable by its other hard link — gets the old ones."""
+    sys.path.insert(0, str(TOOLS))
+    import _lib_atomic_write as law
+    from _lib_output import OutputWriteError
+
+    target = tmp_path / "artifact.yaml"
+    target.write_text("OLD\n", encoding="utf-8")
+    os.link(target, tmp_path / "other-name")
+    real_fdopen = os.fdopen
+
+    class SwappedThenFull:
+        def __init__(self, fd, *a, **k):
+            self._h = real_fdopen(fd, *a, **k)
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            self._h.close()
+        def write(self, text):
+            self._h.write(text[: len(text) // 2])
+            self._h.flush()
+            theirs = tmp_path / "theirs.tmp"
+            theirs.write_text("THEIRS\n", encoding="utf-8")
+            os.replace(theirs, target)
+            raise OSError(27, "File too large")
+
+    old, read_from = law._read_old(target)
+    monkeypatch.setattr(law.os, "fdopen", SwappedThenFull)
+    opts = law._Opts("utf-8", "\n", 0o644, "--out", False)
+    with pytest.raises(OutputWriteError):
+        law._rewrite_existing(target, "N" * 100, opts, old, read_from)
+    assert target.read_text(encoding="utf-8") == "THEIRS\n"
+    assert (tmp_path / "other-name").read_text(encoding="utf-8") == "OLD\n"
+
+
+def test_a_failure_that_is_not_an_os_error_still_puts_the_old_bytes_back(tmp_path):
+    """Blind review on #4324: text the encoding cannot take fails after the
+    truncate with a UnicodeEncodeError — not an OSError. The old bytes go
+    back all the same, and the error is not swallowed."""
+    sys.path.insert(0, str(TOOLS))
+    import _lib_atomic_write as law
+
+    target = tmp_path / "artifact.yaml"
+    target.write_text("OLD\n", encoding="utf-8")
+    old, read_from = law._read_old(target)
+    opts = law._Opts("utf-8", "\n", 0o644, "--out", False)
+    with pytest.raises(UnicodeEncodeError):
+        law._rewrite_existing(target, "new\udcff", opts, old, read_from)
+    assert target.read_bytes() == b"OLD\n"
+
+
+def test_old_bytes_of_another_file_at_the_same_inode_are_not_put_back(tmp_path, monkeypatch):
+    """Blind review on #4324: an inode number is reused at once on some
+    filesystems, so (st_dev, st_ino) alone does not say the file opened is
+    the one read. Here the file read is changed in between — same inode,
+    other content: what was read is not written back into it."""
+    sys.path.insert(0, str(TOOLS))
+    import _lib_atomic_write as law
+    from _lib_output import OutputWriteError
+
+    target = tmp_path / "artifact.yaml"
+    target.write_text("A-OLD\n", encoding="utf-8")
+    old, read_from = law._read_old(target)
+    with open(target, "w", encoding="utf-8") as fh:  # someone else's content now
+        fh.write("B-SOMEONE-ELSES\n")
+    real_fdopen = os.fdopen
+
+    class Full:
+        def __init__(self, fd, *a, **k):
+            self._h = real_fdopen(fd, *a, **k)
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            self._h.close()
+        def write(self, _text):
+            raise OSError(27, "File too large")
+
+    monkeypatch.setattr(law.os, "fdopen", Full)
+    opts = law._Opts("utf-8", "\n", 0o644, "--out", False)
+    with pytest.raises(OutputWriteError):
+        law._rewrite_existing(target, "N\n", opts, old, read_from)
+    assert b"A-OLD" not in target.read_bytes()
+
+
+def _law():
+    sys.path.insert(0, str(TOOLS))
+    import _lib_atomic_write as law
+    return law
+
+
+def test_a_new_file_gets_the_bytes_exactly_as_given(tmp_path):
+    """#3981 on the exclusive create: bytes go out unchanged."""
+    law = _law()
+    target = tmp_path / "artifact.bin"
+    law._create_new(target, b"a\r\nb\x00\x1a", law._Opts("utf-8", "\n", 0o644, "--out", False))
+    assert target.read_bytes() == b"a\r\nb\x00\x1a"
+
+
+def test_a_new_file_whose_text_cannot_be_encoded_is_left_empty(tmp_path):
+    """Not an OSError either: the file this call created is emptied, never a
+    prefix, and the error goes on."""
+    law = _law()
+    target = tmp_path / "artifact.yaml"
+    opts = law._Opts("utf-8", "\n", 0o644, "--out", False)
+    with pytest.raises(UnicodeEncodeError):
+        law._create_new(target, "ok " * 5000 + "\udcff", opts)
+    assert target.read_bytes() == b""
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs mkfifo")
+def test_a_fifo_is_neither_read_nor_rewritten_as_a_file(tmp_path):
+    """A FIFO put at the name after the caller looked: `_read_old` says so
+    without blocking, and `_rewrite_existing` hands it back (False) for the
+    plain write instead of truncating or putting anything back."""
+    law = _law()
+    fifo = tmp_path / "artifact.yaml"
+    os.mkfifo(fifo)
+    assert law._read_old(fifo) == (law._NOT_REGULAR, None)
+    reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)  # so a write open does not block
+    try:
+        opts = law._Opts("utf-8", "\n", 0o644, "--out", False)
+        assert law._rewrite_existing(fifo, "x\n", opts, b"OLD", None) is False
+        assert os.read(reader, 100) == b""  # nothing was written through it
+    finally:
+        os.close(reader)

@@ -83,14 +83,25 @@ def _run(monkeypatch, confd: Path, out: Path, *extra: str) -> int:
 def _forbid_in_place_write(monkeypatch, out: Path) -> None:
     """Make a truncating write of *out* itself fail, so a test can prove the
     atomic path ran (the tmp beside it is unaffected)."""
+    import _lib_atomic_write
+
     real = Path.write_text
+    real_in_place = _lib_atomic_write._write_in_place
 
     def write_text(self, *a, **k):
         if str(self) == str(out):
             raise AssertionError(f"in-place write of {out}: atomicity was dropped")
         return real(self, *a, **k)
 
+    def in_place(path, *a, **k):
+        # #4106: the in-place fallback writes through os.open / os.fdopen,
+        # not Path.write_text — guard its entry too, or this is blind to it.
+        if str(path) == str(out):
+            raise AssertionError(f"in-place write of {out}: atomicity was dropped")
+        return real_in_place(path, *a, **k)
+
     monkeypatch.setattr(Path, "write_text", write_text)
+    monkeypatch.setattr(_lib_atomic_write, "_write_in_place", in_place)
 
 
 def _is_fresh_metadata(path: Path) -> bool:
@@ -593,8 +604,17 @@ class TestSameResultAsInPlace:
                 raise PermissionError(errno.EACCES, "Permission denied", str(out))
             return real_write_text(self, *a, **k)
 
+        real_open = os.open
+
+        def open_for_writing(path, flags, *a, **k):
+            # #4106: the in-place rewrite opens the file with os.open.
+            if os.fspath(path) == str(out) and flags & (os.O_WRONLY | os.O_RDWR):
+                raise PermissionError(errno.EACCES, "Permission denied", str(out))
+            return real_open(path, flags, *a, **k)
+
         monkeypatch.setattr(gtm.os, "access", access)
         monkeypatch.setattr(Path, "write_text", write_text)
+        monkeypatch.setattr(os, "open", open_for_writing)
         rc = _run(monkeypatch, confd, out)
         monkeypatch.undo()
         err = capsys.readouterr().err
