@@ -328,7 +328,18 @@ PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanag
 
 格式規則以 [`tenant-config.schema.json`](../schemas/tenant-config.schema.json) 的 `receiverHttpUrl`／`receiverSmtpHostPort` 為準；哪些值 Alertmanager 實際接受或拒收，以共享表 `receiver_presence_cases.json` 的 `am` 欄為準（測試以 Alertmanager `config.Load` 實跑斷言）。
 
-所有類型均支援 `send_resolved: true`（預設 false），控制 alert 解除時是否發送通知。
+所有類型均支援 `send_resolved`，控制 alert 解除時是否發送通知。路由產生器不替這個欄位補預設值：有寫才原樣輸出，沒寫時用的是 Alertmanager 對該 receiver 類型的預設，各類型不同（Alertmanager 0.34.2 實測）：
+
+| 類型 | 輸出的 Alertmanager 區塊 | 沒寫 `send_resolved` 時 |
+|------|--------------------------|-------------------------|
+| **Webhook** | `webhook_configs` | `true` |
+| **Rocket.Chat** | `webhook_configs` | `true` |
+| **Microsoft Teams** | `msteams_configs` | `true` |
+| **PagerDuty** | `pagerduty_configs` | `true` |
+| **Email** | `email_configs` | `false` |
+| **Slack** | `slack_configs` | `false` |
+
+預設為 `true` 的類型，一次觸發到恢復會送出兩則通知。要不要恢復通知會影響下游時，請明寫 `send_resolved: true` 或 `false`，不要依賴預設。
 
 選填欄位的值也會檢查（[#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)）：只擋 Alertmanager 會拒收、導致整份設定 reload 失敗的值，以 Alertmanager 0.34.1 的判定為準。
 

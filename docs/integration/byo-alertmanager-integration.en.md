@@ -334,7 +334,18 @@ Required field values are format-checked too ([#2180](https://github.com/vencil/
 
 The format rules are defined by `receiverHttpUrl` / `receiverSmtpHostPort` in [`tenant-config.schema.json`](../schemas/tenant-config.schema.json); which values Alertmanager actually accepts or rejects is recorded in the `am` column of the shared table `receiver_presence_cases.json` (asserted by a test that runs Alertmanager's `config.Load`).
 
-All types support `send_resolved: true` (default false) to control if resolved alerts are sent.
+All types support `send_resolved`, which controls whether a notification is sent when an alert resolves. The route generator sets no default for it: the field is written out only when you wrote it, and when it is left out Alertmanager's default for that receiver type applies. The default differs by type (measured on Alertmanager 0.34.2):
+
+| Type | Alertmanager block written | Without `send_resolved` |
+|------|----------------------------|-------------------------|
+| **Webhook** | `webhook_configs` | `true` |
+| **Rocket.Chat** | `webhook_configs` | `true` |
+| **Microsoft Teams** | `msteams_configs` | `true` |
+| **PagerDuty** | `pagerduty_configs` | `true` |
+| **Email** | `email_configs` | `false` |
+| **Slack** | `slack_configs` | `false` |
+
+Where the default is `true`, one fire-to-resolve cycle sends two notifications. When the resolve notification matters downstream, write `send_resolved: true` or `false` yourself and do not rely on the default.
 
 Optional values are checked too ([#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)): only the values Alertmanager refuses, which make the whole reload fail, as Alertmanager 0.34.1 judges them.
 
