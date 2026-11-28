@@ -2105,6 +2105,16 @@ repos:
         # Per-line escape via `<!-- jsx-loader-compat: ignore -->` for legitimate
         # exceptions / illustrative quotes.
 
+      - id: jsx-no-dark-variant
+        name: "ADR-015: portal JSX writes no Tailwind dark: variant (dark mode is <html data-theme> alone)"
+        entry: '\bdark:[a-z]'
+        language: pygrep
+        files: ^tools/portal/src/.*\.jsx$
+        # #4290: dark mode is the data-theme attribute and the tokens of
+        # design-tokens.css alone; the loader sets no class `dark` and no
+        # Tailwind darkMode, so a `dark:` class would follow the OS setting
+        # instead of the theme toggle. The pattern needs a class name right
+        # after `dark:`, so prose ("removed its dark: classes") is not hit.
       - id: window-x-no-fallback-check
         name: Forbid module-scope `const X = window.__X;` no-fallback reads (dev-rules.md §S6, TRK-237)
         entry: python3 -X utf8 scripts/tools/lint/check_window_x_no_fallback.py --ci

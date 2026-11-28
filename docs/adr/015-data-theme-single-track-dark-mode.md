@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: portal
 created_at: 2026-04-18
-updated_at: 2026-11-24
+updated_at: 2026-11-28
 ---
 # ADR-015: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體
 
@@ -23,19 +23,19 @@ updated_at: 2026-11-24
 
 2026-11-24 修訂：改寫為現行行為。決策不變。
 
+2026-11-28 修訂：loader 改為只設 `data-theme`，第 1 條改由 pre-commit hook 強制（[#4290](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4290)）。
+
 ## 決策
 
 Portal 的 JSX 工具只有一套 dark mode 機制：`<html>` 上的 `data-theme` 屬性。深淺色的換色全部交給 `docs/assets/design-tokens.css` 裡的 token（CSS 變數）。**JSX 不寫 Tailwind 的 `dark:` 變體**（例如 `dark:bg-slate-900`）。
 
 具體規則：
 
-1. JSX 不使用 `dark:` 前綴（原定以 pre-commit lint 強制，尚未實作）。
+1. JSX 不使用 `dark:` 前綴。pre-commit hook `jsx-no-dark-variant` 擋 `tools/portal/src/` 底下 `.jsx` 裡 `dark:` 後面直接接 class 名稱的寫法，CI 的 Lint job 也跑它；註解裡提到 `dark:`（例如記錄某元件已移除 `dark:`）不受影響。
 2. 顏色寫成引用 token 的 Tailwind arbitrary value（方括號裡直接寫 CSS 值的 class，例如 `bg-[color:var(--da-color-surface)]`）；遷移舊元件時，原本的 `dark:xxx` 直接刪掉，不改寫成別的東西。
 3. 切換主題就是改 `<html data-theme="…">`，元件本身不判斷目前是深色還是淺色。
 4. Tailwind 設定不開 `darkMode`。
 5. loader 切換主題時只設 `data-theme`，不加 class `dark`。
-
-現行 loader 尚未符合第 4、5 條，見「已知限制」。
 
 ### 範例：同一個 class，跟著 `data-theme` 換色
 
@@ -59,7 +59,13 @@ Portal 的 JSX 工具只有一套 dark mode 機制：`<html>` 上的 `data-theme
 
 結果：`<html data-theme="light">` 時這張卡片的背景是 `#ffffff`，`<html data-theme="dark">` 時是 `#1e293b`。JSX 一個字都不用改，也不需要第二個 class。
 
-主題由 `docs/assets/jsx-loader.html` 決定：使用者可在 Light／Dark／System 三者間切換，選擇存在 `localStorage` 的 `__da_theme_pref`，沒有存過就跟著作業系統的 `prefers-color-scheme`。
+主題由 `docs/assets/jsx-loader.html` 決定：使用者可在 Light／Dark／System 三者間切換，選擇存在 `localStorage` 的 `__da_theme_pref`，沒有存過就跟著作業系統的 `prefers-color-scheme`。loader 切換時只設這一個屬性：
+
+```js {.quote src="docs/assets/jsx-loader.html"}
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+```
+
+loader 自己的外框（返回連結、主題按鈕、載入動畫）也用 `html[data-theme="dark"]` 選擇器換色，不用 class `dark`。
 
 ## 背景
 
@@ -90,21 +96,7 @@ Portal 的 JSX 工具只有一套 dark mode 機制：`<html>` 上的 `data-theme
 ### 已知限制
 
 - **沒有 token 的顏色不會換色。** Tailwind 內建調色盤的 class（例如 `bg-red-500 text-white`）不經過 token，深色主題下仍是同一個顏色。這類 class 目前在 `tools/portal/src/` 的 JSX 裡仍大量存在，例如狀態色、步驟完成色。本決策只解決「有 token 的畫面上兩套機制並存」，不解決「顏色根本沒進 token」；後者另案追蹤。`design-token-usage` lint 只看新增的行，抓 hex 色碼、style 裡的 px 數值、錯誤／警告 token 當前景色與 `slate-*` class，其他調色盤 class 不抓。
-- **loader 尚未符合第 4、5 條。** 現行的 `jsx-loader.html` 設定 `tailwind.config = { darkMode: 'class' }`，切到深色時同時加上 class `dark` 與 `data-theme="dark"`，因為 loader 自己的外框樣式（返回連結、主題按鈕、載入動畫）是用 `html.dark` 選擇器寫的。
-
-  ```html {.quote src="docs/assets/jsx-loader.html"}
-      document.documentElement.classList.toggle('dark', isDark);
-      document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-  ```
-
-  對 JSX 工具沒有影響，因為 JSX 裡沒有 `dark:` 變體。但這也代表：有人在 JSX 重新寫進 `dark:`，畫面上會照樣生效，不會露出問題。
-- **「不准寫 `dark:`」沒有機制守。** 目前沒有 lint 擋 `dark:`，靠 review。要確認現況，在 repo 根目錄跑：
-
-  ```bash
-  grep -rnE '\bdark:[a-z]' tools/portal/src --include='*.jsx'
-  ```
-
-  應無輸出。註解裡提到 `dark:`（例如記錄某元件已移除 `dark:`）不算違反，上面的樣式只比對 `dark:` 後面直接接 class 名稱的寫法。
+- **hook 只看 `tools/portal/src/` 的 `.jsx`。** 其他地方（例如 `docs/` 底下的 HTML 或 `.js`）寫進 `dark:`，hook 不會擋。目前這些地方也沒有 `dark:` class。
 
 ## 考慮過的替代方案
 

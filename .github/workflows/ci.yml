@@ -288,6 +288,8 @@ jobs:
           # diff-only. Same hoisting rationale as design-token-usage above.
           pre-commit run undefined-tokens-check --all-files
           pre-commit run jsx-loader-compat-check --all-files
+          # #4290: ADR-015 rule 1 — no Tailwind `dark:` variant in portal JSX.
+          pre-commit run jsx-no-dark-variant --all-files
           pre-commit run window-x-no-fallback-check --all-files
           pre-commit run dev-rules-enforcement-check --all-files
           pre-commit run portal-audience-enum-check --all-files
