@@ -71,6 +71,7 @@ on:
       # file, when the job reads something this list does not cover. Do not
       # edit between the markers.
       # BEGIN GENERATED path-trace (scripts/ops/workflow_path_filter.py generate)
+      - ".github/actions/go-build-cache/action.yml"
       - ".github/path-traces/image-ref-resolve.yaml.json"
       - ".github/workflows/image-ref-resolve.yaml"
       - ".python-version"
