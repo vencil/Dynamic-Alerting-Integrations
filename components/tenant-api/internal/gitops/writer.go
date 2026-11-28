@@ -2169,6 +2169,44 @@ func nonFiniteWrites(tenantID string, tcfg cfg.ThresholdConfig, carried []byte) 
 	return cfg.NonFiniteThresholdWrites(written)
 }
 
+// twinSpellingWrites is the refusal of a threshold the tenant's section
+// writes under both #1231 spellings (#4253): the exporter keeps one line and
+// folds the other away (config.TwinSpelledThresholds), so the second is a
+// value that is never served. Refused only where this write puts the pair
+// there — one the file on disk (prior) already holds is the rename notice it
+// always was, so an unrelated edit of that tenant is not blocked (#3227's
+// ratchet). Both sides are read by the exporter's decode (DecodeTenantBody).
+func twinSpellingWrites(tenantID, yamlContent string, prior []byte) []string {
+	body, err := cfg.DecodeTenantBody([]byte(yamlContent))
+	if err != nil {
+		return nil
+	}
+	twins := cfg.TwinSpelledThresholds(body.Tenants[tenantID])
+	if len(twins) == 0 {
+		return nil
+	}
+	var had map[string][2]string
+	if len(prior) > 0 {
+		if base, err := cfg.DecodeTenantBody(prior); err == nil {
+			had = cfg.TwinSpelledThresholds(base.Tenants[tenantID])
+		}
+	}
+	keys := make([]string, 0, len(twins))
+	for k := range twins {
+		if _, carried := had[k]; !carried {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		p := twins[k]
+		out = append(out, fmt.Sprintf("tenant=%s: %q and %q are one threshold (#1231 rename) — only %q is served; "+
+			"keep one spelling (%q) and delete the other", tenantID, p[0], p[1], p[0], k))
+	}
+	return out
+}
+
 // validate checks an incoming tenant YAML body before it is written.
 //
 // yamlContent is the tenant-only document the portal sends (the real
@@ -2291,6 +2329,9 @@ func validateReplacingOver(configDir, tenantID, tenantFilePath, yamlContent stri
 	// — the batch merges (WriteBatch, WritePRBatch's in-lock merge) reach no
 	// other check of it (validateBodyOnly is the full-body paths' pre-flight).
 	errs = append(errs, nonFiniteWrites(tenantID, tcfg, carried)...)
+	// #4253: one threshold under both #1231 spellings, where this write puts
+	// the pair there; a pair the file already holds stays a notice.
+	errs = append(errs, twinSpellingWrites(tenantID, yamlContent, baseRaw)...)
 
 	// B2-wide eol-expansion guard (ADR-024 §8) at the SHARED write choke point, so
 	// PutTenant + batch full-config writes are covered, not just the /custom-alerts

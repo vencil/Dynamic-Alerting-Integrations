@@ -127,21 +127,22 @@ func TestNormalizeKeys(t *testing.T) {
 			in:   map[string]any{`x{q=~"A,B"}`: 1, `x{q=~"A"}`: 2},
 			want: map[string]any{`x{q=~"A,B"}`: 1, `x{q=~"A"}`: 2},
 		},
-		"both #1231 spellings: kept, the retired one is a duplicate": {
+		// #4253: the #1231 fold (normalizeKeysTaking) keeps the canonical
+		// line the layer takes and records the retired one, as written.
+		"both #1231 spellings: folded, the retired one is a duplicate": {
 			in:   map[string]any{retiredBase: 1, "mysql_threads_running": 2},
-			want: map[string]any{retiredBase: 1, "mysql_threads_running": 2},
+			want: map[string]any{"mysql_threads_running": 2},
 			dups: map[string][]string{"mysql_threads_running": {retiredBase}},
 		},
 		"both #1231 spellings of a dimensional key, re-spelled": {
-			in:      map[string]any{`mysql_cpu{b="2",a="1"}`: 1, `mysql_threads_running{a="1", b="2"}`: 2},
-			want:    map[string]any{`mysql_cpu{a="1", b="2"}`: 1, `mysql_threads_running{a="1", b="2"}`: 2},
-			written: map[string]string{`mysql_cpu{a="1", b="2"}`: `mysql_cpu{b="2",a="1"}`},
-			dups:    map[string][]string{`mysql_threads_running{a="1", b="2"}`: {`mysql_cpu{b="2",a="1"}`}},
+			in:   map[string]any{`mysql_cpu{b="2",a="1"}`: 1, `mysql_threads_running{a="1", b="2"}`: 2},
+			want: map[string]any{`mysql_threads_running{a="1", b="2"}`: 2},
+			dups: map[string][]string{`mysql_threads_running{a="1", b="2"}`: {`mysql_cpu{b="2",a="1"}`}},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, s := normalizeKeys(tc.in)
+			got, s := normalizeKeysTaking(tc.in, levelTakes)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("map = %v, want %v", got, tc.want)
 			}

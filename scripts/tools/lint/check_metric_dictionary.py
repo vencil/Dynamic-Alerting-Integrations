@@ -17,7 +17,6 @@ stale 或 undocumented entry 會導致遷移建議不完整。
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Set
@@ -189,16 +188,19 @@ def check_dictionary_coverage(
 
 
 def rule_pack_alert_names() -> Set[str]:
-    """rule-packs/ 裡所有告警名。"""
-    names: Set[str] = set()
+    """rule-packs/ 裡所有告警名，照 Prometheus 的 rule loader 讀出來的
+    （#4357：不掃 YAML 原文——flow mapping、帶引號的名稱讀錯，註解與 block
+    scalar 裡的 ``- alert:`` 文字讀成告警）。loader 拒收任何一個 pack 時
+    丟 ``RuleFilesRefused``。"""
     # #3471: the rule packs are the one declaration's; the registry beside
     # them is declared no rule file and holds no alert.
     paths = (_lib_consumer_read.RULE_PACKS.files_in(RULE_PACKS_DIR)
              if RULE_PACKS_DIR.is_dir() else [])
-    for path in paths:
-        names.update(re.findall(r"^\s*-\s*alert:\s*(\S+)",
-                                path.read_text(encoding="utf-8"), re.M))
-    return names
+    return {str(rule["alert"])
+            for rule_file in _lib_consumer_read.prometheus_rule_files(paths)
+            for group in rule_file.groups
+            for rule in group.get("rules") or []
+            if isinstance(rule, dict) and "alert" in rule}
 
 
 _READERS_INDEX: "Dict[tuple, dict]" = {}

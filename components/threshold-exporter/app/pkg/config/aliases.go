@@ -122,6 +122,290 @@ func canonicalKeyFor(key string) (string, bool) {
 	return key, false
 }
 
+// spellingFold is what foldSpellings did to one threshold of one map: the
+// spelling the kept line was written in when it was not the canonical one
+// (written), and the spelling of the other line it folded away when the map
+// wrote both (folded). Keyed by the canonical key.
+type spellingFold struct{ written, folded string }
+
+// foldSpellings is m with every retired #1231 spelling folded into its
+// canonical key (#4253) — the one rule for which line of a map a threshold
+// is: with one spelling written, that line, now under the canonical key;
+// with both, the line the layer adopts (adopts: the layer's own reading — a
+// refused, null or non-finite value is a line it does not take), and the
+// canonical one when it adopts both or neither. The folds record, per
+// canonical key, what was written, for every reader that reports a retired
+// spelling. m itself, and nil, when m writes no retired spelling: m is never
+// written to.
+func foldSpellings[V any](m map[string]V, adopts func(key string, v V) bool) (map[string]V, map[string]spellingFold) {
+	var out map[string]V
+	var folds map[string]spellingFold
+	for k := range m {
+		if !touchesAlias(k) {
+			continue
+		}
+		canon, isAlias := canonicalKeyFor(k)
+		if !isAlias {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]V, len(m))
+			for k2, v2 := range m {
+				out[k2] = v2
+			}
+			folds = map[string]spellingFold{}
+		}
+		delete(out, k)
+		av := m[k]
+		cv, both := m[canon]
+		switch {
+		case !both:
+			out[canon] = av
+			folds[canon] = spellingFold{written: k}
+		case adopts(canon, cv) || !adopts(k, av):
+			folds[canon] = spellingFold{folded: k}
+		default:
+			out[canon] = av
+			folds[canon] = spellingFold{written: k, folded: canon}
+		}
+	}
+	if out == nil {
+		return m, nil
+	}
+	return out, folds
+}
+
+// valueFold is ScheduledValue.fold: what the decode's #1231 fold did to the
+// line (#4253).
+type valueFold struct {
+	// written is the retired spelling the line was written in; "" for the
+	// canonical one.
+	written string
+	// folded is the spelling of the line folded away beside it — the same
+	// map wrote both — and "" when it wrote one.
+	folded string
+	// other is the line folded away, as written (nil when there was none):
+	// for the readers that name it (a value not served), and for when this
+	// line's `expires:` passes — it is then as deleted, and the other line,
+	// when the layer takes it, is what the layer writes (filterBodies).
+	other *ScheduledValue
+}
+
+// foldBodies folds every body of m (foldSpellings, #4253), in place: a line
+// the layer takes is a threshold-shaped one (isThresholdShaped — a number,
+// a `disable`, a schedule); a value no reader takes is no line. The kept
+// line carries what was folded (valueFold).
+func foldBodies(m map[string]map[string]ScheduledValue) bool {
+	twins := false
+	for name, body := range m {
+		folded, folds := foldSpellings(body, func(_ string, sv ScheduledValue) bool { return isThresholdShaped(sv) })
+		if folds == nil {
+			continue
+		}
+		for canon, f := range folds {
+			sv := folded[canon]
+			vf := &valueFold{written: f.written, folded: f.folded}
+			if f.folded != "" {
+				other := body[f.folded]
+				if f.written == "" { // the line folded away is the retired one
+					other.fold = &valueFold{written: f.folded}
+				}
+				vf.other = &other
+			}
+			sv.fold = vf
+			folded[canon] = sv
+		}
+		m[name] = folded
+		twins = twins || anyTwin(folds)
+	}
+	return twins
+}
+
+// anyTwin reports whether folds folded a line away beside another
+// spelling's.
+func anyTwin(folds map[string]spellingFold) bool {
+	for _, f := range folds {
+		if f.folded != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// levelTakes is foldSpellings' "the layer takes this line" for a raw value
+// of a subtree `_defaults.yaml` level or of a `tenants:` / `profiles:` body
+// (the walker's maps): written and threshold-shaped (subtreeLevelRead) —
+// isThresholdShaped on what the typed decode makes of it.
+func levelTakes(key string, raw any) bool {
+	_, written, shaped := subtreeLevelRead(key, raw)
+	return written && shaped
+}
+
+// rootTakesRaw is levelTakes for the root `_defaults.yaml`'s raw values:
+// one the root decode does not refuse (rootRefusesRaw), as rootTakes reads
+// the typed decode's.
+func rootTakesRaw(key string, raw any) bool { return raw != nil && !rootRefusesRaw(key, raw) }
+
+// normalizeKeysTaking is normalizeKeys, then the #1231 twin rule with takes,
+// the layer's reading (foldSpellings, #4253): of two spellings of one
+// threshold in the map, the line the layer does not take is no line, and the
+// canonical one wins when it takes both or neither. The walker's maps are
+// what the layers wrote (/effective names a line as written), so the line
+// kept keeps its spelling — only the one that loses goes, recorded as a dup
+// (a second spelling of a threshold the map also writes, not served) as the
+// layer wrote it. The dimensional re-spelling comes first, so two spellings
+// whose labels are written differently are one threshold to the rule.
+func normalizeKeysTaking[V any](m map[string]V, takes func(string, V) bool) (map[string]V, *keySpellings) {
+	normalized, s := normalizeKeys(m)
+	_, folds := foldSpellings(normalized, takes)
+	var out map[string]V
+	for canon, f := range folds {
+		if f.folded == "" {
+			continue // a lone retired spelling is a line as written
+		}
+		if out == nil {
+			out = make(map[string]V, len(normalized))
+			for k, v := range normalized {
+				out[k] = v
+			}
+		}
+		delete(out, f.folded)
+		loser := s.writtenOf(f.folded)
+		if s != nil {
+			delete(s.written, f.folded)
+		}
+		// A null is no line (#2418): beside the other spelling it is no
+		// duplicate.
+		if nullThreshold(f.folded, any(normalized[f.folded])) {
+			continue
+		}
+		served := canon
+		if f.written != "" {
+			served = f.written
+		}
+		if s == nil {
+			s = &keySpellings{}
+		}
+		s.addDup(served, loser)
+	}
+	if s != nil && len(s.written) == 0 {
+		s.written = nil
+	}
+	if out == nil {
+		return normalized, s
+	}
+	return out, s
+}
+
+// TwinSpelledThresholds is, for one decoded tenant body (DecodeTenantBody),
+// every threshold it writes under both #1231 spellings (#4253) — canonical
+// key → the two spellings as written, the kept line's first. For the
+// tenant-api write gate, which refuses such a pair only where the write
+// puts it there.
+func TwinSpelledThresholds(section map[string]ScheduledValue) map[string][2]string {
+	var out map[string][2]string
+	for k, sv := range section {
+		if sv.fold == nil || sv.fold.folded == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string][2]string{}
+		}
+		out[k] = [2]string{sv.writtenAs(k), sv.fold.folded}
+	}
+	return out
+}
+
+// TenantAsWritten is one tenant's decoded map (canonical keys, #4253) keyed
+// as the layers wrote its lines: each line under its own spelling, and the
+// line the decode folded away beside another spelling's back beside it — the
+// map the decode read, for the readers that name a tenant's lines (da-guard's
+// keys, unserved values, disable effects, schedules). m itself when no line
+// was folded.
+func TenantAsWritten(m map[string]ScheduledValue) map[string]ScheduledValue {
+	folded := false
+	for _, sv := range m {
+		if sv.fold != nil {
+			folded = true
+			break
+		}
+	}
+	if !folded {
+		return m
+	}
+	out := make(map[string]ScheduledValue, len(m)+1)
+	for k, sv := range m {
+		if sv.fold == nil {
+			out[k] = sv
+			continue
+		}
+		out[sv.writtenAs(k)] = sv
+		if sv.fold.other != nil {
+			out[sv.fold.folded] = *sv.fold.other
+		}
+	}
+	return out
+}
+
+// writesRetired reports whether sv's line, or the line the decode folded
+// away beside it, is written in a retired spelling (#4253) — one retired key
+// the tenant writes either way.
+func writesRetired(sv ScheduledValue) bool {
+	if sv.fold == nil {
+		return false
+	}
+	if sv.fold.written != "" {
+		return true
+	}
+	_, isAlias := canonicalKeyFor(sv.fold.folded)
+	return isAlias
+}
+
+// FoldedLine is the other spelling's line the decode folded away beside sv's
+// (#4253) — a line the tenant layer wrote and does not serve — with the
+// spelling it was written in; ok is false when there is none.
+func FoldedLine(sv ScheduledValue) (spelling string, line ScheduledValue, ok bool) {
+	if sv.fold == nil || sv.fold.other == nil {
+		return "", ScheduledValue{}, false
+	}
+	return sv.fold.folded, *sv.fold.other, true
+}
+
+// WrittenSpellingOf is the spelling the tenant wrote its line of threshold
+// canon in, overrides being its decoded map (keyed canonically, #4253): the
+// retired one where that is the line the tenant layer kept. canon itself
+// when the tenant writes no line of it.
+func WrittenSpellingOf(overrides map[string]ScheduledValue, canon string) string {
+	if sv, ok := overrides[canon]; ok {
+		return sv.writtenAs(canon)
+	}
+	return canon
+}
+
+// writtenAs is the spelling sv's line was written in, key being the
+// (canonical) key it is held under.
+func (sv ScheduledValue) writtenAs(key string) string {
+	if sv.fold != nil && sv.fold.written != "" {
+		return sv.fold.written
+	}
+	return key
+}
+
+// mergeRootFold carries partial's fold record of root key k into merged, as
+// the merge carries the value: the later file's line replaces the earlier
+// one's, and with it what was folded beside it.
+func mergeRootFold(merged *ThresholdConfig, partial ThresholdConfig, k string) {
+	f, folded := partial.rootFolds[k]
+	if !folded {
+		delete(merged.rootFolds, k)
+		return
+	}
+	if merged.rootFolds == nil {
+		merged.rootFolds = map[string]spellingFold{}
+	}
+	merged.rootFolds[k] = f
+}
+
 // legacySpellingFor is the inverse of canonicalKeyFor over the same shapes:
 // given a canonical-spelled key, it returns the deprecated spelling (if the
 // key's head is an alias target, exactly or with `_critical`). Used by
@@ -240,8 +524,10 @@ func canonicalizeOptionalOverrides(keys []string) map[string]struct{} {
 // views (GET /{id}) keep showing the tenant's file verbatim.
 func canonicalizeOverrides(overrides map[string]ScheduledValue) (map[string]ScheduledValue, int) {
 	deprecated := 0
-	for k := range overrides {
-		if _, isAlias := canonicalKeyFor(k); isAlias {
+	for k, sv := range overrides {
+		// #4253: the decode folded a retired spelling into its canonical
+		// key; the line keeps what it was written as (valueFold).
+		if _, isAlias := canonicalKeyFor(k); isAlias || writesRetired(sv) {
 			deprecated++
 		}
 	}
@@ -422,35 +708,29 @@ func overlayAcrossSpellings[V any](dst, src map[string]V) {
 	}
 }
 
-// WithoutDoubleSpelledThresholds returns overrides without every key whose
-// threshold the same map also writes under another spelling (#2368) — m
-// itself when there is none. For da-guard's redundant-override input: with
-// a tenant writing both `mysql_threads_running` and `mysql_cpu`, deleting
-// either one serves the OTHER one's value (or, for the losing spelling,
-// nothing changes), and no "inherited value" MergedDefaults can hold
-// answers that — so neither key is judged.
-func WithoutDoubleSpelledThresholds(m map[string]any) map[string]any {
-	var drop []string
-	var buf [2]string
-	for k := range m {
-		for _, s := range otherSpellings(k, &buf) {
-			if _, both := m[s]; both {
-				drop = append(drop, k)
-				break
-			}
+// JudgeableTenantOverrides is TenantOverridesRaw without every threshold the
+// tenant's block writes twice (#2368, #4253): deleting the line kept serves
+// the other one's value, which no inherited value can stand for — so the
+// redundant-override check judges none of them.
+func (ec *EffectiveConfig) JudgeableTenantOverrides() map[string]any {
+	if len(ec.tenantTwins) == 0 {
+		return ec.TenantOverridesRaw
+	}
+	out := make(map[string]any, len(ec.TenantOverridesRaw))
+	for k, v := range ec.TenantOverridesRaw {
+		if _, twice := ec.tenantTwins[k]; !twice {
+			out[k] = v
 		}
 	}
-	if len(drop) == 0 {
-		return m
-	}
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	for _, k := range drop {
-		delete(out, k)
-	}
 	return out
+}
+
+// tenantDups is the tenant layer's dups (keySpellings), nil when none.
+func tenantDups(s *keySpellings) map[string][]string {
+	if s == nil {
+		return nil
+	}
+	return s.dups
 }
 
 // hasAliasEquivalent reports whether overrides already contains key under ANY
