@@ -500,7 +500,9 @@ _UNREACHED: "dict[str, str]" = {
     **{f"_grar_parse.py:_apply_tenant_entries#{n}":
        "the `duplicate_tenant` record's text (#2315 refuses the tree first, "
        "with `duplicate_tenant_errors`' line); see the note above" for n in (2, 3, 4)},
-    "_grar_parse.py:load_tenant_tree#1":
+    # #4368: the second call of load_tenant_tree since the enforced-match
+    # warning's (the first, printed by the `enforced_migrated` case) went in.
+    "_grar_parse.py:load_tenant_tree#2":
         "the `domain_policy_out_of_scope` record's text (the printed line is "
         "`check_policy_scope`'s); see the note above",
     "_grar_parse.py:policy_level_source#2":

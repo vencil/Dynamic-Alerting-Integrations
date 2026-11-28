@@ -100,6 +100,7 @@
     "#2504 - a null key in a routes match (~, null, an empty `? ` key) is no label name: the entry is rejected in every reader, alone or beside a valid label. The generator keeps that key (as None) instead of dropping it as its loader drops null keys elsewhere, so it no longer renders the route on the other labels alone; a critical -> pagerduty route that carries one is no escalation.",
     "enforced_group_by_invalid (#2503, per tree): [file, field, kind] per bad group_by element of the `_routing_enforced` route(s) the generator renders - read from the root `_` files in name order, a later one with `enabled: true` (as PyYAML reads it: `yes` / `on` too) replacing an earlier; judged only with a truthy receiver that the receiver contract accepts (_grar_merge.build_receiver_config) and a non-empty group_by list, the `{{tenant}}` shape once per routed tenant AFTER substitution. field is `_routing_enforced.group_by[i]`, or `_routing_enforced (<tenant>).group_by[i]` for the `{{tenant}}` shape; file is the root file the enforced block came from. The generator's --strict ERROR (it names no file, so the Python half compares field and kind), da-guard's routing_group_by_invalid with an empty tenant and Field <file>:<field>. The --policy domain allowlist is not applied (load_tenant_tree does not know it).",
     "#2989 - an enabled `_routing_enforced` whose `match` is written but is not a list of non-empty strings as PyYAML reads them (a mapping `{severity: critical}`, the routes[i].match spelling, or `{}`; a string; a number; a list holding 1, ~, yes, a mapping, '' or a string that is only whitespace as Python's str.strip() reads it, U+001C-U+001F included) is not enabled in any reader: a platform row [routing_enforced_match_invalid, file, '_routing_enforced.match'] - the generator's blocking `WARN ... skipping` (--validate fails), da-guard's error with an empty tenant. An earlier root file's enabled block stays in force (its group_by is still judged); the refused block's own group_by is not judged (no route is rendered from it). A null match or [] means no matcher, as an absent one; a disabled block is not judged. Before, the generator dropped such a match and the NOC route received every alert.",
+    "#4368 - an enabled `_routing_enforced` in force whose `match` holds a matcher on da_migrated (the label only migrate-rule's alerts carry; any operator or value, an element of several matchers included) is rendered as written: a platform row [routing_enforced_match_migrated, file, '_routing_enforced.match[<i>]'] per such element - the generator's WARN that never blocks. The name as a value (alertname=\"da_migrated\") is not judged. No Go column: da-guard never judged it (its routing checks were deleted with ADR-036 step 3, #2905).",
     "refused (#2341): null, or why the generator renders NOTHING for the tenant although it is declared - 'invalid_tenant_id' = its id is refused (tenant_ids, below; checked first); 'routing_not_mapping' = its `_routing` (tenant file over the root platform overlay), as PyYAML reads it, is neither a mapping nor a disabling string (disable / disabled / off / false, a YAML string): `slack`, a list, null, an unquoted false / off / no (a YAML boolean; a quoted 'off' disables). targets is then null. The generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's routing_not_mapping.",
     "tenant_ids (#2341 R8, ADR-035): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go tenantid.Valid) and accepts. The rule is the tenant-config schema's definitions.tenantId, a DNS-1123 label: 1-63 characters of [a-z0-9-], starting and ending with [a-z0-9] - so UPPER, `_`, a leading or trailing `-` and 64 characters are refused. A declared tenant with a refused id makes the generator refuse the WHOLE tree in every mode (ADR-035 §3: rc 1, nothing written); within the tree it renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - load_tenant_tree's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>). schema_search_accepts: ids the schema's `propertyNames` check (Python jsonschema; JSON Schema `pattern` is a SEARCH and Python's `$` matches before a trailing newline) lets through although every decoded-key reader refuses them - the accepted gap ADR-035 §Consequences and known limits names; Python asserts both halves.",
     "#2341 - a disabling string is decided as _lib_validation.routing_disabled decides it (is_disabled before #3141, which moved threshold rows to the exporter\u0027s reading): Python str.strip() (U+001C-U+001F are whitespace too) then lower() on the remaining text, which must be ASCII (U+0130 'I with dot' never lowers to 'i'): `\"\\x1coff\"` disables, `\"d\\u0130sable\"` is routing_not_mapping.",
@@ -5074,6 +5075,42 @@
           "routing_enforced_match_invalid",
           "_w2.yaml",
           "_routing_enforced.match"
+        ]
+      ],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-enforced-match-migrated-label-4368",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n",
+        "_noc.yaml": "_routing_enforced:\n  enabled: true\n  match: ['severity=\"critical\"', '{team=\"noc\", da_migrated!=\"true\"}', 'alertname=\"da_migrated\"']\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n"
+      },
+      "platform": [
+        [
+          "routing_enforced_match_migrated",
+          "_noc.yaml",
+          "_routing_enforced.match[1]"
         ]
       ],
       "expect": {

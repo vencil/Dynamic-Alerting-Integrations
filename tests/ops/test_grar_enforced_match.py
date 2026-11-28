@@ -11,6 +11,10 @@ validate-config 回 1；輸出模式照常產出、結束碼不變。較早的�
 `match` 缺或 null 仍是「不加 matcher」。跨語言判定由
 tests/shared/routing_policy_parity_matrix.json 的 `routing-enforced-match-*-2989`
 四棵樹釘住；這裡釘 CLI 與各讀者的行為。租戶 id 都是 fixture 名稱（CLAUDE.md #9）。
+
+#4368（檔尾 `TestMigratedLabel`）：生效中區塊的 `match` 有 matcher 寫在
+`da_migrated`（`MIGRATED_LABEL`，只有 migrate-rule 的告警帶）上時，給
+`routing_enforced_match_migrated`：WARN、`blocks: never`，路由照寫的產出。
 """
 from __future__ import annotations
 
@@ -28,6 +32,7 @@ sys.path.insert(0, str(REPO / "scripts" / "tools"))
 sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
 from _grar_parse import load_tenant_tree  # noqa: E402
 from _grar_routes import _build_enforced_routes, enforced_match_invalid  # noqa: E402
+from _grar_routes import MIGRATED_LABEL, enforced_match_migrated_label  # noqa: E402
 
 # validate-config 的 profiles 列經 da-guard 讀租戶（conftest 以 `go build` 建出）。
 pytestmark = pytest.mark.usefixtures("da_guard_env")
@@ -219,3 +224,84 @@ def test_enforced_match_invalid(value, want):
     assert enforced_match_invalid({"match": value}) is want
     assert enforced_match_invalid({}) is False
     assert enforced_match_invalid("not a block") is False
+
+
+# ── #4368: a matcher on MIGRATED_LABEL in the enforced block in force ──────
+_MIGRATED_KIND = "routing_enforced_match_migrated"
+_MIGRATED_LINE = f"is a matcher on {MIGRATED_LABEL}"
+
+# (match as YAML flow, the [index, operator] rows): every shape the
+# Alertmanager loader (da-read, `--validate`) reads, plus a quoted name.
+_MIGRATED_NAMED = [
+    (f"['{MIGRATED_LABEL}=\"true\"']", [[0, "="]]),
+    (f"['{MIGRATED_LABEL}=true']", [[0, "="]]),
+    (f"['{{{MIGRATED_LABEL}=\"true\"}}']", [[0, "="]]),
+    (f"['severity=\"critical\"', 'a=\"b\",{MIGRATED_LABEL}=\"true\"']", [[1, "="]]),
+    (f"[' {MIGRATED_LABEL} = \"true\" ']", [[0, "="]]),
+    (f"['{MIGRATED_LABEL}=\"\"']", [[0, "="]]),
+    (f"['{MIGRATED_LABEL}!=\"true\"', '{MIGRATED_LABEL}!~\"t.*\"']", [[0, "!="], [1, "!~"]]),
+    (f"['{MIGRATED_LABEL}=~\".+\"']", [[0, "=~"]]),
+    (f"['\"{MIGRATED_LABEL}\"=\"true\"']", [[0, "="]]),
+]
+# The name elsewhere than a matcher's name: not judged.
+_MIGRATED_NOT_NAMED = [
+    "['severity=\"critical\"']", f"['x_{MIGRATED_LABEL}=\"true\"']",
+    f"['{MIGRATED_LABEL}_x=\"true\"']", f"['alertname=\"{MIGRATED_LABEL}\"']",
+    f"['alertname=\"a,{MIGRATED_LABEL}=b\"']",
+]
+
+
+def _migrated_rows(d: Path) -> list[tuple]:
+    got = load_tenant_tree(str(d))
+    return [(w.kind, w.severity, w.blocks, w.file, w.field) for w in got.schema_warnings
+            if getattr(w, "kind", None) == _MIGRATED_KIND]
+
+
+class TestMigratedLabel:
+    @pytest.mark.parametrize("match,want", _MIGRATED_NAMED, ids=[m for m, _ in _MIGRATED_NAMED])
+    def test_named_in_any_shape(self, tmp_path, match, want):
+        """The issue's case and its other spellings: one warning per element."""
+        d = _tree(tmp_path, _enforced(match))
+        assert enforced_match_migrated_label(yaml.safe_load(_enforced(match))["_routing_enforced"]) \
+            == [tuple(r) for r in want]
+        assert _migrated_rows(d) == [
+            (_MIGRATED_KIND, "warning", "never", "_noc.yaml", f"_routing_enforced.match[{i}]")
+            for i, _op in want]
+
+    @pytest.mark.parametrize("match", _MIGRATED_NOT_NAMED)
+    def test_not_named(self, tmp_path, match):
+        assert _migrated_rows(_tree(tmp_path, _enforced(match))) == []
+
+    def test_rendered_as_written_and_never_blocks(self, tmp_path):
+        """A warning: `--validate --strict` passes and names it; the route keeps the
+        matcher (#4355: it is not mistaken for the migrated shadow route)."""
+        written = f'{MIGRATED_LABEL}="true"'
+        d = _tree(tmp_path, _enforced(f"['{MIGRATED_LABEL}=\"true\"']"))
+        assert [r.get("matchers") for r in _enforced_routes(d)] == [[written]]
+        p = _gar(d, "--validate", "--strict")
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert f"_routing_enforced in _noc.yaml: match[0] {_MIGRATED_LINE} (=)" in p.stdout + p.stderr
+
+    def test_judged_on_the_block_in_force(self, tmp_path):
+        """Root `_` files in name order, the later enabled block in force: an earlier
+        one replaced is not judged; the later one is, under its own file."""
+        named = _enforced(f"['{MIGRATED_LABEL}=\"true\"']")
+        clean = _enforced("['severity=\"critical\"']")
+        assert _migrated_rows(_tree(tmp_path / "a", clean, defaults_extra=named)) == []
+        assert [r[3] for r in _migrated_rows(_tree(tmp_path / "b", named, defaults_extra=clean))] \
+            == ["_noc.yaml"]
+
+    def test_tenant_shape_is_judged(self, tmp_path):
+        d = _tree(tmp_path, _enforced(f"['{MIGRATED_LABEL}=\"true\"']",
+                                      url="https://noc.example.com/{{tenant}}"))
+        assert [r[4] for r in _migrated_rows(d)] == ["_routing_enforced.match[0]"]
+
+    def test_disabled_or_refused_block_is_not_judged(self, tmp_path):
+        """Off: nothing said. A refused `match` (#2989) is that finding alone."""
+        named = _enforced(f"['{MIGRATED_LABEL}=\"true\"']")
+        assert _migrated_rows(_tree(tmp_path / "a", named.replace("enabled: true",
+                                                                  "enabled: false"))) == []
+        refused = _enforced(f"['{MIGRATED_LABEL}=\"true\"', 1]")
+        got = load_tenant_tree(str(_tree(tmp_path / "b", refused)))
+        assert [w.kind for w in got.schema_warnings if getattr(w, "kind", None) in
+                (_MIGRATED_KIND, "routing_enforced_match_invalid")] == ["routing_enforced_match_invalid"]

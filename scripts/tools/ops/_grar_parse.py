@@ -96,6 +96,8 @@ from _grar_routes import (  # noqa: E402
     enforced_group_by_problems,
     enforced_match_invalid,
     enforced_match_invalid_text,
+    enforced_match_migrated_label,
+    enforced_match_migrated_label_text,
     enforced_route_tenants,
 )
 
@@ -468,6 +470,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict, *,
                         file=fname, field="_routing_enforced.match"))
             elif isinstance(raw, dict) and enabled is True:
                 result["enforced_routing"] = raw
+                result["enforced_routing_file"] = fname  # #4368: the block in force
             elif isinstance(raw, dict) and enabled is False:
                 pass  # explicitly disabled → None
             elif isinstance(raw, dict):
@@ -1909,6 +1912,16 @@ def load_tenant_tree(
     # NOC. (#2906: a non-boolean `enabled` is a field-type finding, above —
     # refused whole.)
     schema_warnings.extend(parsed.get("enforced_errors", []))
+    # #4368: a matcher of the enforced block in force on the label only
+    # migrated alerts carry — rendered as written, so a warning in every
+    # mode that never blocks (as an override's unknown metric_group, #3692).
+    enforced_file = parsed.get("enforced_routing_file")
+    for idx, op in enforced_match_migrated_label(parsed["enforced_routing"]):
+        schema_warnings.append(Finding(
+            "  WARN: " + enforced_match_migrated_label_text(
+                f" in {shown_file(enforced_file)}", idx, op),
+            kind="routing_enforced_match_migrated", blocks="never",
+            file=enforced_file, field=f"_routing_enforced.match[{idx}]"))
     # #2245: `_routing_defaults.routes` — dropped at parse, same blocking line.
     # #2904: routing written where nothing reads it (routing_in_unread_location)
     # rides the same list, so it blocks `--validate` the same way.
