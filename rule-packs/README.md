@@ -2,7 +2,7 @@
 title: "Rule Packs — 模組化 Prometheus 規則"
 tags: [overview, introduction]
 audience: [all]
-version: v1.12.0
+version: v2.9.0
 lang: zh
 ---
 # Rule Packs — 模組化 Prometheus 規則

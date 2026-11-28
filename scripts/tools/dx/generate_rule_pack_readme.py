@@ -31,6 +31,7 @@ from validate_docs_versions import count_rule_packs  # noqa: E402
 # The metadata annotation templates' one spelling (#3483): the example below must
 # match what check_leftouterjoin_enrichment enforces on the real packs.
 from check_leftouterjoin_enrichment import METADATA_ANNOTATIONS  # noqa: E402
+from _lib_versions import read_platform_version  # noqa: E402  (#4251: frontmatter version)
 
 # Repo root = FOUR parents up (scripts/tools/dx/<file> → dx → tools → scripts →
 # repo). The original default used three (→ the non-existent scripts/rule-packs/),
@@ -121,7 +122,7 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append('title: "Rule Packs — 模組化 Prometheus 規則"')
     lines.append("tags: [overview, introduction]")
     lines.append("audience: [all]")
-    lines.append("version: v1.12.0")
+    lines.append(f"version: {read_platform_version()}")
     lines.append("lang: zh")
     lines.append("---")
     lines.append("# Rule Packs — 模組化 Prometheus 規則")

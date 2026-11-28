@@ -26,6 +26,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  #
 from _lib_versions import (  # noqa: E402
     read_platform_version as _read_shared_platform_version,
 )
+import _lib_site_pages  # noqa: E402  (#4251: the site pages outside docs/)
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -150,10 +151,44 @@ def scan_docs(docs_dir: Path) -> List[FrontmatterInfo]:
         rel_parts = md_file.relative_to(docs_dir).parts
         if any(part.startswith(".") for part in rel_parts):
             continue
+        # #4251: docs/rule-packs/ is the mkdocs bridge's transient, gitignored
+        # copy; the pages are judged at their source, below.
+        if rel_parts[0] == _lib_site_pages.BRIDGED_DOCS_SUBDIR:
+            continue
         info = extract_frontmatter(md_file)
         results.append(info)
 
     return results
+
+
+def scan_site_pages(docs_dir: Path) -> List[FrontmatterInfo]:
+    """Every site page: ``scan_docs`` plus the pages the mkdocs bridge serves
+    from the repo root's ``rule-packs/`` (#4251), read at their source.
+
+    The bridged pages are site pages that were never checked: their copy
+    appeared under docs/ only while a build ran, so their front matter sat at
+    v1.12.0 for every release since."""
+    results = scan_docs(docs_dir)
+    if not results:
+        return results  # main() reports an empty docs/ as nothing measured
+    results += [extract_frontmatter(p) for p in _bridged_sources(docs_dir)]
+    return results
+
+
+def _bridged_sources(docs_dir: Path) -> List[Path]:
+    """The bridged pages that exist at their source (the bridge serves only
+    those): beside docs/, in the repo root's rule-packs/."""
+    root = docs_dir.resolve().parent
+    return [p for p in _lib_site_pages.bridged_pages(root) if p.is_file()]
+
+
+def count_site_pages_on_disk(docs_dir: Path) -> int:
+    """The witness for "Scanned: N of M": every *.md below docs/ before the
+    hidden filter — but not the bridge's transient copy, which is no page of
+    its own — plus the bridged pages at their source."""
+    copy = docs_dir / _lib_site_pages.BRIDGED_DOCS_SUBDIR
+    on_disk = sum(1 for p in docs_dir.rglob("*.md") if copy not in p.parents)
+    return on_disk + len(_bridged_sources(docs_dir)) if on_disk else 0
 
 
 def detect_drift(
@@ -343,8 +378,8 @@ def main(argv: Optional[List[str]] = None) -> "Report | None":
     elif not os.access(DOCS_DIR, os.R_OK):
         reason = f"not readable: {DOCS_DIR}"
     else:
-        total_found = sum(1 for _ in DOCS_DIR.rglob("*.md"))
-    scanned = scan_docs(docs_dir=DOCS_DIR) if reason is None else []
+        total_found = count_site_pages_on_disk(DOCS_DIR)
+    scanned = scan_site_pages(docs_dir=DOCS_DIR) if reason is None else []
     if not scanned:
         if reason is None and total_found:
             reason = (f"all {total_found} markdown file(s) hidden (a dot-prefixed "
@@ -365,7 +400,7 @@ def main(argv: Optional[List[str]] = None) -> "Report | None":
         fixed = fix_drift(items, expected)
         print(f"Fixed {fixed} file(s)")
         # Re-scan after fix
-        scanned = scan_docs(docs_dir=DOCS_DIR)
+        scanned = scan_site_pages(docs_dir=DOCS_DIR)
         items = detect_drift(scanned, expected)
 
     errors = [i for i in items if i.severity == "error"]

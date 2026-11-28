@@ -2,7 +2,7 @@
 title: "Rule Pack Alert Reference Guide"
 tags: [alerts, reference, rule-packs]
 audience: [tenant, sre]
-version: v1.12.0
+version: v2.9.0
 lang: en
 ---
 # Rule Pack Alert Reference Guide
