@@ -8,6 +8,7 @@ its loop is time-bound and best exercised end-to-end).
 from __future__ import annotations
 
 import http.client
+import json
 import os
 import sys
 import urllib.error
@@ -385,6 +386,63 @@ class TestMainCallerErrors:
         assert (out_dir / "run-config.json").exists()
         assert sorted(p.name for p in out_dir.iterdir()) == [
             "metrics-timeseries.csv", "run-config.json"]
+        assert json.loads((out_dir / "run-config.json").read_text(encoding="utf-8"))[
+            "interrupted"] is False
+
+    def test_an_interrupted_soak_is_recorded_in_run_config(self, tmp_path, monkeypatch, cli_argv):
+        """#3981: SIGINT mid-soak still writes both files, and run-config.json
+        says the run was cut short (the summary that said so is gone)."""
+        import signal
+        config_dir = tmp_path / "conf"
+        config_dir.mkdir()
+        out_dir = tmp_path / "out"
+        polls = []
+
+        def fetch(*a, **kw):
+            polls.append(1)
+            if len(polls) == 2:          # the first loop poll, after the probe
+                os.kill(os.getpid(), signal.SIGINT)
+            return {}
+        monkeypatch.setattr(rcs, "fetch_metrics", fetch)
+        monkeypatch.setattr(rcs.time, "sleep", lambda s: None)
+        old = signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
+        try:
+            cli_argv("run_chaos_soak.py",
+                "--target-url", "http://localhost:8080",
+                "--config-dir", str(config_dir),
+                "--output-dir", str(out_dir),
+                "--duration-min", "60", "--reload-interval-sec", "9999")
+            assert rcs.main() == EXIT_CALLER_ERROR
+        finally:
+            signal.signal(signal.SIGINT, old[0])
+            signal.signal(signal.SIGTERM, old[1])
+        cfg = json.loads((out_dir / "run-config.json").read_text(encoding="utf-8"))
+        assert cfg["interrupted"] is True
+        assert (out_dir / "metrics-timeseries.csv").read_text(encoding="utf-8").count("\n") == 2
+
+    @pytest.mark.parametrize("blocked", ["metrics-timeseries.csv", "run-config.json"])
+    def test_a_blocked_output_is_refused_before_the_soak_starts(
+            self, tmp_path, monkeypatch, capsys, cli_argv, blocked):
+        """#3981: both files are written when the soak ends, so a name that
+        cannot take them is judged before the first probe — not after hours
+        of samples that would then be lost."""
+        config_dir = tmp_path / "conf"
+        config_dir.mkdir()
+        out_dir = tmp_path / "out"
+        (out_dir / blocked).mkdir(parents=True)
+        probes = []
+        monkeypatch.setattr(rcs, "fetch_metrics", lambda *a, **kw: probes.append(1) or {})
+        cli_argv("run_chaos_soak.py",
+            "--target-url", "http://localhost:8080",
+            "--config-dir", str(config_dir),
+            "--output-dir", str(out_dir),
+            "--duration-min", "0")
+        with pytest.raises(SystemExit) as ei:
+            rcs.main()
+        assert ei.value.code == 2
+        assert probes == [], "the target was probed before the output was judged"
+        err = capsys.readouterr().err
+        assert blocked in err and "--output-dir" in err and "Traceback" not in err
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +452,7 @@ class TestTriggerReloadAcceptsBothSpellings:
     """A soak whose carriers are `.yml` used to never fire a reload.
 
     `trigger_reload` returning False on every pass does NOT abort the run:
-    `main()` keeps polling and still writes `summary.txt`, so the exercise
+    `main()` keeps polling and still writes its output, so the exercise
     reads as "hot-reload survived N hours" having never reloaded once. That
     is the same silent-green the `.YAML` case (#1588) produced, one axis
     over — the exporter's scanner takes BOTH spellings, so a `db-b.yml` is
@@ -493,7 +551,7 @@ class TestTriggerReloadAcceptsBothSpellings:
 # #1789: the deferred write error, and when it has to be said out loud
 # ---------------------------------------------------------------------------
 class TestDeferredWriteErrorReporting:
-    """The summary / run-config writes sit in a `finally`, so their
+    """The time-series / run-config writes sit in a `finally`, so their
     `OutputWriteError` is remembered and re-raised AFTER the block. Whether
     that re-raise is ever reached depends on something this handler cannot
     see from inside itself — whether another exception was already unwinding
@@ -539,3 +597,25 @@ class TestDeferredWriteErrorReporting:
         err = capsys.readouterr().err
         assert not err.startswith("ERROR: ")
         assert "\nERROR: " not in err
+
+
+# ---------------------------------------------------------------------------
+# #3981: an interrupted soak is recorded in run-config.json, and the report
+# says so (the summary.txt that said "INTERRUPTED" is gone)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("interrupted,word", [(True, "incomplete"), (False, "completed")])
+def test_the_report_tells_an_interrupted_soak_from_a_full_one(tmp_path, interrupted, word):
+    import render_soak_diff
+    cfg = {"target_url": "http://x", "config_dir": "c", "duration_min": 1,
+           "reload_interval_sec": 60, "metrics_poll_sec": 30, "output_dir": str(tmp_path),
+           "started_at_utc": "2026-11-28T00:00:00+00:00",
+           "ended_at_utc": "2026-11-28T00:01:00+00:00",
+           "reload_count": 0, "poll_count": 2, "interrupted": interrupted}
+    (tmp_path / "run-config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    header = ["timestamp_utc", "elapsed_sec", "reload_count_so_far", *rcs.TRACKED_METRICS]
+    rows = [",".join(header)] + [
+        ",".join(["2026-11-28T00:00:00+00:00", str(t), "0", *["1"] * len(rcs.TRACKED_METRICS)])
+        for t in (0, 30)]
+    (tmp_path / "metrics-timeseries.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    report, _rc = render_soak_diff.render(tmp_path, warmup_sec_override=0)
+    assert f"- **Duration**: 1 min ({word})" in report

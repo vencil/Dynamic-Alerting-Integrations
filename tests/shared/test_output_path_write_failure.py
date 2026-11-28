@@ -806,9 +806,9 @@ ROWS: list[Row] = [
                       "--warmup-sec", "0"],
       reach="hand-built soak output dir (run-config.json + flat timeseries CSV)",
       out_name="soak-report.md"),
-    # Three rows, three sinks. `run_chaos_soak` writes two artefacts under
-    # `--output-dir`, both judged before the first is written (#3981), so one
-    # row would only ever prove the `mkdir`. `--duration-min 0` makes the
+    # Three rows. `run_chaos_soak` writes two artefacts under `--output-dir`,
+    # both judged before the soak starts (#3981): a blocked one stops the run
+    # at that judgement, so one row would only ever prove the `mkdir`. `--duration-min 0` makes the
     # poll loop a no-op (the `finally` still runs and still writes both
     # files) and `--reload-interval-sec 9999` keeps the chaos from touching
     # the fixture conf.d. Artifact (#3981, owner 2026-11-28):
@@ -827,7 +827,7 @@ ROWS: list[Row] = [
                         "--config-dir", _soak_config_dir(c.tmp),
                         "--duration-min", "0", "--reload-interval-sec", "9999",
                         "--output-dir", str(out)],
-        reach=f"same; {_artefact} is blocked so the run dies at that sink",
+        reach=f"same; {_artefact} is blocked, so the pre-soak judgement refuses it",
         readers=lambda c, out: [_soak_diff_reader(c, out)],
         shapes=("artifact_is_dir",),
         artifact=_artefact, variant=_artefact)
@@ -1195,12 +1195,14 @@ ROWS: list[Row] = [
       shapes=("parent_is_file", "target_is_dir")),
     # #3981 (owner 2026-11-28): the nightly race leg's fragment. Artifact:
     # `file_race_report --frags-dir` loads `frag-<module>.json` whole (the
-    # `Reader`; DO_FILE is unset, so it files nothing and starts no gh).
+    # `Reader`; the row's env sets DO_FILE=false and DRY_RUN=1, so whatever
+    # the caller's environment holds, it files nothing and starts no gh).
     R("../ops/parse_go_test_json.py", "--output", "file", "artifact",
       lambda c, out: ["--module", "m", "--input", str(_empty_file(c.tmp)),
                       "--output", str(out), "--go-exit-code", "0"],
       reach="an empty `go test -json` stream; offline",
       out_name="frag-m.json",
+      env=lambda c: {"DO_FILE": "false", "DRY_RUN": "1"},
       readers=lambda c, out: [Reader("../ops/file_race_report.py",
                                      ["--frags-dir", str(out.parent), "--expected-modules", "m"])],
       shapes=("parent_is_file", "target_is_dir")),

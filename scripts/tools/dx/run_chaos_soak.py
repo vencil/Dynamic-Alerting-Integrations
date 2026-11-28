@@ -100,7 +100,8 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_prometheus import transport_error_text  # noqa: E402
 from _lib_output import (  # noqa: E402  (#1789; #3276; #3981: the artifact entry)
-    OutputWriteError, ensure_dir, exit_on_output_write_error, safe_label, write_repo_artifacts)
+    OutputWriteError, check_writable_artifact, ensure_dir, exit_on_output_write_error, safe_label,
+    write_repo_artifacts)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 
@@ -141,6 +142,10 @@ class RunConfig:
     ended_at_utc: str = ""
     reload_count: int = 0
     poll_count: int = 0
+    # #3981: a SIGINT / SIGTERM ended the soak early. Kept in the file (the
+    # summary that said "INTERRUPTED" is on stderr now) so the directory, and
+    # `render_soak_diff`'s report, can tell a cut-short run from a full one.
+    interrupted: bool = False
 
 
 def parse_metrics(text: str) -> dict[str, float]:
@@ -311,6 +316,13 @@ def main() -> int:
     ensure_dir(args.output_dir, flag="--output-dir")
     csv_path = out / "metrics-timeseries.csv"
     run_config_path = out / "run-config.json"
+    # #3981: both files are only written when the soak ends, so judge them
+    # NOW — a directory, a FIFO, stdout or a file this process cannot replace
+    # is refused (rc 2) before hours of samples are collected, not after.
+    # What only the write meets (a full disk, a mode changed meanwhile) can
+    # still stop it at the end; the old files are then kept whole.
+    for path in (csv_path, run_config_path):
+        check_writable_artifact(str(path), flag="--output-dir")
 
     # First-probe check: target must be reachable before we commit to a long run
     try:
@@ -397,6 +409,7 @@ def main() -> int:
         # `sys.exc_info()` there can never answer this question.
         in_flight = sys.exc_info()[0]
         cfg.ended_at_utc = datetime.now(timezone.utc).isoformat()
+        cfg.interrupted = interrupted or in_flight is not None
 
         # #3981: both files through the artifact entry, judged together
         # before the first is written — a blocked run-config.json no longer
