@@ -12,7 +12,8 @@
     "generator": "the Alertmanager route generator (generate_alertmanager_routes.py)",
     "custom_alert_compiler": "the custom-alert rule-pack compiler (compile_custom_alerts.py)",
     "policy_engine": "Policy-as-Code (evaluate-policy; validate-config's policy_dsl row). Listed here for `_policies`, which it reads by name; it also reads any key a deployment's rule names as `target`, which no registry can list: a verdict must count a key a rule names as read",
-    "annotation": "nothing on the alert path: a note for people and tools; not measured"
+    "annotation": "nothing on the alert path: a note for people and tools; not measured",
+    "log_projection": "the tenant log projection generator (tenant-api log-projection): which tenants' logs Vector copies into their own log partition"
   },
   "keys": {
     "_silent_mode": {
@@ -84,6 +85,11 @@
       "read_by": {"generator": ["platform_top"]},
       "description": "The platform-enforced (NOC) route rendered for every tenant.",
       "value": {"shape": "mapping"}
+    },
+    "_log_projection": {
+      "read_by": {"log_projection": ["tenant", "platform_tenants"]},
+      "description": "Whether Vector copies the tenant's own platform logs into its log partition (ADR-021): `enable`, or `disable` (the default). Only a tenant that also holds an AccountID in tenant-api's ledger is projected.",
+      "value": {"shape": "scalar"}
     },
     "_policies": {
       "read_by": {"policy_engine": ["platform_top"]},

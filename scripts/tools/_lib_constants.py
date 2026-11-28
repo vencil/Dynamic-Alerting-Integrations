@@ -112,6 +112,7 @@ OPERATOR_ROUTING_REMEDY_ZH: Final[str] = (
 VALID_RESERVED_KEYS: Final[set[str]] = {
     "_custom_alerts",
     "_expected_exporters",
+    "_log_projection",
     "_metadata",
     "_namespaces",
     "_profile",
@@ -148,6 +149,9 @@ RESERVED_KEY_READERS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
     },
     "_expected_exporters": {
         "exporter": ("tenant", "platform_tenants", "profile"),
+    },
+    "_log_projection": {
+        "log_projection": ("tenant", "platform_tenants"),
     },
     "_metadata": {
         "exporter": ("tenant", "platform_tenants", "profile"),

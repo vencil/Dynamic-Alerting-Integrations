@@ -577,6 +577,18 @@ docker run -i --rm <部署中的 tenant-api 映像> state show --from - < tenant
 - 有 `org-scope` 的規則需要以 `--oauth2-proxy-config`（或 `TA_OAUTH2_PROXY_CONFIG`）指向部署用的 oauth2-proxy 設定檔，否則它引用的 claim 沒有 header 注入，RBAC 設定會像在 server 一樣被拒收。
 - **升級前用要升級到的新版 image 跑**，讓判定與新版 server 一致，例如 `docker run --rm -v "$PWD/conf.d:/conf.d:ro" <新版 tenant-api 映像> config check --kind scope --config-dir /conf.d`。CI 對 repo 內的範例設定（`try-local/seed/conf.d`）也跑它。
 
+### Vector 的租戶日誌投影設定：`log-projection`
+
+`log-projection` 寫出 Vector 的租戶日誌投影設定（[ADR-021](../../docs/adr/021-tenant-log-query-federation.md)、[#4212](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4212)）：把 `helm/vector` 產生的樣板填上要投影的租戶。一個租戶要投影，須**同時**滿足：帳本（`_account_registry.yaml`）有它的 AccountID，且它的 conf.d 設定寫了 `_log_projection: enable`（租戶檔，或根目錄平台檔的 `tenants:`，租戶檔優先）。帳本替每個租戶配號、退租也不收回，所以「有號碼」不等於「要投影」。三份輸入各由它唯一的讀者判讀：帳本與可見度紀錄用 server 的解析函式（同 `state show`），conf.d 用 exporter 的載入器。
+
+- `log-projection render --config-dir DIR --state-from FILE|DIR|- --template FILE [--out FILE]`：讀一次 conf.d 目錄與 state 備份（`--state-from` 收的與 `state show --from` 相同），寫到 `--out` 或 stdout。結束碼：0 已寫出、1 有輸入不能用（不寫任何東西）、2 用法錯誤。
+- `log-projection run --template FILE --out FILE --confd-configmap NAME [--confd-namespace NS]`（或 `--config-dir DIR`），加上 server 的 `--state-*` 旗標：每 `--interval`（預設 30s）讀一次輸入，讓 `--out` 與輸入一致。
+  - 讀不到或不能用的輸入（帳本或可見度紀錄損壞、conf.d 有檔案解析不了）不寫任何東西，上一份照舊生效；只有從未成功、而且還沒有檔案時，才寫出不含任何租戶的樣板（只有平台副本）。
+  - 已投影租戶的 AccountID 若與上一次不同，整次結果拒收：帳本從不改號，改了代表讀到的不是帳本。
+  - `_log_projection` 只認 `enable`、`disable`（與 null）；其他寫法（`Enable`、`true`）不投影，記一筆 `flag_unread`。旗標開著、帳本卻還沒有號碼的租戶記 `no_account`。
+  - 給了 `--vector-metrics-url` 時，每次寫檔後最多等 `--reload-timeout`（預設 30s）看 Vector 的 `--reload-metric`（預設 `vector_reloaded_total`）有沒有增加。Vector 載入失敗時會繼續跑舊設定，且不記任何失敗 metric，所以計數沒增加是唯一的訊號。
+  - Metrics 在 `--metrics-addr`（預設 `:9599`）的 `/metrics`：`da_log_projection_last_success_timestamp_seconds`、`_projected_tenants`、`_unprojected_tenants{reason}`、`_read_failures_total{source}`、`_refused_total{reason}`、`_writes_total`、`_reload_unconfirmed`、`_empty_fallback`。
+
 ### dir 模式的外部寫入者必須拿 flock
 
 `dir` 模式**只供開發與 try-local**；正式環境用 `configmap` 模式：tenant-api 以 ConfigMap 的 `resourceVersion` 做樂觀並行控制，讀取之後若紀錄被別人改過，它的寫入會被 API server 拒絕、重讀後再套用，不會蓋掉別人的修改。
