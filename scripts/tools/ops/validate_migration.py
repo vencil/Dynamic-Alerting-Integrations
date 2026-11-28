@@ -1,44 +1,56 @@
 #!/usr/bin/env python3
-"""validate_migration.py — Shadow Monitoring 驗證工具。
+"""validate_migration.py — Shadow Monitoring 驗證工具：比對 legacy 與 migrated 的告警集合。
 
-比對新舊 Recording Rule 的數值輸出，驗證遷移後的行為等價性。
-透過 Prometheus API 抓取兩組 Recording Rule 的即時向量值，
-逐一比對數值差異，產出 diff 報告。
+讀 migrate-rule 寫的遷移對照（``.migration/mapping/<租戶>.yaml``），每一輪做三件事：
+
+0. 規則檢查：對照裡每條告警，legacy 端要載入不帶 ``da_migrated`` 的同名規則，migrated
+   端要載入該租戶的 migrated 規則（``/api/v1/rules``）；任一邊沒載入，或所在規則組的評估
+   間隔大於取樣窗口（``--interval``，窗口裡可能沒有任何一次評估，看起來就像沒響），
+   結束碼 2、逐條點名。少了這一步，migrated 規則根本沒部署而這段期間又沒有告警響時，
+   兩邊都是空集合，會被判成一致。
+1. count 預檢：對照裡每組 selector，legacy（注入前）在 legacy 端、pinned（注入後）
+   在 migrated 端各數一次序列。legacy 有、pinned 是 0 → 注入選不到資料（租戶歸屬的
+   假設錯了，或 ``job=``／``instance=`` 與平台的抓取設定不一致；migrated 規則永遠
+   不會響），結束碼 2、逐條點名。兩邊都是 0 → 不可驗，不放行。只查現有資料。
+2. 告警集合比對：每條有 legacy 對應的 migrated 告警，兩邊各查一次
+   ``max_over_time(ALERTS{…}[<interval>])``——這一輪的窗口內響過（firing 與
+   pending 分開）的序列。比對鍵是（租戶, ``da_cluster``, alertname, 狀態）加上
+   序列其餘的 label，去掉 ``tenant``、``da_migrated``、``alertstate``。租戶歸屬：
+   migrated 側是規則寫的靜態 ``tenant``；legacy 側取告警的 ``tenant``，沒有就取
+   ``namespace``，兩者都沒有 → 不可驗。legacy 側其他租戶的告警是注入本來就會收窄
+   的部分，另列、不算 mismatch。遷移時新增的告警（``added: true``）不比。
+
+用窗口而不是瞬時值：兩台 Prometheus 的評估相位不同時，瞬時值會誤報 mismatch。
+代價是短於一輪的時差看不到；遷移不改 ``for:``，這個代價可接受。窗口是左開區間
+``(t − interval, t]``，t 是各端收到查詢的時刻；兩輪之間還隔著一輪查詢的耗時，所以
+相鄰兩輪的窗口之間有一道小縫，比縫還短的單邊告警可能看不到。
+
+已知限制：legacy 端以 alertname 查 ALERTS。另一條同名、沒有被遷移的 legacy 規則
+（例如改用黃金標準的，或在別的檔案裡）的告警沒有 migrated 對應，會一直是 mismatch。
+
+數值比對（``--old``／``--new``、prefix-mapping、``--tolerance``）已移除（#4227）：
+prefix-mapping 以具名的結束碼 2 拒收，請用新版 migrate-rule 重產對照。
 
 用法:
-  # 基本比對: 指定新舊兩組 recording rule 名稱
+  # 單次比對（legacy 與 migrated 規則載入同一台 Prometheus）
   python3 validate_migration.py \\
-    --old "mysql_global_status_threads_connected" \\
-    --new "tenant:custom_mysql_global_status_threads_connected:max" \\
+    --mapping migration_output/.migration/mapping/db-a.yaml \\
     --prometheus http://prometheus.monitoring.svc.cluster.local:9090
 
-  # 批次比對: 使用 prefix-mapping.yaml
+  # legacy 規則還在客戶原本的 Prometheus 上：兩端分別指定
   python3 validate_migration.py \\
-    --mapping migration_output/.migration/prefix-mapping.yaml \\
-    --prometheus http://prometheus.monitoring.svc.cluster.local:9090
+    --mapping migration_output/.migration/mapping/db-a.yaml \\
+    --prometheus http://edge-prometheus:9090 \\
+    --legacy-prometheus http://legacy-prometheus:9090
 
-  # 持續監控模式 (每 60 秒比對一次，運行 N 輪)
+  # 持續監控，收斂（連續 N 輪乾淨）就寫 cutover-readiness.json 並停止
   python3 validate_migration.py \\
-    --mapping migration_output/.migration/prefix-mapping.yaml \\
-    --prometheus http://prometheus.monitoring.svc.cluster.local:9090 \\
-    --watch --interval 60 --rounds 1440
+    --mapping migration_output/.migration/mapping/db-a.yaml \\
+    --watch --interval 60 --rounds 1440 --auto-detect-convergence
 
-  # 本地開發 (透過 port-forward)
-  kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
-  python3 validate_migration.py \\
-    --mapping migration_output/.migration/prefix-mapping.yaml \\
-    --prometheus http://localhost:9090
-
-  # 叢集內執行 (包裝為 K8s Job，適合長期 Shadow Monitoring)
-  # 參見 docs/migration-guide.md §11 的 Job manifest 範例
-
-需求:
-  - Prometheus Query API 必須可從腳本執行位置存取
-    * 叢集內: K8s Service (http://prometheus.monitoring.svc.cluster.local:9090)
-    * 叢集外: port-forward 或 Ingress
-    * 多叢集: Thanos Query / VictoriaMetrics 等統一查詢端點亦可
-  - 新舊兩套 Recording Rule 必須同時在 Prometheus 中運行
-  - 建議在 Shadow Monitoring 階段 (新 Alert 掛 migration_status=shadow) 使用
+結束碼：0 = 告警集合一致、預檢乾淨（watch + 收斂偵測：已收斂）；1 = 有 mismatch
+或不可驗（watch + 收斂偵測：未收斂）；2 = 輸入錯誤、查詢失敗，或規則沒載入、評估間隔
+大於窗口、注入後選不到資料（等不掉的設定問題，watch 也立刻停止）。
 """
 
 import sys
@@ -46,7 +58,6 @@ import os
 import csv
 import io
 import json
-import math
 import time
 import argparse
 from datetime import datetime, timezone
@@ -56,393 +67,371 @@ from typing import NamedTuple
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
-# Migrated in #489 Phase B (was missing encoding setup → would crash on
-# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
-sys.path.insert(0, str(_THIS_DIR))
-sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
-from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import ensure_dir_or_die, write_operator_output_or_die, output_dir_type, add_prometheus_arg, prometheus_url, non_negative_seconds  # noqa: E402
+from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_python import ensure_dir_or_die, write_operator_output_or_die, output_dir_type, add_prometheus_arg, prometheus_url  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, json_file_text  # noqa: E402
 from _lib_label import safe_label  # noqa: E402  (#4210: a key is file content)
-from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③b)
+from _lib_validation import is_valid_tenant_id, operator_file_type, positive_int, positive_seconds, url_type  # noqa: E402
 import _lib_input  # noqa: E402  (#3445: --mapping is read by the lib)
-from _lib_shadow_report import REPORT_COLUMNS, TIMESTAMP_FORMAT, tenant_cell  # noqa: E402  (#3662)
+import _lib_shadow_report as report  # noqa: E402  (#3662 / #4227: the one definition)
+from _lib_shadow_report import tenant_cell  # noqa: E402
 from _lib_cluster_identity import CLUSTER_IDENTITY_LABEL  # noqa: E402  (ADR-006)
+from _grar_routes import MIGRATED_LABEL, MIGRATED_VALUE  # noqa: E402  (#4355: the one spelling)
 # #3133: a query not answered raises QueryError; a sample is read once, by
 # the lib (#3213).
-from _lib_prometheus import QueryError, prometheus_instant, vector_sample  # noqa: E402
+from _lib_prometheus import QueryError, prometheus_instant, prometheus_rules, vector_count  # noqa: E402
 
-# The query seam tests replace (the lib's raising reader).
+# The query seams tests replace (the lib's raising readers).
 query_prometheus = prometheus_instant
+query_rules = prometheus_rules
+
+#: The label a migrated rule writes, and the one a legacy alert is
+#: attributed by first.
+TENANT_LABEL = "tenant"
+#: A legacy alert without ``tenant`` is attributed by this one.
+NAMESPACE_LABEL = "namespace"
+#: The ALERTS label that tells firing from pending.
+ALERTSTATE_LABEL = "alertstate"
+#: Labels that are not part of an alert's label set: the side (``tenant`` is
+#: static on the migrated side; the migration identity), the state (a key
+#: field of its own), and the ones the key holds by name.
+_NOT_IN_LABELS = frozenset({"__name__", "alertname", TENANT_LABEL, MIGRATED_LABEL,
+                            ALERTSTATE_LABEL, CLUSTER_IDENTITY_LABEL})
 
 
-class ClusterKey(NamedTuple):
-    """The key of a row that carries the cluster label: one group per
-    (tenant, cluster) (ADR-006, #1200)."""
-
-    tenant: str
-    da_cluster: str
-
-
-def _split_key(key):
-    """(tenant, cluster or None) of a value-map key."""
-    if isinstance(key, ClusterKey):
-        return key.tenant, key.da_cluster
-    return key, None
-
-
-def extract_value_map(results, group_by="tenant"):
-    """將 Prometheus 結果轉換為 {key: float_value} 字典。
-
-    migrate 產生的規則逐（租戶、叢集）聚合（ADR-006，#1200）：收了多個叢集的
-    Prometheus 對同一個租戶回好幾列，各帶自己的 `da_cluster`。key 因此是
-    （租戶、叢集）——帶 `da_cluster` 的列是 `ClusterKey(tenant, da_cluster)`，
-    兩個叢集各佔一格、不互相覆蓋；沒有這個 label 的列（單一 Prometheus）照舊
-    以 label 值（字串）為 key，自成一組。
-    """
-    value_map = {}
-    for item in results:
-        metric = item.get("metric", {})
-        key = metric.get(group_by, "__no_label__")
-        cluster = metric.get(CLUSTER_IDENTITY_LABEL)
-        if cluster:
-            key = ClusterKey(key, cluster)
-        # None only for a histogram-only row: an unreadable value never gets
-        # here (#3133: prometheus_instant refuses the answer, rc 2 — it used
-        # to read as "missing", rc 1).
-        value_map[key] = vector_sample(item)
-    return value_map
-
-
-def compare_vectors(old_map, new_map, tolerance=0.001):
-    """比對兩組向量值，回傳差異清單。
-
-    tolerance: 允許的數值誤差 (預設 0.1%)
-
-    兩邊以同一個 key 配對：`ClusterKey` 的列逐叢集比（差異多一個
-    `da_cluster` 欄），字串 key 的列照舊。只在一邊出現的叢集是 `mismatch`
-    （另一邊的值是 None、delta 是 None）：兩邊的分組不同（例如一邊還是舊版
-    migrate 產的 `by(tenant)` 規則），那不是「資料還沒到」，也不會被略過。
-    沒有叢集 label 的列只在一邊出現時，照舊是 old_missing／new_missing。
-    """
-    diffs = []
-    all_keys = sorted(set(list(old_map.keys()) + list(new_map.keys())),
-                      key=lambda k: tuple(x or "" for x in _split_key(k)))
-
-    for key in all_keys:
-        old_val = old_map.get(key)
-        new_val = new_map.get(key)
-        tenant, cluster = _split_key(key)
-        one_sided_cluster = cluster is not None and (
-            (key in old_map) != (key in new_map))
-
-        if one_sided_cluster:
-            status = "mismatch"
-        elif old_val is None and new_val is None:
-            status = "both_empty"
-        elif old_val is None:
-            status = "old_missing"
-        elif new_val is None:
-            status = "new_missing"
-        elif abs(old_val - new_val) <= tolerance * max(abs(old_val), abs(new_val), 1):
-            status = "match"
-        else:
-            status = "mismatch"
-
-        diff = {
-            "tenant": tenant,
-            "old_value": old_val,
-            "new_value": new_val,
-            "status": status,
-            "delta": (new_val - old_val) if old_val is not None and new_val is not None else None,
-        }
-        if cluster is not None:
-            diff[CLUSTER_IDENTITY_LABEL] = cluster
-        diffs.append(diff)
-    return diffs
-
-
-def run_single_comparison(prom_url, old_query, new_query, label, tolerance=0.001):
-    """執行單次比對，回傳 diff 結果。"""
-    try:
-        old_results = query_prometheus(prom_url, old_query)
-    except QueryError as exc:
-        print(f"  ❌ 查詢舊規則失敗: {exc}", file=sys.stderr)
-        return None
-
-    try:
-        new_results = query_prometheus(prom_url, new_query)
-    except QueryError as exc:
-        print(f"  ❌ 查詢新規則失敗: {exc}", file=sys.stderr)
-        return None
-
-    old_map = extract_value_map(old_results, group_by="tenant")
-    new_map = extract_value_map(new_results, group_by="tenant")
-
-    diffs = compare_vectors(old_map, new_map, tolerance=tolerance)  # #2494
-    return {
-        "label": label,
-        "old_query": old_query,
-        "new_query": new_query,
-        "old_count": len(old_results),
-        "new_count": len(new_results),
-        "diffs": diffs,
-    }
-
-
-#: --mapping：prefix-mapping.yaml，頂層是映射（#3445：內容讀不了、或頂層型別不對，
+#: --mapping：migrate-rule 寫的遷移對照，頂層是映射（#3445：內容讀不了、或頂層型別不對，
 #: 都是點名旗標與路徑的 caller error，不是 traceback）。
 MAPPING_DOCUMENT = _lib_input.Document("yaml", dict)
 
-
-_KIND = {type(None): "空值", str: "字串", int: "數字", float: "數字",
-         bool: "布林值", list: "清單", dict: "映射"}
-
-
-_KEY_SHOWN = 120  # a key longer than this is cut in the refusal line
+_EXPECTED = {"str": "非空字串", "list": "清單", "dict": "映射", "bool": "布林值",
+             "alert_or_record": "alert 與 record 恰好其一",
+             "tenant_id": "合法的租戶 id（ADR-035）", "unique": "不重複的 alert",
+             "added_alert": f"只有 {report.ADDED_ALERT} 能標 added"}
 
 
-def _kind(value):
-    return _KIND.get(type(value), "其他型別")
+def load_mapping(args):
+    """`--mapping` 的遷移對照（``_lib_shadow_report.read_mapping``）。
 
-
-def _shown_key(key):
-    """*key* as the refusal line names it: control characters neutralised,
-    a non-string as its repr, a very long one cut."""
-    label = safe_label(key if isinstance(key, str) else repr(key))
-    return label if len(label) <= _KEY_SHOWN else label[:_KEY_SHOWN] + "…"
-
-
-def _unusable_reason(key, info):
-    """Why the `--mapping` entry *key* → *info* cannot become a pair, or None.
-
-    A field counts as given when it is there and not null; a given field
-    the entry is read by must be a non-empty string. Usable: `old_query` and
-    `new_query` both given; or neither, and a truthy `golden_rule` (skipped,
-    said) or a given `original_metric` (the legacy pair). `original_metric`
-    is judged only on the legacy path, the one that reads it: migrate can
-    write it empty (a key equal to the prefix) beside a usable pair.
+    ⛔ prefix-mapping（數值比對用的 ``old_query``／``new_query``／``original_metric``）
+    以具名的 caller error 拒收（rc 2，reason ``mapping_prefix_format``），不退回
+    數值比對（#4227）。不是 migrate-rule 寫的形狀：每一處都點名後 rc 2（#4210／
+    #4221：讀不了的項目不靜默略過）。沒有任何可比的告警也是 rc 2：零比對組等於
+    什麼都沒驗證。
     """
-    if not isinstance(key, str):
-        return f"key 不是字串（實為{_kind(key)}）"
-    if not isinstance(info, dict):
-        return f"值不是映射（實為{_kind(info)}）"
-    for field in ("old_query", "new_query"):
-        reason = _not_a_string(info, field)
-        if reason:
-            return reason
-    if (info.get("old_query") is None) != (info.get("new_query") is None):
-        return "old_query 與 new_query 只有一個"
-    if info.get("old_query") is not None or info.get("golden_rule"):
-        return None
-    if info.get("original_metric") is None:
-        return "沒有 old_query／new_query，也沒有 original_metric 或 golden_rule"
-    return _not_a_string(info, "original_metric")
-
-
-def _not_a_string(info, field):
-    value = info.get(field)
-    if value is not None and not (isinstance(value, str) and value.strip()):
-        return f"{field} 不是非空字串（實為{_kind(value)}）"
-    return None
-
-
-def load_mapping_pairs(args):
-    """從 `--mapping`（prefix-mapping.yaml，`MAPPING_DOCUMENT`）載入比對組。
-
-    migrate 會為每個 key 寫下 `old_query`（原規則 LHS 依租戶聚合）與
-    `new_query`（recording rule 名），兩邊同量綱、同聚合。舊版 migrate 產的
-    檔沒有這兩欄，只能退回「原始指標 vs `tenant:<key>:max`」：rate 類與
-    `:sum` 的比對組在那種檔上比不出東西（issue 1818），所以對每一組印警告，
-    請使用者用新版 migrate 重產。
-
-    改用黃金標準（有 `golden_rule`）的項沒有 migrate 產出的 recording rule，
-    舊檔對它們組出的 `tenant:<key>:max` 不存在、只會報新側缺值，所以跳過並說明。
-
-    ⛔ 不能用的項目是 caller error（#4210，dev-rules §13 的 supplied-but-unusable，
-    比照 #1649）：先前它們被靜默略過，使用者以為那個 key 比對過了。migrate 正常
-    產出的檔不會碰到，碰到的是手改或損毀的檔；全部點名
-    （key 與原因）後以 rc 2 結束，而不是只比對剩下的。形狀見 `_unusable_reason`。
-    """
-    # #3415 / #3445: the path and the content judged by the lib — missing,
-    # not a file, not openable, not UTF-8, not YAML, not a mapping: named.
-    mapping_path = args.mapping
-    mapping = _lib_input.document(args, "mapping", lang="zh")
-
-    pairs = []
-    legacy = []
-    golden = []
-    unusable = []
-    for prefixed_key, info in mapping.items():
-        reason = _unusable_reason(prefixed_key, info)
-        if reason:
-            unusable.append(f"{_shown_key(prefixed_key)}（{reason}）")
-            continue
-        original = info.get("original_metric")
-        old_query, new_query = info.get("old_query"), info.get("new_query")
-        if old_query is None:
-            if info.get("golden_rule"):
-                golden.append(prefixed_key)
-                continue
-            # `_critical` 項讀的是同一條 recording rule。
-            base_key = prefixed_key[:-len("_critical")] if prefixed_key.endswith(
-                "_critical") else prefixed_key
-            old_query, new_query = original, f"tenant:{base_key}:max"
-            legacy.append(prefixed_key)
-        pairs.append({
-            "label": prefixed_key,
-            "old_query": old_query,
-            "new_query": new_query,
-            "alert_name": info.get("alert_name", ""),
-            "golden_match": info.get("golden_match"),
-        })
-    if unusable:
+    path = safe_label(str(args.mapping))
+    doc = _lib_input.document(args, "mapping", lang="zh")
+    if report.is_prefix_mapping(doc):
         raise CallerError(
-            f"--mapping {safe_label(str(mapping_path))}: {len(unusable)} 個項目不能用，整份未比對"
-            f"（請用 migrate 重產這個檔，或修正這幾項）: {'；'.join(unusable)}",
+            f"--mapping {path}: 這是數值比對用的 prefix-mapping（{'／'.join(report.PREFIX_MAPPING_FIELDS)}），"
+            "validate 已改為比對告警集合，不再讀它。請用新版 migrate-rule 重產遷移對照"
+            "（da-tools migrate-rule <rules.yml> --tenant <租戶> --owner <團隊> --expiry <日期>），"
+            "再以 --mapping <輸出目錄>/.migration/mapping/<租戶>.yaml 執行",
+            reason="mapping_prefix_format")
+    mapping, problems = report.read_mapping(doc, is_valid_tenant_id)
+    if problems:
+        shown = "；".join(f"{safe_label(where)}（應為{_EXPECTED[want]}）" for where, want in problems)
+        raise CallerError(
+            f"--mapping {path}: {len(problems)} 處不是 migrate-rule 寫的遷移對照，整份未比對"
+            f"（請用 migrate-rule 重產這個檔，或修正這幾處）: {shown}",
             reason="mapping_entry_unusable")
-    if golden:
-        print(f"ℹ️  {len(golden)} 項改用黃金標準，migrate 沒有為它們產生 recording rule，"
-              f"不在這裡比對: {', '.join(map(safe_label, golden))}", file=sys.stderr)
-    if legacy:
-        print(f"⚠️  {mapping_path} 沒有 old_query／new_query（舊版 migrate 產出），"
-              f"{len(legacy)} 組改用「原始指標 vs tenant:<key>:max」比對；rate 類或 :sum "
-              f"的組會比不出來。請用新版 migrate 重產這個檔: {', '.join(map(safe_label, legacy))}",
-              file=sys.stderr)
-    return pairs
+    if not mapping.alerts:
+        raise CallerError(
+            f"--mapping {path}: 沒有任何有 legacy 對應的告警可比"
+            f"（遷移時新增的 {len(mapping.added)} 條不比），零比對組等於什麼都沒驗證",
+            reason="mapping_no_alerts")
+    return mapping
 
 
-def print_summary(all_results):
-    """印出比對摘要。
+def promql_string(value):
+    """*value* as a PromQL double-quoted string: JSON's escapes are a subset
+    of the Go string syntax PromQL reads."""
+    return json.dumps(value, ensure_ascii=False)
 
-    r3 W2 修正：查詢失敗的 pair（result 為 None）此前被 continue 靜默跳過
-    ——「查詢全失敗」時 mismatches/missing 均 0，照樣印 🎉「可以安全切換」
-    但 exit 2，摘要與 exit code 自相矛盾。現統計 None 數：任一查詢失敗即
-    印警示、抑制 🎉（未驗證 ≠ 一致）。
-    """
-    total_pairs = len(all_results)
-    total_matches = 0
-    total_mismatches = 0
-    total_missing = 0
-    failed_queries = sum(1 for r in all_results if r is None)
 
-    for result in all_results:
-        if result is None:
+def window_text(seconds):
+    """A range-selector duration for *seconds* (in milliseconds, so a
+    fractional --interval keeps its value)."""
+    return f"{max(1, round(seconds * 1000))}ms"
+
+
+def alerts_query(alert, window, side, tenant):
+    """The ALERTS series of *alert* seen during the last *window* seconds on
+    *side* (``legacy`` or ``migrated``): a migrated alert carries
+    ``da_migrated`` and its tenant, a legacy one never carries it."""
+    matchers = [f"alertname={promql_string(alert)}"]
+    if side == "migrated":
+        matchers += [f"{MIGRATED_LABEL}={promql_string(MIGRATED_VALUE)}",
+                     f"{TENANT_LABEL}={promql_string(tenant)}"]
+    else:
+        matchers.append(f'{MIGRATED_LABEL}=""')
+    return f"max_over_time(ALERTS{{{', '.join(matchers)}}}[{window_text(window)}])"
+
+
+class AlertKey(NamedTuple):
+    """One alert series of one side, as the two sides are compared by."""
+
+    alert: str
+    tenant: "str | None"
+    da_cluster: "str | None"
+    state: str
+    labels: tuple  # ((name, value), ...) sorted, without _NOT_IN_LABELS
+
+
+def alert_key(alert, metric, side):
+    """The key of the ALERTS series *metric*. Its tenant: on the migrated
+    side the static ``tenant`` the rule writes; on the legacy side the
+    alert's ``tenant``, else its ``namespace``, else None (unverifiable)."""
+    owner = metric.get(TENANT_LABEL) or None
+    if side == "legacy" and owner is None:
+        owner = metric.get(NAMESPACE_LABEL) or None
+    labels = tuple(sorted((k, v) for k, v in metric.items() if k not in _NOT_IN_LABELS))
+    return AlertKey(alert, owner, metric.get(CLUSTER_IDENTITY_LABEL) or None,
+                    metric.get(ALERTSTATE_LABEL, ""), labels)
+
+
+def labels_text(labels):
+    """*labels* as a PromQL label set."""
+    return "{" + ", ".join(f"{k}={promql_string(v)}" for k, v in labels) + "}"
+
+
+def _order(key):
+    return (key.da_cluster or "", key.state, key.labels)
+
+
+def compare_alerts(alert, tenant, legacy_keys, migrated_keys):
+    """The report rows of *alert*: each key of either side, with its status."""
+    rows = []
+    legacy_mine = {k for k in legacy_keys if k.tenant == tenant}
+    for key in sorted(legacy_mine | set(migrated_keys), key=_order):
+        on_legacy, on_migrated = key in legacy_mine, key in migrated_keys
+        status = report.STATUS_MATCH if on_legacy and on_migrated else report.STATUS_MISMATCH
+        rows.append(_alert_row(key, on_legacy, on_migrated, status))
+    for key in sorted(set(legacy_keys) - legacy_mine,
+                      key=lambda k: (k.tenant is not None, k.tenant or "", *_order(k))):
+        status = report.STATUS_UNVERIFIABLE if key.tenant is None else report.STATUS_OTHER_TENANT
+        rows.append(_alert_row(key, True, False, status))
+    return rows
+
+
+def _alert_row(key, on_legacy, on_migrated, status):
+    return {"kind": report.KIND_ALERT, "rule": key.alert, "tenant": key.tenant or "",
+            CLUSTER_IDENTITY_LABEL: key.da_cluster, "state": key.state,
+            "labels": labels_text(key.labels), "legacy": int(on_legacy),
+            "migrated": int(on_migrated), "status": status}
+
+
+def selector_status(legacy_count, pinned_count):
+    """The precheck verdict of one selector pair."""
+    if pinned_count > 0:
+        return report.STATUS_OK
+    if legacy_count > 0:
+        return report.STATUS_PIN_SELECTS_NOTHING
+    return report.STATUS_UNVERIFIABLE
+
+
+def _count(prom, selector):
+    """How many series *selector* selects on *prom*, or None (said on
+    stderr) when the query is not answered."""
+    try:
+        return vector_count(query_prometheus(prom, f"count({selector})")) or 0
+    except QueryError as exc:
+        print(f"  ❌ 查詢失敗（{prom}）: count({selector}): {exc}", file=sys.stderr)
+        return None
+
+
+def _alert_keys(prom, alert, window, side, tenant):
+    try:
+        rows = query_prometheus(prom, alerts_query(alert, window, side, tenant))
+    except QueryError as exc:
+        print(f"  ❌ 查詢 {side} 端 ALERTS 失敗（{prom}）: {alert}: {exc}", file=sys.stderr)
+        return None
+    return {alert_key(alert, row.get("metric", {}), side) for row in rows}
+
+
+def rule_rows(mapping, prom, window, side):
+    """The rule rows of *side*: every alert of *mapping* not loaded there, or
+    loaded in a group evaluated less often than *window*. None (said on
+    stderr) when the rules API does not answer."""
+    try:
+        groups = query_rules(prom, rule_type="alert")
+    except QueryError as exc:
+        print(f"  ❌ 查詢 {side} 端規則失敗（{prom}）: {exc}", file=sys.stderr)
+        return None
+    loaded = report.loaded_alert_rules(groups, mapping.alerts, migrated=side == "migrated",
+                                       tenant=mapping.tenant, label=MIGRATED_LABEL,
+                                       value=MIGRATED_VALUE)
+    rows = []
+    for alert in mapping.alerts:
+        intervals = loaded[alert]
+        slowest = max((i for i in intervals if i is not None), default=None)
+        if not intervals:
+            status, labels = report.STATUS_RULE_NOT_LOADED, "（沒有載入）"
+        elif slowest is not None and slowest > window:
+            status, labels = report.STATUS_WINDOW_TOO_SHORT, f"評估間隔 {slowest:g}s > 窗口 {window:g}s"
+        else:
             continue
-        for d in result["diffs"]:
-            if d["status"] == "match":
-                total_matches += 1
-            elif d["status"] == "mismatch":
-                total_mismatches += 1
-            elif d["status"] in ("old_missing", "new_missing"):
-                total_missing += 1
+        rows.append({"kind": report.KIND_RULE, "rule": alert, "tenant": mapping.tenant,
+                     CLUSTER_IDENTITY_LABEL: None, "state": "", "labels": labels,
+                     "legacy": int(side == "legacy"), "migrated": int(side == "migrated"),
+                     "status": status})
+    return rows
 
+
+def run_round(mapping, legacy_prom, migrated_prom, window):
+    """One round: ``{"rows": [...], "query_errors": n}``."""
+    rows, query_errors = [], 0
+    for prom, side in ((legacy_prom, "legacy"), (migrated_prom, "migrated")):
+        found = rule_rows(mapping, prom, window, side)
+        if found is None:
+            query_errors += 1
+        else:
+            rows.extend(found)
+    for pair in mapping.selectors:
+        legacy_n = _count(legacy_prom, pair.legacy)
+        pinned_n = _count(migrated_prom, pair.pinned)
+        if legacy_n is None or pinned_n is None:
+            query_errors += 1
+            continue
+        rows.append({"kind": report.KIND_SELECTOR, "rule": pair.rule,
+                     "tenant": mapping.tenant, CLUSTER_IDENTITY_LABEL: None, "state": "",
+                     "labels": f"{pair.legacy} → {pair.pinned}",
+                     "legacy": legacy_n, "migrated": pinned_n,
+                     "status": selector_status(legacy_n, pinned_n)})
+    for alert in mapping.alerts:
+        legacy_keys = _alert_keys(legacy_prom, alert, window, "legacy", mapping.tenant)
+        migrated_keys = _alert_keys(migrated_prom, alert, window, "migrated", mapping.tenant)
+        if legacy_keys is None or migrated_keys is None:
+            query_errors += 1
+            continue
+        rows.extend(compare_alerts(alert, mapping.tenant, legacy_keys, migrated_keys))
+    return {"rows": rows, "query_errors": query_errors}
+
+
+#: The counts a round is judged by (and the readiness reports), by name.
+_TALLIED = (report.STATUS_MATCH, report.STATUS_MISMATCH, *report.SETUP_STATUSES,
+            report.STATUS_UNVERIFIABLE, report.STATUS_OTHER_TENANT)
+
+
+def tally(result):
+    """The status counts of a round, and its query errors."""
+    counts = {status: 0 for status in _TALLIED}
+    for row in result["rows"]:
+        if row["status"] in counts:
+            counts[row["status"]] += 1
+    counts["query_errors"] = result["query_errors"]
+    return counts
+
+
+def is_clean(result):
+    """A round with nothing in the way of a cutover: every rule loaded and
+    evaluated within the window, every pin selecting data, no mismatch,
+    nothing unverifiable, every query answered."""
+    counts = tally(result)
+    return not (any(counts[s] for s in report.BLOCKING_STATUSES) or counts["query_errors"])
+
+
+def setup_problems(result):
+    """How many rows of *result* no waiting clears (``SETUP_STATUSES``)."""
+    counts = tally(result)
+    return sum(counts[s] for s in report.SETUP_STATUSES)
+
+
+def _where(row):
+    cluster = row.get(CLUSTER_IDENTITY_LABEL)
+    tenant = row["tenant"] or "（無 tenant／namespace）"
+    return tenant if cluster is None else f"{tenant} {CLUSTER_IDENTITY_LABEL}={cluster}"
+
+
+def print_summary(result):
+    """印出一輪的摘要；有問題的列逐條點名。"""
+    counts = tally(result)
+    rows = result["rows"]
+    selectors = [r for r in rows if r["kind"] == report.KIND_SELECTOR]
     print(f"\n{'='*60}")
     print("📊 驗證摘要 (Validation Summary)")
     print(f"{'='*60}\n")
-    print(f"比對組數: {total_pairs}")
-    print(f"  ✅ 數值一致: {total_matches}")
-    print(f"  ❌ 數值差異: {total_mismatches}")
-    print(f"  ⚠️  缺少資料: {total_missing}\n")
+    print(f"規則: 沒有載入 {counts[report.STATUS_RULE_NOT_LOADED]}、"
+          f"評估間隔大於窗口 {counts[report.STATUS_WINDOW_TOO_SHORT]}")
+    print(f"selector 預檢: {len(selectors)} 組")
+    print(f"  ❌ 注入後選不到資料: {counts[report.STATUS_PIN_SELECTS_NOTHING]}")
+    print(f"告警序列: {sum(1 for r in rows if r['kind'] == report.KIND_ALERT)}")
+    print(f"  ✅ 兩邊一致: {counts[report.STATUS_MATCH]}")
+    print(f"  ❌ 只在一邊: {counts[report.STATUS_MISMATCH]}")
+    print(f"  ℹ️  legacy 側其他租戶（注入收窄，不算 mismatch）: {counts[report.STATUS_OTHER_TENANT]}")
+    print(f"不可驗（不放行）: {counts[report.STATUS_UNVERIFIABLE]}\n")
 
-    if failed_queries:
-        print(f"⚠️  {failed_queries}/{total_pairs} 組查詢失敗"
-              "（Prometheus 連線 / 查詢層錯誤），本輪結果不完整——"
-              "未驗證的比對組不得視為一致。\n")
-    if total_mismatches == 0 and total_missing == 0 and failed_queries == 0:
-        print("🎉 所有 Recording Rule 數值完全一致！可以安全切換。\n")
-    elif total_mismatches > 0:
-        print("⚠️  發現數值差異，請檢查以下項目:\n")
-        for result in all_results:
-            if result is None:
-                continue
-            for d in result["diffs"]:
-                if d["status"] == "mismatch":
-                    cluster = d.get(CLUSTER_IDENTITY_LABEL)
-                    if cluster is not None and d["delta"] is None:
-                        print(f"  • [{result['label']}] tenant={d['tenant']} "
-                              f"{CLUSTER_IDENTITY_LABEL}={cluster}: "
-                              f"舊={d['old_value']} 新={d['new_value']} "
-                              "(這個叢集只在一邊出現)")
-                        continue
-                    where = (f"tenant={d['tenant']}" if cluster is None else
-                             f"tenant={d['tenant']} {CLUSTER_IDENTITY_LABEL}={cluster}")
-                    print(f"  • [{result['label']}] {where}: "
-                          f"舊={d['old_value']} 新={d['new_value']} "
-                          f"(差異={d['delta']:.4f})")
+    for row in rows:
+        status = row["status"]
+        if status in (report.STATUS_RULE_NOT_LOADED, report.STATUS_WINDOW_TOO_SHORT):
+            side = "legacy" if row["legacy"] else "migrated"
+            print(f"  • [{row['rule']}] {side} 端規則: {row['labels']}")
+        elif status == report.STATUS_PIN_SELECTS_NOTHING:
+            print(f"  • [{row['rule']}] 注入後選不到資料: {row['labels']}"
+                  f"（legacy {row['legacy']} 條序列，pinned 0 條）")
+        elif status == report.STATUS_MISMATCH:
+            side = "legacy" if row["legacy"] else "migrated"
+            print(f"  • [{row['rule']}] 只在 {side} 端 {row['state']}: "
+                  f"{_where(row)} {row['labels']}")
+        elif status == report.STATUS_UNVERIFIABLE and row["kind"] == report.KIND_SELECTOR:
+            print(f"  • [{row['rule']}] 不可驗（兩邊都沒有序列）: {row['labels']}")
+        elif status == report.STATUS_UNVERIFIABLE:
+            print(f"  • [{row['rule']}] 不可驗（legacy 告警沒有 tenant 也沒有 namespace，"
+                  f"歸不了租戶）: {row['state']} {row['labels']}")
+
+    if counts["query_errors"]:
+        print(f"\n⚠️  {counts['query_errors']} 組查詢失敗（Prometheus 連線／查詢層錯誤），"
+              "本輪結果不完整——未驗證的比對組不得視為一致。")
+    if is_clean(result):
+        print("🎉 告警集合一致、預檢乾淨。\n")
+    else:
         print()
 
 
-def classify_results(all_results):
-    """將一輪比對結果歸類為 exit-code 訊號（README §6.3 / _lib_exitcodes 契約）。
-
-    回傳 (has_finding, has_query_error)：
-      - has_finding: 任一 diff 為 mismatch / old_missing / new_missing。
-        口徑刻意與 print_summary 的計數一致（both_empty 不計）。
-      - has_query_error: 任一 pair 查詢失敗（run_single_comparison 回傳
-        None——Prometheus 連線 / 查詢層錯誤）。沿用姊妹工具
-        shadow_verify.py 的 #452/#737 歸類：unreachable Prometheus /
-        query failure 屬 caller error（exit 2，system-actionable），
-        不是 violation。（r3 W2 起 print_summary 也統計 None：任一
-        查詢失敗即印警示並抑制 🎉，摘要與 exit code 不再矛盾。）
-    """
-    has_finding = False
-    has_query_error = False
-    for result in all_results:
-        if result is None:
-            has_query_error = True
-            continue
-        for d in result["diffs"]:
-            if d["status"] in ("mismatch", "old_missing", "new_missing"):
-                has_finding = True
-    return has_finding, has_query_error
+def round_exit_code(result):
+    """The exit code a round answers on its own: a query not answered or a
+    setup problem (``SETUP_STATUSES``) → 2; a mismatch or anything
+    unverifiable → 1."""
+    counts = tally(result)
+    if counts["query_errors"] or setup_problems(result):
+        return EXIT_CALLER_ERROR
+    if counts[report.STATUS_MISMATCH] or counts[report.STATUS_UNVERIFIABLE]:
+        return EXIT_VIOLATION
+    return EXIT_OK
 
 
-def write_csv_report(all_results, output_dir):
-    """將比對結果寫入 CSV。"""
+def write_csv_report(result, output_dir):
+    """將一輪的結果寫入 CSV（欄位是 ``_lib_shadow_report.REPORT_COLUMNS``）。"""
     out_dir = Path(output_dir)
     # #1641: an unusable -o/--output-dir is rc=2 + one line naming the flag,
-    # not a traceback at rc=1 (which reads as "values mismatch").
+    # not a traceback at rc=1 (which reads as a finding).
     ensure_dir_or_die(out_dir, flag="-o/--output-dir")
     csv_path = str(out_dir / "validation-report.csv")
 
     buf = io.StringIO()
-    # lineterminator='\n' — csv.writer's default is '\r\n'; we pin '\n' so the
-    # output is byte-identical on every host.
-    # ⚠️ HISTORY: this used to compensate for write_text_secure translating
-    # \n → \r\n on Windows (default '\r\n' would have landed as '\r\r\n', i.e.
-    # phantom blank rows under universal-newline reading). The writer (the
-    # operator entry since #3107) pins newline="\n" itself, so NO translation
-    # happens any more and this
-    # file is LF on every platform — previously it was CRLF on Windows and LF
-    # on Linux. Do NOT "restore" the old reasoning: that translation is gone.
+    # lineterminator='\n': the writer (the operator entry since #3107) pins
+    # newline="\n" itself, so the file is LF on every platform.
     # #3662: the header, the row keys and the timestamp format are
     # `_lib_shadow_report`'s — the one definition `shadow-verify
     # --report-csv` reads the file by. DictWriter refuses a key that is no
-    # column, so a row cannot drift from the header. The timestamp is UTC,
-    # as the reader takes it (it was local time, read as UTC).
-    writer = csv.DictWriter(buf, fieldnames=REPORT_COLUMNS, lineterminator='\n')
+    # column, so a row cannot drift from the header.
+    writer = csv.DictWriter(buf, fieldnames=report.REPORT_COLUMNS, lineterminator='\n')
     writer.writeheader()
-    ts = time.strftime(TIMESTAMP_FORMAT, time.gmtime())
-    for result in all_results:
-        if result is None:
-            continue
-        for d in result["diffs"]:
-            writer.writerow({
-                "Label": result["label"],
-                "Tenant": tenant_cell(d["tenant"], d.get(CLUSTER_IDENTITY_LABEL)),
-                "Old Query": result["old_query"],
-                "New Query": result["new_query"],
-                "Old Value": d["old_value"],
-                "New Value": d["new_value"],
-                "Delta": d["delta"],
-                "Status": d["status"],
-                "Timestamp": ts,
-            })
-    write_operator_output_or_die(csv_path, "\ufeff" + buf.getvalue(), flag="-o/--output-dir")
+    ts = time.strftime(report.TIMESTAMP_FORMAT, time.gmtime())
+    for row in result["rows"]:
+        writer.writerow({
+            "Kind": row["kind"],
+            "Rule": row["rule"],
+            "Tenant": tenant_cell(row["tenant"], row.get(CLUSTER_IDENTITY_LABEL)),
+            "State": row["state"],
+            "Labels": row["labels"],
+            "Legacy": row["legacy"],
+            "Migrated": row["migrated"],
+            "Status": row["status"],
+            "Timestamp": ts,
+        })
+    write_operator_output_or_die(csv_path, "﻿" + buf.getvalue(), flag="-o/--output-dir")
     return csv_path
 
 
@@ -456,284 +445,166 @@ def _convergence_flag(args) -> str:
 
 
 class ConvergenceTracker:
-    """Track metric pair convergence across watch rounds.
+    """Track clean rounds across watch rounds (#4227).
 
-    Records per-pair status ("match" / "mixed" / "error") each round.
-    Reports cutover readiness when all pairs are stable for N consecutive rounds.
+    Ready when the last ``stability_window`` rounds were all clean
+    (:func:`is_clean`): no mismatch, nothing unverifiable, every pin
+    selecting data, every query answered.
     """
 
-    def __init__(self, stability_window=5):
+    def __init__(self, tenant, stability_window=5):
+        self.tenant = tenant
         self.stability_window = stability_window
-        self.pair_history = {}  # {label: [status, status, ...]}
         self.round_count = 0
+        self.clean_rounds = 0  # consecutive, ending at the last round
+        self.last = None
 
-    def record_round(self, all_results):
-        """Record results from one polling round."""
+    def record_round(self, result):
+        """Record one polling round."""
         self.round_count += 1
-        for result in all_results:
-            if result is None:
-                continue
-            label = result["label"]
-            statuses = [d["status"] for d in result["diffs"]]
-            if all(s == "match" for s in statuses):
-                agg = "match"
-            elif any(s == "mismatch" for s in statuses):
-                agg = "mismatch"
-            else:
-                agg = "mixed"  # missing or empty
-            self.pair_history.setdefault(label, []).append(agg)
-
-    def is_converged(self, label):
-        """Check if a single pair has been stable for stability_window rounds."""
-        history = self.pair_history.get(label, [])
-        if len(history) < self.stability_window:
-            return False
-        recent = history[-self.stability_window:]
-        return all(s == "match" for s in recent)
+        self.clean_rounds = self.clean_rounds + 1 if is_clean(result) else 0
+        self.last = tally(result)
 
     def compute_report(self):
-        """Return cutover readiness assessment."""
-        if self.round_count < 2:
-            return {
-                "ready": False,
-                "reason": f"Insufficient rounds ({self.round_count}, need >= 2)",
-                "round_count": self.round_count,
-            }
-
-        total = len(self.pair_history)
-        if total == 0:
-            return {"ready": False, "reason": "No pairs tracked", "round_count": self.round_count}
-
-        converged = []
-        unconverged = []
-        for label in sorted(self.pair_history):
-            if self.is_converged(label):
-                converged.append(label)
-            else:
-                unconverged.append(label)
-
-        pct = 100.0 * len(converged) / total
-        ready = len(unconverged) == 0
-
-        return {
+        """Return the cutover readiness assessment: the fields of
+        ``_lib_shadow_report.READINESS_FIELDS``, in order, nothing else."""
+        ready = self.clean_rounds >= self.stability_window
+        if ready:
+            recommendation = "Safe to cutover"
+        else:
+            recommendation = (f"{self.clean_rounds}/{self.stability_window} consecutive "
+                              "clean rounds")
+        values = {
             "ready": ready,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "convergence_percentage": round(pct, 1),
-            "converged_count": len(converged),
-            "total_pairs": total,
-            "converged_pairs": converged,
-            "unconverged_pairs": unconverged,
+            "tenant": self.tenant,
             "round_count": self.round_count,
             "stability_window": self.stability_window,
-            "recommendation": "Safe to cutover" if ready
-                else f"{len(unconverged)} pair(s) not yet stable",
+            "clean_rounds": self.clean_rounds,
+            "last_round": self.last or {},
+            "recommendation": recommendation,
         }
+        return {field: values[field] for field in report.READINESS_FIELDS}
 
     def print_status(self):
         """Print convergence status to stdout."""
-        report = self.compute_report()
-        if "convergence_percentage" not in report:
-            # Early rounds or no pairs — minimal output
-            print(f"\n  Convergence: {report.get('reason', 'pending')}")
-            return report
-        pct = report["convergence_percentage"]
-        conv = report["converged_count"]
-        total = report["total_pairs"]
-        print(f"\n  Convergence: {conv}/{total} pairs stable ({pct:.0f}%)")
-        if report["unconverged_pairs"]:
-            print(f"  Unconverged: {', '.join(report['unconverged_pairs'])}")
-        if report["ready"]:
+        out = self.compute_report()
+        print(f"\n  Convergence: {out['clean_rounds']}/{out['stability_window']} "
+              "consecutive clean rounds")
+        if out["ready"]:
             print("\n  *** CUTOVER READY ***")
-        return report
+        return out
 
 
-def _tolerance(text):
-    """argparse type for --tolerance: a finite ratio >= 0 (#2494).
-
-    Once the flag reached the comparison, `inf` (or any huge value) judged
-    every pair a match — a readiness report with nothing compared — and a
-    negative or NaN value judged even identical values a mismatch.
-    """
-    try:
-        value = float(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
-    if not math.isfinite(value) or value < 0:
-        raise argparse.ArgumentTypeError(
-            f"must be a finite ratio >= 0 (e.g. 0.01 = 1%), got {text!r}")
-    return value
+def _write_readiness(args, data):
+    conv_path = args.convergence_output or str(Path(args.output_dir) / "cutover-readiness.json")
+    conv_flag = _convergence_flag(args)
+    ensure_dir_or_die(Path(conv_path).parent, flag=conv_flag)
+    write_operator_output_or_die(conv_path, json_file_text(data, flag=conv_flag), flag=conv_flag)
+    return conv_path
 
 
-def main():
-    """CLI entry point: Shadow Monitoring 驗證工具。."""
-    try_utf8_stdout()
+def build_parser():
+    """The validate parser."""
     parser = argparse.ArgumentParser(
-        description="Shadow Monitoring 驗證工具 — 比對新舊 Recording Rule 數值",
+        description="Shadow Monitoring 驗證工具 — 比對 legacy 與 migrated 規則的告警集合",
     )
-
-    # 比對來源
-    group = parser.add_mutually_exclusive_group(required=True)
-    _lib_input.add_input(group, "--mapping", decode=MAPPING_DOCUMENT,
-                         help="prefix-mapping.yaml 檔案路徑 (批次比對)")
-    group.add_argument("--old", help="舊 Recording Rule 的 PromQL 查詢")
-
-    parser.add_argument("--new", help="新 Recording Rule 的 PromQL 查詢 (搭配 --old)")
+    _lib_input.add_input(parser, "--mapping", decode=MAPPING_DOCUMENT, required=True,
+                         help="migrate-rule 寫的遷移對照（.migration/mapping/<租戶>.yaml）")
     add_prometheus_arg(parser,
-                       help_text="Prometheus Query API URL "
+                       help_text="migrated 規則所在的 Prometheus Query API URL "
                                  "(預設: $PROMETHEUS_URL，否則 http://localhost:9090; "
                                  "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
+    parser.add_argument("--legacy-prometheus", default=None, type=url_type(empty="refuse"),
+                        help="legacy 規則所在的 Prometheus Query API URL（預設: 與 --prometheus 相同）")
     parser.add_argument("-o", "--output-dir", default="validation_output", type=output_dir_type(),
                         help="輸出目錄 (預設: validation_output)")
-    parser.add_argument("--tolerance", type=_tolerance, default=0.001,
-                        help="數值誤差容忍度 (預設: 0.001 = 0.1%%)")
     parser.add_argument("--watch", action="store_true",
                         help="持續監控模式")
-    parser.add_argument("--interval", type=non_negative_seconds, default=60,
-                        help="監控間隔秒數（≥ 0，0 = 輪與輪之間不等待，可帶小數；預設: 60）")
-    parser.add_argument("--rounds", type=int, default=10,
+    parser.add_argument("--interval", type=positive_seconds, default=60,
+                        help="每輪的間隔秒數，也是告警取樣窗口（> 0，可帶小數；預設: 60）。"
+                             "小於規則組的評估間隔時結束碼 2：窗口裡沒有一次評估，那一側就看不到告警")
+    parser.add_argument("--rounds", type=positive_int, default=10,
                         help="監控輪數 (預設: 10)")
     parser.add_argument("--auto-detect-convergence", action="store_true",
-                        help="Track convergence across rounds; auto-stop when cutover ready")
-    parser.add_argument("--stability-window", type=int, default=5,
-                        help="Consecutive match rounds required for convergence (default: 5)")
+                        help="Track clean rounds; auto-stop and write cutover readiness when ready")
+    parser.add_argument("--stability-window", type=positive_int, default=5,
+                        help="Consecutive clean rounds required for convergence (default: 5)")
     # #3107 ③b: the progress and summary own stdout, so `-` is refused.
     parser.add_argument("--convergence-output",
                         type=operator_file_type(
                             stdout="this tool prints its progress and summary there"),
                         help="Write cutover readiness report JSON to file")
+    return parser
 
-    args = parser.parse_args()
 
-    # 構造比對組
-    pairs = []
-    if args.mapping is not None:  # '' is given: refused, named (#3797)
-        pairs = load_mapping_pairs(args)
-        print(f"📂 載入 {len(pairs)} 組比對自 {args.mapping}")
-    elif args.old and args.new:
-        pairs = [{
-            "label": "manual",
-            "old_query": args.old,
-            "new_query": args.new,
-        }]
-    else:
-        print("錯誤: 使用 --old 時必須同時指定 --new", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+def main():
+    """CLI entry point: Shadow Monitoring 驗證工具。."""
+    try_utf8_stdout()
+    args = build_parser().parse_args()
 
-    if not pairs:
-        # r3 W2（沿 #452/#737 系譜）：零比對組 = 什麼都沒驗證，vacuous pass
-        # 不得綠燈放行 promote（`da-tools validate && promote` 會誤過）。
-        # 空 mapping 屬 caller 可修的輸入問題 → EXIT_CALLER_ERROR，訊息走
-        # stderr（stdout 留給驗證結果）。
-        print("No comparison pairs found.", file=sys.stderr)
-        return EXIT_CALLER_ERROR
+    mapping = load_mapping(args)
+    print(f"📂 租戶 {mapping.tenant}: {len(mapping.alerts)} 條告警、"
+          f"{len(mapping.selectors)} 組 selector，載入自 {args.mapping}")
 
     # #3528: --prometheus, else $PROMETHEUS_URL judged here (rc 2, named).
-    prom = prometheus_url(args.prometheus)
+    migrated_prom = prometheus_url(args.prometheus)
+    legacy_prom = args.legacy_prometheus or migrated_prom
 
-    def run_once():
-        all_results = []
-        for pair in pairs:
-            print(f"  🔍 比對: {pair['label']}...")
-            result = run_single_comparison(
-                prom,
-                pair["old_query"],
-                pair["new_query"],
-                pair["label"],
-                tolerance=args.tolerance,
-            )
-            all_results.append(result)
-        return all_results
+    def one_round():
+        result = run_round(mapping, legacy_prom, migrated_prom, args.interval)
+        print_summary(result)
+        return result, write_csv_report(result, args.output_dir)
 
-    if args.watch:
-        tracker = None
-        if args.auto_detect_convergence:
-            tracker = ConvergenceTracker(stability_window=args.stability_window)
-
-        print(f"\n  Watch mode: every {args.interval}s, up to {args.rounds} rounds")
-        if tracker:
-            print(f"  Convergence detection: stability window = {args.stability_window} rounds\n")
-
-        csv_path = None
-        all_results = []
-        for i in range(args.rounds):
-            print(f"\n--- Round {i+1}/{args.rounds} ({time.strftime('%H:%M:%S')}) ---")
-            all_results = run_once()
-            print_summary(all_results)
-            csv_path = write_csv_report(all_results, args.output_dir)
-
-            if tracker:
-                tracker.record_round(all_results)
-                report = tracker.print_status()
-                if report["ready"]:
-                    # Write convergence report and stop
-                    conv_path = args.convergence_output or str(
-                        Path(args.output_dir) / "cutover-readiness.json"
-                    )
-                    conv_flag = _convergence_flag(args)
-                    ensure_dir_or_die(Path(conv_path).parent, flag=conv_flag)
-                    write_operator_output_or_die(
-                        conv_path, json_file_text(report, flag=conv_flag), flag=conv_flag)
-                    print(f"\n  Cutover readiness report: {conv_path}")
-                    break
-
-            if i < args.rounds - 1:
-                time.sleep(args.interval)
-
-        if tracker and not tracker.compute_report()["ready"]:
-            print(f"\n  Watch completed ({args.rounds} rounds) without full convergence.")
-            final = tracker.compute_report()
-            conv_path = args.convergence_output or str(
-                Path(args.output_dir) / "cutover-readiness.json"
-            )
-            conv_flag = _convergence_flag(args)
-            ensure_dir_or_die(Path(conv_path).parent, flag=conv_flag)
-            write_operator_output_or_die(
-                conv_path, json_file_text(final, flag=conv_flag), flag=conv_flag)
-            print(f"  Partial convergence report: {conv_path}")
-
-        if csv_path:
-            print(f"\n  CSV report: {csv_path}")
-
-        # Exit 語意（watch 以「收斂／最後一輪」判定；README §6.3）：
-        #   - --auto-detect-convergence 且 ready → EXIT_OK。收斂（連續
-        #     stability_window 輪全 match）即 shadow monitoring 成功；
-        #     早期輪的 mismatch 是等待收斂的常態，不算 violation。
-        #   - 有 tracker 但未收斂（跑滿 rounds 仍不穩定）→ EXIT_VIOLATION，
-        #     即使最後一輪碰巧全 match——單輪乾淨不足以推翻「未達
-        #     stability window」的判定。
-        #   - 無 tracker → 以最後一輪為準：有 mismatch / missing →
-        #     EXIT_VIOLATION，全 match → EXIT_OK。
-        #   - 判定輪（最後一輪）有查詢層失敗 → EXIT_CALLER_ERROR，優先於
-        #     violation（對齊 shadow_verify.py）；已收斂則不看——收斂本身
-        #     已證明查詢可用且數值穩定。
-        if tracker is not None and tracker.compute_report()["ready"]:
-            return EXIT_OK
-        has_finding, has_query_error = classify_results(all_results)
-        if has_query_error:
-            return EXIT_CALLER_ERROR
-        if tracker is not None:
-            return EXIT_VIOLATION  # 未收斂
-        return EXIT_VIOLATION if has_finding else EXIT_OK
-    else:
-        all_results = run_once()
-        print_summary(all_results)
-        csv_path = write_csv_report(all_results, args.output_dir)
+    if not args.watch:
+        result, csv_path = one_round()
         print(f"📁 CSV 報告: {csv_path}")
+        return round_exit_code(result)
 
-        # Exit 語意（單次模式；README §6.3——修 silent-pass：mismatch /
-        # missing 此前一路 exit 0，客戶 cutover CI 的
-        # `da-tools validate && promote` 會在數值不符時誤放行）：
-        # 查詢層失敗 → EXIT_CALLER_ERROR（優先，對齊 shadow_verify.py）；
-        # mismatch / missing → EXIT_VIOLATION；全 match → EXIT_OK。
-        has_finding, has_query_error = classify_results(all_results)
-        if has_query_error:
-            return EXIT_CALLER_ERROR
-        return EXIT_VIOLATION if has_finding else EXIT_OK
+    tracker = (ConvergenceTracker(mapping.tenant, stability_window=args.stability_window)
+               if args.auto_detect_convergence else None)
+    print(f"\n  Watch mode: every {args.interval}s, up to {args.rounds} rounds")
+    if tracker:
+        print(f"  Convergence detection: stability window = {args.stability_window} rounds\n")
+
+    result = csv_path = None
+    for i in range(args.rounds):
+        print(f"\n--- Round {i+1}/{args.rounds} ({time.strftime('%H:%M:%S')}) ---")
+        result, csv_path = one_round()
+        if tracker:
+            tracker.record_round(result)
+            if tracker.print_status()["ready"]:
+                print(f"\n  Cutover readiness report: "
+                      f"{_write_readiness(args, tracker.compute_report())}")
+                break
+        # A setup problem is no state to wait out: a pin that selects nothing,
+        # a rule not loaded, a window no evaluation falls in.
+        if setup_problems(result):
+            print("\n  規則沒載入、評估間隔大於窗口，或注入後選不到資料：停止監控（修正後再驗）。",
+                  file=sys.stderr)
+            break
+        if i < args.rounds - 1:
+            time.sleep(args.interval)
+
+    if tracker and not tracker.compute_report()["ready"]:
+        print(f"\n  Watch completed ({tracker.round_count} rounds) without convergence.")
+        print(f"  Partial convergence report: {_write_readiness(args, tracker.compute_report())}")
+    print(f"\n  CSV report: {csv_path}")
+
+    # Exit 語意（watch）：收斂 → 0（早期輪的 mismatch 是等待收斂的常態）；
+    # 否則以最後一輪為準：查詢失敗或注入選不到資料 → 2；有收斂偵測但未收斂
+    # → 1，即使最後一輪碰巧乾淨；無收斂偵測 → 最後一輪自己的結束碼。
+    if tracker is not None and tracker.compute_report()["ready"]:
+        return EXIT_OK
+    code = round_exit_code(result)
+    if code == EXIT_CALLER_ERROR or tracker is None:
+        return code
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":
     # entrypoint.py 以 exec_module(__main__) 執行本檔，exit code 只能靠
-    # SystemExit 上傳——裸 main() 會把回傳值丟掉（正是 silent-pass bug 的
-    # 後半段）。main() 回傳 int，run() 把它當成 process exit code。
+    # SystemExit 上傳——裸 main() 會把回傳值丟掉。main() 回傳 int，run() 把它當成
+    # process exit code。
     import _lib_exitcodes  # noqa: E402
     _lib_exitcodes.run(main)

@@ -398,6 +398,21 @@ LIVE.update({
 # Each row reads one file the tool decodes; live/minimal are the same kind of
 # document (fixtures/<slug>/live.* and minimal.*), the minimal one all but
 # empty. The Prometheus a row queries answers from its handler below.
+
+
+def _migrated_rules_answer(legacy=False):
+    """`/api/v1/rules`: the alerts of the mapping fixtures (#4227) loaded as
+    migrated rules of tenant-x — and, *legacy*, as legacy rules beside them."""
+    alerts = ("MySQLTooManyConnections", "MySQLSlowQueries")
+    groups = [{"name": "migrated", "interval": 30, "rules": [
+        {"name": a, "type": "alerting", "labels": {"tenant": "tenant-x", "da_migrated": "true"}}
+        for a in alerts]}]
+    if legacy:
+        groups.append({"name": "legacy", "interval": 30, "rules": [
+            {"name": a, "type": "alerting", "labels": {}} for a in alerts]})
+    return {"status": "success", "data": {"groups": groups}}
+
+
 LIVE.update({
     "alert-correlate --input": {
         "live": _file((HOOK / "fixtures" / "alert-correlate-input" / "live.json")
@@ -424,17 +439,15 @@ LIVE.update({
                          .read_text(encoding="utf-8")),
         "argv": ["preflight", "--mapping", "{F}", "--json", "--prometheus", "{PROM}",
                  "--alertmanager", "{PROM}"],
-        # Prometheus: healthy, 3 tenant:* names, 6 shadow series; Alertmanager
-        # (the same server): a config with the migration_status matcher.
+        # Prometheus: healthy, the mapping's alerts loaded as migrated rules
+        # of tenant-x (#4227); Alertmanager (the same server): a config with
+        # the migrated-alerts shadow receiver (#4277).
         "prometheus": lambda path, params: (
             "Prometheus Server is Healthy." if path == "/-/healthy" else
             {"config": {"original": "route:\n  receiver: default\n  routes:\n"
-                                    "  - receiver: shadow-null\n    matchers:\n"
-                                    "    - migration_status=\"shadow\"\n"}}
+                                    "  - receiver: migrated-alerts-shadow\n"}}
             if path.endswith("/api/v2/status") else
-            {"status": "success", "data": {"resultType": "vector", "result": [
-                {"metric": {}, "value": [1767225600, "3" if "tenant:" in
-                                         params.get("query", "") else "6"]}]}}),
+            _migrated_rules_answer()),
     },
     "shadow-verify --readiness-json": {
         "live": _file((HOOK / "fixtures" / "shadow-verify-readiness-json" / "live.json")
@@ -461,11 +474,13 @@ LIVE.update({
         "minimal": _file((HOOK / "fixtures" / "validate-mapping" / "minimal.yaml")
                          .read_text(encoding="utf-8")),
         "argv": ["--mapping", "{F}", "--prometheus", "{PROM}"],
-        # Every old and new query: the same two tenants, the same values.
-        "prometheus": lambda _path, _params: {
-            "status": "success", "data": {"resultType": "vector", "result": [
-                {"metric": {"tenant": "tenant-x"}, "value": [1767225600, "42"]},
-                {"metric": {"tenant": "tenant-y"}, "value": [1767225600, "17"]}]}},
+        # #4227: every alert loaded on both sides, every selector counting
+        # two series, no ALERTS on either side — a clean round, rc 0.
+        "prometheus": lambda path, params: (
+            _migrated_rules_answer(legacy=True) if path == "/api/v1/rules" else
+            {"status": "success", "data": {"resultType": "vector", "result": [
+                {"metric": {}, "value": [1767225600, "2"]}]
+                if params.get("query", "").startswith("count(") else []}}),
     },
 })
 

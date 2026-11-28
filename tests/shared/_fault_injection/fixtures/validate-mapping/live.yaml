@@ -1,15 +1,18 @@
-# Prefix Mapping Table — the shape `migrate` writes (prefix-mapping.yaml)
-custom_mysql_connections:
-  original_metric: mysql_global_status_threads_connected
-  alert_name: MySQLTooManyConnections
-  golden_match: mysql_connections
-  golden_rule: null
-  old_query: max by(tenant, da_cluster) (mysql_global_status_threads_connected)
-  new_query: tenant:custom_mysql_connections:max
-custom_mysql_slow_queries:
-  original_metric: mysql_global_status_slow_queries
-  alert_name: MySQLSlowQueries
-  golden_match: null
-  golden_rule: null
-  old_query: sum by(tenant, da_cluster) (rate(mysql_global_status_slow_queries[5m]))
-  new_query: tenant:custom_mysql_slow_queries:sum
+# The mapping migrate-rule writes (.migration/mapping/<tenant>.yaml, #4227)
+tenant: tenant-x
+rules_file: .migration/migrated/tenant-x/rules.yml
+rules:
+- group: mysql
+  alert: MySQLTooManyConnections
+  selectors:
+  - legacy: mysql_global_status_threads_connected
+    pinned: mysql_global_status_threads_connected{tenant="tenant-x"}
+- group: mysql
+  alert: MySQLSlowQueries
+  selectors:
+  - legacy: mysql_global_status_slow_queries
+    pinned: mysql_global_status_slow_queries{tenant="tenant-x"}
+- group: migrated-expiry
+  alert: MigratedRulesExpiring
+  added: true
+  selectors: []

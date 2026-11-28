@@ -29,7 +29,7 @@ def _build_help_text(lang):
     diagnose          租戶健康檢查 (配置 + 指標 + 告警狀態)
     batch-diagnose    多租戶並行健康報告 (轉換後)
     baseline          觀察指標並建議閾值
-    validate          比較舊規則 vs 新規則 (影子監控)
+    validate          比對 legacy 與 migrated 規則的告警集合 (影子監控)
     backtest          根據歷史資料回測閾值變更
     cutover           一鍵影子監控轉換 (§7.1 所有步驟)
     blind-spot        掃描叢集目標並查找未監控實例
@@ -119,7 +119,7 @@ Commands (Prometheus API — portable):
     diagnose          Tenant health check (config + metric + alert status)
     batch-diagnose    Multi-tenant parallel health report (post-cutover)
     baseline          Observe metrics and recommend thresholds
-    validate          Compare old vs new recording rules (Shadow Monitoring)
+    validate          Compare legacy vs migrated rules' alert sets (Shadow Monitoring)
     backtest          Backtest threshold changes against historical data
     cutover           One-command Shadow Monitoring cutover (§7.1 all steps)
     blind-spot        Scan cluster targets and find unmonitored instances
@@ -441,7 +441,7 @@ COMMAND_MAP = {
 _USAGE_EXAMPLES = (
     "da-tools check-alert MariaDBHighConnections db-a --prometheus http://prometheus:9090",
     "da-tools baseline --tenant db-a --prometheus http://prometheus:9090",
-    "da-tools validate --mapping prefix-mapping.yaml --prometheus http://prometheus:9090",
+    "da-tools validate --mapping .migration/mapping/<tenant>.yaml --prometheus http://prometheus:9090",
     "da-tools migrate legacy-rules.yml --dry-run --triage",
     "da-tools scaffold --tenant db-c --db mariadb,redis --non-interactive",
     "da-tools lint /path/to/custom-rules/ --ci",

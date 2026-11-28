@@ -69,7 +69,7 @@ lang: zh
 | `threshold_govern.py` | 閾值治理報告（唯讀，#656；ADR-027 §4 移除寫入路徑）。 |
 | `threshold_recommend.py` | 閾值推薦引擎。 |
 | `validate_config.py` | One-stop configuration validation. |
-| `validate_migration.py` | Shadow Monitoring 驗證工具。 |
+| `validate_migration.py` | Shadow Monitoring 驗證工具：比對 legacy 與 migrated 的告警集合。 |
 | `validate_all.py` | Unified validation entry point for all documentation and config validation tools. |
 
 ## DX / 自動化工具
@@ -281,7 +281,7 @@ lang: zh
 - `scripts/tools/_lib_python.py`：Shared library for Dynamic Alerting Python tools.
 - `scripts/tools/_lib_redact.py`：Which config fields hold a credential, and how a report prints them.
 - `scripts/tools/_lib_registry.py`：Does an image ref resolve? Asked of its registry through the distribution v2 API (#3611).
-- `scripts/tools/_lib_shadow_report.py`：The validation report `validate` writes and `shadow-verify` reads (#3662).
+- `scripts/tools/_lib_shadow_report.py`：The shadow-monitoring documents: the migration mapping migrate-rule writes,
 - `scripts/tools/_lib_site_pages.py`：The site pages that live outside ``docs/`` (#4251).
 - `scripts/tools/_lib_tenant_state.py`：Read tenant-api's state records as tenant-api reads them (#2883, ADR-036 §12).
 - `scripts/tools/_lib_tenant_uniqueness.py`：Does this ARTIFACT declare one tenant twice? One measurement, two producers.

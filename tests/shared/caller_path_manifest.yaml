@@ -285,13 +285,11 @@ commands:
   validate:
     "--convergence-output": output
     "--interval": not_path
-    "--new": not_path
-    "--old": not_path
+    "--legacy-prometheus": url
     "--output-dir": output
     "--prometheus": url
     "--rounds": not_path
     "--stability-window": not_path
-    "--tolerance": not_path
   validate-config:
     "--lint-policy": {kind: reader, by: "lint_custom_rules --policy (subprocess, #3797: validate-config never reads it; lint's own declared document judges it, its rc 2 is the custom_rules caller_error row)", pinned_by: "tests/ops/test_validate_config.py::test_lint_policy_is_lint_s_own_input"}
     "--rule-packs": {kind: reader, by: "lint_custom_rules --rule-pack-dir (subprocess; its rc 2 is the custom_rules caller_error row, #3755)", pinned_by: "tests/ops/test_validate_config.py::test_rule_packs_lint_refusal_is_a_caller_error_row"}

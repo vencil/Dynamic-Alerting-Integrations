@@ -294,13 +294,24 @@ KNOWN_FLAG_NOOP: dict[tuple[str, str], str] = {}
 # Stub Prometheus / Alertmanager
 # ═══════════════════════════════════════════════════════════════════════════
 # Instant queries: the stub answers with one sample per tenant, keyed on the
-# query text. validate_migration compares OLD vs NEW per tenant.
+# query text. validate_migration (#4227) counts each selector of the mapping
+# on both sides — one series each: the precheck is clean — and finds no ALERTS
+# on either side (an unknown query answers empty): every round is clean.
 INSTANT_VALUES = {
-    "migration_old": 100.0,
-    "migration_new": 105.0,   # 5 % above old
-    "steady_old": 100.0,      # equal on every round: converges
-    "steady_new": 100.0,
+    "count(steady_metric)": 1.0,
+    'count(steady_metric{tenant="tenant-one"})': 1.0,
 }
+
+
+def _migration_mapping(t: Path) -> str:
+    """A mapping as migrate-rule writes it: one alert, one selector pair."""
+    path = t / "mapping.yaml"
+    path.write_text(json.dumps({
+        "tenant": "tenant-one", "rules_file": "rules.yml", "rules": [
+            {"group": "g", "alert": "Steady", "selectors": [
+                {"legacy": "steady_metric", "pinned": 'steady_metric{tenant="tenant-one"}'}]}]}),
+        encoding="utf-8")
+    return str(path)
 
 
 def _alert_quality_matrix(now: float) -> list[dict]:
@@ -351,6 +362,14 @@ class _StubHandler(BaseHTTPRequestHandler):
                  "value": [time.time(), str(value)]}]
             self._send({"status": "success",
                         "data": {"resultType": "vector", "result": result}})
+        elif url.path == "/api/v1/rules":
+            # #4227: the mapping's alert loaded on both sides (one server),
+            # evaluated within validate's window.
+            self._send({"status": "success", "data": {"groups": [
+                {"name": "g", "interval": 0.001, "rules": [
+                    {"name": "Steady", "type": "alerting", "labels": {}},
+                    {"name": "Steady", "type": "alerting",
+                     "labels": {"tenant": "tenant-one", "da_migrated": "true"}}]}]}})
         elif url.path == "/api/v1/targets":
             # redis, mongodb and mysql exporter targets (blind_spot_discovery).
             # Job names differ from the kind they map to, so excluding by
@@ -655,14 +674,7 @@ def _json_status_and_rc(proc: subprocess.CompletedProcess) -> object:
 
 R = Recipe
 RECIPES: list[Recipe] = [
-    # #2494's regression. New is 5 % above old: the 0.1 % default rejects it,
-    # 10 % accepts it, 1 % still rejects it.
-    R("validate_migration", "--tolerance",
-      lambda t, s: ["--prometheus", s, "--old", "migration_old",
-                    "--new", "migration_new", "-o", str(t / "out")],
-      flip=("--tolerance", "0.1"), boundary=("--tolerance", "0.01"),
-      without=EXIT_VIOLATION, with_=EXIT_OK,
-      note="5 % drift: default 0.001 and 0.01 reject it, 0.1 accepts it"),
+    # #2494's --tolerance was removed with the numeric comparison (#4227).
 
     # ADR-007 domain-policy violation: WARN without --strict, FAIL with it.
     # Boundary: the same tree under a policy the tenant does not violate.
@@ -683,13 +695,13 @@ RECIPES: list[Recipe] = [
       flip=("--min-score", "80"), boundary=("--min-score", "70"),
       note="score 75, no BAD alert: min 80 fails, min 70 and the 0 default pass"),
 
-    # Watch mode, 3 rounds, every round matching. Converged = the last
-    # `window` rounds all match, so the default 5 cannot converge in 3
+    # Watch mode, 3 rounds, every round clean. Converged = the last
+    # `window` rounds all clean, so the default 5 cannot converge in 3
     # rounds (exit 1), 2 does (exit 0), 4 still cannot.
     R("validate_migration", "--stability-window",
-      lambda t, s: ["--prometheus", s, "--old", "steady_old",
-                    "--new", "steady_new", "-o", str(t / "out"),
-                    "--watch", "--interval", "0", "--rounds", "3",
+      lambda t, s: ["--prometheus", s, "--mapping", _migration_mapping(t),
+                    "-o", str(t / "out"),
+                    "--watch", "--interval", "0.001", "--rounds", "3",
                     "--auto-detect-convergence"],
       flip=("--stability-window", "2"), boundary=("--stability-window", "4"),
       without=EXIT_VIOLATION, with_=EXIT_OK,
@@ -867,7 +879,7 @@ def _buckets() -> dict[str, set[tuple[str, str]]]:
 
 def test_population_is_not_empty():
     """An enumerator that finds nothing would make every check below pass."""
-    assert ("validate_migration", "--tolerance") in POPULATION, sorted(POPULATION)
+    assert ("validate_migration", "--stability-window") in POPULATION, sorted(POPULATION)
 
 
 def test_every_verdict_flag_is_gated_or_explained():

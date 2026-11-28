@@ -18,18 +18,17 @@ from _kubectl_fake import install as install_kubectl  # (#3539)
 # Fixtures
 # ---------------------------------------------------------------------------
 
-def _readiness(ready=True, pct=100.0, converged=5, total=5):
-    """A parsed cutover-readiness.json."""
+def _readiness(ready=True, clean=5, tenant="t1"):
+    """A parsed cutover-readiness.json, as `validate --auto-detect-convergence`
+    writes it (#4227: `_lib_shadow_report.READINESS_FIELDS`)."""
     return {
         "ready": ready,
         "timestamp": "2026-03-07T12:00:00Z",
-        "convergence_percentage": pct,
-        "converged_count": converged,
-        "total_pairs": total,
-        "converged_pairs": [f"pair_{i}" for i in range(converged)],
-        "unconverged_pairs": [],
+        "tenant": tenant,
         "round_count": 10,
         "stability_window": 5,
+        "clean_rounds": clean,
+        "last_round": {},
         "recommendation": "Safe to cutover" if ready else "Not ready",
     }
 
@@ -45,11 +44,30 @@ class TestLoadCutoverReadiness:
         """有效內容正確載入。"""
         data = ct.load_cutover_readiness(_readiness())
         assert data["ready"]
-        assert data["convergence_percentage"] == 100.0
+        assert data["clean_rounds"] == 5
+
+    def test_another_tenants_readiness_is_a_caller_error(self):
+        """#4227 review: the readiness names its tenant; one tenant's
+        readiness cut another over. --force does not override it."""
+        report = ct.apply_cutover(_readiness(tenant="t1"), "t2", "http://prom:9090",
+                                  dry_run=True, force=True)
+        assert (report["failed_step"], report["caller_error"]) == ("load_readiness", True)
+        assert "tenant 't1'" in report["message"]
+
+    def test_ready_must_be_a_boolean(self):
+        with pytest.raises(ValueError, match="'ready' is not a boolean"):
+            ct.load_cutover_readiness(_readiness() | {"ready": "false"})
+
+    def test_a_readiness_of_the_numeric_comparison_is_refused(self):
+        """#4227: the fields the numeric comparison wrote are not these."""
+        with pytest.raises(ValueError, match="Missing required fields"):
+            ct.load_cutover_readiness({
+                "ready": True, "timestamp": "t", "convergence_percentage": 100.0,
+                "converged_count": 1, "total_pairs": 1})
 
     def test_not_ready(self):
         """未準備好的狀態正確解析。"""
-        data = ct.load_cutover_readiness(_readiness(ready=False, pct=60.0))
+        data = ct.load_cutover_readiness(_readiness(ready=False, clean=2))
         assert not data["ready"]
 
     def test_missing_fields(self):
@@ -222,10 +240,7 @@ class TestPartWayCutover:
             return (0, "job deleted\n", "")
         _kubectl(monkeypatch, kubectl)
         readiness = tmp_path / "ready.json"
-        readiness.write_text(json.dumps({
-            "ready": True, "timestamp": "2026-01-01T00:00:00Z",
-            "convergence_percentage": 100, "converged_count": 1, "total_pairs": 1,
-        }), encoding="utf-8")
+        readiness.write_text(json.dumps(_readiness()), encoding="utf-8")
         monkeypatch.setattr(sys, "argv", [
             "cutover_tenant.py", "--readiness-json", str(readiness), "--tenant", "t1",
             "--prometheus", "http://127.0.0.1:9", "--json-output"])
@@ -328,7 +343,7 @@ class TestApplyCutover:
     def test_all_steps_succeed(self, _vh, _kube):
         """所有步驟成功。"""
         with tempfile.TemporaryDirectory() as tmp:
-            report = ct.apply_cutover(_readiness(), "db-a", "http://prom:9090")
+            report = ct.apply_cutover(_readiness(tenant="db-a"), "db-a", "http://prom:9090")
             assert report["success"]
             assert len(report["steps_completed"]) == 5
             assert report["failed_step"] is None
@@ -336,7 +351,7 @@ class TestApplyCutover:
     def test_not_ready_without_force(self):
         """未準備好時不強制執行。"""
         with tempfile.TemporaryDirectory() as tmp:
-            report = ct.apply_cutover(_readiness(ready=False, pct=60.0), "db-a",
+            report = ct.apply_cutover(_readiness(ready=False, clean=2, tenant="db-a"), "db-a",
                                       "http://prom:9090")
             assert not report["success"]
             assert report["failed_step"] == "readiness_check"
@@ -347,7 +362,7 @@ class TestApplyCutover:
     def test_force_overrides_not_ready(self, _vh, _kube):
         """--force 覆蓋未準備好的檢查。"""
         with tempfile.TemporaryDirectory() as tmp:
-            report = ct.apply_cutover(_readiness(ready=False, pct=60.0), "db-a",
+            report = ct.apply_cutover(_readiness(ready=False, clean=2, tenant="db-a"), "db-a",
                                       "http://prom:9090", force=True)
             assert report["success"]
 
@@ -356,7 +371,7 @@ class TestApplyCutover:
     def test_fails_at_second_step(self, _kube):
         """在第二步失敗。"""
         with tempfile.TemporaryDirectory() as tmp:
-            report = ct.apply_cutover(_readiness(), "db-a", "http://prom:9090")
+            report = ct.apply_cutover(_readiness(tenant="db-a"), "db-a", "http://prom:9090")
             assert not report["success"]
             assert len(report["steps_completed"]) == 1
             assert report["failed_step"] == "Remove old Recording Rules"
@@ -366,7 +381,7 @@ class TestApplyCutover:
     def test_dry_run(self, _vh, _kube):
         """Dry-run 模式。"""
         with tempfile.TemporaryDirectory() as tmp:
-            report = ct.apply_cutover(_readiness(), "db-a", "http://prom:9090",
+            report = ct.apply_cutover(_readiness(tenant="db-a"), "db-a", "http://prom:9090",
                                       dry_run=True)
             assert report["success"]
 

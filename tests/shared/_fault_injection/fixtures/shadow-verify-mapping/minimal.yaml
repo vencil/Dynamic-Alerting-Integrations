@@ -1,1 +1,5 @@
-{}
+tenant: tenant-x
+rules:
+- group: mysql
+  alert: MySQLTooManyConnections
+  selectors: []

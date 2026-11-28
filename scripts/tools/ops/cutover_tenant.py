@@ -50,6 +50,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 from _lib_python import add_prometheus_arg, prometheus_url  # noqa: E402
 import _lib_input  # noqa: E402  (#3445: --readiness-json is read by the lib)
+from _lib_shadow_report import READINESS_FIELDS  # noqa: E402  (#4227: the one definition)
 from _lib_kubectl import KubectlError, kubectl_run  # noqa: E402  (#3539)
 from _lib_prometheus import (  # noqa: E402
     QueryError, collapse_replicas, prometheus_instant, vector_count,
@@ -67,8 +68,10 @@ def threshold_rows_query(tenant: str) -> str:
 # Readiness JSON
 # ---------------------------------------------------------------------------
 
-REQUIRED_READINESS_FIELDS = {"ready", "timestamp", "convergence_percentage",
-                             "converged_count", "total_pairs"}
+#: #4227: the fields `validate --auto-detect-convergence` writes, one
+#: definition (`_lib_shadow_report.READINESS_FIELDS`). A readiness of the
+#: numeric comparison (convergence_percentage …) lacks them: rc 2, named.
+REQUIRED_READINESS_FIELDS = frozenset(READINESS_FIELDS)
 
 # #452/#737: machine-readable marker prefix for caller-error-class step
 # failures (transport to Prometheus, env precondition) so the orchestrator
@@ -83,16 +86,23 @@ CALLER_ERROR_PREFIX = "[caller-error] "
 READINESS_DOCUMENT = _lib_input.Document("json", dict)
 
 
-def load_cutover_readiness(data):
-    """Validate a parsed cutover-readiness.json (`READINESS_DOCUMENT`).
+def load_cutover_readiness(data, tenant=None):
+    """Validate a parsed cutover-readiness.json (`READINESS_DOCUMENT`): every
+    field there, ``ready`` a boolean, and — given *tenant* — the readiness
+    of that tenant (#4227: one tenant's readiness cut another over).
 
-    Returns *data*, which holds at least: ready, timestamp,
-    convergence_percentage, converged_count, total_pairs.
+    Returns *data*, which holds at least every field of
+    ``_lib_shadow_report.READINESS_FIELDS``.
     Raises ValueError on schema violation.
     """
     missing = REQUIRED_READINESS_FIELDS - set(data.keys())
     if missing:
         raise ValueError(f"Missing required fields: {sorted(missing)}")
+    if not isinstance(data["ready"], bool):
+        raise ValueError(f"'ready' is not a boolean (got {data['ready']!r})")
+    if tenant is not None and data["tenant"] != tenant:
+        raise ValueError(f"the readiness is tenant {data['tenant']!r}'s, not {tenant!r}'s: "
+                         "run validate --auto-detect-convergence for this tenant")
     return data
 
 
@@ -245,7 +255,7 @@ def apply_cutover(readiness_doc, tenant, prometheus_url,
 
     # ── Check readiness ───────────────────────────────────────────────
     try:
-        readiness = load_cutover_readiness(readiness_doc)
+        readiness = load_cutover_readiness(readiness_doc, tenant)
     except ValueError as exc:
         # #452/#737: a readiness JSON without its fields = input precondition
         # failure = caller-error (exit 2), not a cutover finding (exit 1).
@@ -256,9 +266,9 @@ def apply_cutover(readiness_doc, tenant, prometheus_url,
 
     if not readiness.get("ready") and not force:
         report["failed_step"] = "readiness_check"
-        pct = readiness.get("convergence_percentage", "?")
         report["message"] = (
-            f"Not ready for cutover (convergence={pct}%). "
+            f"Not ready for cutover ({readiness.get('clean_rounds', '?')}/"
+            f"{readiness.get('stability_window', '?')} consecutive clean rounds). "
             "Use --force to override."
         )
         return report

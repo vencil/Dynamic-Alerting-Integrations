@@ -76,6 +76,7 @@ from _lib_io import exit_on_yaml_file_error, find_metric_dictionary, load_yaml_f
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 import _lib_input  # noqa: E402  (#4040: the rule file is read once, here)
 import _lib_metric_sources  # noqa: E402  (#4226: how each metric is pinned)
+import _lib_shadow_report as msr  # noqa: E402  (#4227: the mapping's one definition)
 import _lib_write_check  # noqa: E402  (the shared refusal of an existing -o, #3206)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
@@ -674,11 +675,11 @@ def plan_migration(groups, tenant, owner, expiry, dictionary=None, *, pin=None):
         else:
             plan.migrated_records.append(rule["record"])
         out["rules"].append(new)
-        entry = {"group": group.get("name"),
-                 ("alert" if is_alert else "record"): _rule_name(rule)}
+        entry = {msr.RULE_GROUP: group.get("name"),
+                 (msr.RULE_ALERT if is_alert else msr.RULE_RECORD): _rule_name(rule)}
         if not is_alert:
-            entry["migrated_record"] = new["record"]
-        entry["selectors"] = answer.get("selectors", [])
+            entry[msr.RULE_MIGRATED_RECORD] = new["record"]
+        entry[msr.RULE_SELECTORS] = answer.get("selectors", [])
         plan.mapping.append(entry)
         groupings = groupings_without_cluster(tree)
         if groupings:
@@ -688,8 +689,8 @@ def plan_migration(groups, tenant, owner, expiry, dictionary=None, *, pin=None):
         plan.groups.append({"name": EXPIRY_GROUP,
                             "rules": [expiry_alert(tenant, owner, expiry)]})
         # only on the migrated side: the alert-set comparison must expect it
-        plan.mapping.append({"group": EXPIRY_GROUP, "alert": EXPIRY_ALERT, "added": True,
-                             "selectors": []})
+        plan.mapping.append({msr.RULE_GROUP: EXPIRY_GROUP, msr.RULE_ALERT: EXPIRY_ALERT,
+                             msr.RULE_ADDED: True, msr.RULE_SELECTORS: []})
     return plan
 
 
@@ -708,7 +709,8 @@ def render_mapping(plan, tenant):
             "# 與注入後（pinned），以及 (tenant, alert)。selector 是不帶 range／offset／@ 的\n"
             "# instant selector，可直接拿去數序列：legacy 有、pinned 沒有的，就是注入選不到。\n")
     return head + yaml.safe_dump(
-        {"tenant": tenant, "rules_file": rules_rel(tenant), "rules": plan.mapping},
+        {msr.MAPPING_TENANT: tenant, msr.MAPPING_RULES_FILE: rules_rel(tenant),
+         msr.MAPPING_RULES: plan.mapping},
         sort_keys=False, allow_unicode=True, width=1000)
 
 

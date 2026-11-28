@@ -140,7 +140,7 @@ da-tools <command> --help
 | `diagnose` | Tenant 健康檢查（config + metric + alert 狀態） | `<tenant>` |
 | `batch-diagnose` | 批次租戶健康檢查（auto-discover + 並行診斷） | （自動探索） |
 | `baseline` | 觀測指標 + 推薦閾值 | `--tenant <name>` |
-| `validate` | Shadow Monitoring 雙軌比對（含 auto-convergence） | `--mapping <file>` 或 `--old <query> --new <query>` |
+| `validate` | Shadow Monitoring 比對 legacy 與 migrated 規則的告警集合（含 auto-convergence） | `--mapping <file>` |
 | `cutover` | Shadow Monitoring 一鍵切換 | `--tenant <name>` |
 | `blind-spot` | 掃描 cluster targets 與 tenant config 交叉比對盲區 | `--config-dir <dir>` |
 | `backtest` | PR threshold 變更歷史回測 | `--config-dir` + `--baseline` 或 `--tenant` + `--metric` + `--old-value`／`--new-value` |
@@ -474,78 +474,83 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 
 #### validate
 
-Shadow Monitoring 驗證工具：比對新舊 Recording Rule 數值，偵測自動收斂。
+Shadow Monitoring 驗證工具：比對 legacy 規則與 migrated 規則（`migrate-rule` 原樣遷移、注入租戶的規則）各自響的告警集合，偵測收斂。
 
-**用途**：遷移階段持續監控新舊規則行為等價性；確認何時可安全切換。
+**用途**：影子期持續確認 migrated 規則的行為與 legacy 規則一致；判定何時可安全切換（`cutover` 讀它寫的 readiness）。
 
 **語法**
 
 ```bash
-da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
+da-tools validate --mapping <file> [options]
 ```
 
 **必需參數**
 
-選擇一種模式：
+`--mapping <file>`：`migrate-rule` 寫的遷移對照 `.migration/mapping/<租戶>.yaml`。內容長這樣：
 
-1. **Mapping 模式**：`--mapping <file>`
-   讀舊版 `da-tools migrate` 在輸出目錄的 `.migration/` 下產生的 `prefix-mapping.yaml`（現在的 `migrate` 不再產生它，遷移對照改為 `.migration/mapping/<tenant>.yaml`，`validate` 讀新對照的支援在後續的 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)），不接受 CSV（餵 CSV、或內容不是合法 YAML、頂層不是 mapping 時，結束碼 2，stderr 一行點名 `--mapping` 與路徑，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)；先前是 traceback）。檔案長這樣（舊版 `migrate` 的輸出）：
-   ```yaml
-   custom_mysql_global_status_threads_connected:
-     original_metric: mysql_global_status_threads_connected
-     alert_name: MySQLTooManyConnections
-     golden_match: null
-     golden_rule: null
-     old_query: max by(tenant, da_cluster) (mysql_global_status_threads_connected)
-     new_query: tenant:custom_mysql_global_status_threads_connected:max
-   ```
-   每一項產生一組比對：新查詢 `new_query` 是 migrate 產生的 recording rule；舊查詢 `old_query` 是原規則的左半邊以同一種方式逐（租戶、叢集）聚合，rate 類規則保留 `rate()`（例如 `sum by(tenant, da_cluster) (rate(mysql_global_status_slow_queries[5m]))` 對 `tenant:custom_mysql_global_status_slow_queries:sum`）。兩邊量綱相同，recording rule 有載入並正常評估時數值會一致。兩邊以（租戶、`da_cluster`）配對：收了多個叢集資料的 Prometheus 對同一個租戶回好幾列，各叢集各比一次，報告的 `Tenant` 欄寫成 `<租戶> (da_cluster=<叢集>)`；只在一邊出現的叢集列為 `mismatch` 並點名叢集（叢集名裡的 `\`、`(`、`)` 與換行在該欄以 `\` 跳脫）（例如一邊還是舊版 migrate 產的 `by(tenant)` 規則）。序列沒有 `da_cluster` 時，比對與報告與先前相同。v2.9.0 映像的 migrate 產生 `by(tenant)`，validate 只以租戶配對（同一個租戶有兩列時後一列蓋掉前一列） <!-- image-caveat: v2.9.0 -->原始 series 沒有 `tenant` label 時，舊查詢會多出一個沒有租戶的組，報告裡列為新側缺值。字典判定改用黃金標準的項（有 `golden_rule`）migrate 不產出 recording rule，沒有這兩欄，validate 跳過並在 stderr 列出。
-   舊版 migrate 產的檔沒有 `old_query`／`new_query`，validate 會在 stderr 警告並退回「原始指標 對 `tenant:<key>:max`」：rate 類與 `:sum` 的組在這種檔上比不出來：手動補上這兩欄，或以產生它的那一版 migrate 重產（#4226 起的 migrate 不再產生這份檔，新的對照檔由 #4227 接上 validate）。⚠️ v2.9.0 映像的 migrate 與 validate 都還是舊行為。 <!-- image-caveat: v2.9.0 -->
-   不能用的項目會讓整次執行以結束碼 2 停下，stderr 一行點名每個項目的 key 與原因，不比對任何一組（[#4210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4210)；先前是靜默略過，剩下的組照常比對）。不能用的形狀：值不是 mapping（例如留空成 null）、key 不是字串、`old_query`／`new_query` 有寫但不是非空字串、退回舊格式比對時 `original_metric` 不是非空字串、`old_query` 與 `new_query` 只寫了一個、兩者都沒有且也沒有 `original_metric` 或 `golden_rule`。migrate 正常產出的檔不會碰到；`original_metric` 只在退回舊格式比對時才檢查。
+```yaml
+tenant: tenant-x
+rules_file: .migration/migrated/tenant-x/rules.yml
+rules:
+- group: mysql
+  alert: MySQLTooManyConnections
+  selectors:
+  - legacy: mysql_global_status_threads_connected
+    pinned: mysql_global_status_threads_connected{tenant="tenant-x"}
+- group: migrated-expiry
+  alert: MigratedRulesExpiring
+  added: true
+  selectors: []
+```
 
-2. **Query 模式**：`--old <query> --new <query>`
-   直接指定兩組 PromQL
+⛔ 數值比對（`--old`／`--new`、`prefix-mapping.yaml`、`--tolerance`）已移除（[#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)）。給 prefix-mapping 時結束碼 `2`，stderr 一行說明要用新版 `migrate-rule` 重產對照。對照裡不是 `migrate-rule` 寫的形狀的地方（欄位型別、`tenant` 不是合法租戶 id、同一條 alert 出現兩次、`added` 標在 `MigratedRulesExpiring` 以外的告警上）全部點名後結束碼 `2`，不比對任何一組；沒有任何有 legacy 對應的告警也是 `2`。
+
+**每一輪做什麼**
+
+1. **規則檢查**：legacy 端要載入不帶 `da_migrated` 的同名告警規則，migrated 端要載入該租戶的 migrated 規則（`/api/v1/rules`）。任一邊沒載入，或所在規則組的評估間隔大於 `--interval`（窗口裡可能沒有任何一次評估），結束碼 `2`。
+2. **count 預檢**：對照裡每組 selector，`legacy` 在 legacy 端、`pinned` 在 migrated 端各數一次序列。legacy 有、pinned 是 0 → 注入後選不到資料（租戶歸屬的假設錯了，或 `job=`／`instance=` 與平台的抓取設定不一致），結束碼 `2` 並點名；兩邊都是 0 → 不可驗。
+3. **告警集合比對**：兩邊各查 `max_over_time(ALERTS{…}[<interval>])`，即這一輪窗口內響過的序列，firing 與 pending 分開比。比對鍵是（租戶, `da_cluster`, alertname, 狀態）加上序列其餘的 label，去掉 `tenant`、`da_migrated`、`alertstate`。租戶歸屬：migrated 側取規則寫的靜態 `tenant`；legacy 側取告警的 `tenant`，沒有就取 `namespace`，兩者都沒有 → 不可驗。legacy 側其他租戶的告警是注入本來就會收窄的部分，列為 `other_tenant`，不算 mismatch。`added: true` 的告警不比。
+
+不可驗一律不放行（結束碼 `1`，readiness 不 ready）；要切換只能用 `cutover --force`。用窗口而不是瞬時值，是因為兩台 Prometheus 的評估相位不同時瞬時值會誤報；代價是短於一輪的時差看不到。已知限制：legacy 端以 alertname 查，另一條同名但沒有遷移的 legacy 規則會一直是 mismatch。
 
 **選項**
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--mapping <FILE>` | Mapping 模式：`prefix-mapping.yaml` 路徑（見上方） | （無） |
-| `--old <QUERY>` | Query 模式：舊 Recording Rule 的 PromQL（搭配 `--new`） | （無） |
-| `--new <QUERY>` | Query 模式：新 Recording Rule 的 PromQL（搭配 `--old`） | （無） |
-| `--prometheus <URL>` | Prometheus Query API URL。沒給這個旗標時，工具在要查 Prometheus 時才讀 `$PROMETHEUS_URL`（並檢查） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
+| `--mapping <FILE>` | 遷移對照（見上方） | （必需） |
+| `--prometheus <URL>` | migrated 規則所在的 Prometheus Query API URL。沒給這個旗標時，工具在要查 Prometheus 時才讀 `$PROMETHEUS_URL`（並檢查） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
+| `--legacy-prometheus <URL>` | legacy 規則所在的 Prometheus（legacy 規則還在客戶原本的 Prometheus 上時） | 與 `--prometheus` 相同 |
 | `--watch` | 持續監控模式（每 N 秒比對一次） | false |
-| `--interval <SEC>` | 監控間隔（秒，≥ 0，可帶小數；`0` = 輪與輪之間不等待，由 `--rounds` 封頂；負數、`nan`、`inf` 回 `2`） | `60` |
-| `--rounds <N>` | 監控輪數。⚠️ `0` 不是無限，是**一輪都不跑**（`for i in range(rounds)`） | `10` |
-| `--tolerance <RATIO>` | 容許誤差**比值**（不是百分比）：`0.01` = 1%。必須是 ≥ 0 的有限數，`inf`、`nan`、負值回 2 | `0.001` |
-| `--auto-detect-convergence` | 自動偵測收斂並產出 readiness JSON | false |
+| `--interval <SEC>` | 每輪的間隔，也是告警取樣窗口（秒，> 0，可帶小數；`0`、負數、`nan`、`inf` 回 `2`） | `60` |
+| `--rounds <N>` | 監控輪數（≥ 1） | `10` |
+| `--auto-detect-convergence` | 連續 `--stability-window` 輪乾淨就寫 readiness JSON 並停止 | false |
 | `-o, --output-dir <DIR>` | 輸出目錄；`validation-report.csv`（與 watch 模式的 `cutover-readiness.json`）寫在這裡。`-` 不是目錄，會被拒絕（結束碼 `2`，[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | `validation_output` |
-| `--stability-window <N>` | `--auto-detect-convergence` 判定收斂所需的連續全部 match 輪數 | `5` |
+| `--stability-window <N>` | 判定收斂所需的連續乾淨輪數（≥ 1）：規則都已載入、預檢乾淨、沒有 mismatch、沒有不可驗、查詢都有回答 | `5` |
 | `--convergence-output <FILE>` | readiness JSON 的寫入路徑（`--watch --auto-detect-convergence`）。`-`、空值與本次 stdout 已在寫的檔（如 `/dev/stdout`）是結束碼 `2`（stdout 已印進度與摘要；要名為 `-` 的檔請給 `./-`）；權限 `0600`，只對自己擁有的一般檔設定（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | `-o/--output-dir` 下的 `cutover-readiness.json` |
 
 **輸出**
 
-`<output-dir>/validation-report.csv`，每個 rule 對每個租戶一列，欄位固定為 `Label,Tenant,Old Query,New Query,Old Value,New Value,Delta,Status,Timestamp`（`Timestamp` 為 UTC；沒有任何比對結果時只寫表頭，這樣的檔 `shadow-verify --report-csv` 會拒收；`shadow-verify` 依同一份欄位定義讀，[#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)）；摘要另印到 stdout。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
+`<output-dir>/validation-report.csv`，欄位固定為 `Kind,Rule,Tenant,State,Labels,Legacy,Migrated,Status,Timestamp`（`shadow-verify --report-csv` 依同一份欄位定義讀，[#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)）。`Kind` 是 `rule`（規則檢查，只列有問題的）、`selector`（預檢，`Legacy`／`Migrated` 是兩邊的序列數）或 `alert`（一條告警序列，`Legacy`／`Migrated` 是 1／0）；`Status` 是 `match`、`mismatch`、`other_tenant`、`unverifiable`、`ok`、`pin_selects_nothing`、`rule_not_loaded`、`window_too_short` 之一。帶 `da_cluster` 的列，`Tenant` 寫成 `<租戶> (da_cluster=<叢集>)`（叢集名裡的 `\`、`(`、`)` 與換行以 `\` 跳脫）。`Timestamp` 為 UTC；摘要另印到 stdout。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
 
-`--watch` 搭配 `--auto-detect-convergence` 時，額外在同一目錄寫入 `cutover-readiness.json` 供 `cutover` 命令使用（`--convergence-output <FILE>` 可改路徑）；單次模式（無 `--watch`）不會產出這個檔。
+`--watch` 搭配 `--auto-detect-convergence` 時，額外在同一目錄寫入 `cutover-readiness.json` 供 `cutover` 使用（`--convergence-output <FILE>` 可改路徑），欄位為 `ready`、`timestamp`、`tenant`、`round_count`、`stability_window`、`clean_rounds`、`last_round`、`recommendation`；`cutover` 只收這個租戶的 readiness。單次模式（無 `--watch`）不會產出這個檔。
 
 **範例**
 
 ```bash
-da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml
-da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml --watch --interval 60 --rounds 1440
-da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml --watch --auto-detect-convergence -o ./validation_output
+da-tools validate --mapping migration_output/.migration/mapping/tenant-x.yaml
+da-tools validate --mapping migration_output/.migration/mapping/tenant-x.yaml --prometheus http://edge:9090 --legacy-prometheus http://legacy:9090
+da-tools validate --mapping migration_output/.migration/mapping/tenant-x.yaml --watch --interval 60 --rounds 1440 --auto-detect-convergence -o ./validation_output
 ```
 
 **結束碼**
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 全部比對組一致；`--watch --auto-detect-convergence` 時為已收斂 |
-| `1` | 有 mismatch 或單邊查不到值（`old_missing`／`new_missing`）；`--watch --auto-detect-convergence` 時為跑滿 `--rounds` 仍未收斂 |
-| `2` | 呼叫端錯誤：參數錯誤、mapping 裡沒有任何比對組、Prometheus 連線或查詢失敗、或回應格式不對（樣本值讀不懂先前被報成 `old_missing`／`new_missing`、結束碼 `1`，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）（`--watch` 只看最後一輪；已收斂時不看），或 `-o/--output-dir`／`--convergence-output` 指到的輸出路徑寫不進去（#1641）。`--mapping` 不存在、不是一般檔、打不開，或內容讀不了（不是 UTF-8、不是合法 YAML、頂層不是 mapping，空檔亦同）時，stderr 一行點名旗標與路徑（例如 `ERROR: --mapping /x/m.yaml: 頂層不是映射（實為清單）`），不是 traceback（[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)；空檔先前以「No comparison pairs found」結束，同樣是 2） |
+| `0` | 這一輪乾淨（規則都已載入、預檢乾淨、告警集合一致）；`--watch --auto-detect-convergence` 時為已收斂 |
+| `1` | 有 mismatch 或不可驗；`--watch --auto-detect-convergence` 時為跑滿 `--rounds` 仍未收斂（即使最後一輪碰巧乾淨） |
+| `2` | 呼叫端錯誤：參數錯誤；`--mapping` 讀不了、是 prefix-mapping、或不是 `migrate-rule` 寫的形狀；Prometheus 連線或查詢失敗、回應格式不對；規則沒載入、評估間隔大於窗口、注入後選不到資料（等不掉的設定問題，`--watch` 也立刻停止）；或 `-o/--output-dir`／`--convergence-output` 寫不進去（#1641）。`--mapping` 不存在、不是一般檔、打不開，或內容不是 UTF-8、不是合法 YAML、頂層不是 mapping 時，stderr 一行點名旗標與路徑（[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)） |
 
-⚠️ v2.9.0 映像還沒有這套結束碼：除了參數錯誤回 `2`，其餘一律回 `0`，連不上 Prometheus 時也照樣印「🎉 可以安全切換」。用 v2.9.0 時不要拿結束碼當閘門，要讀摘要裡的 mismatch／missing 計數。 <!-- image-caveat: v2.9.0 -->
+⚠️ v2.9.0 映像還是數值比對的舊版 validate，沒有這套行為與結束碼。 <!-- image-caveat: v2.9.0 -->
 
 ---
 
@@ -828,25 +833,25 @@ da-tools shadow-verify <phase> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--mapping <FILE>` | prefix-mapping.yaml 路徑（preflight 用） | （無） |
-| `--report-csv <FILE>` | `validate` 產出的 validation-report.csv 路徑（runtime/convergence 用）。表頭必須正好是 `validate` 寫出的那 9 欄（`Label,Tenant,Old Query,New Query,Old Value,New Value,Delta,Status,Timestamp`，同一份定義），至少一筆資料列，每列欄數相同、`Timestamp` 為 `YYYY-MM-DD HH:MM:SS`（UTC）；否則結束碼 2、點名旗標與路徑。⚠️ 先前空檔、只有表頭、別的工具的 CSV、欄位過多的列、時間格式錯都讀成「沒有 mismatch」，`runtime` 判 PASS、`convergence` 的 7 天檢查只給 warn，結束碼 0；欄位過少的列是 traceback（結束碼 2）（[#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)） | （無） |
+| `--mapping <FILE>` | `migrate-rule` 寫的遷移對照 `.migration/mapping/<租戶>.yaml`（preflight 用）。prefix-mapping、不是 `migrate-rule` 寫的形狀、沒有任何可比的告警時，該項 FAIL、結束碼 2（[#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)；零比對組先前判 pass） | （無） |
+| `--report-csv <FILE>` | `validate` 產出的 validation-report.csv 路徑（runtime/convergence 用）。表頭必須正好是 `validate` 寫出的那 9 欄（`Kind,Rule,Tenant,State,Labels,Legacy,Migrated,Status,Timestamp`，同一份定義；數值比對時代的舊表頭同樣拒收，#4227），至少一筆資料列，每列欄數相同、`Timestamp` 為 `YYYY-MM-DD HH:MM:SS`（UTC）；否則結束碼 2、點名旗標與路徑。⚠️ 先前空檔、只有表頭、別的工具的 CSV、欄位過多的列、時間格式錯都讀成「沒有 mismatch」，`runtime` 判 PASS、`convergence` 的 7 天檢查只給 warn，結束碼 0；欄位過少的列是 traceback（結束碼 2）（[#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)） | （無） |
 | `--readiness-json <FILE>` | cutover-readiness.json 路徑（convergence 用） | （無） |
 | `--prometheus <URL>` | Prometheus Query API URL | `http://localhost:9090` |
-| `--alertmanager <URL>` | Alertmanager API URL。明確給了卻讀不到（連不上、回錯或回應格式不對）時 shadow 路由那一項 FAIL、結束碼 2；不給時讀預設值，讀不到照舊 skip（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。回應格式不對包含缺 `config` 或 `config.original`（AM v2 API 必填）：這種回答先前被當成空設定、報 warn「No migration_status matcher found」、結束碼 0 | `http://localhost:9093` |
+| `--alertmanager <URL>` | Alertmanager API URL。明確給了卻讀不到（連不上、回錯或回應格式不對）時 shadow 路由那一項 FAIL、結束碼 2；不給時讀預設值，讀不到照舊 skip（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。回應格式不對包含缺 `config` 或 `config.original`（AM v2 API 必填）：這種回答先前被當成空設定、報 warn、結束碼 0。讀到的設定裡沒有 receiver `migrated-alerts-shadow`（`generate-routes` 產生的影子路由，#4277）時那一項是 warn | `http://localhost:9093` |
 | `--json` | JSON 結構化輸出（CI 用） | false |
 
 **三階段檢查內容**
 
 | 階段 | 檢查項目 |
 |------|----------|
-| `preflight` | Mapping 檔案存在、Recording rules loaded、AM interception route |
-| `runtime` | Mismatch 計數、tenant 覆蓋率、三態模式一致性 |
-| `convergence` | cutover-readiness 評估、7 天 zero-mismatch 檢查 |
+| `preflight` | 遷移對照可讀且有可比的告警、對照裡的告警已以該租戶的 migrated 規則載入、AM 設定裡有影子 receiver |
+| `runtime` | Mismatch 計數（含注入選不到資料、規則沒載入）、不可驗列（FAIL）、tenant 覆蓋率、三態模式一致性 |
+| `convergence` | cutover-readiness 評估（欄位不齊即結束碼 2）、7 天內沒有 mismatch 或不可驗列 |
 
 **範例**
 
 ```bash
-da-tools shadow-verify preflight --mapping migration_output/.migration/prefix-mapping.yaml
+da-tools shadow-verify preflight --mapping migration_output/.migration/mapping/tenant-x.yaml
 da-tools shadow-verify runtime --report-csv validation_output/validation-report.csv
 da-tools shadow-verify convergence --report-csv validation_output/validation-report.csv --readiness-json validation_output/cutover-readiness.json
 da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
@@ -3836,7 +3841,7 @@ spec:
 
 ### Q: 如何指定多個 metric 用於 validate？
 
-**A**: 使用 `--mapping` 指向舊版 `da-tools migrate` 產生的 `prefix-mapping.yaml`（不接受 CSV）；現在的 `migrate` 寫的是 `.migration/mapping/<tenant>.yaml`，`validate` 讀它的支援在後續的 #4227。詳見 [validate](#validate) 命令說明。
+**A**: 不必指定 metric：`validate` 以 `--mapping` 讀 `migrate-rule` 寫的 `.migration/mapping/<tenant>.yaml`，對照裡每條告警、每組 selector 都會比（數值比對與 `prefix-mapping.yaml` 已移除，#4227）。詳見 [validate](#validate) 命令說明。
 
 ### Q: blind-spot 與 analyze-gaps 有什麼區別？
 
