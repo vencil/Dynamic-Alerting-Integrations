@@ -176,3 +176,59 @@ func TestSpellingFold_EffectiveReadsTheRootAsTheRootDecodeDoes(t *testing.T) {
 		t.Errorf("/effective mysql_threads_running = %v, want the root's other line, 7 (as /metrics)", got)
 	}
 }
+
+// #4253 review F1: merged_hash is the merge's, the same on every path that
+// computes it — /effective's and the exporter's (ComputeMergedHash) — for a
+// root writing a twin the root and a subtree level read differently.
+func TestSpellingFold_MergedHashIsOneOnEveryPath(t *testing.T) {
+	t.Parallel()
+	root := "defaults:\n  mysql_threads_running: \"off\"\n  " + retiredSpelling + ": 7\n"
+	tenant := "tenants:\n  tx:\n    _metadata: {owner: x}\n"
+	dir := t.TempDir()
+	writeMergeTree(t, dir, map[string]string{"_defaults.yaml": root, "tx.yaml": tenant})
+	ec, err := ResolveEffective(dir, "tx", fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	merge, err := ComputeMergedHash([]byte(tenant), "tx", [][]byte{[]byte(root)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ec.MergedHash != merge {
+		t.Errorf("/effective merged_hash %s, ComputeMergedHash %s: one merge, one hash", ec.MergedHash, merge)
+	}
+}
+
+// #4253 review F2: a tenant writing both spellings, the canonical line kept,
+// still writes the retired one — it is counted, as the notice names it.
+func TestSpellingFold_AFoldedRetiredLineIsStillCounted(t *testing.T) {
+	t.Parallel()
+	cfg := loadTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+		"t.yaml":         "tenants:\n  tx:\n    " + retiredSpelling + ": \"7\"\n    mysql_threads_running: \"9\"\n",
+	})
+	if _, st := cfg.ResolveAtWithStats(fixedNow); st.PerTenantDeprecatedKeys["tx"] != 1 {
+		t.Errorf("deprecated keys %v, want tx 1", st.PerTenantDeprecatedKeys)
+	}
+}
+
+// #4253 review F3: a null is no line (#2418) — beside the other spelling it
+// is no duplicate, and a redundant override beside it is still judged.
+func TestSpellingFold_ANullOtherSpellingIsNoDuplicate(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeMergeTree(t, dir, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+		"sub/tx.yaml":    "tenants:\n  tx:\n    mysql_threads_running: \"30\"\n    " + retiredSpelling + ": null\n",
+	})
+	ec, err := ResolveEffective(dir, "tx", fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ec.NotServed) != 0 {
+		t.Errorf("not_served %v, want none: a null writes nothing", ec.NotServed)
+	}
+	if _, judged := ec.JudgeableTenantOverrides()["mysql_threads_running"]; !judged {
+		t.Errorf("judgeable overrides %v lack mysql_threads_running", ec.JudgeableTenantOverrides())
+	}
+}

@@ -1466,3 +1466,22 @@ func TestServedValues_UndeclaredMaintenanceHasNoTimeBox(t *testing.T) {
 		t.Errorf("undeclared maintenance filter: time_boxes %+v, want none", tb)
 	}
 }
+
+// #4253 review F4: both lines of a tenant writing one threshold twice are
+// listed unserved — the kept one and the one folded away — whichever spelling
+// the tenant layer keeps.
+func TestServedValues_BothLinesOfATwiceWrittenThresholdAreListed(t *testing.T) {
+	t.Parallel()
+	retired := "mysql_" + "cpu"
+	for _, c := range []struct{ canon, old string }{{`"abc"`, "disable"}, {"disable", `"abc"`}} {
+		code, doc, _, stderr := served(t, map[string]string{
+			"_defaults.yaml": defaultsOnly + "  mysql_threads_running: 30\n",
+			"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_threads_running: " + c.canon + "\n    " +
+				retired + ": " + c.old + "\n",
+		}, "")
+		mustOK(t, code, stderr)
+		if u := doc.Tenants["tenant-a"].Unserved; len(u) != 2 {
+			t.Errorf("canonical %s, retired %s: unserved %v, want both lines", c.canon, c.old, u)
+		}
+	}
+}

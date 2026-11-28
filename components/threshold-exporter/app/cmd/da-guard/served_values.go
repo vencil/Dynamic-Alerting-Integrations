@@ -1413,14 +1413,19 @@ func unservedOf(dst map[string]any, cfg *config.ThresholdConfig, overrides map[s
 		_, canonWritten := overrides[canon]
 		shadowed := isAlias && canonWritten
 		// #4253: the decode folded the other spelling's line away beside
-		// this one; it is not served.
+		// this one; it is not served. Each line is listed under its own
+		// spelling when the folded one is the canonical key itself.
+		own := k
 		if spelling, line, ok := config.FoldedLine(sv); ok {
 			dst[spelling] = rawScheduledValue(line)
+			if spelling == k {
+				own = config.WrittenSpelling(sv, k)
+			}
 		}
 		if served(canon) && !shadowed {
 			continue
 		}
-		dst[k] = rawScheduledValue(sv)
+		dst[own] = rawScheduledValue(sv)
 	}
 	// #2031: a root dimensional default the tenant does not write is the
 	// tenant's labelled series; one with no row is unserved. #3045: so is

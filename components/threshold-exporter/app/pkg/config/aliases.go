@@ -254,8 +254,8 @@ func rootTakesRaw(key string, raw any) bool { return raw != nil && !rootRefusesR
 // of one threshold whose labels are written differently are one threshold to
 // the fold.
 func normalizeKeysTaking[V any](m map[string]V, takes func(string, V) bool) (map[string]V, *keySpellings) {
-	out, s := normalizeKeys(m)
-	out, folds := foldSpellings(out, takes)
+	normalized, s := normalizeKeys(m)
+	out, folds := foldSpellings(normalized, takes)
 	for canon, f := range folds {
 		if s != nil && f.written != "" {
 			if w, ok := s.written[f.written]; ok {
@@ -266,11 +266,18 @@ func normalizeKeysTaking[V any](m map[string]V, takes func(string, V) bool) (map
 		if f.folded == "" {
 			continue
 		}
+		loser := s.writtenOf(f.folded)
+		if s != nil {
+			delete(s.written, f.folded)
+		}
+		// A null is no line (#2418): beside the other spelling it is no
+		// duplicate.
+		if nullThreshold(f.folded, any(normalized[f.folded])) {
+			continue
+		}
 		if s == nil {
 			s = &keySpellings{}
 		}
-		loser := s.writtenOf(f.folded)
-		delete(s.written, f.folded)
 		s.addDup(canon, loser)
 	}
 	if s != nil && len(s.written) == 0 {
@@ -307,6 +314,24 @@ func FoldedLine(sv ScheduledValue) (spelling string, line ScheduledValue, ok boo
 		return "", ScheduledValue{}, false
 	}
 	return sv.fold.folded, *sv.fold.other, true
+}
+
+// WrittenSpelling is the spelling sv's line was written in, key being the
+// canonical key the decode holds it under (#4253).
+func WrittenSpelling(sv ScheduledValue, key string) string { return sv.writtenAs(key) }
+
+// writesRetired reports whether sv's line, or the line the decode folded
+// away beside it, is written in a retired spelling (#4253) — one retired key
+// the tenant writes either way.
+func writesRetired(sv ScheduledValue) bool {
+	if sv.fold == nil {
+		return false
+	}
+	if sv.fold.written != "" {
+		return true
+	}
+	_, isAlias := canonicalKeyFor(sv.fold.folded)
+	return isAlias
 }
 
 // writtenAs is the spelling sv's line was written in, key being the
@@ -454,7 +479,7 @@ func canonicalizeOverrides(overrides map[string]ScheduledValue) (map[string]Sche
 	for k, sv := range overrides {
 		// #4253: the decode folded a retired spelling into its canonical
 		// key; the line keeps what it was written as (valueFold).
-		if _, isAlias := canonicalKeyFor(k); isAlias || (sv.fold != nil && sv.fold.written != "") {
+		if _, isAlias := canonicalKeyFor(k); isAlias || writesRetired(sv) {
 			deprecated++
 		}
 	}

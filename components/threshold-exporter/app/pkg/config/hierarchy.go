@@ -716,7 +716,11 @@ func computeEffectiveConfigDocAt(
 	parsed := buf[:0]
 	merged := make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
-		pd := parseChainDefaults(defBytes, i == rootLevel)
+		// The merge — merged_hash's input — decodes every level alike, as
+		// every path that hashes it does (ComputeMergedHash, the exporter's
+		// cold hash), which knows no root level; the view reads the root by
+		// the root decode (chainBlock, #4253).
+		pd := ParseChainDefaults(defBytes)
 		if merged, err = foldDefaults(merged, i, pd); err != nil {
 			return effectiveParts{}, err
 		}
