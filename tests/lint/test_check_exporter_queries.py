@@ -560,14 +560,20 @@ def test_query_label_negative_and_regex_ok():
         {"x_liveness", "x_main"}, "P") == []
 
 
-def test_query_label_regexes_do_not_backtrack():
-    """A long run of backslashes with no closing quote must not hang (py/redos):
-    with the overlapping body this took exponential time."""
-    import time
+def test_a_text_the_parser_refuses_is_named():
+    """#4264: the matchers are read on Prometheus' tree, so text it cannot
+    parse (an unterminated string) is refused by name, never scanned."""
     text = 'query="' + "\\" * 40 + 'x' + "\n" + 'label_replace(v, "query", "' + "\\" * 40 + "x"
-    t0 = time.monotonic()
-    ceq.query_label_findings([text], {"x_liveness"}, "P")
-    assert time.monotonic() - t0 < 1.0
+    with pytest.raises(ceq._lib_consumer_read.InputRefused, match="parser refuses"):
+        ceq.query_label_findings([text], {"x_liveness"}, "P")
+
+
+@pytest.mark.parametrize("text", [
+    'x > 0 # query="x_gone" in a comment',
+    'q{other="query=\\"x_gone\\""}',
+])
+def test_a_query_matcher_in_a_comment_or_a_value_is_not_read(text):
+    assert ceq.query_label_findings([text], {"x_liveness"}, "P") == []
 
 
 def test_escaped_quote_inside_query_value():
@@ -628,8 +634,8 @@ def test_compare_served_expands_regex_selectors(tree, tmp_path):
 
 def test_selected_queries_applies_every_matcher():
     qs = {"x_liveness", "x_main", "x_other"}
-    assert ceq.selected_queries('query=~"x_.+", query!="x_liveness"', qs) == {"x_main", "x_other"}
-    assert ceq.selected_queries("query!~'x_(main|other)'", qs) == {"x_liveness"}
+    assert ceq.selected_queries([("=~", "x_.+"), ("!=", "x_liveness")], qs) == {"x_main", "x_other"}
+    assert ceq.selected_queries([("!~", "x_(main|other)")], qs) == {"x_liveness"}
 
 
 def test_liveness_query_on_a_database_of_its_own(tree, monkeypatch):
@@ -645,9 +651,10 @@ def test_liveness_query_on_a_database_of_its_own(tree, monkeypatch):
 
 def test_brace_inside_a_selector_regex():
     qs = {"x_liveness", "x_main"}
-    text = 'query_timestamp{query=~"x_l{1}iveness"}'
-    m = ceq._BUILTIN_SELECTOR.search(text)
-    assert ceq.selected_queries(m.group(2), qs) == {"x_liveness"}
+    [(metric, matchers)] = ceq._builtin_selections(
+        ceq._shape_trees(['query_timestamp{query=~"x_l{1}iveness"}'])[0])
+    assert metric == "query_timestamp"
+    assert ceq.selected_queries(matchers, qs) == {"x_liveness"}
 
 
 def test_label_replace_reading_query_is_not_a_write():
