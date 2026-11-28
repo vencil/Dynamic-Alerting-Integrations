@@ -104,6 +104,11 @@ func main() {
 	if configSubcommand(os.Args) {
 		os.Exit(runConfigCmd(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	}
+	// #4212: `tenant-api log-projection render|run`, Vector's tenant log
+	// projection config from the ledger and conf.d's _log_projection.
+	if logProjSubcommand(os.Args) {
+		os.Exit(runLogProjCmd(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
 
 	// ── Flags ──────────────────────────────────────────────────────────────────
 	// --config-dir and the state-store flags are shared with `tenant-api
