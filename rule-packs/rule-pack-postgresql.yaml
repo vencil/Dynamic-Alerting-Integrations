@@ -6,6 +6,17 @@
 #   - postgres_exporter (https://github.com/prometheus-community/postgres_exporter)
 #
 # >>> GENERATED:threshold-registry:pack-postgresql — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+# 本 pack 讀的每個原始指標選擇器，CI 都拿下列真實 exporter 的 /metrics 核對（#3833；
+# scripts/ops/exporter_capture_runtime.sh postgresql）。其他版本或旗標組合沒有核對過。
+#   prometheus-community/postgres_exporter v0.21.1
+#     映像：quay.io/prometheuscommunity/postgres-exporter@sha256:a88794758ad461c75f3825b51cde4bde730bdff04b3b24d00efe14217e41f615
+#     啟動旗標（非預設，少了就有規則讀不到資料）：--collector.postmaster
+#     核對對象：postgres 16.15；狀態：primary、replica
+#   另外也讀、但沒有核對的名稱：pg_replication_lag
+#       postgres_exporter v0.12.1 以前的名稱，來自它範例 queries.yaml 的 pg_replication 項目
+#       （--extend.query-path）；v0.13.0 起由 replication collector 改供應
+#       pg_replication_lag_seconds。保留給還在用那份查詢檔的租戶，釘住的版本不供應這個名稱
+#
 # 對應的 threshold-exporter 閾值（全部內建在讀取端，conf.d 不必列；[chart-default]=平台出貨即啟用，省略就用平台值；未標者沒有平台值，「未啟用」一行寫原因，租戶、子目錄或 profile 給值才發射）:
 #   pg_connections: 80   [chart-default]   # % of max_connections — Connection usage % warning
 #   pg_replication_lag: 30   [chart-default]   # seconds — Replication lag warning
@@ -40,9 +51,34 @@ groups:
           / on(tenant, da_cluster)
           clamp_min(max by(tenant, da_cluster) (pg_settings_max_connections), 1)
 
-      # Replication lag in seconds (max across replicas)
+      # Replication lag in seconds (max across replicas).
+      #   - Two names for one quantity (#4354): postgres_exporter's replication
+      #     collector (v0.13.0 on) serves pg_replication_lag_seconds;
+      #     pg_replication_lag is what the `pg_replication` entry of its sample
+      #     queries.yaml served up to v0.12.1 (--extend.query-path). Both are
+      #     EXTRACT(EPOCH FROM now() - pg_last_xact_replay_timestamp()) on a
+      #     standby and 0 on a primary — seconds, same help text ("Replication
+      #     lag behind master in seconds"). With only the old name, a tenant on
+      #     a current exporter had no lag series and the alert never fired.
+      #   - One difference, not corrected here: since v0.14.0 the collector
+      #     also reads 0 while the standby has replayed everything it received,
+      #     so an idle primary no longer looks like growing lag. The old query
+      #     did not.
+      #   - One exporter serving both names (a current exporter still given the
+      #     old queries.yaml): both are read and `max` takes the larger, so
+      #     that tenant gets the old query's value, as before #4354. Measured
+      #     on v0.21.1: a queries.yaml metric carries `server`, the collector's
+      #     does not, and with several DSNs the collector serves the FIRST
+      #     server only. `ignoring(server)` would pair the collector's one
+      #     series with every server's old one and drop the other servers' lag
+      #     — a missed alert, not a louder one. Both cases are pinned (t-both,
+      #     t-multi in
+      #     tests/rulepacks/rule-pack-postgresql-replication-lag-names_test.yaml).
       - record: tenant:pg_replication_lag:max
-        expr: max by(tenant, da_cluster) (pg_replication_lag)
+        expr: |
+          max by(tenant, da_cluster) (
+            pg_replication_lag_seconds or pg_replication_lag
+          )
 
       # Deadlocks in the last 5 minutes — a COUNT, not a per-second rate (#4033).
       # Summed over the cluster's databases (pg_stat_database_deadlocks is one

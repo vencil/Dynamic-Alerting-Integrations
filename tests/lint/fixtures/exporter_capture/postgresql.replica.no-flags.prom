@@ -1,0 +1,53 @@
+# HELP pg_replication_is_replica Indicates if the server is a replica
+# TYPE pg_replication_is_replica gauge
+pg_replication_is_replica 1
+# HELP pg_replication_lag_seconds Replication lag behind master in seconds
+# TYPE pg_replication_lag_seconds gauge
+pg_replication_lag_seconds 0
+# HELP pg_replication_last_replay_seconds Age of last replay in seconds
+# TYPE pg_replication_last_replay_seconds gauge
+pg_replication_last_replay_seconds 2.848032
+# HELP pg_settings_max_connections Server Parameter: max_connections
+# TYPE pg_settings_max_connections gauge
+pg_settings_max_connections 100
+# HELP pg_stat_activity_count number of connections in this state
+# TYPE pg_stat_activity_count gauge
+pg_stat_activity_count{application_name="",backend_type="",datname="postgres",state="active",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="postgres",state="disabled",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="postgres",state="fastpath function call",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="postgres",state="idle in transaction",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="postgres",state="idle in transaction (aborted)",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template0",state="active",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template0",state="disabled",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template0",state="fastpath function call",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template0",state="idle",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template0",state="idle in transaction",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template0",state="idle in transaction (aborted)",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template1",state="active",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template1",state="disabled",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template1",state="fastpath function call",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template1",state="idle",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template1",state="idle in transaction",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="",datname="template1",state="idle in transaction (aborted)",usename="",wait_event="",wait_event_type=""} 0
+pg_stat_activity_count{application_name="",backend_type="client backend",datname="postgres",state="idle",usename="monitor",wait_event="ClientRead",wait_event_type="Client"} 1
+# HELP pg_stat_database_deadlocks Number of deadlocks detected in this database
+# TYPE pg_stat_database_deadlocks counter
+pg_stat_database_deadlocks{datid="1",datname="template1"} 0
+pg_stat_database_deadlocks{datid="4",datname="template0"} 0
+pg_stat_database_deadlocks{datid="5",datname="postgres"} 0
+# HELP pg_stat_database_xact_commit Number of transactions in this database that have been committed
+# TYPE pg_stat_database_xact_commit counter
+pg_stat_database_xact_commit{datid="1",datname="template1"} 0
+pg_stat_database_xact_commit{datid="4",datname="template0"} 0
+pg_stat_database_xact_commit{datid="5",datname="postgres"} 2
+# HELP pg_stat_database_xact_rollback Number of transactions in this database that have been rolled back
+# TYPE pg_stat_database_xact_rollback counter
+pg_stat_database_xact_rollback{datid="1",datname="template1"} 0
+pg_stat_database_xact_rollback{datid="4",datname="template0"} 0
+pg_stat_database_xact_rollback{datid="5",datname="postgres"} 0
+# HELP pg_up Whether the last scrape of metrics from PostgreSQL was able to connect to the server (1 for yes, 0 for no).
+# TYPE pg_up gauge
+pg_up 1
+# HELP postgres_exporter_build_info A metric with a constant '1' value labeled by version, revision, branch, goversion from which postgres_exporter was built, and the goos and goarch for the build.
+# TYPE postgres_exporter_build_info gauge
+postgres_exporter_build_info{branch="HEAD",goarch="amd64",goos="linux",goversion="go1.27.4",revision="05ec47a115a2c5d813e64c664213a88682fc8dc7",tags="unknown",version="0.21.1"} 1

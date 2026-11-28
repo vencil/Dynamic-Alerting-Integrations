@@ -2,7 +2,7 @@
 
 The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its
 display/exporter/default_on/rule_pack_file(/queries/presence/metric_prefixes/
-undeclared_notice)
+undeclared_notice/exporters/unchecked_alternatives)
 and its `thresholds` (registry key order), BUILTIN_DEFAULT_KEYS: the keys the
 readers build in with a platform value (`arming: default`, the same derivation
 as builtin_defaults_gen.go, #3832), and EXPECTED_EXPORTER_KINDS: the packs with
@@ -55,6 +55,25 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                 'rule_pack_file': 'rule-packs/rule-pack-postgresql.yaml',
                 'presence': ['pg_up'],
                 'metric_prefixes': ['pg_'],
+                'exporters': [{'name': 'prometheus-community/postgres_exporter',
+                               'image': 'quay.io/prometheuscommunity/postgres-exporter',
+                               'tag': 'v0.21.1',
+                               'digest': 'sha256:a88794758ad461c75f3825b51cde4bde730bdff04b3b24d00efe14217e41f615',
+                               'flags': ['--collector.postmaster'],
+                               'server': {'image': 'postgres',
+                                          'tag': '16.15',
+                                          'digest': 'sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657'},
+                               'states': ['primary', 'replica'],
+                               'identity': {'primary': {'metric': 'pg_replication_is_replica',
+                                                        'value': 0},
+                                            'replica': {'metric': 'pg_replication_is_replica',
+                                                        'value': 1}}}],
+                'unchecked_alternatives': [{'metric': 'pg_replication_lag',
+                                            'reason': 'postgres_exporter v0.12.1 以前的名稱，來自它範例 '
+                                                      'queries.yaml 的 pg_replication 項目 '
+                                                      '（--extend.query-path）；v0.13.0 起由 '
+                                                      'replication collector 改供應 '
+                                                      'pg_replication_lag_seconds。保留給還在用那份查詢檔的租戶，釘住的版本不供應這個名稱'}],
                 'thresholds': {'pg_connections': {'value': 80,
                                                   'unit': '% of max_connections',
                                                   'desc': 'Connection usage % warning',

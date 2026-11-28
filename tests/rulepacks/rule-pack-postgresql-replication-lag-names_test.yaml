@@ -1,0 +1,73 @@
+# promtool unit test — tenant:pg_replication_lag:max reads both names of the
+# replication lag (#4354, #3833).
+#
+# postgres_exporter's replication collector serves pg_replication_lag_seconds
+# (what scripts/ops/exporter_capture_runtime.sh postgresql captures from the
+# pinned exporter); pg_replication_lag is the name its sample queries.yaml
+# served. One tenant per case:
+#   t-new   only the collector's name   -> red when the record reads only the
+#                                          old name (the state before #4354)
+#   t-old   only the queries.yaml name  -> red when the old name is dropped
+#   t-both  both, from one exporter     -> the larger (max), not the two added
+#   t-multi one exporter, two DSNs      -> the second server's lag is kept
+#
+# The labels are the real exporter's (postgres_exporter v0.21.1 given the old
+# queries.yaml): a queries.yaml metric carries `server`, the collector's does
+# not, and with several DSNs the collector serves the first server only. A
+# rule that pairs the two names (`or ignoring(server)`) reads t-multi as 5 —
+# red: the 90 s lag of the second server would never alert.
+rule_files:
+  - ../../rule-packs/rule-pack-postgresql.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'pg_replication_lag_seconds{tenant="t-new", instance="db-0"}'
+        values: '40x20'
+      - series: 'pg_replication_lag{tenant="t-old", instance="db-0", server="db-0:5432"}'
+        values: '50x20'
+      - series: 'pg_replication_lag_seconds{tenant="t-both", instance="db-0"}'
+        values: '5x20'
+      - series: 'pg_replication_lag{tenant="t-both", instance="db-0", server="db-0:5432"}'
+        values: '70x20'
+      - series: 'pg_replication_lag_seconds{tenant="t-multi", instance="db-0"}'
+        values: '5x20'
+      - series: 'pg_replication_lag{tenant="t-multi", instance="db-0", server="db-0:5432"}'
+        values: '5x20'
+      - series: 'pg_replication_lag{tenant="t-multi", instance="db-0", server="db-1:5432"}'
+        values: '90x20'
+      - series: 'user_threshold{tenant="t-new", component="pg", metric="replication_lag", severity="warning"}'
+        values: '30x20'
+      - series: 'user_threshold{tenant="t-old", component="pg", metric="replication_lag", severity="warning"}'
+        values: '30x20'
+      - series: 'user_threshold{tenant="t-both", component="pg", metric="replication_lag", severity="warning"}'
+        values: '30x20'
+      - series: 'user_threshold{tenant="t-multi", component="pg", metric="replication_lag", severity="warning"}'
+        values: '30x20'
+    promql_expr_test:
+      - expr: tenant:pg_replication_lag:max
+        eval_time: 2m
+        exp_samples:
+          - labels: 'tenant:pg_replication_lag:max{tenant="t-new"}'
+            value: 40
+          - labels: 'tenant:pg_replication_lag:max{tenant="t-old"}'
+            value: 50
+          - labels: 'tenant:pg_replication_lag:max{tenant="t-both"}'
+            value: 70
+          - labels: 'tenant:pg_replication_lag:max{tenant="t-multi"}'
+            value: 90
+      # 30s `for:` served: every tenant is above the threshold by one name or
+      # the other, and each fires once.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PostgreSQLHighReplicationLag"})
+        eval_time: 2m
+        exp_samples:
+          - labels: '{alertname="PostgreSQLHighReplicationLag", tenant="t-new"}'
+            value: 1
+          - labels: '{alertname="PostgreSQLHighReplicationLag", tenant="t-old"}'
+            value: 1
+          - labels: '{alertname="PostgreSQLHighReplicationLag", tenant="t-both"}'
+            value: 1
+          - labels: '{alertname="PostgreSQLHighReplicationLag", tenant="t-multi"}'
+            value: 1

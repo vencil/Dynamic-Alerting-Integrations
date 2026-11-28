@@ -41,6 +41,31 @@ sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 # valid Go template (or an HTML tag in the rendered Markdown table).
 from check_leftouterjoin_enrichment import METADATA_ANNOTATIONS  # noqa: E402
 from _lib_versions import read_platform_version  # noqa: E402  (#4251: frontmatter version)
+sys.path.insert(0, os.path.join(_THIS_DIR, "..", "ops"))
+# The registry's projection (#3833): which real exporter a pack was checked
+# against, and the start-up flags its alerts need.
+from _rule_packs_generated import THRESHOLD_PACKS  # noqa: E402
+
+
+def exporter_note(pack_name: str, lang: str) -> List[str]:
+    """The lines under a pack's heading that name the exporter version its
+    alerts were checked against and the non-default flags they need (#3833,
+    `packs.<pack>.exporters` of rule-packs/threshold-registry.yaml). Empty for
+    a pack without `exporters:`."""
+    lines = []
+    for e in (THRESHOLD_PACKS.get(pack_name) or {}).get("exporters") or []:
+        flags = "、".join(f"`{f}`" for f in e["flags"]) if lang == "zh" else \
+            ", ".join(f"`{f}`" for f in e["flags"])
+        if lang == "zh":
+            text = f"> 本 pack 的告警以 `{e['name']}` {e['tag']} 的實際輸出核對過。"
+            if flags:
+                text += f"exporter 要帶這些啟動旗標，否則有告警沒有資料：{flags}。"
+        else:
+            text = f"> This pack's alerts were checked against what `{e['name']}` {e['tag']} serves."
+            if flags:
+                text += f" Start the exporter with these flags, or some alerts have no data: {flags}."
+        lines += [text, ""]
+    return lines
 
 
 def readable(text: str) -> str:
@@ -296,6 +321,7 @@ def generate_markdown_zh(alerts_by_pack: Dict[str, List[Dict]]) -> str:
 
         lines.append(f"## {display_name['zh']}")
         lines.append("")
+        lines += exporter_note(pack_name, "zh")
         lines.append(
             "| 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |"
         )
@@ -363,6 +389,7 @@ def generate_markdown_en(alerts_by_pack: Dict[str, List[Dict]]) -> str:
 
         lines.append(f"## {display_name['en']}")
         lines.append("")
+        lines += exporter_note(pack_name, "en")
         lines.append("| Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |")
         lines.append("|---|---|---|---|---|---|")
 
