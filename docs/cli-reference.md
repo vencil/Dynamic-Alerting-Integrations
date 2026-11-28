@@ -3111,7 +3111,7 @@ da-tools guard <subcommand> [flags]
 | Finding kind | 嚴重度 | 觸發 |
 |---|---|---|
 | `missing_required` | error | `--required-fields` 列的某個 dotted path 在租戶的有效設定裡不存在，或存在但值是 null（閾值 key 的 null 不是停用，要停用請寫 `disable`）；每個租戶、每個欄位一筆，Field 是那個路徑 |
-| `redundant_override` | warn | 這一行覆寫刪掉也不會改變任何東西，拿掉、靠繼承即可。閾值鍵：刪掉這一行後 exporter 送出的閾值列從現在起都相同，且沒有別的 finding 負責這一行。保留鍵：只在保留鍵登錄檔寫明 exporter 是唯一讀者（租戶檔、平台檔、profile 三層都讀），而且值是與繼承值相同的純量時才報（目前是 `_silent_mode` 與 `_state_*`）。從被拒收的子目錄 defaults key 繼承來的不報 |
+| `redundant_override` | warn | 這一行覆寫刪掉也不會改變任何東西，拿掉、靠繼承即可。閾值鍵：刪掉這一行後 exporter 送出的閾值列從現在起都相同，且沒有別的 finding 負責這一行。保留鍵：只在保留鍵登錄檔寫明 exporter 是唯一讀者（租戶檔、平台檔、profile 三層都讀）、形狀不是 mapping 或 list，而且值是與繼承值相同的純量、沒有別的 finding 負責這一行時才報（目前是 `_silent_mode` 與 `_state_*`）。從被拒收的子目錄 defaults key 繼承來的不報 |
 | `cardinality_exceeded` | error | 租戶的預測列數（見 `--cardinality-limit`）超過每租戶上限；或沒超過上限、但超過 exporter 自己的 `max_metrics_per_tenant`（exporter 會悄悄截斷） |
 | `cardinality_warning` | warn | 租戶的預測列數沒超過上限，但超過 warn-tier（上限 × `--cardinality-warn-ratio`）；訊息寫出占上限的百分比與剩餘列數 |
 

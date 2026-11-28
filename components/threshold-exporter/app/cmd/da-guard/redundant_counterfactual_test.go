@@ -172,18 +172,27 @@ func TestGuard_RedundantReservedKeyFollowsTheRegistry(t *testing.T) {
 			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _routing_profile: p1\n",
 				"tx.yaml": "tenants:\n  tx:\n    _routing_profile: p1\n"},
 			"_routing_profile", false},
-		// A silence with an end date: deleting the line moves the end.
-		{"silence with its own end date",
-			map[string]string{"_defaults.yaml": root,
-				"_platform.yaml": "tenants:\n  tx:\n    _silent_mode: {target: all, expires: \"2099-01-01T00:00:00Z\", reason: freeze}\n",
-				"tx.yaml":        "tenants:\n  tx:\n    _silent_mode: {target: all, expires: \"2099-02-01T00:00:00Z\", reason: freeze}\n"},
+		// The exporter does not read `_profile` in a profile.
+		{"profile binding repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_profiles.yaml": "profiles:\n  gold:\n    pg_connections: 70\n",
+				"_platform.yaml": "tenants:\n  tx:\n    _profile: gold\n",
+				"tx.yaml":        "tenants:\n  tx:\n    _profile: gold\n"},
+			"_profile", false},
+		// A list key, here written as a scalar on both sides.
+		{"expected exporters repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _expected_exporters: mysql\n",
+				"tx.yaml": "tenants:\n  tx:\n    _expected_exporters: mysql\n"},
+			"_expected_exporters", false},
+		// The key verdict reports the line (a state filter the root does not
+		// declare): its finding, not a redundancy.
+		{"state key of an undeclared filter repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _state_foo: enable\n",
+				"tx.yaml": "tenants:\n  tx:\n    _state_foo: enable\n"},
+			"_state_foo", false},
+		{"refused silent mode repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _silent_mode: bogus\n",
+				"tx.yaml": "tenants:\n  tx:\n    _silent_mode: bogus\n"},
 			"_silent_mode", false},
-		// A field another reader reads (environment) differs; owner does not.
-		{"metadata sharing one field with the profile",
-			map[string]string{"_defaults.yaml": root,
-				"_profiles.yaml": "profiles:\n  std:\n    _metadata: {owner: team-p, environment: production}\n",
-				"tx.yaml":        "tenants:\n  tx:\n    _profile: std\n    _metadata: {owner: team-p, environment: staging}\n"},
-			"_metadata.owner", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

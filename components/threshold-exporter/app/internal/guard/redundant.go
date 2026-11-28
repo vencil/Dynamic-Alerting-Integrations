@@ -114,7 +114,7 @@ func checkRedundantOverrides(input CheckInput) []Finding {
 		// (scalarsEqual) can carry an `expires:`, a weekday window or a field
 		// another reader reads, which no value comparison sees.
 		for _, key := range sortedKeys(reserved) {
-			if !config.RedundancyJudgedByValue(key) {
+			if !config.RedundancyJudgedByValue(key) || input.ReservedOwnedElsewhere[tenantID][key] {
 				continue
 			}
 			defaultValue, exists := defaultLeaves[key]
