@@ -10,7 +10,7 @@ name: Deploy Documentation
 #   because Pages ran Jekyll over the MkDocs *source* (which has no root
 #   index.html — only index.md + Liquid-hostile content). Serving via
 #   `actions/deploy-pages` deploys the SAME `mkdocs build` output the lint
-#   job runs (docs-ci `MkDocs Build Verification` -> mkdocs_strict_check.sh),
+#   job runs (docs-ci `Documentation Checks` -> mkdocs_strict_check.sh),
 #   so deploy and lint track one artifact instead of two disconnected build
 #   systems — closing the gap where "lint green" said nothing about what was
 #   actually served.
