@@ -114,6 +114,7 @@ _EXPECTED: dict[str, "set[str] | dict[str, set[str]]"] = {
     "_policies": {"key_verdict_incomplete"},
     "_namespaces": set(),
     "_custom_alerts": set(),
+    "_log_projection": set(),
     # The routing keys: the routing matrix walks inside them; here, the key
     # itself holding a canary.
     "_routing": {"url_string": {"routing_not_mapping"},
@@ -140,6 +141,9 @@ _NOT_JUDGED = {
     ("_custom_alerts", "*"): "the generator reads the recipes the exporter serves (the #1211 "
                              "delivery check) and reports nothing about a list that serves none; "
                              "compile-custom-alerts is the tool that judges the list",
+    ("_log_projection", "*"): "read by the log projection generator (tenant-api log-projection, "
+                              "#4212), not by the route generator; validate-config's json_schema row "
+                              "(the schema's enum) and the generator itself judge its value",
     ("_routing_enforced", "url_string"): "a `_routing_enforced` that is not a mapping is read as "
                                          "absent, and nothing says so",
     ("_routing_enforced", "canary_key_list"): "as `url_string`: not a mapping, read as absent",

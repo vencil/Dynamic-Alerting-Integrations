@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+import _lib_site_pages  # noqa: E402  (#4347: the bridge's page list)
 
 # Nav section mapping: front matter tags → nav section
 SECTION_MAP = {
@@ -121,17 +122,18 @@ def scan_docs(docs_dir: Path, repo_root: Path) -> list:
 
 
 def scan_bridged_rule_packs(repo_root: Path) -> list:
-    """Scan repo-root `rule-packs/*.md`, which the site serves via a hook.
+    """The repo-root `rule-packs/` pages the site serves via a hook.
 
     ⚠️ `docs/rule-packs/` does not exist on disk; `scripts/mkdocs/rule_packs_bridge.py`
     materialises those pages at build time, so their nav path happens to equal
-    their repo-relative path. Everything else outside `docs/` is NOT bridged and
-    therefore cannot be a nav entry at all — which is why this function is
-    narrow instead of globbing the repo root.
+    their repo-relative path. Only the pages it bridges (its `RULE_PACK_DOCS`,
+    read through `_lib_site_pages`, #4347) can be nav entries: any other md in
+    `rule-packs/` is not on the site. A listed page that is not a file is
+    skipped, as the bridge skips it.
     """
     files = []
-    for rp_md in sorted((repo_root / 'rule-packs').glob('*.md')):
-        if rp_md.name.endswith('.en.md'):
+    for rp_md in _lib_site_pages.bridged_pages(repo_root):
+        if rp_md.name.endswith('.en.md') or not rp_md.is_file():
             continue
         fm = extract_front_matter(rp_md)
         files.append({

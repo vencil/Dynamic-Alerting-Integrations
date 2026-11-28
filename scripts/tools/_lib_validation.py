@@ -1800,7 +1800,7 @@ def _http_config_problem(value: Any, rtype: str = "webhook") -> Optional[str]:
     """First problem of an ``http_config`` value, or ``None`` (#2295).
 
     Alertmanager's own rule (prometheus/common HTTPClientConfig / ProxyConfig
-    as Alertmanager 0.34.1 loads them), stricter only where the shared case table
+    as Alertmanager 0.34.2 loads them), stricter only where the shared case table
     says ``strict``:
 
     - null is unset; otherwise a mapping;
