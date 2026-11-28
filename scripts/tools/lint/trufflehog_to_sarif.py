@@ -64,8 +64,8 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
 )
-from _lib_io import exit_on_output_write_error, write_operator_output  # noqa: E402  (#1789; #3982)
-from _lib_validation import operator_file_type  # noqa: E402  (#3982)
+from _lib_output import exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#1789; #3981)
+from _lib_validation import artifact_file_type  # noqa: E402  (#3981)
 
 SARIF_SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
 SARIF_VERSION = "2.1.0"
@@ -210,10 +210,9 @@ def main() -> int:
     )
     parser.add_argument("--input", required=True,
                         help="trufflehog --json output file (NDJSON)")
-    # #3982: the scan summary owns stdout, so `-` is refused.
-    parser.add_argument("--output", required=True,
-                        type=operator_file_type(stdout="this tool prints its scan "
-                                                       "summary there"),
+    # #3981: an artifact — upload-sarif loads the file whole — so it is
+    # replaced whole, never a stream: `-` is refused.
+    parser.add_argument("--output", required=True, type=artifact_file_type(),
                         help="SARIF file to write")
     parser.add_argument("--tool-version", default="unknown",
                         help="trufflehog version string for the SARIF tool.driver")
@@ -229,13 +228,14 @@ def main() -> int:
     findings = parse_ndjson(in_path.read_text(encoding="utf-8", errors="replace"))
     sarif, verified_count = convert(findings, args.tool_version)
 
-    # #3982: through the operator entry — same bytes; the file is 0600 (it
-    # lists secret findings; the SARIF upload steps run as the same user).
-    # A failure is the one line every tool prints, via the decorator on
-    # `main` (rc 2).
-    write_operator_output(args.output,
-                          json.dumps(sarif, indent=2, ensure_ascii=False) + "\n",
-                          flag="--output")
+    # #3981 (owner 2026-11-28): an artifact — `upload-sarif` loads it whole
+    # (EXTERNAL_READERS) — so it is replaced atomically: a failed run leaves
+    # no half a SARIF to upload. Same bytes; 0600, as before (it lists secret
+    # findings; the upload step runs as the same user). A failure is the one
+    # line every tool prints, via the decorator on `main` (rc 2).
+    write_repo_artifact(args.output,
+                        json.dumps(sarif, indent=2, ensure_ascii=False) + "\n",
+                        flag="--output", mode=0o600)
 
     total = len(findings)
     unverified_count = total - verified_count

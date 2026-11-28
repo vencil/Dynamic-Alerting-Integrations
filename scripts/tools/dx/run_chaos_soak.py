@@ -7,7 +7,7 @@ Purpose
 Replaces the originally-planned 5-6 week wall-clock staging soak with a
 ~4-hour compressed-time run that touches the exporter's hot-reload path
 ~240 times while sampling /metrics every N seconds. The output is a
-time-series CSV + summary text suitable for `render_soak_diff.py` to
+time-series CSV + run config suitable for `render_soak_diff.py` to
 render a before/after report.
 
 Design rationale
@@ -54,8 +54,14 @@ Quick validation (CI / dev box, ~2 minutes):
 Output
 ------
     <output-dir>/metrics-timeseries.csv  -- one row per /metrics poll
-    <output-dir>/summary.txt             -- header + reload count + first/last samples
     <output-dir>/run-config.json         -- exact args + start/end timestamps
+
+Both are read whole by ``render_soak_diff.py --input-dir`` (``make
+soak-readiness`` runs it next), so they are repo-artifact writes (#3981, owner
+2026-11-28): the time series is kept in memory for the length of the soak and
+both files are replaced atomically when it ends — interrupted or not — after
+both have been judged writable. A killed run (SIGKILL, OOM) leaves the
+directory as it was, not half a CSV. The run summary goes to stderr.
 
 Exit codes
 ----------
@@ -71,6 +77,7 @@ from __future__ import annotations
 import argparse
 import csv
 import http.client
+import io
 import json
 import signal
 import sys
@@ -92,8 +99,9 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_prometheus import transport_error_text  # noqa: E402
-from _lib_io import (  # noqa: E402  (#1789; #3276; #3982: open_operator_output, ensure_dir)
-    OutputWriteError, ensure_dir, exit_on_output_write_error, open_operator_output, safe_label)
+from _lib_output import (  # noqa: E402  (#1789; #3276; #3981: the artifact entry)
+    OutputWriteError, check_writable_artifact, ensure_dir, exit_on_output_write_error, safe_label,
+    write_repo_artifacts)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 
@@ -134,6 +142,10 @@ class RunConfig:
     ended_at_utc: str = ""
     reload_count: int = 0
     poll_count: int = 0
+    # #3981: a SIGINT / SIGTERM ended the soak early. Kept in the file (the
+    # summary that said "INTERRUPTED" is on stderr now) so the directory, and
+    # `render_soak_diff`'s report, can tell a cut-short run from a full one.
+    interrupted: bool = False
 
 
 def parse_metrics(text: str) -> dict[str, float]:
@@ -240,7 +252,7 @@ def _report_deferred_write_error(
     """Say the deferred write failure out loud — but only if it is about to be
     swallowed. Returns whether a line was printed.
 
-    The summary/run-config writes live in a ``finally``, so their
+    The time-series/run-config writes live in a ``finally``, so their
     ``OutputWriteError`` is REMEMBERED and re-raised after the block (raising
     inside a ``finally`` would replace whatever was already unwinding). Two
     cases follow from that, and they need opposite handling:
@@ -266,7 +278,6 @@ def main() -> int:
     # #3528 (imported here: a line added above would move the sink pins
     # test_output_write_sites_stay_guarded.py holds by line)
     from _lib_validation import output_dir_type, url_type
-    import contextlib  # #3982: csv_stack (here for the same reason)
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
     parser.add_argument("--target-url", required=True, type=url_type(empty="refuse"),  # #3528
                         help="threshold-exporter URL (e.g. http://localhost:8080)")
@@ -279,7 +290,7 @@ def main() -> int:
     parser.add_argument("--metrics-poll-sec", type=int, default=30,
                         help="Poll /metrics every N seconds (default 30)")
     parser.add_argument("--output-dir", required=True, type=output_dir_type(),  # #3982
-                        help="Where to write timeseries CSV + summary")
+                        help="Where to write the timeseries CSV + run-config.json")
     args = parser.parse_args()
 
     cfg = RunConfig(
@@ -304,8 +315,14 @@ def main() -> int:
     out = Path(args.output_dir)
     ensure_dir(args.output_dir, flag="--output-dir")
     csv_path = out / "metrics-timeseries.csv"
-    summary_path = out / "summary.txt"
     run_config_path = out / "run-config.json"
+    # #3981: both files are only written when the soak ends, so judge them
+    # NOW — a directory, a FIFO, stdout or a file this process cannot replace
+    # is refused (rc 2) before hours of samples are collected, not after.
+    # What only the write meets (a full disk, a mode changed meanwhile) can
+    # still stop it at the end; the old files are then kept whole.
+    for path in (csv_path, run_config_path):
+        check_writable_artifact(str(path), flag="--output-dir")
 
     # First-probe check: target must be reachable before we commit to a long run
     try:
@@ -326,20 +343,10 @@ def main() -> int:
     next_reload_at = time.time() + args.reload_interval_sec
     next_poll_at = time.time()  # first poll immediately
 
-    # Open CSV with header.
-    # #3982: through the operator entry, held open for the length of the
-    # soak by `csv_stack`; it is closed in the `finally` below with the
-    # summary writes, so a failure of its last flush is remembered like
-    # theirs. (The handle's newline="\n" translates nothing: csv's "\r\n"
-    # row ends are written as they were under newline="".)
-    # ⚠️ Its `writerow` / `flush` in the poll loop happen OUTSIDE the entry's
-    # conversion: a write or a flush that fails there — a filesystem that
-    # filled up mid-run — still exits 1 with a traceback. Written down in
-    # tests/shared/test_output_write_sites_stay_guarded.py (below its
-    # NOT_GUARDED list, which cannot hold them: they are not sinks the scanner
-    # can see), not silently ignored.
-    csv_stack = contextlib.ExitStack()
-    csv_file = csv_stack.enter_context(open_operator_output(str(csv_path), flag="--output-dir"))
+    # The time series, in memory (#3981): written with run-config.json in the
+    # `finally` below, through the artifact entry, so the poll loop does no
+    # file I/O at all. csv's "\r\n" row ends are kept as they are.
+    csv_file = io.StringIO(newline="")
     writer = csv.writer(csv_file)
     writer.writerow(["timestamp_utc", "elapsed_sec", "reload_count_so_far", *TRACKED_METRICS])
 
@@ -379,7 +386,6 @@ def main() -> int:
                     for m in TRACKED_METRICS:
                         row.append(f"{metrics.get(m, ''):.0f}" if isinstance(metrics.get(m), float) else "")
                 writer.writerow(row)
-                csv_file.flush()
                 cfg.poll_count += 1
                 next_poll_at = now + args.metrics_poll_sec
 
@@ -403,38 +409,33 @@ def main() -> int:
         # `sys.exc_info()` there can never answer this question.
         in_flight = sys.exc_info()[0]
         cfg.ended_at_utc = datetime.now(timezone.utc).isoformat()
+        cfg.interrupted = interrupted or in_flight is not None
 
-        # Close the CSV, then write summary + run-config
+        # #3981: both files through the artifact entry, judged together
+        # before the first is written — a blocked run-config.json no longer
+        # leaves a fresh time series beside a stale config.
         try:
-            csv_stack.close()
-            with open_operator_output(str(summary_path), flag="--output-dir") as f:
-                f.write(f"v2.8.0 readiness chaos soak — summary\n")
-                f.write(f"=" * 60 + "\n")
-                f.write(f"target:           {args.target_url}\n")
-                f.write(f"config-dir:       {args.config_dir}\n")
-                f.write(f"duration:         {args.duration_min} min "
-                        f"({'completed' if not interrupted else 'INTERRUPTED'})\n")
-                f.write(f"reload interval:  {args.reload_interval_sec}s\n")
-                f.write(f"metrics poll:     {args.metrics_poll_sec}s\n")
-                f.write(f"started (UTC):    {cfg.started_at_utc}\n")
-                f.write(f"ended (UTC):      {cfg.ended_at_utc}\n")
-                f.write(f"reload count:     {cfg.reload_count}\n")
-                f.write(f"metric polls:     {cfg.poll_count}\n")
-                f.write(f"\nTimeseries:       {csv_path.name}\n")
-                f.write(f"Run report:       run `python3 scripts/tools/dx/render_soak_diff.py "
-                        f"--input-dir {out}`\n")
-
-            with open_operator_output(str(run_config_path), flag="--output-dir") as f:
-                json.dump(asdict(cfg), f, indent=2, ensure_ascii=False)
+            write_repo_artifacts(
+                [(str(csv_path), csv_file.getvalue()),
+                 (str(run_config_path), json.dumps(asdict(cfg), indent=2, ensure_ascii=False))],
+                flag="--output-dir")
         except OutputWriteError as exc:
-            # First failure wins and skips the rest; the info lines below still
-            # run so the operator sees where the (partial) output went.
+            # The info lines below still run so the operator sees the summary
+            # and where the output was meant to go.
             pending_write_error = exc
             _report_deferred_write_error(exc, in_flight)
 
         print(f"\n[info] soak {'completed' if not interrupted else 'interrupted'}: "
               f"{cfg.reload_count} reloads / {cfg.poll_count} polls", file=sys.stderr)
-        print(f"[info] output: {out}", file=sys.stderr)
+        print(f"[info] target: {safe_label(args.target_url)}  "
+              f"config-dir: {safe_label(str(args.config_dir))}  "
+              f"reload interval: {args.reload_interval_sec}s  "
+              f"metrics poll: {args.metrics_poll_sec}s", file=sys.stderr)
+        print(f"[info] started (UTC): {cfg.started_at_utc}  ended (UTC): {cfg.ended_at_utc}",
+              file=sys.stderr)
+        print(f"[info] output: {safe_label(str(out))}  (report: python3 "
+              f"scripts/tools/dx/render_soak_diff.py --input-dir {safe_label(str(out))})",
+              file=sys.stderr)
 
     if pending_write_error is not None:
         raise pending_write_error
