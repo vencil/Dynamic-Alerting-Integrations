@@ -2,7 +2,7 @@
 # Rule Pack: JVM (via Micrometer / client_java / jmx_exporter)
 # v1.12.0: Heap memory, GC 時間佔比, thread pool 監控
 #
-# 需要的 exporter（擇一；GC 與 heap 兩條規則兩種命名都讀）:
+# 需要的 exporter（擇一；GC、heap、thread 三條規則兩種命名都讀）:
 #   - Micrometer Prometheus (Spring Boot Actuator)
 #   - 或 https://github.com/prometheus/client_java 的 JVM 指標
 #   - 或 https://github.com/prometheus/jmx_exporter
@@ -154,11 +154,24 @@ groups:
               "mem_source", "legacy", "", "")
           )
 
-      # Active thread count
+      # Live thread count (daemon + non-daemon), the JVM with the most threads
+      # per (tenant, da_cluster) (#4328).
+      #   - Two names for one quantity, ThreadMXBean.getThreadCount():
+      #     Micrometer exports jvm_threads_live_threads, client_java and the
+      #     jmx_exporter javaagent export jvm_threads_current. With only the
+      #     second the alert never fired for a Micrometer tenant.
+      #   - No per-JVM collapse before `or`: each name is ONE gauge per JVM.
+      #     A JVM exposing both names on the same labels is kept once — `or`
+      #     keeps the left (Micrometer) sample and the client_java one is not
+      #     read, even when it is the larger. If the label sets differ (a
+      #     Micrometer common tag such as `application`), both samples
+      #     survive and `max` reads the larger. Either way one JVM's value,
+      #     never the two added (measured: t-both / t-tags in
+      #     tests/rulepacks/rule-pack-jvm-threads_test.yaml).
       - record: tenant:jvm_threads:current
         expr: |
           max by(tenant, da_cluster) (
-            jvm_threads_current
+            jvm_threads_live_threads or jvm_threads_current
           )
 
   # --- Part 2: Threshold Normalization ---
