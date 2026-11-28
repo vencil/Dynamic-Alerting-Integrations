@@ -116,6 +116,7 @@ lang: zh
 | PodStateMetricsMissing | warning | 靜音 | [tier] {{ $labels.tenant }}: {{ $value }} container(s) reporting but kube-state-metrics shows no pod | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:container_metrics:count |
 | CustomRecipeDiskInert | warning | 靜音 | [SRE] {{ $labels.tenant }} disk recipe inert  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kube_pods_running:count |
 | NodeNotReady | warning | 靜音 | [tier] {{ $labels.tenant }}: node {{ $labels.node }} NotReady  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:node_not_ready:core |
+| NodeReadinessFlapping | warning | 靜音 | [tier] {{ $labels.tenant }}: node {{ $labels.node }} readiness flapping, more than 2 changes in 15m  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:node_readiness_flapping:core |
 | TenantHAReplicasDegraded | warning | 靜音 | [tier] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2)  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:ha_replicas_degraded:by_kind |
 
 ---

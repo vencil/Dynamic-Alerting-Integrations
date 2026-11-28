@@ -191,11 +191,17 @@ class TestKubernetesGoldenPreservation:
                 for r in g.get("rules", []) if kind in r
             ]
 
-        # node-health: 2 recordings on edge, 1 alert on central.
+        # node-health: 3 recordings on edge, 2 alerts on central. The flapping
+        # core (#1177) reads raw kube_node_status_condition, so it has to be an
+        # edge recording too — an alert reading the raw series would be silent
+        # at central.
         assert rules_for(edge, "kubernetes-node-health", "record") == [
             "tenant:node_owner:info", "rule_pack_kubernetes:node_not_ready:core",
+            "rule_pack_kubernetes:node_readiness_flapping:core",
         ]
-        assert rules_for(central, "kubernetes-node-health", "alert") == ["NodeNotReady"]
+        assert rules_for(central, "kubernetes-node-health", "alert") == [
+            "NodeNotReady", "NodeReadinessFlapping",
+        ]
         assert rules_for(central, "kubernetes-node-health", "record") == []
 
         # ha-replicas: recording on edge, alert on central.

@@ -235,7 +235,7 @@ Load pre-written Recording Rules + Alert Rules into your Prometheus to enable dy
 | ConfigMap Name | Contents | Rules |
 |---|---|---|
 | `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 11R + 18A |
-| `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 35R + 16A |
+| `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 36R + 17A |
 | `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 12R + 10A |
 | `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 11A |
 | `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 14R + 12A |

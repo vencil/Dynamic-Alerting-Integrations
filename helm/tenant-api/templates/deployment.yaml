@@ -425,8 +425,11 @@ spec:
             - name: conf-dir
               mountPath: /conf.d
               readOnly: true
+            # --work-dir is a directory the service makes in this mount
+            # (0700), not the mount: an emptyDir's root is not private to
+            # the pod's uid, and the service refuses one that is not (#3981).
             - name: generator-work
-              mountPath: {{ include "tenant-api.generatorWorkDir" . }}
+              mountPath: {{ include "tenant-api.generatorWorkMount" . }}
             # Python's tempfile (a judgement writes the shipped platform rule
             # files there for da-read to load) needs a writable /tmp; the root
             # filesystem is read-only. A volume of its own, not a subPath of
