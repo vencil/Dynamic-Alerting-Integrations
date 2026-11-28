@@ -25,6 +25,7 @@ on:
       # reads something this list does not cover. Do not edit between the
       # markers.
       # BEGIN GENERATED path-trace (scripts/ops/workflow_path_filter.py generate)
+      - ".github/actions/go-build-cache/action.yml"
       - ".github/path-traces/backtest.yaml.json"
       - ".python-version"
       - "Makefile"
@@ -147,11 +148,7 @@ jobs:
       # comment would say that instead of the backtest. Built from the PR
       # checkout, so both trees are read by the same binary.
       - name: Set up Go (da-guard)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+        uses: ./.github/actions/go-build-cache
 
       - name: Build da-guard
         run: |

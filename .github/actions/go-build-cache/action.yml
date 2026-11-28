@@ -1,0 +1,92 @@
+# Go for a job that BUILDS this repo's Go binaries (da-guard, da-read,
+# da-crdecode, tenant-api's server) through scripts/ops/go_build.sh — the
+# pytest session, the lints' with_da_*.sh wrappers, `make da-*-build` (#4224).
+#
+# Why not setup-go's own cache: its key is a hash of go.sum alone, and a key
+# that exists is never saved again. So the cache a job restored was the build
+# cache of the day go.sum last changed, and every Go change since then was
+# recompiled in every job, on every push: measured locally, building the three
+# binaries at HEAD on a two-week-old cache took 139.9 s, on a cold cache
+# 164.0 s, on a current one 0.5 s; CI paid ~131 s of it per Python shard.
+#
+# Here the key is a hash of what the build reads — the Go version, the git
+# object ids of scripts/ops/go_build.sh (the flags) and of each built
+# module's tree — and a miss falls back to the newest entry for the same Go
+# version (`restore-keys`), so a PR that changed some Go recompiles only that.
+# ⛔ This action only RESTORES. The one writer is go-build-cache.yaml, on
+# every push to main, and it keeps ONE entry (it deletes the older ones): an
+# entry is ~1.2 GB compressed (measured cold: GOCACHE 2.3 GB, GOMODCACHE
+# 2.1 GB without the toolchain), the repository's cache quota is 10 GB and
+# evicts least-recently-used, so a PR saving its own entry — or main keeping
+# every one — would evict every other cache this repository has.
+#
+# Not for `go test` / benchmark jobs: `-race` and test binaries compile to
+# other cache entries, so this cache would not hold what they need
+# (tests/ops/test_go_build_cache.py states which jobs must use it).
+name: Go build cache
+description: Set up Go without setup-go's cache and restore the build and module caches main's go-build-cache.yaml saved.
+inputs:
+  go-version-file:
+    description: The go.mod whose go line sets the toolchain (the Go SSOT).
+    default: components/threshold-exporter/app/go.mod
+outputs:
+  key:
+    description: The exact cache key for this tree (go-build-cache.yaml saves under it).
+    value: ${{ steps.key.outputs.key }}
+  cache-hit:
+    description: '"true" when the exact key was restored.'
+    value: ${{ steps.restore.outputs.cache-hit }}
+  paths:
+    description: The cache paths (GOCACHE, GOMODCACHE), newline-separated.
+    value: ${{ steps.paths.outputs.paths }}
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      id: go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: ${{ inputs.go-version-file }}
+        cache: false
+
+    - name: Go cache paths
+      id: paths
+      shell: bash
+      run: |
+        {
+          echo "paths<<EOF"
+          go env GOCACHE
+          go env GOMODCACHE
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Go cache key
+      id: key
+      shell: bash
+      env:
+        GO_VERSION: ${{ steps.go.outputs.go-version }}
+      # The git object ids of what the build reads: go_build.sh (the flags) and
+      # the tree of each module the Makefile's $(GO_BUILD) recipes build —
+      # every go.mod, go.sum and .go file under it, content-addressed by git.
+      # ⛔ Not `hashFiles(...)`: that READS every file it hashes, and the
+      # path-traced jobs (backtest, image-ref-resolve) measure their inputs by
+      # access time, so every `_test.go` would become one of their inputs
+      # (#3756). `git rev-parse` reads .git, not the working tree.
+      run: |
+        set -euo pipefail
+        sources=$(git rev-parse \
+          HEAD:scripts/ops/go_build.sh \
+          HEAD:components/threshold-exporter/app \
+          HEAD:components/da-read \
+          HEAD:components/tenant-api | sha256sum | cut -c1-64)
+        echo "prefix=go-build-${RUNNER_OS}-${GO_VERSION}-" >> "$GITHUB_OUTPUT"
+        echo "key=go-build-${RUNNER_OS}-${GO_VERSION}-${sources}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the Go build and module caches
+      id: restore
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.paths.outputs.paths }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: |
+          ${{ steps.key.outputs.prefix }}
