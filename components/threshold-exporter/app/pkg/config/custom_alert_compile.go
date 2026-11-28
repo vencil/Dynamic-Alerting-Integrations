@@ -354,6 +354,51 @@ func (sh customAlertShape) selector() string {
 	return "{" + strings.Join(parts, ", ") + "}"
 }
 
+// namespaceKeyed reports whether metric is one the platform scrapes itself
+// (namespaceKeyedPrefixes, generated from the threshold registry, #4178):
+// cAdvisor, the kubelet's volume stats, kube-state-metrics. No scrape writes
+// `tenant` on their series; they name the tenant only as `namespace`.
+func namespaceKeyed(metric string) bool {
+	for _, p := range namespaceKeyedPrefixes {
+		if strings.HasPrefix(metric, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// withMatcher is sel with one more matcher.
+func withMatcher(sel, m string) string {
+	if sel == "" {
+		return "{" + m + "}"
+	}
+	return sel[:len(sel)-1] + ", " + m + "}"
+}
+
+// tenantRead is read(sel), the expression a recipe reads metric with, so that
+// its series carry `tenant` (#4178). For a namespace-keyed metric the series
+// without a `tenant` take it from `namespace` (ADR-006: infrastructure metrics
+// are attributed one namespace, one tenant), and those that carry one keep it.
+// The derived side is the left operand of `or`, so it wins where both sides
+// yield the same labels: a series written with `tenant` until a scrape stopped
+// writing it is stale from then on, and the series without it is the live one.
+func tenantRead(metric, sel string, read func(sel string) string) string {
+	if !namespaceKeyed(metric) {
+		return read(sel)
+	}
+	return "(label_replace(" + read(withMatcher(sel, `tenant=""`)) +
+		`, "tenant", "$1", "namespace", "(.+)") or ` + read(withMatcher(sel, `tenant!=""`)) + ")"
+}
+
+// gauge and overRange are the two reads a recipe makes of a metric.
+func gauge(metric string) func(string) string {
+	return func(sel string) string { return metric + sel }
+}
+
+func overRange(fn, metric, window string) func(string) string {
+	return func(sel string) string { return fn + "(" + metric + sel + "[" + window + "])" }
+}
+
 var singleUnitDuration = regexp.MustCompile(`^(\d+)(h|m|s)$`)
 
 // durationSeconds converts a single-unit duration (`4h`, `30m`, `10s`) — the
@@ -415,16 +460,16 @@ func metricRecord(id string, sh customAlertShape, sel string) orderedMap {
 	var inner string
 	switch sh.Recipe {
 	case "threshold":
-		inner = "max by(tenant, version" + g + ") (" + sh.Metric + sel + ")"
+		inner = "max by(tenant, version" + g + ") (" + tenantRead(sh.Metric, sel, gauge(sh.Metric)) + ")"
 	case "rate":
-		inner = "sum by(tenant, version" + g + ") (rate(" + sh.Metric + sel + "[" + sh.Window + "]))"
+		inner = "sum by(tenant, version" + g + ") (" + tenantRead(sh.Metric, sel, overRange("rate", sh.Metric, sh.Window)) + ")"
 	case "ratio":
-		inner = "sum by(tenant" + g + ") (rate(" + sh.Metric + sel + "[" + sh.Window + "]))\n" +
+		inner = "sum by(tenant" + g + ") (" + tenantRead(sh.Metric, sel, overRange("rate", sh.Metric, sh.Window)) + ")\n" +
 			"  /\n" +
-			"(sum by(tenant" + g + ") (rate(" + sh.Denominator + sel + "[" + sh.Window + "])) > 0)"
+			"(sum by(tenant" + g + ") (" + tenantRead(sh.Denominator, sel, overRange("rate", sh.Denominator, sh.Window)) + ") > 0)"
 	case "p99_latency":
 		inner = "histogram_quantile(" + sh.Quantile + ",\n" +
-			"  sum by(le, tenant, version" + g + ") (rate(" + sh.Metric + "_bucket" + sel + "[" + sh.Window + "])))"
+			"  sum by(le, tenant, version" + g + ") (" + tenantRead(sh.Metric, sel, overRange("rate", sh.Metric+"_bucket", sh.Window)) + "))"
 	}
 	return record("custom:metric:"+id, normVersion(inner))
 }
@@ -446,9 +491,9 @@ func forecastRecords(id string, sh customAlertShape, sel string) ([]any, error) 
 	var baseInner, predictInner string
 	if sh.Capacity != "" {
 		// ratio mode: a headroom ratio (avail/capacity); >0 guard → no +Inf.
-		baseInner = "sum by(tenant" + g + ") (" + sh.Metric + sel + ")\n" +
+		baseInner = "sum by(tenant" + g + ") (" + tenantRead(sh.Metric, sel, gauge(sh.Metric)) + ")\n" +
 			"  /\n" +
-			"(sum by(tenant" + g + ") (" + sh.Capacity + sel + ") > 0)"
+			"(sum by(tenant" + g + ") (" + tenantRead(sh.Capacity, sel, gauge(sh.Capacity)) + ") > 0)"
 		// clamp_min(…, 0): a negative headroom is meaningless and firing is
 		// unchanged. `base < band`: "predicted low AND currently low" kills the
 		// transient write-burst false positive; the tenant threshold is
@@ -460,7 +505,7 @@ func forecastRecords(id string, sh customAlertShape, sel string) ([]any, error) 
 			"count_over_time(" + base + "[" + l + "s]) > " + strconv.Itoa(forecastMinSamples)
 	} else {
 		// raw mode: an arbitrary gauge — no [0,1] clamp, no band (TRK-327, #936).
-		baseInner = "max by(tenant, version" + g + ") (" + sh.Metric + sel + ")"
+		baseInner = "max by(tenant, version" + g + ") (" + tenantRead(sh.Metric, sel, gauge(sh.Metric)) + ")"
 		predictInner = "predict_linear(" + base + "[" + l + "s], " + h + ")\n" +
 			"  and\n" +
 			"count_over_time(" + base + "[" + l + "s]) > " + strconv.Itoa(forecastMinSamples)
@@ -497,13 +542,13 @@ func sloBurnRecords(id string, sh customAlertShape, sel string) []any {
 		ratioWins = append(ratioWins, long[i], short[i])
 	}
 	for _, w := range ratioWins {
-		inner := "sum by(tenant" + g + ") (rate(" + sh.Metric + sel + "[" + w + "]))\n" +
+		inner := "sum by(tenant" + g + ") (" + tenantRead(sh.Metric, sel, overRange("rate", sh.Metric, w)) + ")\n" +
 			"  /\n" +
-			"(sum by(tenant" + g + ") (rate(" + sh.Denominator + sel + "[" + w + "])) > 0)"
+			"(sum by(tenant" + g + ") (" + tenantRead(sh.Denominator, sel, overRange("rate", sh.Denominator, w)) + ") > 0)"
 		out = append(out, record("custom:metric:"+id+":"+w, normVersion(inner)))
 	}
 	for _, w := range short {
-		out = append(out, record("custom:bad:"+id+":"+w, normVersion("sum by(tenant"+g+") (increase("+sh.Metric+sel+"["+w+"]))")))
+		out = append(out, record("custom:bad:"+id+":"+w, normVersion("sum by(tenant"+g+") ("+tenantRead(sh.Metric, sel, overRange("increase", sh.Metric, w))+")")))
 	}
 	return out
 }
@@ -594,7 +639,7 @@ func sloCoreRecord(id, sev string, minEvents int) (orderedMap, error) {
 // aggregated — per cluster, so the alert says which cluster matched. The raw
 // metric is inlined (no per-pod recording rule).
 func eqCoreRecord(id, sev, metric, sel string) orderedMap {
-	raw := normVersion(metric + sel)
+	raw := normVersion(tenantRead(metric, sel, gauge(metric)))
 	thr := `custom:threshold:` + id + `{severity="` + sev + `"}`
 	core := "(\n" +
 		"  max by(tenant, version, " + clusterLabel + ", name, mode) (\n" +
@@ -628,7 +673,7 @@ func coreRecord(id string, sh customAlertShape, sev, sel string) orderedMap {
 		core = "(\n" +
 			"  " + thr + "\n" +
 			"  unless on(tenant)\n" +
-			"  count by(tenant) (count_over_time(" + sh.Metric + sel + "[" + sh.Window + "]) > 0)\n" +
+			"  count by(tenant) (" + tenantRead(sh.Metric, sel, overRange("count_over_time", sh.Metric, sh.Window)) + " > 0)\n" +
 			")"
 	} else {
 		core = "(\n" +

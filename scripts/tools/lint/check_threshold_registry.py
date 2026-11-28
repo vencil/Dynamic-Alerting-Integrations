@@ -265,6 +265,14 @@ def run_check(
     for problem in registry_lib.presence_problems(doc):
         errors.append(f"inconsistent: {problem}")
 
+    # 3i. the generated Go table of the namespace-keyed metric prefixes (#4178):
+    #     the packs without `presence:`, whose series carry the tenant only as
+    #     `namespace`; the recipe compiler derives `tenant` for them.
+    ns_path = (surface_paths or {}).get(registry_lib.NAMESPACE_KEYED_GO_ID)
+    msg = registry_lib.check_namespace_keyed_go(doc, ns_path)
+    if msg:
+        errors.append(f"stale-surface: {msg}")
+
     # 3g. the pack digest the promtool test of BuiltinDefaultsDigestMismatch
     #     expects (#3831): the platform pack's recording rule carries the
     #     table's digest (a surface above), and the test feeds it back.

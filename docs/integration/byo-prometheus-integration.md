@@ -396,9 +396,9 @@ da-tools validate-config --config-dir /data/conf.d
 
 > **為何只支援 1:1 tenant 歸屬**（disk / PVC / node 等基礎設施指標不支援 N:1）：見 [ADR-006 租戶映射拓撲](../adr/006-tenant-mapping-topologies.md)。
 
-### 步驟 A：抓取 kubelet volume-stats 並注入 `tenant`
+### 步驟 A：抓取 kubelet volume-stats
 
-volume-stats 原生帶 `namespace` 與 `persistentvolumeclaim`，但**不帶 `tenant`**。新增一個抓 kubelet 主 `/metrics` 端點的 scrape job，並用 `metric_relabel_configs` 把 `namespace` 改寫為 `tenant`（1:1，效果同步驟 1；但 kubelet 指標的 `namespace` 是**原生 metric label**，故這裡用 `metric_relabel_configs` 而非步驟 1 的 `relabel_configs`）：
+volume-stats 原生帶 `namespace` 與 `persistentvolumeclaim`，不帶 `tenant`。新增一個抓 kubelet 主 `/metrics` 端點的 scrape job，保留租戶 namespace 的序列即可。**不要**把 `namespace` 寫成 `tenant`：平台的規則與 recipe 從 `namespace` 推出租戶（一個 namespace 對一個租戶），kube-state-metrics 的指標也是這樣讀。抓取時另寫 `tenant` 會讓租戶自訂規則選不到這些序列，`byo-check` 會提出警告。kubelet 指標的 `namespace` 是**原生 metric label**，所以 keep 寫在 `metric_relabel_configs`：
 
 ```yaml
 scrape_configs:
@@ -427,9 +427,6 @@ scrape_configs:
       - source_labels: [__name__]
         action: keep
         regex: "kubelet_volume_stats_.*"
-      # ★ 核心：1:1 把 namespace 注入為 tenant（與步驟 1 的 relabel 同效）
-      - source_labels: [namespace]
-        target_label: tenant
 ```
 
 > 平台自帶的 reference 部署已含這個 job；完整可運行版本見 [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml) 的 `kubelet-volume-stats`。此 job 需 `nodes/proxy` RBAC（與既有的 kubelet-cadvisor job 相同）。非 CSI 叢集套了也**無害**——`metric_relabel_configs` 的 keep 會 drop 到 0 series。
@@ -461,7 +458,7 @@ tenants:
 da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 ```
 
-`byo-check` 的磁碟 recipe 步驟會檢查：**宣告了磁碟 recipe 且有 Running pod 的租戶，是否真的收到 tenant-attributed volume-stats**。未到貨時會明確報出「CSI / scrape job / relabel」三項待查方向。
+`byo-check` 的磁碟 recipe 步驟會檢查：**宣告了磁碟 recipe 且有 Running pod 的租戶，是否真的從自己的 namespace 收到 volume-stats**。未到貨時會報出待查方向：CSI 與 scrape job。
 
 **✅ 通過條件**：磁碟 recipe 步驟為 `pass`（尚未有租戶宣告磁碟 recipe 時為 `skip`）。
 
@@ -470,7 +467,7 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 即使略過上面的 byo-check，平台仍有 runtime 安全網：當租戶**宣告了磁碟 recipe、有 Running pod、但歸屬後的 volume-stats 缺席**時，`CustomRecipeDiskInert` 會觸發，並依序提示三個最常見原因：
 
 1. 工作負載未掛載持久化磁碟（最常見；例如 Pod 為純無狀態服務、PVC 卡在 `Pending`、或 StatefulSet 漏寫 `volumeClaimTemplates`）→ 查該租戶的部署架構；
-2. 缺 kubelet volume-stats scrape job 或 `namespace→tenant` relabel（步驟 A 漏做）；
+2. 缺 kubelet volume-stats scrape job，或它沒保留租戶的 namespace（步驟 A 漏做）；
 3. CSI 未實作 NodeGetVolumeStats（前提不滿足）。
 
 同一個租戶跑在好幾個叢集時，這條告警逐叢集判定（[ADR-006](../adr/006-tenant-mapping-topologies.md)「多叢集同租戶」）：在收了各叢集資料的 Prometheus 上，租戶有 Running pod 卻沒有 volume-stats 的每個叢集各發一則，告警的 `da_cluster` 與 annotation 指出是哪一個；「沒有 volume-stats」指 `kubelet_volume_stats_available_bytes` 與 `kubelet_volume_stats_capacity_bytes` 兩者缺任何一個，只確認其中一個有資料不夠；別的叢集有 volume-stats 不會讓它不響。上面三個原因要在那個叢集查。
@@ -488,9 +485,9 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 > - **網路儲存看不到**：cgroup blkio 只記 block-layer I/O。**NFS / EFS / Azure Files 等網路儲存走 network stack、繞過 blkio → `container_fs` 永遠是 0**（[cAdvisor #1702](https://github.com/google/cadvisor/issues/1702)）。這類環境**無法**用此告警（byo-check 會明說）。
 > - **不是 saturation**：raw IOPS/吞吐 ≠「磁碟飽和」（那是 node 級 %util / latency，屬平台 SRE，租戶側拆不出來）。把它當**相對於 baseline 的異常**信號用（`da-tools baseline` 取建議閾值），別當絕對 SLA。
 
-### 步驟 A：抓取 container_fs 並注入 `tenant`
+### 步驟 A：抓取 container_fs
 
-平台 reference 的 `kubelet-cadvisor` job 已把 `container_fs_{reads,writes}_total` + `_bytes_total` 納入 keep、加上 `namespace→tenant` relabel、並 drop `container=""`/`"POD"`（防 pod-root 重複計）——完整版本見 [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml) 的 `kubelet-cadvisor` job。BYO 自建 Prometheus 請比照（緊 keep + relabel + container drop；別用寬 `container_fs_.*`，device label 會炸 cardinality）。同一 keep 也需含 `container_cpu_cfs_throttled_periods_total` + `container_cpu_cfs_periods_total`（CFS 掐頸告警 `PodContainerCPUThrottled` 的資料來源；僅設 cpu limit 的容器會發出，cardinality 為 cpu-usage 序列的子集，#944）。
+平台 reference 的 `kubelet-cadvisor` job 已把 `container_fs_{reads,writes}_total` + `_bytes_total` 納入 keep，並 drop `container=""`/`"POD"`（防 pod-root 重複計）；不寫 `tenant`，理由同磁碟填滿的步驟 A——完整版本見 [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml) 的 `kubelet-cadvisor` job。BYO 自建 Prometheus 請比照（緊 keep + container drop；別用寬 `container_fs_.*`，device label 會炸 cardinality）。同一 keep 也需含 `container_cpu_cfs_throttled_periods_total` + `container_cpu_cfs_periods_total`（CFS 掐頸告警 `PodContainerCPUThrottled` 的資料來源；僅設 cpu limit 的容器會發出，cardinality 為 cpu-usage 序列的子集，#944）。
 
 ### 步驟 B：租戶宣告 IOPS recipe
 
@@ -523,13 +520,13 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 #     fail → 沒到貨（沒 scrape、或儲存 blkio-bypass）→ 此環境不能用，別依賴
 ```
 
-**✅ 通過條件**：`byo-check` 的 `step5` 為 `pass`，且負載期間 `rate(container_fs_reads_total{tenant="<you>"}[5m])` 或 `..._writes_total` **任一**有非零合理值（讀多寫少的 workload 看 reads 即可——與 gate 的 reads-OR-writes 一致）。**fail / 兩者全 0 就誠實別開**——一個量不到東西的 I/O 告警，比沒有更危險。
+**✅ 通過條件**：`byo-check` 的 `step5` 為 `pass`，且負載期間 `rate(container_fs_reads_total{namespace="<you>"}[5m])` 或 `..._writes_total` **任一**有非零合理值（讀多寫少的 workload 看 reads 即可——與 gate 的 reads-OR-writes 一致）。**fail / 兩者全 0 就誠實別開**——一個量不到東西的 I/O 告警，比沒有更危險。
 
 > **基礎設施變更後重跑**：cgroup 版本（v1→v2 遷移）或 storage driver 換掉時，底層 blkio 統計機制會改變——重跑這道 fidelity gate 即自動重新驗證 container_fs 在新環境仍 high-fidelity，無需信任任何靜態假設。
 
 ### 出問題時：byo-check step5 報 fail
 
-依序查：(1) `container_fs_*` 是否在 cadvisor scrape keep 內、且有 `namespace→tenant` relabel（步驟 A）；(2) 你的儲存是否走網路（NFS/EFS）而**繞過 cgroup blkio**——這類 container_fs 結構上就是 0，請改由平台 SRE 用 node 級 `node_disk_*` 監控；(3) 租戶 workload 是否真的有在寫磁碟（負載期間 baseline 應為非零）。
+依序查：(1) `container_fs_*` 是否在 cadvisor scrape keep 內、租戶的 namespace 是否被保留（步驟 A）；(2) 你的儲存是否走網路（NFS/EFS）而**繞過 cgroup blkio**——這類 container_fs 結構上就是 0，請改由平台 SRE 用 node 級 `node_disk_*` 監控；(3) 租戶 workload 是否真的有在寫磁碟（負載期間 baseline 應為非零）。
 
 > **node 級 saturation 屬平台 SRE**：真正的「磁碟飽和」（%util、await/latency）是 node/device 級、無法 per-tenant 拆解，由平台 SRE 用 `node_disk_*` 監控——不在此租戶 recipe 範圍（同 disk-fill 的 thin-provisioning 界線）。
 

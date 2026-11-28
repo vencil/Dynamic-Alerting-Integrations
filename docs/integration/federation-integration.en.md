@@ -179,6 +179,9 @@ scrape_configs:
       "match[]":
         # Only pull tenant-labeled metrics (DB exporters)
         - '{tenant!=""}'
+        # + cAdvisor / kubelet series of the tenant namespaces: they carry the
+        #   tenant only as `namespace`; custom recipes read them (#4178)
+        - '{__name__=~"(container|kubelet)_.+", namespace=~"db-.+"}'
     static_configs:
       - targets: ["prometheus-edge-asia-1.example.com:9090"]
         labels:
@@ -192,6 +195,7 @@ scrape_configs:
     params:
       "match[]":
         - '{tenant!=""}'
+        - '{__name__=~"(container|kubelet)_.+", namespace=~"db-.+"}'
     static_configs:
       - targets: ["prometheus-edge-europe-1.example.com:9090"]
         labels:
@@ -203,7 +207,7 @@ scrape_configs:
 Important notes:
 
 - `honor_labels: true` ensures that edge `tenant` and `cluster` labels are preserved
-- `match[]` uses `{tenant!=""}` to restrict pulling only metrics with tenant label, avoiding pulling edge infrastructure metrics
+- `match[]` uses `{tenant!=""}` to restrict pulling only metrics with tenant label, avoiding pulling edge infrastructure metrics. The second selector is the exception: the cAdvisor (`container_*`) and kubelet (`kubelet_*`) series of the tenant namespaces. They carry the tenant only as `namespace`, not `tenant`, and tenants' custom disk and IOPS recipes read them centrally, the compiler deriving the tenant from `namespace` ([ADR-006 "Tenant attribution of infrastructure metrics"](../adr/006-tenant-mapping-topologies.en.md)). Only the metrics the edge scrape keeps are sent. kube-state-metrics (`kube_*`) is not: its series are many and no central rule reads raw KSM, so a custom recipe reading `kube_*` does not fire under central evaluation.
 - `scrape_interval` is recommended to be 30s, working with the edge 15s interval to ensure data consistency
 - Federation endpoint does not support TLS client cert by default; cross-internet deployments require additional VPN or reverse proxy setup
 
@@ -218,9 +222,10 @@ Suitable for scenarios with many edge clusters (10+), needing real-time push, or
 remote_write:
   - url: "https://central-prometheus.example.com/api/v1/write"
     write_relabel_configs:
-      # Only push tenant-labeled metrics
-      - source_labels: [tenant]
-        regex: ".+"
+      # Only push tenant-labeled metrics, and the cAdvisor / kubelet series of
+      # the tenant namespaces (they carry the tenant only as `namespace`, #4178)
+      - source_labels: [tenant, __name__, namespace]
+        regex: ".+;.*;.*|;(container|kubelet)_.+;db-.+"
         action: keep
     queue_config:
       max_samples_per_send: 5000
@@ -315,6 +320,7 @@ prometheus:
         params:
           "match[]":
             - '{tenant!=""}'
+            - '{__name__=~"(container|kubelet)_.+", namespace=~"db-.+"}'   # §4.1
         static_configs:
           - targets: ["edge-1.example.com:9090"]
 ```
@@ -395,7 +401,7 @@ The central Prometheus accumulates metrics from all edge clusters. Each new edge
 
 Mitigation measures:
 
-- Edge `write_relabel_configs` pushes only `{tenant!=""}` metrics
+- Edge `write_relabel_configs` pushes only `{tenant!=""}` metrics and the tenant namespaces' cAdvisor / kubelet series (§4.2)
 - Federation `match[]` restricts pulling scope
 - threshold-exporter `max_metrics_per_tenant` limits metrics per tenant (read only from the conf.d root `_defaults.yaml`; Helm: `thresholdConfig.max_metrics_per_tenant`; unset = 500)
 - Monitor `prometheus_tsdb_head_series` to track cardinality trends

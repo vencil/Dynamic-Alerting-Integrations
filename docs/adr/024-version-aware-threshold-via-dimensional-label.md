@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-05-30
-updated_at: 2026-11-24
+updated_at: 2026-11-28
 ---
 
 # ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts
@@ -28,6 +28,7 @@ updated_at: 2026-11-24
 - 2026-11-01：租戶 metadata（runbook_url、owner、tier）不再是告警 label，改由 annotation 讀出（§2）。
 - 2026-11-02：自訂告警的閾值紀錄只在 exporter 各副本一致時才送出（見「後果與已知限制」）。
 - v2.10.0：加入磁碟與 PVC 告警（§10）。
+- 2026-11-28：讀 cAdvisor、kubelet、kube-state-metrics 指標的自訂告警從 `namespace` 推出租戶，抓取時不再寫 `tenant`（§10）。
 
 ## 決策
 
@@ -328,7 +329,7 @@ portal 的 recipe 表單在瀏覽器執行、不跑 Go：它只做即時提示�
 
 **兩種信號、兩種粒度。** 容量（快寫滿、利用率）用 `kubelet_volume_stats_*`，每顆 PVC 一組序列（帶 `persistentvolumeclaim`）；I/O（IOPS、吞吐）用 `rate` recipe 跑 cAdvisor 的 `container_fs_{reads,writes}_total` 與 `_bytes_total`，粒度是每個容器，對不到特定 PVC：一個 Pod 掛多顆 PVC 時切不開。I/O 信號另有環境限制，NFS 這類網路儲存不經 cgroup blkio，`container_fs_*` 一直是 0（見 [BYO Prometheus 整合](../integration/byo-prometheus-integration.md)）。所以「精準到某一顆 PVC」只有容量這側做得到，以下三點都是講容量。
 
-**前提：PVC 由支援 volume stats 的 CSI driver 提供。** kubelet 只對實作了 `NodeGetVolumeStats` 的儲存後端送出 `kubelet_volume_stats_*`。平台的抓取設定從 kubelet 收 `kubelet_volume_stats_*`，把 `namespace` 直接當成 `tenant`（一個 namespace 對一個租戶，見 [ADR-006](006-tenant-mapping-topologies.md)）。
+**前提：PVC 由支援 volume stats 的 CSI driver 提供。** kubelet 只對實作了 `NodeGetVolumeStats` 的儲存後端送出 `kubelet_volume_stats_*`。平台的抓取設定從 kubelet 收 `kubelet_volume_stats_*`，保留 `namespace`、不寫 `tenant`；自訂告警編譯時從 `namespace` 推出租戶，序列已帶 `tenant` 時沿用（一個 namespace 對一個租戶，見 [ADR-006](006-tenant-mapping-topologies.md)「基礎設施指標的租戶歸屬」）。cAdvisor 的 `container_fs_*` 與 kube-state-metrics 的指標也這樣處理。
 
 **逐顆 PVC 判斷，不要被加總掩蓋。** 一個租戶可能掛好幾顆 PVC：一顆 10GB 的設定碟已經 99% 滿、一顆 500GB 的資料碟才 10% 滿，`by(tenant)` 加總後整體還有大量空間，告警永遠不觸發。所以 recipe 可以寫 `group_by: [persistentvolumeclaim]`：聚合時保留這個維度，閾值仍是每租戶一個、套到該租戶的每顆 PVC，任一顆達標就觸發，告警標出是哪一顆。為了控制序列數，`group_by` 只能寫 `persistentvolumeclaim`，`absence` 與 `slo_burn_rate` 不支援。
 
