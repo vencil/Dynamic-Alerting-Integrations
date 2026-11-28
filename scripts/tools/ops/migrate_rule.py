@@ -782,7 +782,10 @@ def _require_output_tree(output_dir):
 
 def write_outputs(output_dir, tenant, rules_text, mapping_text, report_text):
     """三個檔：先確認每個目標都寫得進去（``check_writable_artifact``，#4250：
-    目錄、唯讀檔、建不出來的目錄），再寫第一個——不會只寫了規則檔、沒有對照。"""
+    目錄、唯讀檔、建不出來的目錄），再寫第一個——路徑上的問題不會讓它只寫了
+    規則檔、沒有對照。寫到一半才出的 I/O 錯（磁碟滿）不在此列：以結束碼 2
+    點名那個檔，那個檔可能不完整、前面寫好的不回滾——輸出是決定性的，重跑
+    同一指令就把三個檔寫回一致的一組。"""
     _require_output_tree(output_dir)
     out = Path(output_dir)
     files = ((rules_rel(tenant), rules_text), (mapping_rel(tenant), mapping_text),
