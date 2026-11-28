@@ -31,7 +31,7 @@ Portal 的 JSX 工具只有一套 dark mode 機制：`<html>` 上的 `data-theme
 
 具體規則：
 
-1. JSX 不使用 `dark:` 前綴。pre-commit hook `jsx-no-dark-variant` 擋 `tools/portal/src/` 底下 `.jsx` 與 `.js` 裡 `dark:` 後面直接接 class 的寫法（包括 `dark:[…]`、`dark:!…` 這類形式），CI 的 Lint job 也跑它；註解裡提到 `dark:`（例如記錄某元件已移除 `dark:`）不受影響。
+1. JSX 不使用 `dark:` 前綴。pre-commit hook `jsx-no-dark-variant` 擋 `tools/portal/src/` 底下 `.jsx` 與 `.js` 裡 `dark:` 後面直接接 class 的寫法（包括 `dark:[…]`、`dark:!…` 這類形式），CI 的 Lint job 也跑它。它比對的是字元，不分程式碼或註解：註解裡寫出完整的 `dark:` class（例如 `// 移除了 dark:bg-black`）一樣會被擋，只有 `dark:` 後面沒有直接接 class 的寫法（例如「移除了 `dark:` class」）不會命中。
 2. 顏色寫成引用 token 的 Tailwind arbitrary value（方括號裡直接寫 CSS 值的 class，例如 `bg-[color:var(--da-color-surface)]`）；遷移舊元件時，原本的 `dark:xxx` 直接刪掉，不改寫成別的東西。
 3. 切換主題就是改 `<html data-theme="…">`，元件本身不判斷目前是深色還是淺色。
 4. Tailwind 設定不開 `darkMode`。

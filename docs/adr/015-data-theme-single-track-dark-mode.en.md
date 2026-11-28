@@ -26,7 +26,7 @@ The portal's JSX tools have exactly one dark mode mechanism: the `data-theme` at
 
 The rules:
 
-1. JSX does not use the `dark:` prefix. The pre-commit hook `jsx-no-dark-variant` blocks `dark:` immediately followed by a class (including forms such as `dark:[…]` and `dark:!…`) in the `.jsx` and `.js` files under `tools/portal/src/`, and CI's Lint job runs it too; comments that mention `dark:` (for example noting that a component removed its `dark:` classes) are not affected.
+1. JSX does not use the `dark:` prefix. The pre-commit hook `jsx-no-dark-variant` blocks `dark:` immediately followed by a class (including forms such as `dark:[…]` and `dark:!…`) in the `.jsx` and `.js` files under `tools/portal/src/`, and CI's Lint job runs it too. It matches characters and does not tell code from comments: a comment that writes out a full `dark:` class (for example `// removed dark:bg-black`) is blocked too; only `dark:` not directly followed by a class (for example "removed its `dark:` classes") is not hit.
 2. Colors are written as Tailwind arbitrary values that reference a token (a class with a raw CSS value in square brackets, such as `bg-[color:var(--da-color-surface)]`). When migrating an old component, its `dark:xxx` classes are deleted outright, not rewritten into something else.
 3. Switching the theme means changing `<html data-theme="…">`; components never check whether the current theme is light or dark.
 4. The Tailwind configuration does not enable `darkMode`.
