@@ -2,8 +2,9 @@
 # The rules and the kinds: tests/shared/test_caller_path_manifest.py (module docstring).
 # `by` names the reader that judges a `reader` input, or what the tool does with a
 # `runtime` path (documentation; the gate checks pinned_by). A `runtime` path is
-# the third write class (#3981): what the tool makes there goes through the
-# runtime entry of _lib_output, and only a command declaring one may call it
+# the third write class (#3981): the directories and files the tool makes there
+# go through the runtime entry of _lib_output (a socket is made by its bind, not
+# by a write entry), and only a command declaring one may call it
 # (tests/shared/test_runtime_entry_callers.py).
 # A flag declared with `_lib_input.add_input` (#3446) has no line here: its
 # declaration is on the parser (`action.input_spec`), and the gate reads it there.

@@ -1442,15 +1442,15 @@ def test_a_work_dir_in_use_keeps_everything_but_its_jobs(tmp_path, world):
 def test_a_new_work_dir_is_0700_whatever_the_umask(tmp_path, world):
     """#3981: the runtime entry makes a --work-dir that is not there, and
     its `jobs`, exactly 0700 — a umask that takes the owner's write bit
-    (0277) does not leave them 0500; the parents it makes on the way get
-    the default mode, as `os.makedirs` gives them."""
+    (0277) does not leave them 0500; nor the parents it makes on the way
+    (blind review: one rule for every directory the entry makes)."""
     work = tmp_path / "s" / "made" / "work"
     with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
                    prelude="os.umask(0o277)\n", args=("--work-dir", str(work))) as svc:
         assert svc.call("GET", "/v1/status")[0] == 200
         assert stat.S_IMODE(os.lstat(work).st_mode) == 0o700
         assert stat.S_IMODE(os.lstat(work / "jobs").st_mode) == 0o700
-        assert stat.S_IMODE(os.lstat(work.parent).st_mode) == 0o500
+        assert stat.S_IMODE(os.lstat(work.parent).st_mode) == 0o700
 
 
 def test_a_work_dir_of_another_uid_is_refused_as_non_root(tmp_path, world):

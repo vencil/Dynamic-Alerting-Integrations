@@ -680,8 +680,11 @@ def ensure_dir_or_die(
 # the way ssh-agent and gpg-agent keep their socket directories.
 #
 # * a directory: never a symlink; one already there must be this euid's and
-#   give nothing to group or others (``mode & 0o077 == 0``); a new one is
-#   0700 whatever the umask.
+#   give nothing to group or others (``mode & 0o077 == 0``); a new one, and
+#   every missing parent made for it, is 0700 whatever the umask. ⚠️ Only the
+#   directories this entry makes or accepts are judged: an existing parent
+#   that another uid can write to (no sticky bit) can still swap one of them
+#   after the check — the caller chooses where its private tree lives.
 # * a file: never written through a symlink or over a directory; what is
 #   there is unlinked and the file made anew, ``O_EXCL|O_NOFOLLOW``, 0600.
 #
@@ -723,10 +726,11 @@ def _make_private_dir(path: str, exist_ok: bool, parents: bool) -> None:
         st = None
     if st is None:
         parent = os.path.dirname(os.path.abspath(path))
-        if parents and not os.path.isdir(parent):
-            # The missing parents get the default mode, as `os.makedirs`
-            # gives them: only the leaf is the private directory.
-            os.makedirs(parent, exist_ok=True)
+        if parents and not os.path.lexists(parent):
+            # A missing parent is made by this same rule (blind review,
+            # #3981): a `jobs/` remade under a running service is 0700 too,
+            # not the umask's default.
+            _make_private_dir(parent, True, True)
         try:
             os.mkdir(path, 0o700)
         except FileExistsError:
@@ -736,7 +740,19 @@ def _make_private_dir(path: str, exist_ok: bool, parents: bool) -> None:
         else:
             # The name is opened without following a link and set through
             # the descriptor: what the mkdir made, whatever the umask took.
-            fd = os.open(path, _O_RUNTIME_DIR)
+            try:
+                fd = os.open(path, _O_RUNTIME_DIR)
+            except OSError:
+                # A umask that takes the owner's read bit (0477) leaves a
+                # directory that cannot be opened to set its mode. It is not
+                # left behind half made — a later start would accept it — but
+                # removed; `rmdir` follows no link and removes nothing but an
+                # empty directory.
+                try:
+                    os.rmdir(path)
+                except OSError:
+                    pass
+                raise
             try:
                 os.fchmod(fd, 0o700)
             finally:
@@ -769,8 +785,9 @@ def make_runtime_dir(path: Any, *, flag: Optional[str] = None, exist_ok: bool = 
     write (#3981).
 
     * not there ⇒ ``mkdir`` 0700, then set to exactly 0700 through a
-      descriptor opened ``O_NOFOLLOW``. *parents*: missing parents are made
-      first, with the default mode (only the leaf is private).
+      descriptor opened ``O_NOFOLLOW`` (one that cannot be opened — a umask
+      without the owner's read bit — is removed again and refused).
+      *parents*: missing parents are made first, by the same rule.
     * there ⇒ accepted only when it is a directory — not a symlink, to one
       or anywhere — owned by this euid, with ``mode & 0o077 == 0``. Its mode
       is not changed. *exist_ok* False: there at all is ``File exists``, as
@@ -780,6 +797,14 @@ def make_runtime_dir(path: Any, *, flag: Optional[str] = None, exist_ok: bool = 
       file in its place: ``ENOTDIR`` / ``EEXIST``; someone else's or an open
       directory: ``EPERM``)."""
     p = os.fspath(path)
+    # `lstat("link/")` follows the link (blind review, #3981): the name is
+    # judged without its trailing separators, and a name whose last part is
+    # `.` or `..` names no entry of its own to judge.
+    p = p.rstrip(os.sep) or p
+    if os.path.basename(p) in (".", ".."):
+        exc = NotADirectoryError(errno.EINVAL, "the last part of the path is . or ..; "
+                                 "name the directory itself", p)
+        raise OutputWriteError(p, exc, flag=flag, action="create directory") from exc
     try:
         _make_private_dir(p, exist_ok, parents)
     except OSError as exc:

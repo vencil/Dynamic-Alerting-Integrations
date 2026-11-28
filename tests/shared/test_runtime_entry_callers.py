@@ -29,7 +29,10 @@ WHAT IT DOES NOT SEE
 * **A module imported further away.** Only what the script itself imports
   is allowed (one level): a module two imports away that starts calling
   the entry is a fault here, on purpose.
-* **A call through a variable or ``getattr``**, and code that is not Python.
+* **A name built at run time** (``getattr`` with a computed string, ``exec``)
+  and code that is not Python. ``import *``, ``importlib`` with the module
+  name written out, ``getattr`` with the entry name written out, and the
+  entry taken as a value are seen (blind review, #3981).
 """
 from __future__ import annotations
 
@@ -60,33 +63,54 @@ def runtime_entries() -> frozenset[str]:
 
 
 def reaches(tree: ast.Module, entries: frozenset[str]) -> tuple[bool, bool]:
-    """(imports a runtime entry by name, calls one) for one module: a call
-    of a name imported from ``_lib_output`` (under any alias), or of
-    ``<alias of _lib_output>.<entry>``."""
+    """(imports a runtime entry by name, refers to one) for one module.
+
+    Imported: ``from _lib_output import <entry>`` (any alias) or
+    ``from _lib_output import *``. Referred to — a call, or the function
+    taken as a value (``f = lo.make_runtime_dir``), counts the same:
+    a name imported that way; ``<alias of _lib_output>.<entry>``;
+    ``<anything>.<entry>`` on an ``import_module("_lib_output")`` /
+    ``__import__("_lib_output")`` call; ``getattr(<x>, "<entry>")`` in a
+    module that names ``_lib_output`` at all (blind review, #3981)."""
     names: set[str] = set()
     modules: set[str] = set()
     imported = False
+    names_module = False
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == ENTRY_MODULE and not node.level:
+            names_module = True
             for alias in node.names:
-                if alias.name in entries:
+                if alias.name == "*":
+                    names.update(entries)
+                    imported = True
+                elif alias.name in entries:
                     names.add(alias.asname or alias.name)
                     imported = True
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == ENTRY_MODULE:
                     modules.add(alias.asname or alias.name)
-    called = False
+                    names_module = True
+        elif isinstance(node, ast.Constant) and node.value == ENTRY_MODULE:
+            names_module = True
+
+    def dynamic_import(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Call) and any(
+            isinstance(arg, ast.Constant) and arg.value == ENTRY_MODULE for arg in node.args))
+
+    referred = False
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        f = node.func
-        if isinstance(f, ast.Name) and f.id in names:
-            called = True
-        elif (isinstance(f, ast.Attribute) and f.attr in entries
-              and isinstance(f.value, ast.Name) and f.value.id in modules):
-            called = True
-    return imported, called
+        if isinstance(node, ast.Name) and node.id in names and isinstance(node.ctx, ast.Load):
+            referred = True
+        elif isinstance(node, ast.Attribute) and node.attr in entries and (
+                (isinstance(node.value, ast.Name) and node.value.id in modules)
+                or dynamic_import(node.value)):
+            referred = True
+        elif (names_module and isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+              and node.func.id == "getattr" and len(node.args) >= 2
+              and isinstance(node.args[1], ast.Constant) and node.args[1].value in entries):
+            referred = True
+    return imported, referred
 
 
 def calling_functions(tree: ast.Module, entries: frozenset[str]) -> frozenset[str]:
@@ -254,6 +278,16 @@ _ENTRIES = frozenset({"make_runtime_dir", "write_runtime_file"})
     ("import other\nother.make_runtime_dir(p)\n", (False, False)),
     ("from _lib_output import ensure_dir\nensure_dir(p)\n", (False, False)),
     ("def make_runtime_dir(p): pass\nmake_runtime_dir(p)\n", (False, False)),
+    # blind review (#3981): the spellings that went unseen
+    ("from _lib_output import *\nwrite_runtime_file(p, b'')\n", (True, True)),
+    ("import importlib\nimportlib.import_module('_lib_output').make_runtime_dir(p)\n",
+     (False, True)),
+    ("import _lib_output as lo\nf = lo.make_runtime_dir\nf(p)\n", (False, True)),
+    ("import importlib\nm = importlib.import_module('_lib_output')\n"
+     "getattr(m, 'make_runtime_dir')(p)\n", (False, True)),
+    ("from _lib_output import make_runtime_dir as m\nrun = m\n", (True, True)),
+    # still not the entry: the name in a module that never names _lib_output
+    ("getattr(other, 'make_runtime_dir')(p)\n", (False, False)),
 ])
 def test_the_scanner_sees_a_call_under_any_spelling(source, want):
     assert reaches(ast.parse(source), _ENTRIES) == want

@@ -243,7 +243,6 @@ REGISTERED: dict[str, dict[str, int]] = {
         "ensure_dir .mkdir [entry]": 1,
         "write_repo_artifact atomic_write_text() [entry]": 1,
         # #3981: the runtime entries' private directory and file.
-        "_make_private_dir os.makedirs [entry]": 1,
         "_make_private_dir os.mkdir [entry]": 1,
         "write_runtime_file os.fdopen [entry]": 1,
     },

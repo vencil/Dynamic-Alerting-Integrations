@@ -55,7 +55,7 @@ def test_a_new_directory_is_0700_whatever_the_umask(tmp_path):
     assert _mode(tmp_path / "d") == 0o700
 
 
-def test_parents_are_made_with_the_default_mode_and_only_on_request(tmp_path):
+def test_parents_are_made_private_too_and_only_on_request(tmp_path):
     leaf = tmp_path / "a" / "b" / "d"
     err = _refusal(lambda: make_runtime_dir(leaf))
     assert err.errno == errno.ENOENT and err.action == "create directory"
@@ -65,7 +65,8 @@ def test_parents_are_made_with_the_default_mode_and_only_on_request(tmp_path):
     finally:
         os.umask(old)
     assert _mode(leaf) == 0o700
-    assert _mode(tmp_path / "a") == 0o755 and _mode(tmp_path / "a" / "b") == 0o755
+    # Blind review (#3981): a parent made for it is held to the same rule.
+    assert _mode(tmp_path / "a") == 0o700 and _mode(tmp_path / "a" / "b") == 0o700
 
 
 def test_a_private_directory_already_there_is_accepted_and_left_alone(tmp_path):
@@ -269,3 +270,54 @@ def test_a_handle_that_cannot_be_made_closes_the_descriptor(tmp_path, monkeypatc
     with pytest.raises(OSError) as closed:
         os.fstat(seen[0])
     assert closed.value.errno == errno.EBADF
+
+
+# ── blind review (#3981) ───────────────────────────────────────────────────
+
+_UMASK_0477 = """
+import os, sys
+sys.path.insert(0, sys.argv[1])
+from _lib_output import OutputWriteError, make_runtime_dir
+os.umask(0o477)
+try:
+    make_runtime_dir(sys.argv[2])
+except OutputWriteError as exc:
+    print("refused", exc.errno)
+else:
+    print("made")
+print("left" if os.path.lexists(sys.argv[2]) else "gone")
+"""
+
+
+def test_a_umask_without_the_owners_read_bit_leaves_no_half_made_directory():
+    """0477 makes `mkdir` leave 0300, which its owner cannot open to set the
+    mode: the entry refuses and removes it, so a later start does not accept
+    a directory it never finished. Root opens it anyway, so the snippet runs
+    as uid 65534 where the test runs as root."""
+    setpriv = shutil.which("setpriv")
+    if os.geteuid() == 0 and setpriv is None:
+        pytest.skip("root opens a 0300 directory; setpriv is needed to run as another uid")
+    base = Path(tempfile.mkdtemp(dir="/var/tmp"))
+    try:
+        os.chmod(base, 0o777)
+        target = base / "w"
+        argv = [sys.executable, "-I", "-c", _UMASK_0477, str(TOOLS), str(target)]
+        if os.geteuid() == 0:
+            argv = [setpriv, "--reuid=65534", "--regid=65534", "--clear-groups", *argv]
+        out = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert out.returncode == 0, out.stderr
+        assert out.stdout.split() == ["refused", str(errno.EACCES), "gone"], out.stdout
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+@pytest.mark.parametrize("suffix", ["/", "//", "/."])
+def test_a_trailing_separator_does_not_follow_a_link(tmp_path, suffix):
+    """`lstat("link/")` follows the link: the name is judged without its
+    trailing separators, and one ending in `.` is refused outright."""
+    real = tmp_path / "real"
+    make_runtime_dir(real)
+    link = tmp_path / "link"
+    symlink_or_skip(real, link)
+    err = _refusal(lambda: make_runtime_dir(str(link) + suffix))
+    assert err.errno in (errno.ENOTDIR, errno.EINVAL), err
