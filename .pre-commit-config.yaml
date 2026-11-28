@@ -1767,12 +1767,12 @@ repos:
         pass_filenames: false
         # The only list of keys is `retired_keys:` in the threshold registry
         # (each key and its derived `_critical`). Every tracked file is read
-        # except the registry, the changelogs, tests and Go source under
-        # components/; text the registry's generators render (`--regen` blocks,
-        # the RULE_PACKS module, a registry string projected verbatim into a
+        # except the registry, the changelogs and tests; text the registry's
+        # generators render (`--regen` blocks, the RULE_PACKS module, the Go
+        # table of retired_keys, a registry string projected verbatim into a
         # .json) is recognised by rendering it again. A line that explains a
         # retirement carries `retired-key-mention: <key>` (that line and the
-        # next); a marker that covers nothing is itself a finding.
+        # next); a marker that covers nothing or names no key is a finding.
         # Runs on every commit: which files may teach a key cannot be written
         # as a path regex (any tracked text file can), and retiring a key in
         # the registry turns files this commit did not touch red.

@@ -253,7 +253,7 @@ func (m *TenantMerge) platformLayerNotices(tid string) []string {
 // ⚠️ It judges what validateOverrideKeys judges — key names, `expires:`,
 // `_critical` bases, version labels, a reserved value its reader ignores and
 // (#3267) a threshold value the row resolvers refuse
-// (`mysql_connections: abc`) — and nothing else.
+// (`mysql_connection_usage_percent: abc`) — and nothing else.
 func (m *TenantMerge) profileLayerNotices() []string {
 	if len(m.Profiles) == 0 || len(m.own) == 0 {
 		return nil

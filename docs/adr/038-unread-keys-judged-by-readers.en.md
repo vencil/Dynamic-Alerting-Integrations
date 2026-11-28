@@ -81,7 +81,7 @@ tenants:
     _namespaces: [prod-ns]        # annotation for tools
 ```
 
-The result when this was drafted (2026-10-16, actually run on main):
+On main as of 2026-10-16, this input gives:
 
 | Tool | Result |
 |---|---|

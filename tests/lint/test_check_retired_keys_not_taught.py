@@ -131,6 +131,7 @@ def test_the_derived_critical_twin_is_retired_with_its_base(tmp_path):
     "helm/chart/values.yaml", "try-local/seed/conf.d/t.yaml", "scripts/demo.sh",
     "scripts/tools/ops/tool.py", "tools/portal/src/x.jsx",
     "components/threshold-exporter/config/conf.d/t.yaml", "AGENTS.md", "new-dir/x.txt",
+    "components/threshold-exporter/app/pkg/config/types.go",
 ])
 def test_reader_facing_files_are_scanned(tmp_path, rel):
     assert _keys(_check(tmp_path, {rel: f"{KEY}: 80\n"})) == [(rel, 1, KEY)]
@@ -145,14 +146,57 @@ def test_reader_facing_files_are_scanned(tmp_path, rel):
     ("tools/portal/tests/a.test.ts", "test"),
     ("tools/portal/src/a.test.tsx", "test"),
     ("components/tenant-api/internal/handler/testdata/a.yaml", "test"),
-    ("components/threshold-exporter/app/pkg/config/types.go", "go-source"),
     ("components/threshold-exporter/app/pkg/config/x_test.go", "test"),
 ])
-def test_retirement_talk_tests_and_go_source_are_not_scanned(tmp_path, rel, why):
+def test_retirement_talk_and_tests_are_not_scanned(tmp_path, rel, why):
     r = _check(tmp_path, {rel: f"{KEY}: 80\n", "docs/ok.md": "fine\n"})
     assert _keys(r) == []
     assert r.exempt_files == {why: 1, "registry": 1}
     assert r.files_scanned == 1
+
+
+#: The whole exemption, pinned: None is "scanned". A directory that merely
+#: holds samples (`examples`, `fixtures` outside a tests tree) is scanned.
+EXEMPTIONS = {
+    "rule-packs/threshold-registry.yaml": "registry",
+    "CHANGELOG.md": "changelog",
+    "CHANGELOG-archive.md": "changelog",
+    "changelog.d/1-x.md": "changelog",
+    "changelog.d/README.md": "changelog",
+    "tests/ops/test_x.py": "test",
+    "tests/golden/fixtures/a.yaml": "test",
+    "test/rulepack-e2e/run.sh": "test",
+    "tools/portal/tests/a.test.ts": "test",
+    "tools/portal/src/a.test.tsx": "test",
+    "tests/e2e/visual.spec.ts": "test",
+    "components/tenant-api/internal/handler/testdata/a.yaml": "test",
+    "components/threshold-exporter/app/pkg/config/x_test.go": "test",
+    "scripts/tools/ops/test_helper.py": "test",
+    "docs/x/examples/a.yaml": None,
+    "docs/fixtures/a.yaml": None,
+    "k8s/crd/examples/example-thresholdconfig.yaml": None,
+    "policies/examples/naming.rego": None,
+    "helm/threshold-exporter/values.yaml": None,
+    "helm/tenant-api/ci/values.yaml": None,
+    "tools/portal/src/interactive/tools/x.jsx": None,
+    "tools/portal/src/interactive/tools/_common/data/rule-packs-fallback.json": None,
+    "components/threshold-exporter/app/pkg/config/types.go": None,
+    "components/threshold-exporter/app/pkg/config/retired_threshold_keys_gen.go": None,
+    "components/tenant-api/internal/handler/tenant.go": None,
+    "components/threshold-exporter/config/conf.d/_defaults.yaml": None,
+    "docs/CHANGELOG.md": None,
+    "docs/testing.md": None,
+    "docs/latest_test.md": None,
+    "scripts/tools/lint/check_retired_keys_not_taught.py": None,
+    "README.md": None,
+    "try-local/seed/conf.d/t.yaml": None,
+    ".github/workflows/ci.yml": None,
+}
+
+
+@pytest.mark.parametrize("rel,why", sorted(EXEMPTIONS.items()))
+def test_the_exempt_paths_are_exactly_these(rel, why):
+    assert lint.exempt_reason(rel) == why
 
 
 def test_a_path_that_only_looks_like_a_changelog_is_scanned(tmp_path):
@@ -230,6 +274,29 @@ def test_a_marker_naming_a_key_that_is_not_retired_is_a_finding(tmp_path):
     assert "not in the registry" in r.findings[0].reason
 
 
+@pytest.mark.parametrize("marker", [
+    "<!-- retired-key-mention: -->",
+    "<!-- retired-key-mention:-->",
+    "# retired-key-mention:",
+    "# retired-key-mention: \t",
+    "/* retired-key-mention: */",
+])
+def test_a_marker_that_names_no_key_is_a_finding(tmp_path, marker):
+    r = _check(tmp_path, {"docs/a.md": f"`{KEY}` is retired {marker}\n"})
+    assert sorted(_keys(r)) == [("docs/a.md", 1, ""), ("docs/a.md", 1, KEY)]
+    assert "names no key" in [f for f in r.findings if not f.key][0].reason
+    # ... also in a file that names no retired key at all
+    r = _check(tmp_path / "bare", {"docs/a.md": f"nothing {marker}\n"})
+    assert _keys(r) == [("docs/a.md", 1, "")]
+
+
+def test_prose_about_the_marker_is_not_a_marker(tmp_path):
+    text = ("mark it `retired-key-mention: <key>` on the line\n"
+            'MARKER = "retired-key-mention:"\n'
+            "f\"`{MARKER} {key}`\" and retired-key-mention: {key}\n")
+    assert _keys(_check(tmp_path, {"docs/a.md": text})) == []
+
+
 def test_the_marker_does_not_exempt_another_line_of_the_file(tmp_path):
     text = f"`{KEY}` retired <!-- retired-key-mention: {KEY} -->\n\n\n{KEY}: 80\n"
     assert _keys(_check(tmp_path, {"docs/a.md": text})) == [("docs/a.md", 4, KEY)]
@@ -254,6 +321,53 @@ def test_a_json_string_that_is_not_the_registrys_is_a_finding(tmp_path):
     # a key of the JSON object is not the registry's string either
     assert _keys(_check(tmp_path / "c", {"docs/assets/data.json": json.dumps({KEY: {"desc": DESC}})})) == [
         ("docs/assets/data.json", 1, KEY)]
+
+
+def test_a_json_string_token_outside_a_json_file_is_a_finding(tmp_path):
+    token = json.dumps({"desc": DESC})
+    assert _keys(_check(tmp_path / "json", {"docs/assets/data.json": token})) == []
+    for rel in ("docs/a.md", "k8s/x.yaml", "tools/portal/src/data.js", "docs/assets/data.jsonl"):
+        r = _check(tmp_path / rel.replace("/", "_"), {rel: token + "\n"})
+        assert _keys(r) == [(rel, 1, KEY)], rel
+        assert r.generated_skipped == 0
+
+
+def test_a_registry_string_after_an_escaped_quote_is_not_the_whole_string(tmp_path):
+    # `"say \"<DESC>"`: the registry's token text appears, but it starts at
+    # an escaped quote, inside a longer string
+    data = json.dumps({"desc": 'say "' + DESC})
+    assert json.dumps(DESC) in data
+    r = _check(tmp_path, {"docs/assets/data.json": data})
+    assert _keys(r) == [("docs/assets/data.json", 1, KEY)]
+    assert r.generated_skipped == 0
+
+
+def test_strings_of_the_retirement_sections_are_not_generated_text(tmp_path):
+    hint = f"was {KEY} once"
+    registry = REGISTRY.replace('hint: "converted to a share"', f'hint: "{hint}"').replace(
+        "deprecated_aliases: {}", f"deprecated_aliases:\n  zz_alias: {OTHER}")
+    assert hint in registry and f"zz_alias: {OTHER}" in registry
+    r = _check(tmp_path, {"docs/assets/a.json": json.dumps({"hint": hint}),
+                          "docs/assets/b.json": json.dumps({"alias_of": OTHER})}, registry)
+    assert _keys(r) == [("docs/assets/a.json", 1, KEY), ("docs/assets/b.json", 1, OTHER)]
+    assert r.generated_skipped == 0
+
+
+def test_the_generated_go_table_is_skipped_only_while_fresh(tmp_path):
+    registry = (REPO / lint.REGISTRY_REL).read_text(encoding="utf-8")
+    doc = lint.load_retired_keys(str(REPO / lint.REGISTRY_REL))["doc"]
+    rel = os.path.relpath(lint.registry_lib.RETIRED_KEYS_GO_PATH, REPO).replace(os.sep, "/")
+    assert lint.exempt_reason(rel) is None
+    table = lint.registry_lib.render_retired_keys_go(doc)
+    key = next(iter(doc["retired_keys"]))
+    assert key in table
+    r = _check(tmp_path / "fresh", {rel: table}, registry)
+    assert _keys(r) == [] and r.generated_skipped >= len(doc["retired_keys"])
+    # a hand-edited table, the table under another name, and another Go file
+    assert _check(tmp_path / "stale", {rel: table + f"// {key}\n"}, registry).findings
+    assert _check(tmp_path / "moved", {rel.replace("_gen.go", "_copy.go"): table}, registry).findings
+    other = os.path.dirname(rel) + "/types.go"
+    assert _keys(_check(tmp_path / "go", {other: f"// e.g. \"{key}\"\n"}, registry)) == [(other, 1, key)]
 
 
 def _a_generated_block_naming_a_retired_key():
@@ -337,6 +451,43 @@ def test_a_scan_of_no_file_cannot_pass(tmp_path):
     root, _ = _tree(tmp_path / "b", {})
     with pytest.raises(lint.MeasureError, match="no file was scanned"):
         lint.run_check(root, files=[])
+
+
+def test_a_file_that_cannot_be_read_cannot_be_measured(tmp_path, monkeypatch, capsys):
+    root, listed = _tree(tmp_path, {"docs/a.md": "x\n", "docs/b.md": "y\n"})
+    real = Path.read_bytes
+
+    def unreadable(self):
+        if self.name == "b.md":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+    monkeypatch.setattr(Path, "read_bytes", unreadable)
+    with pytest.raises(lint.MeasureError, match="cannot read docs/b.md"):
+        lint.run_check(root, files=listed)
+    monkeypatch.setattr(lint, "tracked_files", lambda _root: listed)
+    assert lint.main(["--repo-root", str(root), "--ci"]) == 2
+    assert "cannot read docs/b.md" in capsys.readouterr().err
+
+
+def test_a_failing_git_listing_cannot_be_measured(tmp_path, monkeypatch, capsys):
+    root, _ = _tree(tmp_path, {"docs/a.md": "x\n"})         # not a git work tree
+    with pytest.raises(lint.MeasureError, match="`git ls-files` failed"):
+        lint.tracked_files(root)
+    assert lint.main(["--repo-root", str(root), "--ci"]) == 2
+    assert "`git ls-files` failed" in capsys.readouterr().err
+
+    def timed_out(*a, **k):
+        raise lint.subprocess.TimeoutExpired("git", 120)
+    monkeypatch.setattr(lint.subprocess, "run", timed_out)
+    with pytest.raises(lint.MeasureError, match="`git ls-files` failed"):
+        lint.tracked_files(REPO)
+
+
+def test_the_listing_is_gits_whole_listing():
+    import subprocess
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=str(REPO), capture_output=True,
+                         timeout=120, check=True).stdout.decode("utf-8", "surrogateescape")
+    assert lint.tracked_files(REPO) == [p for p in out.split("\0") if p]
 
 
 def test_the_text_count_of_the_section(tmp_path):

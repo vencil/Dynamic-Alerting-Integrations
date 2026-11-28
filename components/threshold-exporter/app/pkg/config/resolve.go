@@ -606,7 +606,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			continue // #4173: a root `<base>_critical` is resolveCriticalRows' default
 		}
 
-		// Parse metric key: "mysql_connections" → component="mysql", metric="connections"
+		// Parse metric key: "mysql_connection_usage_percent" → component="mysql", metric="connection_usage_percent"
 		component, metric := parseMetricKey(metricKey)
 		severity := "warning" // default severity
 
@@ -857,7 +857,7 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 
 // criticalRowBase is resolveCriticalRows' entry test: whether an override
 // key is one it serves as a critical row, and that row's base metric key
-// ("mysql_connections_critical" → "mysql_connections"). The build's
+// ("mysql_connection_usage_percent_critical" → "mysql_connection_usage_percent"). The build's
 // root-null report (rootNullUndeclared, #2518) asks the same function. A `_`
 // key is none (`_myth_critical`, `_routing_x_critical`; baseRowsSkipKey, #3045).
 func criticalRowBase(key string) (string, bool) {

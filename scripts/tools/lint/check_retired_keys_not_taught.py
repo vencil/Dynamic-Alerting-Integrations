@@ -20,15 +20,13 @@ What is scanned: every file ``git ls-files`` lists, except (``exempt_reason``)
 * tests — a directory named ``tests`` / ``test`` / ``testdata`` /
   ``__tests__`` anywhere on the path, or a test file by name (``test_*.py``,
   ``*_test.py``, ``*_test.go``, ``*.test.*``, ``*.spec.*``);
-* Go source under ``components/`` — code a config author does not learn keys
-  from (its comments are NOT checked; the generated retired-keys Go table
-  lives there too);
 * symlinks, files with a NUL byte, and tracked paths that are not a regular
   file in the work tree (counted in the summary, never a finding).
 
 Text generated from the registry is recognised by rendering it again, not by
-a list of paths: a ``--regen`` block (``_registry_lib.surface_specs``) or the
-generated RULE_PACKS module that is byte-equal to a fresh render is skipped,
+a list of paths: a ``--regen`` block (``_registry_lib.surface_specs``), the
+generated RULE_PACKS module or the generated Go table of ``retired_keys`` that
+is byte-equal to a fresh render is skipped,
 and in a ``.json`` file a whole JSON string that is verbatim a string value
 of the registry's live sections (a key's ``desc`` projected into
 ``platform-data.json`` and the portal fallback) is skipped. A stale or
@@ -49,7 +47,10 @@ Escape, at the spot: a line that explains a retirement carries
 file has; ``<!-- … -->`` in Markdown). It covers that line and the next one,
 and only for the keys it names. A marker that names a key which is not
 retired, or covers no mention of a key it names, is an error (a stale
-exemption). There is no central allowlist.
+exemption), and so is a marker that names no key at all (nothing but the end
+of the line or a comment closer after the colon; ``<key>`` written as a
+placeholder in prose about the marker is not one). There is no central
+allowlist.
 
 Fail-closed (exit 2, never 0): the registry cannot be read; ``retired_keys``
 is missing, is not a mapping, or does not hold as many entries as the file's
@@ -95,7 +96,8 @@ _CHANGELOG_RE = re.compile(r"^(?:CHANGELOG[^/]*\.md|changelog\.d/.*)$")
 _TEST_DIRS = frozenset({"tests", "test", "testdata", "__tests__"})
 _TEST_FILE_RE = re.compile(
     r"^(?:test_.*\.py|.*_test\.py|.*_test\.go|.*\.(?:test|spec)\.[A-Za-z]+)$")
-_GO_SOURCE_RE = re.compile(r"^components/.*\.go$")
+#: A marker with no key: only the end of the line or a comment closer follows.
+_EMPTY_MARKER_RE = re.compile(re.escape(MARKER) + r"[ \t]*(?:$|-->|\*/)")
 
 
 class MeasureError(Exception):
@@ -131,8 +133,6 @@ def exempt_reason(rel: str) -> Optional[str]:
     parts = rel.split("/")
     if _TEST_DIRS.intersection(parts[:-1]) or _TEST_FILE_RE.match(parts[-1]):
         return "test"
-    if _GO_SOURCE_RE.match(rel):
-        return "go-source"
     return None
 
 
@@ -244,6 +244,10 @@ class Generated:
                 registry_lib.RULE_PACKS_MODULE_PATH, repo_root).replace(os.sep, "/")
             self._blocks.setdefault(module_rel, []).append(
                 registry_lib.render_rule_packs_module(doc))
+            go_rel = os.path.relpath(
+                registry_lib.RETIRED_KEYS_GO_PATH, repo_root).replace(os.sep, "/")
+            self._blocks.setdefault(go_rel, []).append(
+                registry_lib.render_retired_keys_go(doc))
         except Exception as exc:  # noqa: BLE001 — a registry that cannot render
             raise MeasureError(
                 "cannot render the registry's generated surfaces: "
@@ -287,6 +291,11 @@ def scan_text(rel: str, text: str, judged: dict,
         for m in _MARKER_RE.finditer(line):
             for key in re.split(r"[ \t]*,[ \t]*", m.group(1)):
                 markers.append((lineno, key))
+        if _EMPTY_MARKER_RE.search(line):
+            findings.append(Finding(
+                rel, lineno, "",
+                f"stale exemption: `{MARKER}` names no key; name the retired "
+                "key it covers or remove the marker"))
         stripped.append(_MARKER_RE.sub(lambda m: " " * len(m.group(0)), line))
     mentions: dict = {}  # lineno -> [key]
     for lineno, line in enumerate(stripped, 1):
@@ -419,7 +428,7 @@ def main(argv: Optional[list] = None) -> int:
     print(f"❌ {len(result.findings)} finding(s): a retired threshold key is "
           "named outside the registry and the changelog —", file=sys.stderr)
     for f in result.findings:
-        print(f"  {f.path}:{f.line}: {f.key} — {f.reason}", file=sys.stderr)
+        print(f"  {f.path}:{f.line}: {f.key or '(no key)'} — {f.reason}", file=sys.stderr)
     print(f"({summary}.)\nThe keys come from `{RETIRED_SECTION}:` in "
           f"{REGISTRY_REL}; see this script's docstring for the boundary and "
           "the marker.", file=sys.stderr)

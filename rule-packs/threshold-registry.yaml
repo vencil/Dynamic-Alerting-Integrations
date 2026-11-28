@@ -93,7 +93,7 @@
 # 退役的 key（連同推導的 <old>_critical）不得再出現在文件、範例、腳本與 portal：
 # check_retired_keys_not_taught.py（hook retired-keys-not-taught）以本區段為唯一名單，
 # 本檔、CHANGELOG、changelog.d、測試與由本檔生成的文字除外。解釋退役的那一行在原地標
-# `retired-key-mention: <key>`（涵蓋該行與下一行；沒有對到任何提及的標記本身就是錯）。
+# `retired-key-mention: <key>`（涵蓋該行與下一行；沒有對到任何提及、或沒寫 key 的標記本身就是錯）。
 version: 1
 packs:
   kubernetes:
