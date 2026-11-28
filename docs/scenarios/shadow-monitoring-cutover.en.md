@@ -229,11 +229,15 @@ kubectl rollout restart deployment alertmanager -n monitoring
 
 ### Phase 3: Validation (Days 1–14)
 
+> ⚠️ **The new migrate's output does not feed the automated validation and cutover from 3.1 on yet**: it writes `.migration/mapping/db-a.yaml`, and `validate_migration.py` reads it from [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227) on. Until then 3.1 applies only to the old migrate's `prefix-mapping.yaml`, so the `validation-report.csv` and `cutover-readiness.json` that 3.2 and Phase 4 need are not produced. Before #4227 the new output can only be compared by hand, and **matching alert counts are not convergence**:
+>
+> 1. **Whether each selector selects data**: for every `legacy` / `pinned` pair in the mapping, run `count(<selector>)` against the target Prometheus. A pair where legacy has series and pinned has none is an injection that selects nothing — commonly a recording rule of another rule file whose producer does not write `tenant`.
+> 2. **The alerts' label sets**: during the shadow period, query both expressions below repeatedly (and again with `alertstate="pending"`); both should be empty. `MigratedRulesExpiring` is the added expiry alert with no legacy counterpart, so it is excluded; fill `<alert names in the file>` with the migrated file's alertnames. The legacy rules pin no tenant, so alerts of other tenants show up on the legacy side — the narrowing the injection is meant to do; confirm them one by one.
+>    - Firing only on the migrated side: `ALERTS{component="migrated", alertstate="firing", alertname!="MigratedRulesExpiring"} unless ignoring(tenant, component) ALERTS{component!="migrated", alertstate="firing"}`
+>    - Firing only on the legacy side: `ALERTS{component!="migrated", alertstate="firing", alertname=~"<alert names in the file>"} unless ignoring(tenant, component) ALERTS{component="migrated", alertstate="firing"}`
+
 ```bash
-# 3.1 Start parallel validation
-# ⚠️ The new migrate writes .migration/mapping/db-a.yaml; validate_migration reads it from #4227 on.
-#    Until then this step applies only to a prefix-mapping.yaml from the old migrate. For the new
-#    output, compare count by (alertname) (ALERTS{component="migrated"}) with the legacy alerts' ALERTS
+# 3.1 Start parallel validation (only for the old migrate's prefix-mapping.yaml; see the note above)
 python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \

@@ -219,11 +219,15 @@ kubectl rollout restart deployment alertmanager -n monitoring
 
 ### 階段 3：驗證（Day 1–14）
 
+> ⚠️ **新版 migrate 的產出目前接不上 3.1 之後的自動驗證與切換**：它寫的是 `.migration/mapping/db-a.yaml`，`validate_migration.py` 讀它的支援在 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)。在那之前 3.1 只適用舊版 migrate 的 `prefix-mapping.yaml`，也就產不出 3.2 與階段 4 要的 `validation-report.csv`、`cutover-readiness.json`。新產出在 #4227 之前只能手動比對，且**告警數量一致不算收斂**：
+>
+> 1. **selector 有沒有選到資料**：對 mapping 每一組 `legacy`／`pinned`，在目標 Prometheus 各跑一次 `count(<selector>)`。legacy 有、pinned 沒有的，代表注入選不到——常見原因是它其實是另一個規則檔的 recording rule，而那邊沒寫 `tenant`。
+> 2. **告警的 label 組合**：shadow 期間反覆查以下兩式（`alertstate` 換成 `pending` 再查一次），兩邊都應為空。`MigratedRulesExpiring` 是新增的到期告警，沒有對應的 legacy 告警，所以排除；`<本檔告警名>` 填遷移檔裡的 alertname。legacy 規則沒有釘租戶，會多出其他租戶的告警，那是注入本來就會收窄的部分，要逐條確認。
+>    - 只在 migrated 響：`ALERTS{component="migrated", alertstate="firing", alertname!="MigratedRulesExpiring"} unless ignoring(tenant, component) ALERTS{component!="migrated", alertstate="firing"}`
+>    - 只在 legacy 響：`ALERTS{component!="migrated", alertstate="firing", alertname=~"<本檔告警名>"} unless ignoring(tenant, component) ALERTS{component="migrated", alertstate="firing"}`
+
 ```bash
-# 3.1 啟動並行驗證
-# ⚠️ 新版 migrate 產出的是 .migration/mapping/db-a.yaml，validate_migration 讀它的支援在 #4227；
-#    在那之前這一步只適用舊版 migrate 產生的 prefix-mapping.yaml。新產出可先在 Prometheus 比較
-#    count by (alertname) (ALERTS{component="migrated"}) 與 legacy 告警的 ALERTS 是否一致
+# 3.1 啟動並行驗證（只適用舊版 migrate 的 prefix-mapping.yaml，見上方說明）
 python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
