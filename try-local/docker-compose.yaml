@@ -306,7 +306,7 @@ services:
     restart: unless-stopped
 
   alertmanager:
-    image: prom/alertmanager:v0.34.2
+    image: prom/alertmanager:v0.35.0
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--web.listen-address=:9093"
@@ -330,7 +330,7 @@ services:
     # "Act 2" after the MariaDB red light (see README). Pinned to the SAME image
     # tag as the k8s Deployment (k8s/03-monitoring/deployment-grafana.yaml) so
     # what you see here matches prod.
-    image: grafana/grafana:12.4.14
+    image: grafana/grafana:12.4.15
     environment:
       # Anonymous Admin + no login form: a one-command laptop demo shouldn't ask
       # for a password. Safe ONLY because the port is loopback-only (below); the
@@ -391,7 +391,7 @@ services:
     # the demo on a known-vulnerable layer permanently and — unlike a tag — it
     # could not self-heal. The tag being mutable is the lesser evil here; on the
     # deploy surface, where we DO own the bump loop, the trade goes the other way.
-    image: alpine/git:v2.54.0
+    image: alpine/git:v2.54.1
     entrypoint: ["/bin/sh"]
     command: ["/seed/git-init.sh"]
     environment:

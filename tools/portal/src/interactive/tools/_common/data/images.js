@@ -50,8 +50,8 @@ purpose: |
 // deployed data is.
 const IMAGE_MIRROR = {
   prometheus: 'prom/prometheus:v3.16.0',
-  alertmanager: 'prom/alertmanager:v0.34.2',
-  configReloader: 'quay.io/prometheus-operator/prometheus-config-reloader:v0.95.1',
+  alertmanager: 'prom/alertmanager:v0.35.0',
+  configReloader: 'quay.io/prometheus-operator/prometheus-config-reloader:v0.95.2',
   oauth2Proxy: 'quay.io/oauth2-proxy/oauth2-proxy:v7.15.6',
   thresholdExporter: 'ghcr.io/vencil/threshold-exporter:v2.9.0',
   daPortal: 'ghcr.io/vencil/da-portal:v2.9.0',
