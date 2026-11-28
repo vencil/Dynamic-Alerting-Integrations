@@ -28,6 +28,10 @@ permissions:
 jobs:
   warm:
     name: Warm the Go build cache
+    # A manual run may pick any branch, and `push.branches` does not stop it:
+    # on a feature branch it would save an entry only that branch can restore,
+    # which the cleanup below (it lists main's entries) never deletes.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       contents: read

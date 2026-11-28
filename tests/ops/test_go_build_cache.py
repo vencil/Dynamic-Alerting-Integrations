@@ -24,7 +24,9 @@ plus go-build-cache.yaml (the one writer, on push to main). Held here:
     every module tree the Makefile's $(GO_BUILD) recipes build — never
     `hashFiles()`, which reads the files and so makes every `_test.go` an
     input of the path-traced jobs (backtest went red on exactly that).
-  * the warm workflow runs on push to main, builds every package a $(GO_BUILD)
+  * the warm workflow runs on push to main (its jobs guarded by
+    `if: github.ref == 'refs/heads/main'`, since a manual run may pick any
+    branch), builds every package a $(GO_BUILD)
     recipe builds,
     saves under the composite's key and paths, and is the only workflow that
     saves under that key.
@@ -230,6 +232,11 @@ def warm_problems(wf: dict, targets) -> list[str]:
     branches = ((on.get("push") or {}) if isinstance(on, dict) else {}).get("branches")
     if branches != ["main"] or "pull_request" in _triggers(wf):
         out.append("the writer must run on push to main and never on a PR")
+    if any(str(j.get("if", "")).strip() != "github.ref == 'refs/heads/main'"
+           for j in (wf.get("jobs") or {}).values()):
+        out.append("every writer job must be `if: github.ref == 'refs/heads/main'` — "
+                   "a workflow_dispatch on another branch would save a cache main "
+                   "never restores and the cleanup never deletes")
     steps = [s for j in (wf.get("jobs") or {}).values() for s in (j.get("steps") or [])]
     ids = [s.get("id") for s in steps if _uses(s) == COMPOSITE]
     if len(ids) != 1 or not ids[0]:
@@ -264,6 +271,9 @@ def test_the_warm_rule_can_fail() -> None:
     on_pr = dict(sound, on={"pull_request": {}, "push": {"branches": ["main"]}})
     assert warm_problems(on_pr, targets)
     assert warm_problems(sound, {**targets, "new-build": {("components/x", "./cmd/x")}})
+    unguarded = {**sound, "jobs": {k: {kk: vv for kk, vv in j.items() if kk != "if"}
+                                   for k, j in sound["jobs"].items()}}
+    assert warm_problems(unguarded, targets)
     text = (WORKFLOWS / WARM).read_text(encoding="utf-8")
     assert warm_problems(yaml.safe_load(
         text.replace("outputs.key }}\n", "outputs.key }}-x\n")), targets)
