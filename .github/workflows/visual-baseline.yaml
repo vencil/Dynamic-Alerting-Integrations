@@ -85,8 +85,11 @@ jobs:
         env:
           BASE_URL: http://localhost:8080/interactive/
           CI: 'true'
+          # #3756 ③c (zizmor template-injection): the input reaches the shell
+          # as data, never spliced into the script.
+          SPEC: ${{ inputs.spec }}
         run: |
-          npx playwright test "${{ inputs.spec }}" --update-snapshots
+          npx playwright test "$SPEC" --update-snapshots
 
       - name: Upload regenerated baselines
         uses: actions/upload-artifact@v7
@@ -104,6 +107,8 @@ jobs:
           if-no-files-found: error
 
       - name: Print next steps
+        env:
+          REASON: ${{ inputs.reason }}  # #3756 ③c: as data, not spliced into the script
         run: |
           cat <<'EOF'
 
@@ -115,8 +120,9 @@ jobs:
           2. Unzip into `tests/e2e/` on a fresh branch — preserves the
              `<spec>-snapshots/` subdirectory layout that Playwright expects.
           3. Open a PR titled "chore(e2e): refresh visual baselines —
-             ${{ inputs.reason }}".
+             <the reason below>".
           4. CI on the PR will compare current behaviour against these
              baselines; should be green.
           ====================================================================
           EOF
+          printf 'Reason: %s\n' "$REASON"

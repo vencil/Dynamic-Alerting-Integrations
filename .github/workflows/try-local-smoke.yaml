@@ -9,9 +9,10 @@ on:
     - cron: "0 2 * * *" # 02:00 UTC daily
   workflow_dispatch: {}
 
+# #3756 ③c (zizmor excessive-permissions): read-only here; `issues: write`
+# goes to the job that files the issue.
 permissions:
   contents: read
-  issues: write
 
 jobs:
   smoke:
@@ -59,6 +60,9 @@ jobs:
     needs: smoke
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Check failure streak and open issue
         env:
