@@ -147,11 +147,7 @@ jobs:
       # comment would say that instead of the backtest. Built from the PR
       # checkout, so both trees are read by the same binary.
       - name: Set up Go (da-guard)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+        uses: ./.github/actions/go-build-cache
 
       - name: Build da-guard
         run: |

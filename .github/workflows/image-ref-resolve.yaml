@@ -164,11 +164,7 @@ jobs:
 
       # #3206 (ADR-036 §12): the values files and manifests are read through
       # da-crdecode (kubectl's / Helm's reading); without it the scan exits 2.
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+      - uses: ./.github/actions/go-build-cache
 
       - name: Build da-crdecode
         run: |

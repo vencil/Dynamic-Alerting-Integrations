@@ -99,13 +99,7 @@ jobs:
           fetch-depth: 0  # the merge-base and its commit time
 
       - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
 
       - name: Build da-guard
         run: |

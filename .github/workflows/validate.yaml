@@ -379,13 +379,7 @@ jobs:
       # parse-tree` (yaml.v3); from then on it exits 2 without a da-guard.
       # Built from this checkout, as guard-defaults-impact.yml builds its own.
       - name: Set up Go (da-guard for the route generator; da-read / da-crdecode)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
       - name: Build da-guard
         run: |
           # The shipped shape: scripts/ops/go_build.sh holds the build flags
@@ -483,13 +477,7 @@ jobs:
       - run: pip install pyyaml -c requirements/ci-constraints.txt
       # bump_docs counts the rule packs with validate_docs_versions' counter.
       - name: Set up Go (da-read / da-crdecode)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
       # #3206 (ADR-036 §12): the rule files these steps read are read the way
       # Prometheus' rule loader reads them (`da-read prometheus-rules`) and
       # their ConfigMaps the way kubectl reads them (da-crdecode). Built from
