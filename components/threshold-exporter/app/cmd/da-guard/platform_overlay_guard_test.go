@@ -34,7 +34,7 @@ func redundantFields(t *testing.T, dir string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, &flags{}, fixedNow))
+	report, err := guard.CheckDefaultsImpact(checkInputOf(t, scoped, &flags{}, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}

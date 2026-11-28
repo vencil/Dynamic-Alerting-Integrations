@@ -82,7 +82,7 @@ func predictedRows(t *testing.T, dir, tenant string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := buildCheckInput(scoped, &flags{cardinalityLimit: 1}, fixedNow)
+	in := checkInputOf(t, scoped, &flags{cardinalityLimit: 1}, fixedNow)
 	n, ok := in.PredictedRowCounts[tenant]
 	if !ok {
 		t.Fatalf("no prediction for %s: %v", tenant, in.PredictedRowCounts)
@@ -291,7 +291,7 @@ func TestCardinality_ScopedRunPredictsInScopeTenantsAsTheWholeTree(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := buildCheckInput(scoped, &flags{cardinalityLimit: 1}, fixedNow).PredictedRowCounts
+	got := checkInputOf(t, scoped, &flags{cardinalityLimit: 1}, fixedNow).PredictedRowCounts
 	if len(got) != 2 {
 		t.Fatalf("predicted %v, want exactly ta and tb (tc is outside --scope a)", got)
 	}
