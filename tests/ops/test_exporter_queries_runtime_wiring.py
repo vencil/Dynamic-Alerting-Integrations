@@ -84,11 +84,17 @@ def test_the_script_runs_exactly_the_registry_packs_with_a_queries_file() -> Non
 # ── 2. each pack has a CI step that is the invocation and nothing else ───
 
 _SCRIPT_NAME = "exporter_queries_runtime.sh"
-_INVOCATION = re.compile(
-    r"(?:bash scripts/ops/with_[a-z_]+\.sh )*bash scripts/ops/exporter_queries_runtime\.sh ([a-z0-9_]+)")
 
 
-def wiring_problems(ci: dict, required: set[str], packs: list[str]) -> list[str]:
+def wiring_problems(ci: dict, required: set[str], packs: list[str],
+                    script: str = _SCRIPT_NAME, lacks: str = "has no queries file") -> list[str]:
+    """Why *packs* are not each run by a ci.yml step that is one call of
+    scripts/ops/*script* and nothing else. *lacks* words a step for a pack
+    outside *packs*. (tests/ops/test_exporter_capture_runtime_wiring.py holds
+    exporter_capture_runtime.sh to the same rule.)"""
+    _SCRIPT_NAME = script
+    _INVOCATION = re.compile(
+        r"(?:bash scripts/ops/with_[a-z_]+\.sh )*bash scripts/ops/" + re.escape(script) + r" ([a-z0-9_]+)")
     problems = []
     ran: dict[str, list[str]] = {p: [] for p in packs}
     if "defaults" in ci:
@@ -106,7 +112,7 @@ def wiring_problems(ci: dict, required: set[str], packs: list[str]) -> list[str]
                 continue
             pack = match.group(1)
             if pack not in ran:
-                problems.append(f"{where} runs the script for {pack!r}, which has no queries file")
+                problems.append(f"{where} runs the script for {pack!r}, which {lacks}")
                 continue
             ran[pack].append(where)
             extra = sorted(set(step) - {"name", "run"})

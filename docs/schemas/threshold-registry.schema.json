@@ -94,6 +94,59 @@
               "items": { "type": "string", "pattern": "^[A-Za-z_:][A-Za-z0-9_:]*$" },
               "description": "This pack's exporter's metric namespace: the name prefixes of the metrics it emits (#4270). Required on a pack with `presence:`; their union is what the scrape gate and the split validator take as a tenant exporter's metric, and the onboarding heuristics map a metric to a pack by it. Held both ways by tests/rulepacks/test_exporter_metric_prefixes.py: every raw metric the pack's rules read is under one of its prefixes, and every prefix is read by the pack's rules or presence."
             },
+            "exporters": {
+              "type": "array",
+              "minItems": 1,
+              "description": "The real exporter(s) this pack's raw selectors are checked against (#3833), any one of which a tenant may run: each pinned by tag AND digest, with every non-default flag the pack's metrics need, the pinned server it watches and the server states captured. scripts/ops/exporter_capture_runtime.sh <pack> starts them and scripts/tools/lint/check_exporter_capture.py checks every raw selector the pack's rules read against the union of the captures. `exporter:` must be the entries' names joined by ' or ' (check_threshold_registry.py), and the rule-pack header block states the version and flags. A pack carries this, or `queries:`, or a row in check_exporter_capture.py's ledgers.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "image", "tag", "digest", "flags", "server", "states"],
+                "properties": {
+                  "name": {"type": "string", "minLength": 1, "pattern": "^[^\\s]+$"},
+                  "image": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._/-]*$"},
+                  "tag": {"type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*$"},
+                  "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                  "flags": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {"type": "string", "pattern": "^--[A-Za-z0-9][^\\s]*$"},
+                    "description": "Command-line flags the exporter is started with, beyond its defaults. [] = defaults only."
+                  },
+                  "server": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["image", "tag", "digest"],
+                    "properties": {
+                      "image": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._/-]*$"},
+                      "tag": {"type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*$"},
+                      "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+                    }
+                  },
+                  "states": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+                    "description": "The server states the exporter is scraped in; a selector must be served in at least one. What a state means is the pack's driver (scripts/ops/exporter_capture/<pack>.sh)."
+                  }
+                }
+              }
+            },
+            "unchecked_alternatives": {
+              "type": "array",
+              "minItems": 1,
+              "description": "Only on a pack with `exporters:`. Raw metric names the pack reads as one side of an `or` that no declared exporter serves (an older exporter version's name). Exit-locked both ways by check_exporter_capture.py: an `or` alternative no capture serves must be listed here with its reason, and an entry that a capture serves, or that the pack no longer reads as an alternative, fails.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["metric", "reason"],
+                "properties": {
+                  "metric": {"type": "string", "pattern": "^[A-Za-z_:][A-Za-z0-9_:]*$"},
+                  "reason": {"type": "string", "minLength": 1, "pattern": "^[^\\n]+$"}
+                }
+              }
+            },
             "undeclared_notice": {
               "const": false,
               "description": "Only on a pack with `presence:`. false = TenantExporterUndeclared does not name this kind (its metric is exposed incidentally by many targets, e.g. jvm_* by any JVM application); the kind can still be declared, and TenantExporterAbsent then covers it. Omitted = the notice covers the kind."

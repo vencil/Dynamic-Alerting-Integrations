@@ -71,6 +71,11 @@ required:
   # failed」的訊息結束，不會讀成檢查失敗。`pending`：job 合進 main 並回報過一次後，
   # owner 到設定加上它，再把這個旗標拿掉（見檔頭「改法」）。
   - {name: Exporter Queries Runtime (DB2), kind: job, pending: true}
+  # Owner 裁決 2026-11-28（#3833）：PostgreSQL pack 讀的原始指標，每支 PR 都對 registry
+  # 釘住版本的真實 postgres_exporter 核對一次（試行；其餘 pack 看這一個的數字再決定）。
+  # 拉不到映像時腳本重試三次後以 exit 2 與點名「image pull failed」的訊息結束。`pending`
+  # 的意思同上一筆。
+  - {name: Exporter Capture (PostgreSQL), kind: job, pending: true}
   # #4224：docs-ci 的六項文件檢查（Mermaid、Links、HEAD Blob Hygiene、Front Matter、
   # Coverage、MkDocs）併成一個 job，各自一個 step。
   - {name: Documentation Checks, kind: job}

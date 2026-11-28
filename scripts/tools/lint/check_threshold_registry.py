@@ -264,6 +264,9 @@ def run_check(
         errors.append(f"stale-surface: {msg}")
     for problem in registry_lib.presence_problems(doc):
         errors.append(f"inconsistent: {problem}")
+    # #3833: `exporter:` is derived from `exporters:` where a pack has them.
+    for problem in registry_lib.exporters_problems(doc):
+        errors.append(f"inconsistent: {problem}")
 
     # 3i. the generated Go table of the namespace-keyed metric prefixes (#4178):
     #     the packs without `presence:`, whose series carry the tenant only as

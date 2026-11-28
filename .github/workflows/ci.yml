@@ -957,6 +957,55 @@ jobs:
       - name: "DB2 queries run against a real DB2 and serve the derived names (HARD gate — #3833)"
         run: bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/exporter_queries_runtime.sh db2
 
+  exporter-capture-postgresql:
+    # #3833 (owner ruling 2026-11-28): the list of metrics an exporter serves
+    # comes from the REAL exporter, at a pinned version. The postgresql pack's
+    # `exporters:` entry in rule-packs/threshold-registry.yaml names
+    # postgres_exporter (tag + digest), its flags, the postgres image and the
+    # states; scripts/ops/exporter_capture_runtime.sh starts exactly that,
+    # scrapes /metrics per state and fails when a raw selector the pack's
+    # rules read selects no captured series.
+    #
+    # A job of its own per pack, on every PR, no path gate — the 2026-11-20
+    # ruling recorded on exporter-queries-db2 above, for the same reasons: what
+    # this reads (the rule pack, the registry entry, the driver, the checker,
+    # da-read, two images) is not a list to keep by hand.
+    #
+    # Its required-check status is in .github/required-checks.yaml.
+    # tests/ops/test_exporter_capture_runtime_wiring.py holds "every registry
+    # pack with `exporters:` is run by a CI step" — deleting this job, or giving
+    # a second pack `exporters:` without a step, fails there.
+    name: Exporter Capture (PostgreSQL)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # Not measured on a hosted runner, and the docker path of the script has
+    # not run anywhere before this job's first run. Without docker (PostgreSQL
+    # 16.15 and the exporter's release binary on a 4-core container) the
+    # capture and the check take 5-10 s; here the two images are pulled first.
+    # The script exits 2 by name when a pull fails 3 times.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install dependencies
+        run: pip install pyyaml jsonschema -c requirements/ci-constraints.txt
+
+      - name: Set up Go (da-read / da-crdecode)
+        uses: ./.github/actions/go-build-cache
+
+      # ⛔ One command, nothing around it (see the Oracle step in Lint Rule Packs).
+      # The comparison reads the rule pack and judges each selector the way
+      # Prometheus does (da-read).
+      - name: "PostgreSQL pack selectors are served by the pinned postgres_exporter (HARD gate — #3833)"
+        run: bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/exporter_capture_runtime.sh postgresql
+
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
     #   L2 (Helm template): renders every chart via helm + kube-linter (~1-2 min).

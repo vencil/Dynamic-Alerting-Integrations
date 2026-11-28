@@ -94,6 +94,19 @@
 # check_retired_keys_not_taught.py（hook retired-keys-not-taught）以本區段為唯一名單，
 # 本檔、CHANGELOG、changelog.d、測試與由本檔生成的文字除外。解釋退役的那一行在原地標
 # `retired-key-mention: <key>`（涵蓋該行與下一行；沒有對到任何提及、或沒寫 key 的標記本身就是錯）。
+#
+# packs.<pack>.exporters（#3833）：這個 pack 的原始指標要拿哪一支真實 exporter 核對——
+#   [{name, image, tag, digest, flags, server: {image, tag, digest}, states}]，可以列多支
+#   （租戶擇一使用）。flags 是 pack 的指標需要、而 exporter 預設不開的啟動旗標（沒有就 []）；
+#   states 是要擷取的對象狀態，各狀態怎麼做出來在 scripts/ops/exporter_capture/<pack>.sh。
+#   scripts/ops/exporter_capture_runtime.sh <pack> 照這一筆啟動並抓 /metrics，
+#   check_exporter_capture.py 要求 pack 規則讀的每個原始選擇器都選得到序列。
+#   有 exporters 的 pack，exporter: 必須等於各筆 name 以「 or 」相連（--ci 檢查），版本與
+#   旗標由 --regen 寫進 rule pack 檔頭的生成區塊。
+# packs.<pack>.unchecked_alternatives：pack 以 `A or B` 讀、但沒有任何一筆 exporters 供應
+#   的名稱 [{metric, reason}]。雙向鎖定：沒列的會被擋，列了卻有供應或沒在讀的也會被擋。
+# 每個 pack 必須是 exporters、queries（query-exporter 路徑）、或列在
+# check_exporter_capture.py 的 COVERED_ELSEWHERE／UNVERIFIED 其中之一。
 version: 1
 packs:
   kubernetes:
@@ -110,6 +123,27 @@ packs:
     metric_prefixes: [pg_]
     presence:
       - pg_up
+    exporters:
+      - name: prometheus-community/postgres_exporter
+        image: quay.io/prometheuscommunity/postgres-exporter
+        tag: v0.21.1
+        digest: sha256:a88794758ad461c75f3825b51cde4bde730bdff04b3b24d00efe14217e41f615
+        # PostgreSQLRecentRestart reads pg_postmaster_start_time_seconds; the
+        # collector that serves it is off unless this flag is given.
+        flags: [--collector.postmaster]
+        server:
+          image: postgres
+          tag: "16.15"
+          digest: sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
+        # primary: the exporter on the primary of a streaming-replication
+        # pair; replica: the exporter on its hot standby.
+        states: [primary, replica]
+    unchecked_alternatives:
+      - metric: pg_replication_lag
+        reason: >-
+          postgres_exporter v0.12.1 以前的名稱，來自它範例 queries.yaml 的 pg_replication 項目
+          （--extend.query-path）；v0.13.0 起由 replication collector 改供應
+          pg_replication_lag_seconds。保留給還在用那份查詢檔的租戶，釘住的版本不供應這個名稱
   mariadb:
     display: MariaDB / MySQL (mysqld_exporter)
     exporter: prom/mysqld-exporter or Percona

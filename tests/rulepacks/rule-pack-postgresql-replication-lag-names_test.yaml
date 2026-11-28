@@ -1,0 +1,54 @@
+# promtool unit test — tenant:pg_replication_lag:max reads both names of the
+# replication lag (#4354, #3833).
+#
+# postgres_exporter's replication collector serves pg_replication_lag_seconds
+# (what scripts/ops/exporter_capture_runtime.sh postgresql captures from the
+# pinned exporter); pg_replication_lag is the name its sample queries.yaml
+# served. One tenant per case:
+#   t-new   only the collector's name   -> red when the record reads only the
+#                                          old name (the state before #4354)
+#   t-old   only the queries.yaml name  -> red when the old name is dropped
+#   t-both  both, on the same labels    -> the collector's value is read once
+#                                          (`or` keeps the left side), not the
+#                                          larger and not the two added
+rule_files:
+  - ../../rule-packs/rule-pack-postgresql.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'pg_replication_lag_seconds{tenant="t-new", instance="db-0"}'
+        values: '40x20'
+      - series: 'pg_replication_lag{tenant="t-old", instance="db-0"}'
+        values: '50x20'
+      - series: 'pg_replication_lag_seconds{tenant="t-both", instance="db-0"}'
+        values: '5x20'
+      - series: 'pg_replication_lag{tenant="t-both", instance="db-0"}'
+        values: '70x20'
+      - series: 'user_threshold{tenant="t-new", component="pg", metric="replication_lag", severity="warning"}'
+        values: '30x20'
+      - series: 'user_threshold{tenant="t-old", component="pg", metric="replication_lag", severity="warning"}'
+        values: '30x20'
+      - series: 'user_threshold{tenant="t-both", component="pg", metric="replication_lag", severity="warning"}'
+        values: '30x20'
+    promql_expr_test:
+      - expr: tenant:pg_replication_lag:max
+        eval_time: 2m
+        exp_samples:
+          - labels: 'tenant:pg_replication_lag:max{tenant="t-new"}'
+            value: 40
+          - labels: 'tenant:pg_replication_lag:max{tenant="t-old"}'
+            value: 50
+          - labels: 'tenant:pg_replication_lag:max{tenant="t-both"}'
+            value: 5
+      # 30s `for:` served: the two tenants above the threshold fire, t-both
+      # (5 s by the collector's name) does not.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PostgreSQLHighReplicationLag"})
+        eval_time: 2m
+        exp_samples:
+          - labels: '{alertname="PostgreSQLHighReplicationLag", tenant="t-new"}'
+            value: 1
+          - labels: '{alertname="PostgreSQLHighReplicationLag", tenant="t-old"}'
+            value: 1

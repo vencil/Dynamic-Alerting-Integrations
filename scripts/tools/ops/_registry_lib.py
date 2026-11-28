@@ -290,6 +290,12 @@ def build_registry_doc(
             packs[pack_name]["metric_prefixes"] = list(pack["metric_prefixes"])
         if "undeclared_notice" in pack:
             packs[pack_name]["undeclared_notice"] = pack["undeclared_notice"]
+        if pack.get("exporters"):
+            # The pinned real exporter(s) the pack's raw selectors are checked
+            # against (#3833; `exporters_problems`, check_exporter_capture.py).
+            packs[pack_name]["exporters"] = list(pack["exporters"])
+        if pack.get("unchecked_alternatives"):
+            packs[pack_name]["unchecked_alternatives"] = list(pack["unchecked_alternatives"])
         for key, info in (pack.get(THRESHOLDS) or {}).items():
             if key in keys:
                 raise ValueError(
@@ -778,7 +784,8 @@ def arming_notes_zh(entry: dict) -> list[str]:
 
 #: Per-pack fields of scaffold's RULE_PACKS that come from the registry.
 _PACK_FIELDS = ("display", "exporter", "default_on", "rule_pack_file", "queries",
-                "presence", "metric_prefixes", "undeclared_notice")
+                "presence", "metric_prefixes", "undeclared_notice",
+                "exporters", "unchecked_alternatives")
 #: Per-key fields of scaffold's RULE_PACKS that come from the registry.
 _KEY_FIELDS = ("value", "unit", "desc", "metric_class", "dimensions",
                "value_counterexample")
@@ -793,7 +800,7 @@ _RULE_PACKS_MODULE_HEADER = (
     "\n"
     "The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its\n"
     "display/exporter/default_on/rule_pack_file(/queries/presence/metric_prefixes/\n"
-    "undeclared_notice)\n"
+    "undeclared_notice/exporters/unchecked_alternatives)\n"
     "and its `thresholds` (registry key order), BUILTIN_DEFAULT_KEYS: the keys the\n"
     "readers build in with a platform value (`arming: default`, the same derivation\n"
     "as builtin_defaults_gen.go, #3832), and EXPECTED_EXPORTER_KINDS: the packs with\n"
@@ -1223,6 +1230,70 @@ def presence_problems(doc: dict) -> list[str]:
             problems.append(
                 f"pack {name!r}: undeclared_notice without presence — only a kind "
                 "(a pack with `presence:`) can be noticed")
+    return problems
+
+
+def pack_exporters(doc: dict) -> "dict[str, list[dict]]":
+    """pack -> its `exporters:` entries (#3833): the pinned real exporter(s)
+    whose /metrics the pack's raw selectors are checked against, each with the
+    server it watches, the flags it is started with and the server states
+    captured. Only the packs that carry the field."""
+    return {str(name): list(meta["exporters"])
+            for name, meta in (doc.get("packs") or {}).items()
+            if isinstance(meta, dict) and meta.get("exporters")}
+
+
+def exporter_text(exporters: "list[dict]") -> str:
+    """⛔ THE text of a pack's `exporter:` when it has `exporters:` (#3833):
+    the entries' names joined by " or ". `exporters_problems` holds the
+    authored `exporter:` equal to it, so the human-readable line is not a
+    second, hand-kept statement of which exporter the pack is for."""
+    return " or ".join(str(e["name"]) for e in exporters)
+
+
+def image_ref(entry: dict) -> str:
+    """`<image>:<tag>@<digest>` of an `exporters:` entry or its `server:`."""
+    return f"{entry['image']}:{entry['tag']}@{entry['digest']}"
+
+
+def exporters_problems(doc: dict) -> list[str]:
+    """What breaks the `exporters:` contract beyond the schema (#3833):
+    `exporter:` is `exporter_text` of the entries; `unchecked_alternatives`
+    belongs to a pack with `exporters:`, names each metric once, and each
+    metric is under the pack's `metric_prefixes`."""
+    problems = []
+    for name, meta in (doc.get("packs") or {}).items():
+        if not isinstance(meta, dict):
+            continue
+        exporters = meta.get("exporters")
+        alternatives = meta.get("unchecked_alternatives") or []
+        if alternatives and not exporters:
+            problems.append(
+                f"pack {name!r}: unchecked_alternatives without exporters — there is "
+                "no capture for a name to be left out of")
+        if not exporters:
+            continue
+        try:
+            want = exporter_text(exporters)
+        except (KeyError, TypeError):
+            continue   # the schema names a malformed entry
+        if meta.get("exporter") != want:
+            problems.append(
+                f"pack {name!r}: exporter is {meta.get('exporter')!r}, its exporters: "
+                f"entries name {want!r} — write that (the line is derived from them)")
+        seen: set[str] = set()
+        prefixes = tuple(meta.get("metric_prefixes") or ())
+        for alt in alternatives:
+            metric = alt.get("metric") if isinstance(alt, dict) else None
+            if not isinstance(metric, str):
+                continue
+            if metric in seen:
+                problems.append(f"pack {name!r}: unchecked_alternatives names {metric!r} twice")
+            seen.add(metric)
+            if not metric.startswith(prefixes or ("\0",)):
+                problems.append(
+                    f"pack {name!r}: unchecked alternative {metric!r} is under none of "
+                    f"the pack's metric_prefixes {list(prefixes)}")
     return problems
 
 
@@ -1851,6 +1922,36 @@ _CRITICAL_SECTION_LINES = (
 )
 
 
+def render_exporter_capture_lines(doc: dict, pack_name: str) -> list[str]:
+    """The pack-header lines that tell a reader which real exporter the pack's
+    raw metrics are checked against (#3833): per `exporters:` entry its name,
+    version, pinned image, the non-default flags it is started with, the
+    server and the states captured; then the names the pack also reads that
+    no capture serves. Empty for a pack without `exporters:`."""
+    meta = (doc.get("packs") or {}).get(pack_name) or {}
+    exporters = meta.get("exporters") or []
+    if not exporters:
+        return []
+    lines = [
+        "# 本 pack 讀的每個原始指標選擇器，CI 都拿下列真實 exporter 的 /metrics 核對（#3833；",
+        f"# scripts/ops/exporter_capture_runtime.sh {pack_name}）。其他版本或旗標組合沒有核對過。",
+    ]
+    for e in exporters:
+        flags = " ".join(e["flags"]) if e["flags"] else "（無；全用預設值）"
+        server = e["server"]
+        lines += [
+            f"#   {e['name']} {e['tag']}",
+            f"#     映像：{e['image']}@{e['digest']}",
+            f"#     啟動旗標（非預設，少了就有規則讀不到資料）：{flags}",
+            f"#     核對對象：{server['image']} {server['tag']}；狀態：{'、'.join(e['states'])}",
+        ]
+    for alt in meta.get("unchecked_alternatives") or []:
+        lines.append(f"#   另外也讀、但沒有核對的名稱：{alt['metric']}")
+        lines += [f"#       {seg}" for seg in _wrap_comment(str(alt["reason"]), _COMMENT_WIDTH - 8)]
+    lines.append("#")
+    return lines
+
+
 def render_pack_header_lines(doc: dict, pack_name: str) -> list[str]:
     """The generated threshold section of one rule-pack header (body only).
 
@@ -1864,7 +1965,7 @@ def render_pack_header_lines(doc: dict, pack_name: str) -> list[str]:
     by_pack = keys_by_pack(doc).get(pack_name, {})
     base_keys = {k: e for k, e in by_pack.items() if not e.get("critical_of")}
     critical = {k: e for k, e in by_pack.items() if e.get("critical_of")}
-    lines = [
+    lines = render_exporter_capture_lines(doc, pack_name) + [
         "# 對應的 threshold-exporter 閾值（全部內建在讀取端，conf.d 不必列；"
         "[chart-default]=平台出貨即啟用，省略就用平台值；未標者沒有平台值，"
         "「未啟用」一行寫原因，租戶、子目錄或 profile 給值才發射）:",
