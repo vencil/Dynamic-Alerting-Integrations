@@ -102,19 +102,13 @@ jobs:
       # this step the hook fails by name (go is not on PATH), never passes.
       # ADR-036 §12: `admin-config-schema-check`'s wrapper
       # (scripts/ops/with_admin_config_tools.sh) builds .build/tenant-api and
-      # .build/da-crdecode the same way, so the tenant-api module is cached too.
+      # .build/da-crdecode the same way.
       # #3206: a hook that reads a prometheus.yml builds .build/da-read
-      # (scripts/ops/with_da_read.sh) from its own module, so its go.sum
-      # keys the cache as well.
+      # (scripts/ops/with_da_read.sh) from its own module.
+      # The build cache all of them compile against is main's, restored by the
+      # go-build-cache action (its header says why not setup-go's cache).
       - name: Set up Go (da-guard / tenant-api / da-crdecode / da-read for the lint hooks)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/tenant-api/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
 
       # #3206: `image-pin-capability-check` renders every chart that pins
       # da-tools (`helm template`, the render path); without helm it exits 2.
@@ -277,6 +271,9 @@ jobs:
           pre-commit run forbid-legacy-mariadb-threshold-name --all-files
           pre-commit run forbid-legacy-mysql-cpu-key --all-files
           pre-commit run forbid-legacy-mysql-cpu-selector --all-files
+          # #1200: a key in the registry's retired_keys is named nowhere a
+          # reader learns keys from (docs, samples, scripts, portal).
+          pre-commit run retired-keys-not-taught --all-files
           pre-commit run skip-a11y-justification-check --all-files
           # CI-ROI 6C blind-spot fix: these 4 lints' live-dogfood pytest
           # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as
@@ -511,15 +508,7 @@ jobs:
       # `make da-guard-build`, which needs go. Without this step the gate fails
       # by name (go is not on PATH), never passes.
       - name: Set up Go (da-guard for the RETIRE-ordering gate; da-read / da-crdecode)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          # tenant-api's too: the error-contract gate below builds it (#3202).
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/tenant-api/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
 
       # #3206 (ADR-036 §12): the rule files these steps read are read the way
       # Prometheus' rule loader reads them (`da-read prometheus-rules`) and
@@ -961,13 +950,7 @@ jobs:
         run: pip install pyyaml query-exporter -c requirements/ci-constraints.txt
 
       - name: Set up Go (da-read / da-crdecode)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
 
       # ⛔ One command, nothing around it (see the Oracle step in Lint Rule Packs).
       # The comparison reads the rule pack the way Prometheus does (da-read).
@@ -1062,11 +1045,7 @@ jobs:
       # the manifests through da-crdecode (kubectl's reading); without it the
       # step fails by name (rc 2), never degrades to a PyYAML reading.
       - name: Set up Go (da-crdecode for the L4 PSS rule)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+        uses: ./.github/actions/go-build-cache
 
       - name: Run Container SAST Layer 4 (raw k8s manifests)
         # Real layer (NOT a stub): k8s/ holds real raw manifests. kube-linter
@@ -1244,16 +1223,7 @@ jobs:
       # VIBE_REQUIRE_GO above). Version from the module's own go.mod, the same
       # way guard-defaults-impact.yml / release.yaml do.
       - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          # #3206: tests/conftest.py also builds da-read (components/da-read,
-          # Alertmanager's dependency tree) once per session; its go.sum in the
-          # key keeps those modules and their build cache warm.
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
 
       # Vector CLI — same rationale as setup-Helm above. The ADR-021 #609
       # projection AC behavior gate (tests/shared/test_vector_projection_vrl.py
@@ -2292,13 +2262,7 @@ jobs:
       # exported, so both steps below (and validate_all's platform_data inside
       # `make lint-docs`) use the same binary; a failed build fails the job.
       - name: Set up Go (da-guard; da-read / da-crdecode)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
 
       # #3206: platform_data and byo_rulepack_table read Helm / k8s files
       # through da-crdecode; built here once like da-guard.
@@ -2380,6 +2344,12 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
+
+      # The pytest session builds da-guard / da-read / da-crdecode
+      # (VIBE_TEST_GO_BINARIES above): the go.mod's Go, against main's build
+      # cache, not the runner image's Go on a cold cache.
+      - name: Set up Go
+        uses: ./.github/actions/go-build-cache
 
       # The runner is self-contained — it builds its own venv and runs
       # every Python step (render-extract, keygen, pytest) inside it.

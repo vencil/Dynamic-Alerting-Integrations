@@ -6,7 +6,7 @@
 # (tenant_api_builtin_defaults_info{digest}) serve the digest of the table
 # they were compiled with.
 #
-# ⚠️ The pack's digest this file expects — rulepack_digest: "968ca3d1c003" —
+# ⚠️ The pack's digest this file expects — rulepack_digest: "981b5923a866" —
 # is the CURRENT table's: `check_threshold_registry.py --regen` rewrites it,
 # everywhere in this file, when the table changes, and `--ci` fails while it
 # is stale. Any other 12-hex digest here is a made-up component digest.
@@ -37,11 +37,11 @@ tests:
     input_series:
       - series: 'up{job="threshold-exporter", instance="10.0.0.1:8080"}'
         values: '1x60'
-      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="968ca3d1c003"}'
+      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="981b5923a866"}'
         values: '1x60'
       - series: 'up{job="tenant-api", instance="10.0.0.2:8080"}'
         values: '1x60'
-      - series: 'tenant_api_builtin_defaults_info{job="tenant-api", instance="10.0.0.2:8080", digest="968ca3d1c003"}'
+      - series: 'tenant_api_builtin_defaults_info{job="tenant-api", instance="10.0.0.2:8080", digest="981b5923a866"}'
         values: '1x60'
     alert_rule_test:
       - eval_time: 60m
@@ -72,12 +72,12 @@ tests:
               job: threshold-exporter
               digest: "0123456789ab"
             exp_annotations:
-              summary: "threshold-exporter built-in defaults table 0123456789ab differs from the platform rule pack's 968ca3d1c003 "
+              summary: "threshold-exporter built-in defaults table 0123456789ab differs from the platform rule pack's 981b5923a866 "
               description: |
                 threshold-exporter has served the built-in defaults table
                 0123456789ab for 30 minutes (on at least one of its
                 instances); the platform rule pack was generated from the
-                threshold registry whose table is 968ca3d1c003 .
+                threshold registry whose table is 981b5923a866 .
                 digest="none" means an instance serves no digest series: a release
                 older than the built-in layer, which gives no default-armed
                 threshold a value unless conf.d writes it.
@@ -121,7 +121,7 @@ tests:
     input_series:
       - series: 'up{job="threshold-exporter", instance="10.0.0.1:8080"}'
         values: '1x60'
-      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="968ca3d1c003"}'
+      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="981b5923a866"}'
         values: '1x60'
       - series: 'up{job="tenant-api", instance="10.0.0.2:8080"}'
         values: '1x60'
@@ -143,7 +143,7 @@ tests:
         values: '1x60'
       - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="0123456789ab"}'
         values: '1x20 _x40'
-      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="968ca3d1c003"}'
+      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="981b5923a866"}'
         values: '_x20 1x40'
     promql_expr_test:
       - expr: count(ALERTS{alertname="BuiltinDefaultsDigestMismatch", alertstate="firing"})
@@ -161,7 +161,7 @@ tests:
     input_series:
       - series: 'up{job="threshold-exporter", instance="10.0.0.1:8080"}'
         values: '1x60'
-      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="968ca3d1c003"}'
+      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="981b5923a866"}'
         values: '1x60'
       - series: 'up{job="threshold-exporter", instance="10.0.0.3:8080"}'
         values: '1x60'

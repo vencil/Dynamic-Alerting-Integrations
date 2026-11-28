@@ -244,7 +244,7 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 | clickhouse | built-in /metrics | 10 | 7 |
 | db2 | query-exporter | 17 | 13 |
 | elasticsearch | elasticsearch_exporter | 14 | 12 |
-| jvm | jmx_exporter | 9 | 8 |
+| jvm | Micrometer / client_java / jmx_exporter | 9 | 7 |
 | kafka | kafka_exporter | 8 | 6 |
 | kubernetes | cAdvisor + kube-state-metrics | 35 | 16 |
 | liveness | threshold-exporter 心跳 | 0 | 3 |
@@ -257,7 +257,7 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 | postgresql | postgres_exporter | 8 | 8 |
 | rabbitmq | rabbitmq_exporter | 16 | 12 |
 | redis | redis_exporter | 12 | 10 |
-| **合計** | | **175** | **206** |
+| **合計** | | **175** | **205** |
 <!-- RULE_PACK_STATS_END -->
 
 

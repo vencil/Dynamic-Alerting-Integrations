@@ -111,7 +111,7 @@ groups:
 
 ### Example: groups leave `/metrics` unchanged, and the new fields stay out of `tenant_metadata_info`
 
-Input: conf.d/ holds `_defaults.yaml` (`defaults: {mysql_connections: 80}`), a tenant file `db-a.yaml` (`mysql_connections: "70"`, `_expected_exporters: [mariadb]`, with the `_metadata` from section 1), and the `_groups.yaml` from section 2.
+Input: conf.d/ holds `_defaults.yaml` (`defaults: {mysql_connection_usage_percent: 80}`), a tenant file `db-a.yaml` (`mysql_connection_usage_percent: "70"`, `_expected_exporters: [mariadb]`, with the `_metadata` from section 1), and the `_groups.yaml` from section 2.
 
 Every line of threshold-exporter's `/metrics` carrying `tenant="db-a"` (comment lines excluded):
 
@@ -120,10 +120,24 @@ da_tenant_metrics_over_limit{tenant="db-a"} 0
 tenant_expected_exporter{pack="mariadb",tenant="db-a"} 1
 tenant_metadata_info{owner="team-dba",runbook_url="https://wiki.example.com/db-a",tenant="db-a",tier="tier-1"} 1
 user_severity_dedup{mode="enable",tenant="db-a"} 1
-user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 70
+user_threshold{component="container",metric="cpu",severity="warning",tenant="db-a"} 80
+user_threshold{component="container",metric="cpu_throttle",severity="warning",tenant="db-a"} 25
+user_threshold{component="container",metric="memory",severity="warning",tenant="db-a"} 85
+user_threshold{component="db2",metric="log_usage_percent",severity="warning",tenant="db-a"} 75
+user_threshold{component="db2",metric="storage_path_used_percent",severity="warning",tenant="db-a"} 80
+user_threshold{component="db2",metric="tablespace_used_percent",severity="warning",tenant="db-a"} 80
+user_threshold{component="es",metric="disk_usage_percent",severity="warning",tenant="db-a"} 85
+user_threshold{component="es",metric="heap_usage_percent",severity="warning",tenant="db-a"} 85
+user_threshold{component="mysql",metric="connection_usage_percent",severity="warning",tenant="db-a"} 70
+user_threshold{component="mysql",metric="replication_lag",severity="warning",tenant="db-a"} 30
+user_threshold{component="oracle",metric="process_usage_percent",severity="warning",tenant="db-a"} 85
+user_threshold{component="oracle",metric="tablespace_used_percent",severity="warning",tenant="db-a"} 85
+user_threshold{component="pg",metric="connections",severity="warning",tenant="db-a"} 80
+user_threshold{component="pg",metric="replication_lag",severity="warning",tenant="db-a"} 30
+user_threshold{component="rabbitmq",metric="node_mem_percent",severity="warning",tenant="db-a"} 90
 ```
 
-Result: `tenant_metadata_info` carries only owner, runbook_url, and tier; environment, region, domain, tags, and groups appear on no metric, and the declared exporter kinds appear only as the `pack` label of `tenant_expected_exporter`. Running again without `_groups.yaml` gives identical output, apart from timing and Go runtime metrics (`go_memstats_*`, `go_threads`).
+Result: of the `user_threshold` lines only `connection_usage_percent` (70) comes from the tenant file; the rest are the platform's built-in defaults. `tenant_metadata_info` carries only owner, runbook_url, and tier; environment, region, domain, tags, and groups appear on no metric, and the declared exporter kinds appear only as the `pack` label of `tenant_expected_exporter`. Running again without `_groups.yaml` gives identical output, apart from timing and Go runtime metrics (`go_memstats_*`, `go_threads`).
 
 ## Rationale
 

@@ -336,7 +336,7 @@ const disabledSpelling = "disable"
 // ParseMetricKey splits a metric key into component and metric (exported for testing).
 func ParseMetricKey(key string) (string, string) { return parseMetricKey(key) }
 
-// parseMetricKey splits "mysql_connections" into ("mysql", "connections").
+// parseMetricKey splits "mysql_connection_usage_percent" into ("mysql", "connection_usage_percent").
 // If no underscore, component defaults to "default".
 //
 // Edge case: keys starting with "_" (e.g. "_leading") have idx == 0, which

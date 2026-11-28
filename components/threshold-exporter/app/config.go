@@ -1111,7 +1111,7 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// the else above, so the tenant-patch path published tenants exactly as
 	// their files spell them — without the profile overlay `Resolve` expects to
 	// find already merged in. Measured on a tenant whose `_profile: gold` supplies
-	// mysql_connections=95: adding an unrelated key to that tenant's own file
+	// mysql_connection_usage_percent=95: adding an unrelated key to that tenant's own file
 	// dropped it to the platform default 80, silently, until a restart put it
 	// back. A threshold LOOSENED with no signal is this ticket's own shape.
 	//

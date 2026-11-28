@@ -325,7 +325,7 @@ tests:
 
   - interval: 15s
     input_series:
-      - series: 'user_threshold_unset{tenant="t-jvm", pack="jvm", key="jvm_gc_pause"}'
+      - series: 'user_threshold_unset{tenant="t-jvm", pack="jvm", key="jvm_gc_time_percent"}'
         values: '1x160'
       - series: 'jvm_memory_used_bytes{tenant="t-jvm", job="tenant-exporters"}'
         values: '1x160'
@@ -336,16 +336,16 @@ tests:
           - exp_labels:
               tenant: t-jvm
               pack: jvm
-              key: jvm_gc_pause
+              key: jvm_gc_time_percent
               severity: info
               maintenance: mute
             exp_annotations:
-              summary: "jvm_gc_pause has no threshold for t-jvm: the alert on it stays silent"
-              summary_zh: "t-jvm 沒有設定 jvm_gc_pause：讀它的告警不會響"
-              platform_summary: "jvm_gc_pause: no threshold, so its alert never fires"
-              platform_summary_zh: "jvm_gc_pause：沒有門檻值，讀它的告警不會響"
-              description: "No threshold is served for jvm_gc_pause, so the jvm alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
-              description_zh: "jvm_gc_pause 沒有送出任何門檻值，jvm 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
+              summary: "jvm_gc_time_percent has no threshold for t-jvm: the alert on it stays silent"
+              summary_zh: "t-jvm 沒有設定 jvm_gc_time_percent：讀它的告警不會響"
+              platform_summary: "jvm_gc_time_percent: no threshold, so its alert never fires"
+              platform_summary_zh: "jvm_gc_time_percent：沒有門檻值，讀它的告警不會響"
+              description: "No threshold is served for jvm_gc_time_percent, so the jvm alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
+              description_zh: "jvm_gc_time_percent 沒有送出任何門檻值，jvm 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
               owner: ""
               tier: ""

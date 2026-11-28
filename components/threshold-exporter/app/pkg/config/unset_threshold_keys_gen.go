@@ -17,7 +17,7 @@ var unsetThresholdKeys = []unsetThresholdKey{
 	{"db2_lock_wait_time", "db2"},
 	{"es_pending_tasks", "elasticsearch"},
 	{"es_search_latency_ms", "elasticsearch"},
-	{"jvm_gc_pause", "jvm"},
+	{"jvm_gc_time_percent", "jvm"},
 	{"jvm_memory", "jvm"},
 	{"jvm_threads", "jvm"},
 	{"kafka_broker_count", "kafka"},

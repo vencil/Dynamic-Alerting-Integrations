@@ -35,13 +35,13 @@ parent: architecture-and-design.md
 | ClickHouse | `prometheus-rules-clickhouse` | 10 | 7 |
 | Kafka | `prometheus-rules-kafka` | 8 | 6 |
 | RabbitMQ | `prometheus-rules-rabbitmq` | 16 | 12 |
-| JVM | `prometheus-rules-jvm` | 9 | 8 |
+| JVM | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | `prometheus-rules-nginx` | 9 | 7 |
 | Kubernetes | `prometheus-rules-kubernetes` | 35 | 16 |
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 1 | 58 |
-| **總計** | | **175** | **206** (= **381** rules) |
+| **總計** | | **175** | **205** (= **380** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### 團隊切分（示意，**非**擁有權宣告）
@@ -65,8 +65,12 @@ groups:
   - name: mariadb-normalization
     rules:
       # 正規化命名：tenant:<component>_<metric>:<function>
-      - record: tenant:mysql_threads_connected:max
-        expr: max by(tenant) (mysql_global_status_threads_connected)
+      - record: tenant:mysql_connection_usage:percent
+        expr: |
+          max by(tenant) (
+            100 * mysql_global_status_threads_connected
+            / (mysql_global_variables_max_connections > 0)
+          )
 
       - record: tenant:mysql_slow_queries:rate5m
         expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
@@ -79,11 +83,11 @@ groups:
 groups:
   - name: mariadb-threshold-normalization
     rules:
-      - record: tenant:alert_threshold:mysql_connections
-        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="warning"})
+      - record: tenant:alert_threshold:mysql_connection_usage_percent
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="warning"})
 
-      - record: tenant:alert_threshold:mysql_connections_critical
-        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="critical"})
+      - record: tenant:alert_threshold:mysql_connection_usage_percent_critical
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="critical"})
 ```
 
 **關鍵：** 使用 `max by(tenant)` 而非 `sum`，防止 HA 雙倍計算（詳見第 4.3 節）
@@ -98,9 +102,9 @@ groups:
       - alert: MariaDBHighConnections
         expr: |
           (
-            tenant:mysql_threads_connected:max
+            tenant:mysql_connection_usage:percent
             > on(tenant) group_left
-            tenant:alert_threshold:mysql_connections
+            tenant:alert_threshold:mysql_connection_usage_percent
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -109,10 +113,10 @@ groups:
           severity: warning
           maintenance: mute   # 必填 mute｜page；上面兩行維護條件由 generate_rulepack_derived.py 依它寫入
         annotations:
-          summary: "MariaDB connections {{ $value }} exceeds threshold ({{ $labels.tenant }})"
-          summary_zh: "MariaDB 連線數 {{ $value }} 超過閾值（{{ $labels.tenant }}）"
-          description: "Connection count has exceeded the threshold"
-          description_zh: "連線數已超過設定的閾值"
+          summary: "MariaDB connection usage {{ $value }}% exceeds threshold ({{ $labels.tenant }})"
+          summary_zh: "MariaDB 連線使用率 {{ $value }}% 超過閾值（{{ $labels.tenant }}）"
+          description: "Connection usage has exceeded the threshold"
+          description_zh: "連線使用率已超過設定的閾值"
           platform_summary: "[Tier: {{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Connection pool exhaustion — escalate to DBA"
           platform_summary_zh: "[Tier: {{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：連線集區耗盡——需升級至 DBA"
 ```
@@ -149,5 +153,20 @@ Rule Pack 支援 **`*_zh` 後綴 annotation** 實現多語言通知：
 2. **團隊自主** — DBA 擁有 MariaDB 規則，不需要中央平台審核
 3. **可複用** — 規則可輕鬆移植至其他 Prometheus 叢集
 4. **獨立測試** — 每個包可獨立驗證和發布
+
+### 3.4 Exporter 相容性：JVM 的 GC 時間佔比
+
+JVM pack 的 `jvm_gc_time_percent`（告警 `JVMHighGCPause`／`JVMHighGCPauseCritical`）比的是 `tenant:jvm_gc_time:percent`：每個租戶、每個叢集裡**最忙的那個 JVM** 花在 GC 暫停的時間百分比（5 分鐘平均），不是各 JVM 的加總。十個各 7.5% 的 JVM 讀到 7.5，一個 50% 的 JVM 讀到 50。
+
+兩種命名都讀，一個 JVM 同時吐兩種時只算一次（取 Micrometer）：
+
+| Exporter | 讀的指標 | 說明 |
+|---|---|---|
+| Micrometer（Spring Boot Actuator） | `jvm_gc_pause_seconds_sum` | 逐 `action`／`cause`（1.11 起加 `gc`）一條，先加總成每個 JVM 一個值 |
+| client_java、jmx_exporter | `jvm_gc_collection_seconds_sum` | 逐 collector（`gc`）一條；`gc` 以 `Cycles` 結尾的（`ZGC Cycles`、`ZGC Major Cycles`、`ZGC Minor Cycles`、`Shenandoah Cycles`）是 concurrent 階段、應用仍在執行，不計入。`G1 Concurrent GC` 是 G1 的 Remark／Cleanup 暫停，計入 |
+
+⚠️ **Micrometer 版本下限**：Micrometer 把它認得的 concurrent cycle 另外記到 `jvm_gc_concurrent_phase_time_seconds`；不認得的會整段記成暫停，讀數偏高。Shenandoah 需 1.7.0 以上，ZGC 需 1.8.0 以上，分代 ZGC（JDK 21 `-XX:+ZGenerational`）需 1.12.4 以上或 1.13.0 以上（1.11.x 沒有）。依據是 Micrometer `JvmMemory.isConcurrentPhase` 在各版本 tag 的內容，沒有實際跑過。
+
+⚠️ 每個 JVM 的值是把 `action`／`cause`／`gc` 以外的 label 都當成 JVM 的身分來加總的。exporter 若在這兩個指標上多加一個逐 series 的 label，同一個 JVM 會被拆成幾份、讀數偏低。
 
 ---

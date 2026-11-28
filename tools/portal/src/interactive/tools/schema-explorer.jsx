@@ -92,7 +92,7 @@ const SCHEMA = [
       { key: 'elasticsearch_heap_usage_warning', type: 'number', desc: t('ES heap 使用率 warning（%）', 'ES heap usage warning (%)'), rulePack: 'elasticsearch', example: '"75"', range: '0-100' },
       { key: 'kubernetes_pod_restart_warning', type: 'number', desc: t('Pod 重啟次數 warning', 'Pod restart count warning'), rulePack: 'kubernetes', example: '"5"', range: '>= 0' },
       { key: 'kubernetes_cpu_throttle_warning', type: 'number', desc: t('CPU throttle 比例 warning（%）', 'CPU throttle ratio warning (%)'), rulePack: 'kubernetes', example: '"25"', range: '0-100' },
-      { key: 'jvm_gc_pause_warning', type: 'number', desc: t('GC 暫停 warning（秒／秒：每秒暫停的秒數）', 'GC pause warning (s/s: seconds paused per second)'), rulePack: 'jvm', example: '"0.5"', range: '> 0' },
+      { key: 'jvm_gc_time_percent', type: 'number', desc: t('GC 時間佔比 warning（最忙的 JVM 花在 GC 暫停的時間 %）', 'GC time warning (% of time the busiest JVM spends in GC pauses)'), rulePack: 'jvm', example: '"10"', range: '0-100' },
       { key: 'node_disk_usage_warning', type: 'number', desc: t('磁碟使用率 warning（%）', 'Disk usage warning (%)'), rulePack: 'node', example: '"80"', range: '0-100' },
       { key: 'node_disk_usage_warning_critical', type: 'number', desc: t('磁碟使用率 critical（%）', 'Disk usage critical (%)'), rulePack: 'node', example: '"90"', range: '0-100' },
     ],
