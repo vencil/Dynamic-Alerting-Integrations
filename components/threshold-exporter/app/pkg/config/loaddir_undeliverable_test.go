@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func writeUndeliverableTree(t *testing.T, files map[string]string) string {
@@ -114,7 +115,7 @@ func TestLoadDirReport_UndeliverableIsTheBuildsUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	built, err := loadDirBuild(scan, dir, discardLogger, nil)
+	built, err := loadDirBuild(scan, dir, discardLogger, nil, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +216,7 @@ func buildUnreachable(t *testing.T, dir string) (undeliverable, disabled map[str
 	if err != nil {
 		t.Fatal(err)
 	}
-	built, err := loadDirBuild(scan, dir, discardLogger, nil)
+	built, err := loadDirBuild(scan, dir, discardLogger, nil, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

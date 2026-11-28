@@ -245,7 +245,67 @@ func (m *ConfigManager) Close() {
 		m.debounce.timer = nil
 	}
 	m.debounce.pendingReasons = nil
+	if m.debounce.expiryTimer != nil {
+		m.debounce.expiryTimer.Stop()
+		m.debounce.expiryTimer = nil
+	}
 	m.debounce.mu.Unlock()
+}
+
+// reasonThresholdExpiry is the reload reason of a tree whose committed
+// config has reached its ValidUntil (#4263).
+const reasonThresholdExpiry = "threshold_expiry"
+
+// armExpiryReload schedules a reload at cfg's ValidUntil — the next
+// `expires:` of the tree, from which on the committed config no longer
+// answers for the instant (#4263) — replacing any earlier schedule. The
+// reload goes through triggerDebouncedReload, so it takes reloadMu like any
+// other and scrapes never wait on it; until it commits (the debounce window
+// plus one build) the previous config is served. No ValidUntil: none.
+func (m *ConfigManager) armExpiryReload(cfg *ThresholdConfig) {
+	if m.clock == nil {
+		m.clock = clockwork.NewRealClock()
+	}
+	m.debounce.mu.Lock()
+	defer m.debounce.mu.Unlock()
+	if m.debounce.expiryTimer != nil {
+		m.debounce.expiryTimer.Stop()
+		m.debounce.expiryTimer = nil
+	}
+	until, ok := cfg.ValidUntil()
+	if !ok {
+		return
+	}
+	d := until.Sub(m.clock.Now())
+	if d < 0 {
+		d = 0
+	}
+	m.debounce.expiryTimer = m.clock.AfterFunc(d, func() { m.triggerDebouncedReload(reasonThresholdExpiry) })
+}
+
+// now is the manager's clock (time.Now() when none was set: a manager
+// assembled by hand in a test).
+func (m *ConfigManager) now() time.Time {
+	if m.clock == nil {
+		return time.Now()
+	}
+	return m.clock.Now()
+}
+
+// debouncePending reports whether a debounced reload is scheduled and has
+// not fired yet.
+func (m *ConfigManager) debouncePending() bool {
+	m.debounce.mu.Lock()
+	defer m.debounce.mu.Unlock()
+	return m.debounce.timer != nil
+}
+
+// expiredCommit reports whether the committed config no longer answers for
+// the manager's clock (ValidAt): past its next `expires:` — the watch tick's
+// safety net under armExpiryReload — or before the last one it saw pass (the
+// clock set back).
+func (m *ConfigManager) expiredCommit() bool {
+	return !m.GetConfig().ValidAt(m.now())
 }
 
 // reloadPriorState bundles every m.* hierarchy field captured under

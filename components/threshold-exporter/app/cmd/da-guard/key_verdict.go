@@ -215,7 +215,7 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	if _, data, ok := scan.RootCarrier(); ok {
 		heads = policyHeadsOf(data)
 	}
-	cfg, rep, written, err := config.LoadDirFromScan(scan, dir, discard)
+	cfg, rep, written, err := config.LoadDirFromScanAt(scan, dir, discard, at)
 	if errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) == 0 && rep.RootListErr == nil {
 		// No config file at all: no tenant, so no error.
 		res := empty()

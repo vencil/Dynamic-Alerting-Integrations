@@ -467,7 +467,7 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 		tenantCfg = ThresholdConfig{}
 	}
 
-	merged := mergeTenantConfig(root.r, tenantCfg)
+	merged := mergeTenantAt(root.r, tenantCfg, time.Time{})
 
 	// #3504: no fallback. A file whose decode does not declare tenantID gives
 	// tenantID nothing, exactly as /metrics reads it: the exporter takes a
@@ -479,7 +479,6 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 
 	// Silent: ApplyProfiles' WARNs would be written on every request; the
 	// same facts reach the caller through ValidateTenantKeys.
-	merged.applyProfiles(nil)
 	return merged
 }
 
@@ -517,9 +516,7 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 // platform/profile ones for that key, and the tenant layer's own Notices on
 // the null key itself (e.g. the rename notice for a legacy spelling).
 func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConfig) TenantMerge {
-	merged := mergeTenantConfig(loadRootPlatform(configDir), tenantCfg)
-	merged.applyProfiles(nil) // silent, as in MergeTenantOverRootPlatform
-	return merged
+	return mergeTenantAt(loadRootPlatform(configDir), tenantCfg, time.Time{})
 }
 
 // mergeTenantConfig is the shared core behind both Merge*TenantWithRootDefaults
@@ -861,6 +858,10 @@ func (r rootPlatform) mergeProfilesInto(dst map[string]map[string]ScheduledValue
 type parsedPlatformFile struct {
 	cfg ThresholdConfig
 	err error
+	// timed: some `tenants:` or `profiles:` value carries an `expires:`.
+	// Decided once per decode, so a merge over a platform file without one
+	// (the cached steady state) does not walk its entries to filter nothing.
+	timed bool
 }
 
 // rootPlatformParseCacheSize bounds the cache. A deployment has a handful of
@@ -898,7 +899,8 @@ func (c *platformParseCache) get(hash string, data []byte) *parsedPlatformFile {
 	c.mu.Unlock()
 
 	cfg, err := ParseConfigFile(data)
-	p := &parsedPlatformFile{cfg: cfg, err: err}
+	p := &parsedPlatformFile{cfg: cfg, err: err,
+		timed: err == nil && (bodiesHoldTimed(cfg.Tenants) || bodiesHoldTimed(cfg.Profiles))}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -968,4 +970,64 @@ func rootCarrierOf(scan *TreeScan) (path string, data []byte, ok bool) {
 		return "", nil, false
 	}
 	return p, f.Data, true
+}
+
+// mergeTenantAt is the per-tenant merge (mergeTenantConfig, then the
+// profiles) answering for at (zero = time.Now()): run on the platform files
+// and the tenant body with what expired at at left out, and — when they hold
+// a time-boxed value — twice more for decideExpiry, exactly as the tree's
+// build does (#4263). own keeps the body as written: the write check judges
+// what the tenant wrote.
+func mergeTenantAt(root rootPlatform, tenantCfg ThresholdConfig, at time.Time) TenantMerge {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	run := func(keep expiryKeep) TenantMerge {
+		body := tenantCfg
+		body.Tenants, _ = filterBodies(tenantCfg.Tenants, keep)
+		m := mergeTenantConfig(root.filtered(keep), body)
+		m.applyProfiles(nil)
+		return m
+	}
+	timed := expiryScan{at: at}
+	now := run(timed.keep)
+	full := now
+	if timed.any {
+		full = run(func(ScheduledValue) bool { return true })
+		untimed := run(keepUntimed)
+		decideExpiry(at, &full.ThresholdConfig, &now.ThresholdConfig, &untimed.ThresholdConfig, timed.last, timed.next)
+	} else {
+		now.expiry = &expiryState{} // nothing time-boxed
+	}
+	now.own = full.own
+	return now
+}
+
+// filtered is r with every platform file's `tenants:` and `profiles:`
+// values keep refuses left out — a copy: r is shared read-only by concurrent
+// merges (RootPlatform). r itself when nothing is left out.
+func (r rootPlatform) filtered(keep expiryKeep) rootPlatform {
+	var files []rootPlatformFile
+	for i, f := range r.files {
+		if f.parsed == nil || f.parsed.err != nil || !f.parsed.timed {
+			continue
+		}
+		tenants, tCut := filterBodies(f.parsed.cfg.Tenants, keep)
+		profiles, pCut := filterBodies(f.parsed.cfg.Profiles, keep)
+		if !tCut && !pCut {
+			continue
+		}
+		if files == nil {
+			files = append([]rootPlatformFile(nil), r.files...)
+		}
+		cfg := f.parsed.cfg
+		cfg.Tenants, cfg.Profiles = tenants, profiles
+		files[i].parsed = &parsedPlatformFile{cfg: cfg, timed: true}
+	}
+	if files == nil {
+		return r
+	}
+	out := r
+	out.files = files
+	return out
 }

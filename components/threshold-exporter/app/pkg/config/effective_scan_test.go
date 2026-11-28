@@ -28,7 +28,7 @@ func resolveEffectiveWholeBuild(configDir, tenantID string) (*EffectiveConfig, e
 	}
 	r := newEffectiveResolver(scan)
 	if _, lerr := scan.Locate(tenantID); lerr == nil {
-		built, berr := loadDirBuild(scan, scan.AbsRoot, discardLogger, discardLogger.Printf)
+		built, berr := loadDirBuild(scan, scan.AbsRoot, discardLogger, discardLogger.Printf, fixedNow)
 		if berr != nil {
 			return nil, berr
 		}

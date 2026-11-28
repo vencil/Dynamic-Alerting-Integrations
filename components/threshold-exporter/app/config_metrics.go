@@ -114,6 +114,7 @@ type configMetrics struct {
 	debounceBatch      prometheus.Histogram     // v2.8.0 B-3: count of triggers coalesced per fired window (debounce effectiveness)
 	lastScanComplete   prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful conf.d tree scan completion (e2e harness anchor T1; production stuck-detection)
 	lastReloadComplete prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful diffAndReload completion (e2e harness anchor T2; production stuck-detection)
+	validUntil         prometheus.Gauge         // #4263: the committed config's ValidUntil (0: none)
 	freeOSMemory       prometheus.Counter       // #459: count of explicit runtime/debug.FreeOSMemory() calls after reload (opt-in -free-os-mem-after-reload; 0 when lever disabled)
 	// State-coded gauge: tenants that inherit a key existing ONLY in a
 	// subtree `_defaults.yaml`, which /effective reports and the collector
@@ -343,6 +344,7 @@ func newConfigMetrics() *configMetrics {
 		debounceBatch:               s.DebounceBatch,
 		lastScanComplete:            s.LastScanComplete,
 		lastReloadComplete:          s.LastReloadComplete,
+		validUntil:                  s.ValidUntil,
 		freeOSMemory:                s.FreeOSMemory,
 		subtreeUndeliverableTenants: s.SubtreeUndeliverableTenants,
 		maxTenantsPerFile:           s.MaxTenantsPerFile,
@@ -594,6 +596,20 @@ func (cm *configMetrics) SetLastScanComplete(t time.Time) {
 // Called only on success path — see SetLastScanComplete docstring.
 func (cm *configMetrics) SetLastReloadComplete(t time.Time) {
 	cm.lastReloadComplete.Set(float64(t.Unix()))
+}
+
+// SetValidUntil records the committed config's ValidUntil — the next
+// threshold `expires:` it was merged before (#4263) — as unix seconds; 0
+// when there is none. Called at every commit (commitConfig).
+func (cm *configMetrics) SetValidUntil(t time.Time, ok bool) {
+	if cm == nil || cm.validUntil == nil {
+		return
+	}
+	if !ok {
+		cm.validUntil.Set(0)
+		return
+	}
+	cm.validUntil.Set(float64(t.Unix()))
 }
 
 // IncFreeOSMemory bumps the FreeOSMemory-call counter — called once per
