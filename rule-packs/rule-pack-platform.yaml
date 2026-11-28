@@ -695,6 +695,44 @@ groups:
             alert resolves once that tick's successful scan is scraped.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
 
+      # --- Threshold expiry rebuild overdue (issue #4263) ---
+      # A threshold `expires:` is decided where the tree is merged: the
+      # committed config answers for the instant it was merged at, until
+      # the tree's next `expires:` (da_config_valid_until_unixtime_seconds,
+      # set at every commit in every config mode; 0 = none ahead). At that
+      # instant the exporter merges again; until that merge commits it keeps
+      # serving the previous answer — an expired, perhaps loosened, threshold
+      # included. A merge that does not commit leaves the gauge in the past.
+      # ConfigScanFailing covers a scan that fails; this covers every way
+      # the merge at the expiry does not commit, in every mode (the reload
+      # trigger counter and ConfigReloadStuck are the hierarchical plane's
+      # only). 300s: far above the debounce plus one build; `for: 1m` rides
+      # out one missed scrape. warning: the cause, when it is a scan, pages
+      # as ConfigScanFailing.
+      - alert: ConfigExpiryRebuildOverdue
+        expr: |
+          max without (instance, pod) (
+            (da_config_valid_until_unixtime_seconds > 0)
+            and
+            ((time() - da_config_valid_until_unixtime_seconds) > 300)
+          )
+        for: 1m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "Threshold-exporter has not merged conf.d again since a threshold `expires:` passed — expired thresholds still served"
+          description: |
+            A threshold `expires:` of the committed config passed more than
+            5 minutes ago and the exporter has not committed the merge that
+            follows it, so it keeps serving the answer from before that
+            instant — the expired value included. Nothing else is applied
+            while a reload keeps failing: check ConfigScanFailing and the
+            exporter log ("ERROR: debounced reload failed",
+            "WARN: cannot check config"). The alert resolves on the first
+            successful reload, which moves the gauge to the next `expires:`
+            (or 0).
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
       # --- Config Files Unreadable (issue #2592) ---
       # A conf.d entry below the root that the walk cannot stat, read or
       # list is DROPPED, not a scan failure: the rest of the tree keeps

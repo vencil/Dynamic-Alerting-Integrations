@@ -247,7 +247,7 @@ Load pre-written Recording Rules + Alert Rules into your Prometheus to enable dy
 | `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 16R + 12A |
 | `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 8A |
 | `prometheus-rules-nginx` | `nginx-recording.yml`, `nginx-alert.yml` | 9R + 7A |
-| `prometheus-rules-platform` | `platform-alert.yml` | 1R + 57A |
+| `prometheus-rules-platform` | `platform-alert.yml` | 1R + 58A |
 | `prometheus-rules-liveness` | `liveness-alert.yml` | 0R + 3A |
 | `prometheus-rules-operational` | `operational-alert.yml` | 0R + 4A |
 <!-- BYO_RULEPACK_TABLE_END -->

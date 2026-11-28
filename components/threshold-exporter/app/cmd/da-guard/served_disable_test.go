@@ -505,3 +505,25 @@ func TestServedValues_AnExpiredDisableIsListedWhateverIsBeneath(t *testing.T) {
 		}
 	}
 }
+
+// #4263: an expired `disable` written under a retired spelling, under a
+// profile serving the canonical one: the served spelling is the one
+// described — no second entry for the threshold — and the run succeeds.
+func TestServedValues_AnExpiredDisableUnderAnotherSpelling(t *testing.T) {
+	t.Parallel()
+	for name, profile := range map[string]string{"profile disable": "disable", "profile number": "\"70\""} {
+		code, doc, _, stderr := servedWith(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+			"_profiles.yaml": "profiles:\n  p:\n    mysql_threads_running: " + profile + "\n",
+			"a.yaml": "tenants:\n  a:\n    _profile: p\n    mysql_cpu:\n      default: disable\n" +
+				"      expires: \"2020-01-01T00:00:00Z\"\n",
+		}, "2026-07-01T03:00:00Z", "--disable-effects")
+		if code != 0 {
+			t.Errorf("%s: exit %d: %s", name, code, stderr)
+			continue
+		}
+		if _, listed := doc.Tenants["a"].Keys["mysql_cpu"]; listed {
+			t.Errorf("%s: the expired retired spelling is described beside the served one", name)
+		}
+	}
+}

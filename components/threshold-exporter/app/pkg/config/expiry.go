@@ -546,22 +546,9 @@ func (c *ThresholdConfig) expiryReadAt(now time.Time) time.Time {
 	if c == nil || c.expiry == nil || c.expiry.at.IsZero() {
 		return now
 	}
-	st := c.expiry
-	// Past the grace the rebuild has not come (a reload keeps failing):
-	// `expires:` is read at now again — a degraded reading (an expired
-	// value lapses to the root, the merge's layer beneath unknown), but
-	// never an expired override served for good with no expiry event.
-	if !st.validUntil.IsZero() && !now.Before(st.validUntil.Add(expiryRebuildGrace)) {
-		return now
-	}
-	if !st.validFrom.IsZero() && now.Before(st.validFrom.Add(-expiryRebuildGrace)) {
-		return now
-	}
-	return st.at
+	// A config not rebuilt — a reload keeps failing — keeps its answer, as
+	// any frozen config serves the last good one; the freeze is told by
+	// da_config_valid_until_unixtime_seconds and its alert, not by a second
+	// reading of `expires:` here.
+	return c.expiry.at
 }
-
-// expiryRebuildGrace is how long past ValidUntil (or before ValidFrom) a
-// config keeps answering for its build instant (expiryReadAt): long enough
-// for the exporter's rebuild — the debounce, one build, a watch tick's
-// retry — so a value does not flip to the root and back in between.
-const expiryRebuildGrace = time.Minute

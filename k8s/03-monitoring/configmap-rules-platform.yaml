@@ -209,8 +209,22 @@ data:
     \ no restart needed, and the\n\n        alert resolves once that tick''s successful\
     \ scan is scraped.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md\n\
     \      summary: Threshold-exporter conf.d unscannable for >5m ({{ $labels.reason\
-    \ }}) — config frozen at last good state\n  - alert: ConfigFilesUnreadable\n \
-    \   expr: max without (instance, pod) (da_config_unreadable_files) > 0\n    for:\
+    \ }}) — config frozen at last good state\n  - alert: ConfigExpiryRebuildOverdue\n\
+    \    expr: \"max without (instance, pod) (\\n  (da_config_valid_until_unixtime_seconds\
+    \ > 0)\\n  and\\n  ((time() - da_config_valid_until_unixtime_seconds) > 300)\\\
+    n)\\n\"\n    for: 1m\n    labels:\n      alert_source: platform\n      severity:\
+    \ warning\n    annotations:\n      description: 'A threshold `expires:` of the\
+    \ committed config passed more than\n\n        5 minutes ago and the exporter\
+    \ has not committed the merge that\n\n        follows it, so it keeps serving\
+    \ the answer from before that\n\n        instant — the expired value included.\
+    \ Nothing else is applied\n\n        while a reload keeps failing: check ConfigScanFailing\
+    \ and the\n\n        exporter log (\"ERROR: debounced reload failed\",\n\n   \
+    \     \"WARN: cannot check config\"). The alert resolves on the first\n\n    \
+    \    successful reload, which moves the gauge to the next `expires:`\n\n     \
+    \   (or 0).\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md\n\
+    \      summary: Threshold-exporter has not merged conf.d again since a threshold\
+    \ `expires:` passed — expired thresholds still served\n  - alert: ConfigFilesUnreadable\n\
+    \    expr: max without (instance, pod) (da_config_unreadable_files) > 0\n    for:\
     \ 10m\n    labels:\n      alert_source: platform\n      severity: critical\n \
     \   annotations:\n      description: '{{ $value }} config-named entr(ies) under\
     \ the threshold-exporter''s\n\n        conf.d tree could not be used for more\

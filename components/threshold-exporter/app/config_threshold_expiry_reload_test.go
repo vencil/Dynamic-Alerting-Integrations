@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jonboulle/clockwork"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // #4263: the exporter's committed config answers for the instant it was
@@ -173,5 +174,55 @@ func TestThresholdExpiry_SingleFileTickSeesTheClockSetBack(t *testing.T) {
 	m.tickOnce()
 	if got := served(); got != "5" {
 		t.Errorf("clock set back before expires: %s, want the tenant's 5", got)
+	}
+}
+
+// #4263: da_config_valid_until_unixtime_seconds is the committed config's
+// next `expires:` — set at every commit, in every config mode — and 0 once
+// none lies ahead: what ConfigExpiryRebuildOverdue compares with time().
+func TestThresholdExpiry_ValidUntilGaugeFollowsTheCommit(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	edge := float64(time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC).Unix())
+	body := "tenants:\n  tx:\n    redis_connected_clients:\n      default: \"5\"\n      expires: \"2026-01-01T01:00:00Z\"\n"
+	for _, mode := range []string{"hierarchical", "flat", "single-file"} {
+		mode := mode
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := dir
+			switch mode {
+			case "hierarchical":
+				os.WriteFile(filepath.Join(dir, "_defaults.yaml"), []byte("defaults: {}\n"), 0o600)
+				os.WriteFile(filepath.Join(dir, "t.yaml"), []byte(body), 0o600)
+			case "flat":
+				os.WriteFile(filepath.Join(dir, "t.yaml"), []byte(body), 0o600)
+			default:
+				path = filepath.Join(dir, "config.yaml")
+				os.WriteFile(path, []byte("defaults: {}\n"+body), 0o600)
+			}
+			fresh, _ := freshMetrics(t)
+			m := NewConfigManagerWithDebounce(path, 0)
+			t.Cleanup(m.Close)
+			fc := clockwork.NewFakeClockAt(start)
+			m.SetClock(fc)
+			m.SetMetrics(fresh)
+			m.SetLogger(log.New(io.Discard, "", 0))
+			if err := m.Load(); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := testutil.ToFloat64(fresh.validUntil); got != edge {
+				t.Fatalf("after Load: %v, want %v (01:00)", got, edge)
+			}
+			fc.Advance(2 * time.Hour)
+			m.tickOnce() // the timer's reload, or the tick's safety net
+			deadline := time.Now().Add(5 * time.Second)
+			for testutil.ToFloat64(fresh.validUntil) != 0 {
+				if time.Now().After(deadline) {
+					t.Fatalf("after the rebuild: %v, want 0 (no expires: ahead)", testutil.ToFloat64(fresh.validUntil))
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
 	}
 }

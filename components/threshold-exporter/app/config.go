@@ -542,8 +542,11 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 		// reads m.hierarchy would slip past the check.
 		afterUnlock()
 	}
-	// #4263: the tree answers differently from its next `expires:` on.
+	// #4263: the tree answers differently from its next `expires:` on —
+	// merged again then (armExpiryReload); the instant is exported, so a
+	// merge that does not commit is told (ConfigExpiryRebuildOverdue).
 	m.armExpiryReload(cfg)
+	m.getMetrics().SetValidUntil(cfg.ValidUntil())
 
 	logConfigStats(m.getLogger(), cfg, logHeader)
 	warnInvalidTenantIDs(m.getLogger(), cfg)
