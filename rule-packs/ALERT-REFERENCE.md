@@ -74,13 +74,12 @@ lang: zh
 
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
-| JVMHighGCPause | warning | 靜音 | [tier] {{ $labels.tenant }}: GC pause elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_gc_pause:rate5m |
-| JVMHighGCPauseCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical GC pause  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_gc_pause:rate5m |
+| JVMHighGCPause | warning | 靜音 | [tier] {{ $labels.tenant }}: GC time elevated on the busiest JVM  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_gc_time:percent |
+| JVMHighGCPauseCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical GC time on the busiest JVM  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_gc_time:percent |
 | JVMMemoryPressure | warning | 靜音 | [tier] {{ $labels.tenant }}: heap memory pressure  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_memory_used:percent |
 | JVMMemoryPressureCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical heap pressure  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_memory_used:percent |
 | JVMThreadPoolExhaustion | warning | 靜音 | [tier] {{ $labels.tenant }}: thread pool saturation  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_threads:current |
 | JVMThreadPoolExhaustionCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical thread exhaustion  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_threads:current |
-| JVMPerformanceDegraded | critical | 靜音 | [tier] {{ $labels.tenant }}: multi-signal JVM degradation  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_gc_pause:rate5m |
 | JVMThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires | 在租戶設定寫入該 key 的門檻值即可啟用，根層不必先宣告（#4163）。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---

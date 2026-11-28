@@ -31,13 +31,13 @@ parent: architecture-and-design.en.md
 | ClickHouse | `prometheus-rules-clickhouse` | 10 | 7 |
 | Kafka | `prometheus-rules-kafka` | 8 | 6 |
 | RabbitMQ | `prometheus-rules-rabbitmq` | 16 | 12 |
-| JVM | `prometheus-rules-jvm` | 9 | 8 |
+| JVM | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | `prometheus-rules-nginx` | 9 | 7 |
 | Kubernetes | `prometheus-rules-kubernetes` | 35 | 16 |
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 1 | 58 |
-| **Total** | | **175** | **206** (= **381** rules) |
+| **Total** | | **175** | **205** (= **380** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### Team split (illustrative — **not** an ownership declaration)
@@ -148,3 +148,23 @@ This pattern applies to every receiver type that takes a template (email, Slack,
 For examples, see `rule-packs/` directory.
 
 ### 3.3 Advantages
+
+1. **Zero PR conflicts** — each ConfigMap is independent, so teams can push in parallel
+2. **Team autonomy** — DBAs own the MariaDB rules without a central platform review
+3. **Reusable** — rules port easily to other Prometheus clusters
+4. **Independently testable** — each pack can be validated and released on its own
+
+### 3.4 Exporter compatibility: JVM GC time
+
+The JVM pack's `jvm_gc_time_percent` (alerts `JVMHighGCPause` / `JVMHighGCPauseCritical`) is compared with `tenant:jvm_gc_time:percent`: per tenant and per cluster, the share of wall-clock time the **busiest JVM** spends in GC pauses, in percent (5-minute average) — not the sum over the JVMs. Ten JVMs at 7.5% each read 7.5; one JVM at 50% reads 50.
+
+Both naming schemes are read, and a JVM that exposes both is counted once (from Micrometer):
+
+| Exporter | Metric read | Notes |
+|---|---|---|
+| Micrometer (Spring Boot Actuator) | `jvm_gc_pause_seconds_sum` | One series per `action` / `cause` (plus `gc` from 1.11), summed into one value per JVM first |
+| client_java, jmx_exporter | `jvm_gc_collection_seconds_sum` | One series per collector (`gc`); those whose `gc` ends in `Cycles` (`ZGC Cycles`, `ZGC Major Cycles`, `ZGC Minor Cycles`, `Shenandoah Cycles`) are concurrent phases during which the application keeps running, and are left out. `G1 Concurrent GC` is G1's Remark / Cleanup pauses and is counted |
+
+⚠️ **Micrometer version floor**: Micrometer records the concurrent cycles it recognises in `jvm_gc_concurrent_phase_time_seconds`; one it does not recognise is recorded as a pause in full, and the reading is too high. Shenandoah needs 1.7.0 or later, ZGC 1.8.0 or later, generational ZGC (JDK 21 `-XX:+ZGenerational`) 1.12.4 or later, or 1.13.0 or later (1.11.x never got it). This is read from Micrometer's `JvmMemory.isConcurrentPhase` at each version tag, not run.
+
+⚠️ The per-JVM value is summed treating every label other than `action` / `cause` / `gc` as the JVM's identity. An exporter that adds another per-series label to these two metrics splits one JVM into parts and the reading is too low.

@@ -32,7 +32,7 @@
       "category": "scenario",
       "packs": ["kafka", "mongodb", "jvm", "kubernetes"],
       "desc": { "zh": "高吞吐 IoT：Kafka 資料引入、MongoDB 時序儲存、JVM 處理服務", "en": "High-throughput IoT: Kafka ingestion, MongoDB time-series storage, JVM-based processing services." },
-      "yaml": "# IoT Data Pipeline — Kafka + MongoDB + JVM + Kubernetes\nkafka_consumer_lag: \"50000\"\nkafka_consumer_lag_critical: \"200000\"\nkafka_broker_count: \"3\"\nkafka_under_replicated_partitions: \"0\"\n\nmongodb_connections_current: \"200\"\nmongodb_connections_current_critical: \"300\"\nmongodb_replication_lag: \"5\"\n\njvm_gc_pause: \"0.8\"\njvm_memory: \"85\"\njvm_threads: \"400\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing:\n  receiver:\n    type: pagerduty\n    service_key: REPLACE_WITH_SERVICE_KEY\n  group_by: [alertname, topic]\n  group_wait: \"1m\"\n  group_interval: \"5m\"\n  repeat_interval: \"12h\"\n\n_metadata:\n  owner: iot-platform-team\n  tier: production"
+      "yaml": "# IoT Data Pipeline — Kafka + MongoDB + JVM + Kubernetes\nkafka_consumer_lag: \"50000\"\nkafka_consumer_lag_critical: \"200000\"\nkafka_broker_count: \"3\"\nkafka_under_replicated_partitions: \"0\"\n\nmongodb_connections_current: \"200\"\nmongodb_connections_current_critical: \"300\"\nmongodb_replication_lag: \"5\"\n\njvm_gc_time_percent: \"10\"\njvm_memory: \"85\"\njvm_threads: \"400\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing:\n  receiver:\n    type: pagerduty\n    service_key: REPLACE_WITH_SERVICE_KEY\n  group_by: [alertname, topic]\n  group_wait: \"1m\"\n  group_interval: \"5m\"\n  repeat_interval: \"12h\"\n\n_metadata:\n  owner: iot-platform-team\n  tier: production"
     },
     {
       "id": "saas-backend",
@@ -41,7 +41,7 @@
       "category": "scenario",
       "packs": ["postgresql", "redis", "elasticsearch", "jvm", "kubernetes"],
       "desc": { "zh": "SaaS 後端：PostgreSQL 核心資料、Redis 快取、Elasticsearch 全文搜尋、JVM 服務", "en": "SaaS backend: PostgreSQL for core data, Redis for caching, Elasticsearch for full-text search, JVM services." },
-      "yaml": "# SaaS Multi-Service — PostgreSQL + Redis + ES + JVM + K8s\n# pg_connections is a PERCENTAGE of max_connections (0-100), not a raw count\npg_connections: \"85\"\npg_connections_critical: \"95\"\npg_replication_lag: \"10\"\n\nredis_memory_used_bytes: \"2147483648\"\nredis_connected_clients: \"2000\"\n\nes_heap_usage_percent: \"80\"\nes_disk_usage_percent: \"80\"\n\njvm_memory: \"80\"\njvm_gc_pause: \"0.5\"\njvm_threads: \"500\"\n\ncontainer_cpu: \"70\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"6h\"\n\n_metadata:\n  owner: backend-team\n  tier: production"
+      "yaml": "# SaaS Multi-Service — PostgreSQL + Redis + ES + JVM + K8s\n# pg_connections is a PERCENTAGE of max_connections (0-100), not a raw count\npg_connections: \"85\"\npg_connections_critical: \"95\"\npg_replication_lag: \"10\"\n\nredis_memory_used_bytes: \"2147483648\"\nredis_connected_clients: \"2000\"\n\nes_heap_usage_percent: \"80\"\nes_disk_usage_percent: \"80\"\n\njvm_memory: \"80\"\njvm_gc_time_percent: \"10\"\njvm_threads: \"500\"\n\ncontainer_cpu: \"70\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"6h\"\n\n_metadata:\n  owner: backend-team\n  tier: production"
     },
     {
       "id": "analytics",
@@ -50,7 +50,7 @@
       "category": "scenario",
       "packs": ["clickhouse", "kafka", "jvm", "kubernetes"],
       "desc": { "zh": "實時分析：Kafka 事件串流、ClickHouse OLAP 儲存、JVM 分析工作程式", "en": "Real-time analytics: Kafka event streaming, ClickHouse OLAP storage, JVM analytics workers." },
-      "yaml": "# Real-time Analytics — ClickHouse + Kafka + JVM + K8s\nclickhouse_queries_rate: \"800\"\nclickhouse_queries_rate_critical: \"1200\"\nclickhouse_active_connections: \"150\"\n\nkafka_consumer_lag: \"100000\"\nkafka_consumer_lag_critical: \"500000\"\nkafka_broker_count: \"5\"\n\njvm_memory: \"85\"\njvm_gc_pause: \"1.0\"\n\ncontainer_cpu: \"85\"\ncontainer_memory: \"90\"\n\n_routing:\n  receiver:\n    type: email\n    to: [analytics-team@example.com]\n    smarthost: smtp.example.com:587\n    from: alerts@example.com\n  group_wait: \"2m\"\n  group_interval: \"5m\"\n  repeat_interval: \"24h\"\n\n_metadata:\n  owner: analytics-team\n  tier: production"
+      "yaml": "# Real-time Analytics — ClickHouse + Kafka + JVM + K8s\nclickhouse_queries_rate: \"800\"\nclickhouse_queries_rate_critical: \"1200\"\nclickhouse_active_connections: \"150\"\n\nkafka_consumer_lag: \"100000\"\nkafka_consumer_lag_critical: \"500000\"\nkafka_broker_count: \"5\"\n\njvm_memory: \"85\"\njvm_gc_time_percent: \"10\"\n\ncontainer_cpu: \"85\"\ncontainer_memory: \"90\"\n\n_routing:\n  receiver:\n    type: email\n    to: [analytics-team@example.com]\n    smarthost: smtp.example.com:587\n    from: alerts@example.com\n  group_wait: \"2m\"\n  group_interval: \"5m\"\n  repeat_interval: \"24h\"\n\n_metadata:\n  owner: analytics-team\n  tier: production"
     },
     {
       "id": "enterprise-db",
@@ -68,7 +68,7 @@
       "category": "scenario",
       "packs": ["rabbitmq", "postgresql", "jvm", "kubernetes"],
       "desc": { "zh": "事件驅動架構：RabbitMQ 訊息佇列、PostgreSQL 事件溯源、JVM 微服務", "en": "Event-driven architecture: RabbitMQ message queue, PostgreSQL event sourcing, JVM microservices." },
-      "yaml": "# Event-Driven Microservices — RabbitMQ + PostgreSQL + JVM + K8s\nrabbitmq_queue_messages: \"50000\"\nrabbitmq_queue_messages_critical: \"100000\"\nrabbitmq_node_mem_percent: \"75\"\nrabbitmq_connections: \"800\"\nrabbitmq_consumers: \"10\"\nrabbitmq_unacked_messages: \"5000\"\n\n# pg_connections is a PERCENTAGE of max_connections (0-100), not a raw count\npg_connections: \"75\"\npg_replication_lag: \"5\"\n\njvm_memory: \"75\"\njvm_gc_pause: \"0.3\"\njvm_threads: \"300\"\n\ncontainer_cpu: \"70\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver:\n    type: slack\n    api_url: https://hooks.slack.com/services/xxx/yyy/zzz\n  group_wait: \"30s\"\n  repeat_interval: \"4h\"\n\n_metadata:\n  owner: microservices-team\n  tier: production"
+      "yaml": "# Event-Driven Microservices — RabbitMQ + PostgreSQL + JVM + K8s\nrabbitmq_queue_messages: \"50000\"\nrabbitmq_queue_messages_critical: \"100000\"\nrabbitmq_node_mem_percent: \"75\"\nrabbitmq_connections: \"800\"\nrabbitmq_consumers: \"10\"\nrabbitmq_unacked_messages: \"5000\"\n\n# pg_connections is a PERCENTAGE of max_connections (0-100), not a raw count\npg_connections: \"75\"\npg_replication_lag: \"5\"\n\njvm_memory: \"75\"\njvm_gc_time_percent: \"10\"\njvm_threads: \"300\"\n\ncontainer_cpu: \"70\"\ncontainer_memory: \"80\"\n\n_routing:\n  receiver:\n    type: slack\n    api_url: https://hooks.slack.com/services/xxx/yyy/zzz\n  group_wait: \"30s\"\n  repeat_interval: \"4h\"\n\n_metadata:\n  owner: microservices-team\n  tier: production"
     },
     {
       "id": "search-platform",
@@ -77,7 +77,7 @@
       "category": "scenario",
       "packs": ["elasticsearch", "nginx", "jvm", "kubernetes"],
       "desc": { "zh": "搜尋平台：Elasticsearch 叢集搜尋引擎、Nginx 負載均衡、JVM 索引服務", "en": "Search platform: Elasticsearch cluster search engine, Nginx load balancer, JVM indexing services." },
-      "yaml": "# Search Platform — Elasticsearch + Nginx + JVM + K8s\nes_heap_usage_percent: \"75\"\nes_disk_usage_percent: \"80\"\n\nnginx_connections: \"5000\"\nnginx_request_rate: \"10000\"\nnginx_waiting: \"500\"\n\njvm_memory: \"80\"\njvm_gc_pause: \"0.5\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing_profile: team-sre-apac\n\n_metadata:\n  owner: search-team\n  tier: production"
+      "yaml": "# Search Platform — Elasticsearch + Nginx + JVM + K8s\nes_heap_usage_percent: \"75\"\nes_disk_usage_percent: \"80\"\n\nnginx_connections: \"5000\"\nnginx_request_rate: \"10000\"\nnginx_waiting: \"500\"\n\njvm_memory: \"80\"\njvm_gc_time_percent: \"10\"\n\ncontainer_cpu: \"80\"\ncontainer_memory: \"85\"\n\n_routing_profile: team-sre-apac\n\n_metadata:\n  owner: search-team\n  tier: production"
     },
     {
       "id": "quick-mariadb",
@@ -185,7 +185,7 @@
       "category": "quickstart",
       "packs": ["jvm"],
       "desc": { "zh": "最小 JVM 監控配置", "en": "Minimal JVM monitoring config." },
-      "yaml": "# JVM Quick Start\njvm_gc_pause: \"0.5\"\njvm_memory: \"80\"\njvm_threads: \"500\"\n\n_routing:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+      "yaml": "# JVM Quick Start\njvm_gc_time_percent: \"10\"\njvm_memory: \"80\"\njvm_threads: \"500\"\n\n_routing:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
     },
     {
       "id": "quick-kubernetes",

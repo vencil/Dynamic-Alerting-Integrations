@@ -136,22 +136,20 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:es_search_latency_ms:avg
-  jvm_gc_pause:
+  jvm_gc_time_percent:
     pack: rule-pack-jvm.yaml
     scope: tenant
     direction: '>'
-    resolved_via: jvm_gc_pause_critical sibling
-    observed_series: tenant:jvm_gc_pause:rate5m
-  jvm_gc_pause_critical:
+    observed_series: tenant:jvm_gc_time:percent
+  jvm_gc_time_percent_critical:
     pack: rule-pack-jvm.yaml
     scope: tenant
     direction: '>'
-    observed_series: tenant:jvm_gc_pause:rate5m
+    observed_series: tenant:jvm_gc_time:percent
   jvm_memory:
     pack: rule-pack-jvm.yaml
     scope: tenant
     direction: '>'
-    resolved_via: jvm_memory_critical sibling
     observed_series: tenant:jvm_memory_used:percent
   jvm_memory_critical:
     pack: rule-pack-jvm.yaml

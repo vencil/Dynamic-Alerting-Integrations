@@ -345,7 +345,7 @@ SHIPPED_METRIC_GROUPS: frozenset[str] = frozenset({
     "clickhouse_active_connections", "container_cpu", "container_cpu_throttle",
     "container_memory", "container_oom_killed", "db2_connections_active",
     "db2_lock_wait_time", "es_disk_usage_percent", "es_heap_usage_percent",
-    "es_pending_tasks", "es_search_latency_ms", "jvm_gc_pause", "jvm_memory",
+    "es_pending_tasks", "es_search_latency_ms", "jvm_gc_time_percent", "jvm_memory",
     "jvm_threads", "kafka_consumer_lag",
     "kafka_under_replicated_partitions", "mariadb_liveness",
     "mongodb_connections_current", "mongodb_liveness", "mongodb_replication_lag",

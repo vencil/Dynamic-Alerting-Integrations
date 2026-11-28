@@ -36,10 +36,6 @@
 #     of 0 → no sample either way.
 #   - t-equal: exactly 80 % against a warning of 80 → no alert.
 #   - t-nonheap: area="nonheap" at 99 % is not heap → no sample.
-#
-# JVMPerformanceDegraded (GC pause AND heap, both over their warnings) reads the
-# same series: t-pools and t-single both have GC pauses over the threshold, and
-# only t-single — whose heap really is over 80 % — is degraded.
 rule_files:
   - ../../rule-packs/rule-pack-jvm.yaml
 
@@ -141,10 +137,6 @@ tests:
         values: '80x60'
       - series: 'user_threshold{tenant="t-crit-equal", component="jvm", metric="memory", severity="critical"}'
         values: '95x60'
-      - series: 'jvm_gc_pause_seconds_sum{tenant="t-maint", instance="app-0"}'
-        values: '0+15x60'
-      - series: 'user_threshold{tenant="t-maint", component="jvm", metric="gc_pause", severity="warning"}'
-        values: '0.5x60'
 
       - series: 'jvm_memory_used_bytes{tenant="t-zero", instance="app-0", area="heap"}'
         values: '5x60'
@@ -160,10 +152,6 @@ tests:
       - series: 'user_threshold{tenant="t-zero-legacy", component="jvm", metric="memory", severity="warning"}'
         values: '80x60'
 
-      - series: 'jvm_gc_pause_seconds_sum{tenant="t-equal", instance="app-0"}'
-        values: '0+15x60'
-      - series: 'user_threshold{tenant="t-equal", component="jvm", metric="gc_pause", severity="warning"}'
-        values: '0.5x60'
 
       - series: 'jvm_memory_used_bytes{tenant="t-two", instance="app-0", area="heap"}'
         values: '30x60'
@@ -230,14 +218,6 @@ tests:
         values: '80x60'
 
 
-      - series: 'jvm_gc_pause_seconds_sum{tenant="t-pools", instance="app-0"}'
-        values: '0+15x60'
-      - series: 'user_threshold{tenant="t-pools", component="jvm", metric="gc_pause", severity="warning"}'
-        values: '0.5x60'
-      - series: 'jvm_gc_pause_seconds_sum{tenant="t-single", instance="app-0"}'
-        values: '0+15x60'
-      - series: 'user_threshold{tenant="t-single", component="jvm", metric="gc_pause", severity="warning"}'
-        values: '0.5x60'
 
     promql_expr_test:
       - expr: tenant:jvm_memory_used:percent
@@ -297,9 +277,9 @@ tests:
           - labels: '{alertname="JVMMemoryPressureCritical", tenant="t-crit", severity="critical"}'
             value: 1
 
-      # for: is 5m on the warning and the composite, 3m on the critical.
+      # for: is 5m on the warning, 3m on the critical.
       # At 2m30s nothing has fired and both tiers are pending.
-      - expr: count by(alertname) (ALERTS{alertstate="firing", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical|JVMPerformanceDegraded"})
+      - expr: count by(alertname) (ALERTS{alertstate="firing", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical"})
         eval_time: 2m30s
         exp_samples: []
       - expr: count by(alertname) (ALERTS{alertstate="pending", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical"})
@@ -309,8 +289,8 @@ tests:
             value: 10
           - labels: '{alertname="JVMMemoryPressureCritical"}'
             value: 1
-      # At 4m the critical has fired; the warning and the composite have not.
-      - expr: count by(alertname) (ALERTS{alertstate="firing", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical|JVMPerformanceDegraded"})
+      # At 4m the critical has fired; the warning has not.
+      - expr: count by(alertname) (ALERTS{alertstate="firing", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical"})
         eval_time: 4m
         exp_samples:
           - labels: '{alertname="JVMMemoryPressureCritical"}'
@@ -324,9 +304,3 @@ tests:
           - labels: '{alertname="JVMMemoryPressureCritical"}'
             value: 1
 
-      # t-equal (heap exactly at its threshold) and t-maint are not degraded.
-      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="JVMPerformanceDegraded"})
-        eval_time: 12m
-        exp_samples:
-          - labels: '{alertname="JVMPerformanceDegraded", tenant="t-single"}'
-            value: 1
