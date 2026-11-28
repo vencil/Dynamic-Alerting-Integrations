@@ -18,7 +18,7 @@ Revised 2026-11-22: the Profile Builder that first implemented this rule (a Go l
 
 Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged.
 
-Revised 2026-11-24: the redundant-override check compares the value the exporter reads, so the usual form — a number at the root, a string in the tenant file — is no longer missed ([#4288](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4288)).
+Revised 2026-11-28: a redundant override of a threshold key is judged as a counterfactual — redundant only when deleting the line leaves what the exporter serves unchanged — instead of comparing two values ([#4330](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4330)).
 
 ## Decision
 
@@ -59,7 +59,7 @@ tenants:
 
 da-guard's `redundant_override` check: when a key in a tenant file has the same value the tenant would get with the key deleted, it reports a warning. The comparison is against this tenant's own inheritance: every `_defaults.yaml` along its directory chain, and the `_profile` the tenant binds (where the profile sets a value, the profile's value is what counts).
 
-It compares the values as the exporter reads them, not their YAML types: a top-level key first compares the text the exporter takes the inherited value to be as tenant-file content, and if the texts differ, the threshold the exporter reads (the same finite number and the same severity). So in the example above the root's number `80` and `db-a`'s string `"80"` (the schema's spelling) are the same value; so are `"80.0"` and `"80:warning"`, while `"80:critical"` (another severity) and a value the exporter cannot read (named by `value_not_served`) are not. On the example, `da-guard --config-dir conf.d` names `db-a` (exit code 0; summary and scanned-file list omitted):
+For a threshold key the verdict is a counterfactual: the line is redundant when, with it deleted from the tenant's own file and the tenant rebuilt, the threshold rows the exporter serves (value, severity, labels) are exactly the same at every cut point of the day's schedules. It compares the exporter's own build and resolve, not two values, so YAML types and spellings (`80`, `"80"`, `"80.0"`, `"80:warning"`), schedules, and inheritance from subdirectories and profiles are all decided as the exporter reads them; `"80:critical"` serves another severity and is not redundant. A line another finding owns is not reported either: a value the exporter refuses (`value_not_served`), a key nothing reads (for example a dimensional label not declared under `dimensions:`; `da-guard key-verdict` reads it as an unread error, and tenant-api's writes use the same verdict), and a `disable` that switches nothing off. On the example, `da-guard --config-dir conf.d` names `db-a` (exit code 0; summary and scanned-file list omitted):
 
 ```text
 ### Warnings (informational)
@@ -71,7 +71,7 @@ It compares the values as the exporter reads them, not their YAML types: a top-l
 
 - A warning does not affect the exit code (0); with `--warn-as-error` the exit code is 1. Held by `TestRun_RedundantOverride_SurfacesAsWarning` and `TestRun_RedundantOverride_WithWarnAsError_ExitsOne` in `cmd/da-guard/main_test.go`.
 - Tenants in different subdirectories are each compared against their own chain: `TestRun_RedundantOverride_HonorsCascadingDefaults`.
-- Whether it reports is checked, case by case, against whether deleting the line leaves `da-guard served-values`' values and severities unchanged: `TestGuard_RedundantOverrideFiresExactlyWhenServedIsUnchanged` in `cmd/da-guard/redundant_override_read_test.go`.
+- Whether it reports is checked, case by case, against whether deleting the line leaves `da-guard served-values`' values and severities unchanged: `TestGuard_RedundantOverrideFiresExactlyWhenServedIsUnchanged` in `cmd/da-guard/redundant_override_read_test.go`; the shapes easy to misjudge (a root carrier without the `defaults:` wrapper, a `_critical` whose base is switched off, an undeclared dimensional label, a regex dimensional key containing `.`, schedules) are in `TestGuard_RedundantOverrideIsTheCounterfactual` in `cmd/da-guard/redundant_counterfactual_test.go`.
 - A tenant bound to a `_profile` is compared against the profile's value: `TestGuard_RedundantOverrideFollowsTheProfile` in `cmd/da-guard/profile_guard_test.go`.
 
 ## Context
@@ -87,10 +87,10 @@ This ADR picks option 3 and supplies the rule. It is a cross-component conventio
 ## Consequences and known limitations
 
 - **A redundant override is a warning, not a merge block.** It is harmless at runtime; it only makes the tenant file longer and the intent less clear. To block on it, add `--warn-as-error` in CI.
-- **Nested values are still compared by type.** A leaf under a mapping is read by the structure it sits in, and those structures read differently, so da-guard reports one only when its YAML value and type are both the same; only top-level keys are compared the way the exporter reads them.
-- **Only single values are compared.** A mapping is flattened and each leaf compared; lists are not compared, and identical contents are not reported (`TestCheckRedundantOverrides_SkipsStructuredValues` in `internal/guard/guard_test.go`).
+- **Reserved `_` keys and the values under them are still compared by YAML value and type.** They are not served as threshold rows but read by their own readers (the route generator, metadata, …), and the counterfactual does not cover them yet; da-guard reports one only when its value and type are both the same ([#4331](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4331)).
+- **Only single values of reserved keys are compared.** A reserved key's mapping is flattened and each leaf compared; lists are not compared, and identical contents are not reported (`TestCheckRedundantOverrides_SkipsStructuredValues` in `internal/guard/guard_test.go`).
 - **Keys a subdirectory `_defaults.yaml` cannot set are not judged.** The exporter does not apply `_`-prefixed keys (for example `_silent_mode`) from a subdirectory `_defaults.yaml` (ADR-017 decision 4), so the tenant's own line is the value in effect; such an override is not redundant and da-guard does not report it (`TestGuard_RedundantOverrideSkipsRefusedSubtreeKey` in `cmd/da-guard/subtree_reserved_test.go`).
-- **A tenant can only override a declared threshold.** When a tenant file sets a threshold key that no `_defaults.yaml` declares, `/metrics` does not serve it, and da-guard reports no finding for it. What counts as declared (root directory, built-in layer, `optional_overrides:`) is in ADR-017 decisions 3, 4 and 11.
+- **A tenant can only override a declared threshold.** When a tenant file sets a threshold key that no `_defaults.yaml` declares, `/metrics` does not serve it; da-guard's main report says nothing, while `da-guard key-verdict` and tenant-api's write verdict read it as an unread error. What counts as declared (root directory, built-in layer, `optional_overrides:`) is in ADR-017 decisions 3, 4 and 11.
 - **To switch off an inherited threshold, write `"disable"`, not `null`.** `null` in a tenant file is the same as not writing the key at that level; the tenant still gets the value from above (ADR-017 decision 4), and `check_confd_schema.py` refuses a threshold written as `null` in a tenant file.
 - **A shared value placed in a subdirectory does not reach production under the standard deployment.** The flat assembly customers deploy with carries only the top-level files of conf.d, so a subdirectory `_defaults.yaml` never reaches the live exporter (ADR-016, "Consequences and known limits"). Until that is resolved, a shared value must be in the root `_defaults.yaml` to take effect in production.
 - **No tool generates this shape from a rule set.** Customer rules are imported per tenant with `da-tools migrate`; bulk import has not shipped and is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226).

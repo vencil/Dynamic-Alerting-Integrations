@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tools
 created_at: 2026-04-27
-updated_at: 2026-11-24
+updated_at: 2026-11-28
 ---
 # ADR-018: Profile-as-Directory-Default
 
@@ -23,7 +23,7 @@ updated_at: 2026-11-24
 
 2026-11-24 修訂：改寫為現行行為。決策不變。
 
-2026-11-24 修訂：多餘覆寫的檢查改以 exporter 讀到的值比對，根目錄寫數字、租戶寫字串的一般寫法不再漏報（[#4288](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4288)）。
+2026-11-28 修訂：閾值鍵的多餘覆寫改為反事實判定（刪掉這行後 exporter 送出的不變才算多餘），不再比較兩個值（[#4330](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4330)）。
 
 ## 決策
 
@@ -64,7 +64,7 @@ tenants:
 
 da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租戶刪掉它之後會拿到的值相同時，報一筆 warning。比對的對象是這個租戶自己的繼承結果：目錄鏈上每一層的 `_defaults.yaml`，以及租戶綁定的 `_profile`（profile 給了值，就以 profile 的值為準）。
 
-比對的是 exporter 讀到的值，不是 YAML 的型別：頂層的鍵先比 exporter 把繼承值當成租戶檔內容時的文字，不同再比 exporter 讀出的閾值（同一個有限數、同一個 severity）。所以上例根目錄寫數字 `80`、`db-a` 依 schema 寫字串 `"80"`，算同值；`"80.0"`、`"80:warning"` 也算，`"80:critical"`（severity 不同）與 exporter 讀不了的值（由 `value_not_served` 指出）不算。對上例跑 `da-guard --config-dir conf.d` 指出 `db-a`（結束碼 0；Summary 與掃描清單省略）：
+閾值鍵的判定是一個反事實：在租戶自己的檔案裡刪掉這一行、重建這個租戶之後，exporter 送出的閾值列（值、severity、label）在一天中每個時段排程的切點都完全不變，才算多餘。比的不是兩個值像不像，而是 exporter 自己建構與解析的結果，所以 YAML 型別與寫法（`80`、`"80"`、`"80.0"`、`"80:warning"`）、時段排程、子目錄與 profile 的繼承，都照 exporter 的讀法決定；`"80:critical"` 送出的 severity 不同，不算。另有 finding 負責的行也不報：值被 exporter 拒收的（`value_not_served`），完全沒人讀的鍵（例如維度 label 沒在 `dimensions:` 宣告；由 `da-guard key-verdict` 判為 unread error，tenant-api 寫入時用同一個判定），以及寫了 `disable` 卻沒有東西可關的。對上例跑 `da-guard --config-dir conf.d` 指出 `db-a`（結束碼 0；Summary 與掃描清單省略）：
 
 ```text
 ### Warnings (informational)
@@ -76,7 +76,7 @@ da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租�
 
 - warning 不影響結束碼（0）；加 `--warn-as-error` 時結束碼 1。由 `cmd/da-guard/main_test.go` 的 `TestRun_RedundantOverride_SurfacesAsWarning` 與 `TestRun_RedundantOverride_WithWarnAsError_ExitsOne` 守住。
 - 不同子目錄的租戶各自比對自己那條鏈：`TestRun_RedundantOverride_HonorsCascadingDefaults`。
-- 報出與否，與「刪掉這行後 `da-guard served-values` 的值與 severity 是否不變」逐一對照：`cmd/da-guard/redundant_override_read_test.go` 的 `TestGuard_RedundantOverrideFiresExactlyWhenServedIsUnchanged`。
+- 報出與否，與「刪掉這行後 `da-guard served-values` 的值與 severity 是否不變」逐一對照：`cmd/da-guard/redundant_override_read_test.go` 的 `TestGuard_RedundantOverrideFiresExactlyWhenServedIsUnchanged`；各種容易判錯的形狀（根目錄缺 `defaults:` 包裝、base 被關掉的 `_critical`、沒宣告的維度 label、含 `.` 的 regex 維度鍵、時段排程）見 `cmd/da-guard/redundant_counterfactual_test.go` 的 `TestGuard_RedundantOverrideIsTheCounterfactual`。
 - 綁了 `_profile` 的租戶比對 profile 的值：`cmd/da-guard/profile_guard_test.go` 的 `TestGuard_RedundantOverrideFollowsTheProfile`。
 
 ## 背景
@@ -92,10 +92,10 @@ da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租�
 ## 後果與已知限制
 
 - **多餘的覆寫只是警告，不擋 merge。** 執行時它無害，只是讓租戶檔變長、讓意圖變模糊。要擋就在 CI 加 `--warn-as-error`。
-- **巢狀的值仍分型別比對。** mapping 底下的葉節點由它所在的結構讀取，各結構的讀法不同，da-guard 對它們只在 YAML 的值與型別都相同時才報；頂層的鍵才以 exporter 的讀法比對。
-- **只比對單一值。** mapping 會攤平到每個葉節點逐一比對；list 不比對，內容相同也不報（`internal/guard/guard_test.go` 的 `TestCheckRedundantOverrides_SkipsStructuredValues`）。
+- **`_` 開頭的保留鍵與它底下的值仍比對 YAML 的值與型別。** 這些鍵不經閾值列送出，由 route generator、metadata 等各自的讀者讀取，反事實還沒涵蓋它們；da-guard 只在值與型別都相同時才報（[#4331](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4331)）。
+- **保留鍵只比對單一值。** 保留鍵的 mapping 會攤平到每個葉節點逐一比對；list 不比對，內容相同也不報（`internal/guard/guard_test.go` 的 `TestCheckRedundantOverrides_SkipsStructuredValues`）。
 - **子目錄 `_defaults.yaml` 不生效的鍵不判。** 子目錄 `_defaults.yaml` 裡 `_` 開頭的鍵（例如 `_silent_mode`），exporter 不套用（ADR-017 決策 4），租戶自己那一行才是生效的值；這種覆寫不算多餘，da-guard 也不報（`cmd/da-guard/subtree_reserved_test.go` 的 `TestGuard_RedundantOverrideSkipsRefusedSubtreeKey`）。
-- **租戶只能覆寫有宣告的閾值。** 租戶檔寫了一個 `_defaults.yaml` 沒宣告的閾值鍵，`/metrics` 不送它，而 da-guard 對此不報任何 finding。哪些算已宣告（根目錄、內建層、`optional_overrides:`）見 ADR-017 決策 3、4、11。
+- **租戶只能覆寫有宣告的閾值。** 租戶檔寫了一個 `_defaults.yaml` 沒宣告的閾值鍵，`/metrics` 不送它；da-guard 主報告不報，`da-guard key-verdict` 與 tenant-api 的寫入判定則把它判為 unread error。哪些算已宣告（根目錄、內建層、`optional_overrides:`）見 ADR-017 決策 3、4、11。
 - **要關掉繼承來的閾值，寫 `"disable"`，不要寫 `null`。** 租戶檔寫 `null` 等於這一層沒寫，仍拿到上層的值（ADR-017 決策 4）；而且 `check_confd_schema.py` 會擋下租戶檔裡寫成 `null` 的閾值。
 - **共通值放在子目錄時，標準部署送不到線上。** 客戶部署用的扁平組裝只帶 conf.d 頂層的檔，子目錄的 `_defaults.yaml` 到不了線上的 exporter（ADR-016「後果與已知限制」）。在那個問題解決前，共通值要放在根目錄 `_defaults.yaml` 才會在線上生效。
 - **沒有工具從規則集自動產生這種形狀。** 導入客戶規則目前用逐租戶的 `da-tools migrate`；批次導入尚未出貨，追蹤在 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。

@@ -348,6 +348,15 @@ type CheckInput struct {
 	// schedule_null_value error (#2708); nil skips the check.
 	ScheduleNulls []config.ScheduleNull `json:"-"`
 
+	// RedundantThresholds maps tenant ID → threshold key of the tenant's own
+	// file (TenantOverrides' top-level keys not starting with `_`) →
+	// whether that line is redundant (config.ScopedTenants.RedundantThresholds,
+	// #4330): deleting it leaves what the exporter serves for the tenant the
+	// same at every minute of the day — two builds and two resolves by the
+	// exporter's code — and no other finding owns the line. redundant_override
+	// reports a threshold key only when this says true; nil reports none.
+	RedundantThresholds map[string]map[string]bool `json:"-"`
+
 	// ValuesNotServed maps tenant ID → key → why /metrics does not serve
 	// that key as the tenant's effective config shows it
 	// (config.EffectiveConfig.NotServed, filled by ScopeEffective). The

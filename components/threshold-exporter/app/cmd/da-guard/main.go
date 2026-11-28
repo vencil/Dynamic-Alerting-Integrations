@@ -159,6 +159,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -609,6 +610,34 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 	return false
 }
 
+// redundantThresholds is, for every threshold key of each tenant's own file
+// (a top-level key of overrides not starting with `_`; overrides is
+// TenantOverrides, the double-spelled thresholds already left out), whether
+// the line is redundant (config.ScopedTenants.RedundantThresholds, #4330). A failed
+// counterfactual build is named on the process log and judges no threshold
+// key redundant: redundant_override is advice, and advice the build could
+// not confirm is not given.
+func redundantThresholds(scoped *config.ScopedTenants, overrides map[string]map[string]any, now time.Time) map[string]map[string]bool {
+	cands := map[string][]string{}
+	for tenant, m := range overrides {
+		for k := range m {
+			if !strings.HasPrefix(k, "_") {
+				cands[tenant] = append(cands[tenant], k)
+			}
+		}
+		sort.Strings(cands[tenant])
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	out, err := scoped.RedundantThresholds(cands, now)
+	if err != nil {
+		log.Printf("WARN: redundant_override not judged for threshold keys: %v", err)
+		return nil
+	}
+	return out
+}
+
 // buildCheckInput assembles a guard.CheckInput from the scoped
 // resolution. It's where the YAML-shape → guard-input mapping lives:
 //
@@ -663,6 +692,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guar
 		}
 	}
 	refused, rejected, blockErrs := customAlertVerdicts(scoped)
+	redundant := redundantThresholds(scoped, tenantOverrides, now)
 	var rowCounts map[string]int
 	exporterCap := 0
 	if f.cardinalityLimit > 0 {
@@ -677,8 +707,10 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guar
 	return guard.CheckInput{
 		EffectiveConfigs: effective,
 		// runWith refuses a routing path here (exit 2) before this runs.
-		RequiredFields:       splitNonEmpty(f.requiredFields),
-		TenantOverrides:      tenantOverrides,
+		RequiredFields:  splitNonEmpty(f.requiredFields),
+		TenantOverrides: tenantOverrides,
+		// #4330: redundant_override's counterfactual for threshold keys.
+		RedundantThresholds:  redundant,
 		NewDefaultsByTenant:  newDefaultsByTenant,
 		CardinalityLimit:     f.cardinalityLimit,
 		CardinalityWarnRatio: f.cardinalityWarnRatio,

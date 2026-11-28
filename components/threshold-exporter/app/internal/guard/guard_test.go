@@ -174,10 +174,10 @@ func TestCheckRedundantOverrides_NoOpWhenInputsMissing(t *testing.T) {
 func TestCheckRedundantOverrides_FlagsScalarDuplicate(t *testing.T) {
 	t.Parallel()
 	got := checkRedundantOverrides(CheckInput{
-		NewDefaults: map[string]any{"thresholds": map[string]any{"cpu": 0.9}},
+		NewDefaults: map[string]any{"_thresholds": map[string]any{"_cpu": 0.9}},
 		TenantOverrides: map[string]map[string]any{
-			"redundant":  {"thresholds": map[string]any{"cpu": 0.9}},
-			"meaningful": {"thresholds": map[string]any{"cpu": 0.95}},
+			"redundant":  {"_thresholds": map[string]any{"_cpu": 0.9}},
+			"meaningful": {"_thresholds": map[string]any{"_cpu": 0.95}},
 		},
 	})
 	if len(got) != 1 {
@@ -201,24 +201,25 @@ func TestCheckRedundantOverrides_SkipsStructuredValues(t *testing.T) {
 	// false-positive guardrail.
 	got := checkRedundantOverrides(CheckInput{
 		NewDefaults: map[string]any{
-			"receivers": []any{"email", "slack"},
-			"labels":    map[string]any{"team": "x"},
+			"_receivers": []any{"email", "slack"},
+			"_labels":    map[string]any{"team": "x"},
 		},
 		TenantOverrides: map[string]map[string]any{
 			"t1": {
-				"receivers": []any{"email", "slack"},
-				"labels":    map[string]any{"team": "x"},
+				"_receivers": []any{"email", "slack"},
+				"_labels":    map[string]any{"team": "x"},
 			},
 		},
 	})
-	// `receivers` is a leaf (slice), `labels.team` is a scalar leaf.
-	// labels.team='x' is the same in both → ONE finding for labels.team.
-	// receivers is structured → NOT flagged.
+	// `_receivers` is a leaf (slice), `_labels.team` is a scalar leaf.
+	// _labels.team='x' is the same in both → ONE finding for _labels.team.
+	// _receivers is structured → NOT flagged. (Reserved `_` keys: the leaf
+	// comparison is theirs alone since #4330.)
 	if len(got) != 1 {
-		t.Fatalf("got %d findings, want 1 (labels.team only)", len(got))
+		t.Fatalf("got %d findings, want 1 (_labels.team only)", len(got))
 	}
-	if got[0].Field != "labels.team" {
-		t.Errorf("field = %q, want labels.team", got[0].Field)
+	if got[0].Field != "_labels.team" {
+		t.Errorf("field = %q, want _labels.team", got[0].Field)
 	}
 }
 
@@ -246,12 +247,12 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_PerTenantMaps(t *testing.T)
 	// not its own. PR-1's single NewDefaults map can't distinguish.
 	got := checkRedundantOverrides(CheckInput{
 		TenantOverrides: map[string]map[string]any{
-			"t-db":  {"cpu": 80},
-			"t-web": {"cpu": 80},
+			"t-db":  {"_cpu": 80},
+			"t-web": {"_cpu": 80},
 		},
 		NewDefaultsByTenant: map[string]map[string]any{
-			"t-db":  {"cpu": 80},
-			"t-web": {"cpu": 70},
+			"t-db":  {"_cpu": 80},
+			"t-web": {"_cpu": 70},
 		},
 	})
 	if len(got) != 1 {
@@ -271,12 +272,12 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_PrecedesGlobal(t *testing.T
 	// tenants that have one; the global map covers the rest.
 	got := checkRedundantOverrides(CheckInput{
 		TenantOverrides: map[string]map[string]any{
-			"t-specific": {"cpu": 99},
-			"t-fallback": {"cpu": 50},
+			"t-specific": {"_cpu": 99},
+			"t-fallback": {"_cpu": 50},
 		},
-		NewDefaults: map[string]any{"cpu": 50}, // t-fallback uses this
+		NewDefaults: map[string]any{"_cpu": 50}, // t-fallback uses this
 		NewDefaultsByTenant: map[string]map[string]any{
-			"t-specific": {"cpu": 99}, // t-specific uses this (override per-tenant)
+			"t-specific": {"_cpu": 99}, // t-specific uses this (override per-tenant)
 		},
 	})
 	tenantsFlagged := make(map[string]bool)
@@ -299,10 +300,10 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_NilEntrySkips(t *testing.T)
 	// "explicit opt-out per tenant" path.
 	got := checkRedundantOverrides(CheckInput{
 		TenantOverrides: map[string]map[string]any{
-			"t1": {"cpu": 80},
-			"t2": {"cpu": 80},
+			"t1": {"_cpu": 80},
+			"t2": {"_cpu": 80},
 		},
-		NewDefaults: map[string]any{"cpu": 80},
+		NewDefaults: map[string]any{"_cpu": 80},
 		NewDefaultsByTenant: map[string]map[string]any{
 			"t1": nil, // explicitly skip t1
 		},
@@ -413,9 +414,9 @@ func TestCheckDefaultsImpact_WarningsAlonePass(t *testing.T) {
 		EffectiveConfigs: map[string]map[string]any{
 			"warned": {"thresholds": map[string]any{"cpu": 0.9}},
 		},
-		NewDefaults: map[string]any{"thresholds": map[string]any{"cpu": 0.9}},
+		NewDefaults: map[string]any{"_thresholds": map[string]any{"_cpu": 0.9}},
 		TenantOverrides: map[string]map[string]any{
-			"warned": {"thresholds": map[string]any{"cpu": 0.9}},
+			"warned": {"_thresholds": map[string]any{"_cpu": 0.9}},
 		},
 	})
 	if err != nil {
@@ -441,9 +442,9 @@ func TestCheckDefaultsImpact_FindingsSortedErrorsFirst(t *testing.T) {
 			"b": {"thresholds": map[string]any{"cpu": 0.5}},
 		},
 		RequiredFields: []string{"thresholds.cpu"},
-		NewDefaults:    map[string]any{"thresholds": map[string]any{"cpu": 0.5}},
+		NewDefaults:    map[string]any{"_thresholds": map[string]any{"_cpu": 0.5}},
 		TenantOverrides: map[string]map[string]any{
-			"b": {"thresholds": map[string]any{"cpu": 0.5}},
+			"b": {"_thresholds": map[string]any{"_cpu": 0.5}},
 		},
 	})
 	if err != nil {
@@ -531,9 +532,9 @@ func TestGuardReportMarkdown_RendersBothTablesWhenPresent(t *testing.T) {
 			"warned":  {"thresholds": map[string]any{"cpu": 0.5}},
 		},
 		RequiredFields: []string{"thresholds.cpu"},
-		NewDefaults:    map[string]any{"thresholds": map[string]any{"cpu": 0.5}},
+		NewDefaults:    map[string]any{"_thresholds": map[string]any{"_cpu": 0.5}},
 		TenantOverrides: map[string]map[string]any{
-			"warned": {"thresholds": map[string]any{"cpu": 0.5}},
+			"warned": {"_thresholds": map[string]any{"_cpu": 0.5}},
 		},
 	})
 	if err != nil {
@@ -580,5 +581,23 @@ func TestGuardReportMarkdown_EscapesPipeAndNewline(t *testing.T) {
 	md := r.Markdown()
 	if !strings.Contains(md, `first \| line\nsecond line`) {
 		t.Errorf("pipe / newline not escaped in table cell:\n%s", md)
+	}
+}
+
+// #4330: a threshold key is reported on the counterfactual's word alone —
+// RedundantThresholds — never on its value equalling the inherited one.
+func TestCheckRedundantOverrides_ThresholdKeyFollowsTheCounterfactual(t *testing.T) {
+	t.Parallel()
+	in := CheckInput{
+		NewDefaults:     map[string]any{"cpu": 80},
+		TenantOverrides: map[string]map[string]any{"t1": {"cpu": 80}, "t2": {"cpu": 70}},
+	}
+	if got := checkRedundantOverrides(in); len(got) != 0 {
+		t.Fatalf("no counterfactual: findings %+v, want none (equal values decide nothing)", got)
+	}
+	in.RedundantThresholds = map[string]map[string]bool{"t1": {"cpu": false}, "t2": {"cpu": true}}
+	got := checkRedundantOverrides(in)
+	if len(got) != 1 || got[0].TenantID != "t2" || got[0].Field != "cpu" {
+		t.Fatalf("findings %+v, want exactly t2 / cpu (the counterfactual's verdicts)", got)
 	}
 }
