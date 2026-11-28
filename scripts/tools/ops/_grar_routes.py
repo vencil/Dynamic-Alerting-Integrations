@@ -1116,11 +1116,15 @@ def _build_custom_alert_routes(tenant_names: list[str] | None = None,
 #: name-only, so it notifies no one; the alerts stay visible in Alertmanager.
 MIGRATED_SHADOW_RECEIVER = "migrated-alerts-shadow"
 
-#: ⛔ THE label every migrated rule carries (#4226: migrate-rule writes it,
-#: this route matches it): ``component="migrated"``. Static, so the alert's
-#: identity is the same before and after cutover.
-MIGRATED_LABEL = "component"
-MIGRATED_VALUE = "migrated"
+#: ⛔ THE label every migrated alert carries (#4226: migrate-rule writes it,
+#: this route matches it; #4355: every other platform route and every inhibit
+#: source excludes it): ``da_migrated="true"``. Static, so the alert's
+#: identity is the same before and after cutover. A label of its own, not a
+#: ``component`` value: the series keep their own ``component``, and a
+#: platform route matching that (``component="custom"``) excludes the
+#: migrated label instead of relying on a value that cannot be both.
+MIGRATED_LABEL = "da_migrated"
+MIGRATED_VALUE = "true"
 
 
 def _build_migrated_alert_routes(active_tenants: "Iterable[str]" = ()
@@ -1128,7 +1132,7 @@ def _build_migrated_alert_routes(active_tenants: "Iterable[str]" = ()
     """The migrated-alerts shadow route + its receiver (#4277).
 
     migrate-rule writes the tenant's legacy rules back as they were, each
-    labelled ``component="migrated"``; while the old rules still run beside
+    alert labelled ``da_migrated="true"`` (``MIGRATED_LABEL``); while the old rules still run beside
     them (the shadow period), their alerts must page no one. This route takes
     every such alert to ``migrated-alerts-shadow`` (name-only) — except a
     tenant whose ``_routing_migrated`` is ``active``: a ``tenant!~`` matcher

@@ -1081,7 +1081,7 @@ class TestAssembleConfigmap:
         assert routes_out[3]["matchers"] == ['component="sentinel"']
         assert routes_out[3]["receiver"] == "sentinel-sinkhole"
         assert routes_out[3]["continue"] is False
-        assert routes_out[4]["matchers"] == ['component="migrated"']
+        assert routes_out[4]["matchers"] == ['da_migrated="true"']
         assert routes_out[4]["receiver"] == "migrated-alerts-shadow"
         assert routes_out[4]["continue"] is False
         assert routes_out[5]["receiver"] == "tenant-db-a"

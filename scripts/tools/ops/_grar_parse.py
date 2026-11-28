@@ -1826,7 +1826,7 @@ class TenantTree:
     # opt-out, as opposed to having no `_routing` at all).
     routing_disabled: frozenset[str] = frozenset()
     # #4277: the tenants whose `_routing_migrated` is `active` — their
-    # component="migrated" alerts route like their other alerts; every other
+    # da_migrated="true" alerts route like their other alerts; every other
     # tenant's stay in the shadow receiver (`_build_migrated_alert_routes`).
     migrated_active: frozenset[str] = frozenset()
     # #1560 ⑤-b: every credential a file writes out, and every place whose

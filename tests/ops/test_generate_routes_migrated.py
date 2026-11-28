@@ -1,4 +1,4 @@
-"""#4277：migrate-rule 寫出的 migrated 規則（`component="migrated"`）在 Alertmanager 的隔離。
+"""#4277：migrate-rule 寫出的 migrated 告警（`da_migrated="true"`，#4355）在 Alertmanager 的隔離。
 
 影子期新舊規則並存，migrated 告警不能通知任何人；切換（`_routing_migrated:
 active`）之後，它與該租戶的其他告警走同一條路。切換只動 conf.d 與 Alertmanager，
@@ -23,6 +23,9 @@ pytestmark = pytest.mark.usefixtures("judging_run")
 import _grar_render as render  # noqa: E402
 import _grar_routes as routes_mod  # noqa: E402
 import generate_alertmanager_routes as gar  # noqa: E402
+
+#: #4355: the one spelling, `_grar_routes.MIGRATED_LABEL` / `MIGRATED_VALUE`.
+MIG = f'{routes_mod.MIGRATED_LABEL}="{routes_mod.MIGRATED_VALUE}"'
 
 _GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
         / "generate_alertmanager_routes.py")
@@ -66,14 +69,14 @@ def _render(conf: Path) -> tuple[subprocess.CompletedProcess, dict | None]:
 
 def _migrated_routes(am: dict) -> list[tuple[int, dict]]:
     return [(i, r) for i, r in enumerate(am["route"]["routes"])
-            if 'component="migrated"' in (r.get("matchers") or [])]
+            if MIG in (r.get("matchers") or [])]
 
 
 def test_every_tenant_is_in_shadow_by_default(tmp_path):
     proc, am = _render(_tree(tmp_path, {"t-a": ..., "t-b": ...}))
     assert proc.returncode == 0, proc.stderr
     (idx, route), = _migrated_routes(am)
-    assert route["matchers"] == ['component="migrated"']
+    assert route["matchers"] == [MIG]
     assert route["receiver"] == "migrated-alerts-shadow" and route["continue"] is False
     assert idx == 4, [r.get("matchers") for r in am["route"]["routes"]]
     (recv,) = [r for r in am["receivers"] if r["name"] == "migrated-alerts-shadow"]
@@ -84,7 +87,7 @@ def test_an_active_tenant_is_left_to_its_own_routing(tmp_path):
     proc, am = _render(_tree(tmp_path, {"t-a": "active", "t-b": "shadow", "t-c": ...}))
     assert proc.returncode == 0, proc.stderr
     (_, route), = _migrated_routes(am)
-    assert route["matchers"] == ['component="migrated"', 'tenant!~"t-a"']
+    assert route["matchers"] == [MIG, 'tenant!~"t-a"']
 
 
 def test_the_platform_tenants_layer_counts_too(tmp_path):
@@ -93,7 +96,7 @@ def test_the_platform_tenants_layer_counts_too(tmp_path):
     proc, am = _render(_tree(tmp_path, {"t-a": ..., "t-b": ...}, root_states={"t-b": "active"}))
     assert proc.returncode == 0, proc.stderr
     (_, route), = _migrated_routes(am)
-    assert route["matchers"] == ['component="migrated"', 'tenant!~"t-b"']
+    assert route["matchers"] == [MIG, 'tenant!~"t-b"']
 
 
 @pytest.mark.parametrize("value", ["yes", "Active", "true", "on", "{state: active}", "1"])
@@ -109,7 +112,7 @@ def test_null_is_shadow(tmp_path):
     proc, am = _render(_tree(tmp_path, {"t-a": "null"}))
     assert proc.returncode == 0, proc.stderr
     (_, route), = _migrated_routes(am)
-    assert route["matchers"] == ['component="migrated"']
+    assert route["matchers"] == [MIG]
 
 
 def test_the_route_is_pinned_ahead_of_the_enforced_routes(tmp_path):
@@ -133,7 +136,7 @@ def test_the_route_is_pinned_ahead_of_the_enforced_routes(tmp_path):
 def test_a_merge_given_no_set_puts_every_tenant_in_shadow():
     """A caller with no tenant tree: the safe default."""
     out_routes, out_receivers = render._inject_custom_alert_isolation([], [])
-    assert out_routes[4]["matchers"] == ['component="migrated"']
+    assert out_routes[4]["matchers"] == [MIG]
     assert "migrated-alerts-shadow" in {r["name"] for r in out_receivers}
 
 
@@ -141,7 +144,7 @@ def test_a_stale_migrated_route_is_replaced_by_this_runs():
     """Re-merging an output (or a base that held one) keeps one: this run's."""
     stale = routes_mod._build_migrated_alert_routes(["old"])[0]
     out_routes, _ = render._inject_custom_alert_isolation(stale, [], migrated_active=["new"])
-    found = [r for r in out_routes if 'component="migrated"' in r["matchers"]]
+    found = [r for r in out_routes if MIG in r["matchers"]]
     assert found == routes_mod._build_migrated_alert_routes(["new"])[0]
 
 
@@ -170,7 +173,7 @@ def test_a_tenant_with_routing_disabled_still_cuts_over(tmp_path):
     proc, am = _render(conf)
     assert proc.returncode == 0, proc.stderr
     (_, route), = _migrated_routes(am)
-    assert route["matchers"] == ['component="migrated"', 'tenant!~"t-off"']
+    assert route["matchers"] == [MIG, 'tenant!~"t-off"']
 
 
 def test_a_notifier_on_the_shadow_receiver_is_refused(tmp_path):

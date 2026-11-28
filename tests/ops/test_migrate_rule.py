@@ -10,8 +10,9 @@
    告警的序列）rc 2 點名。
 3. 每種 rc 2 形狀各一個測試，且什麼都不寫。
 4. recording rule：同檔被讀到的一起遷移（遞移），讀到檔裡沒有的 rc 2。
-5. expr 以外原樣保留；labels 加 tenant／component=migrated，annotations 加
-   owner／expiry；到期伴隨告警；mapping 檔的 selector 注入前後。
+5. expr 以外原樣保留（序列自己的 ``component`` 也是，#4355）；labels 加 tenant，
+   告警再加 da_migrated="true"，annotations 加 owner／expiry；到期伴隨告警（不帶
+   da_migrated）；mapping 檔的 selector 注入前後。
 6. 輸出過 ``lint_custom_rules --ci``（租戶規則檔佈局），promtool 量得到
    隔離：別的租戶的序列不讓 migrated 告警響。
 """
@@ -109,7 +110,7 @@ def test_the_output_passes_the_lint_as_the_tenants_rule_file(tmp_path, fixture, 
     assert proc.returncode == 0, proc.stderr
     lint = subprocess.run(
         [sys.executable, str(_TOOLS / "ops" / "lint_custom_rules.py"),
-         str(out / mr.DRAFT_ROOT / "migrated"), "--ci"],
+         str(out / mr.DRAFT_ROOT / "migrated"), "--ci", "--migrated"],
         capture_output=True, text=True, encoding="utf-8", timeout=300)
     assert lint.returncode == 0, lint.stdout + lint.stderr
     assert "Errors: 0" in lint.stdout
@@ -197,7 +198,7 @@ REFUSED = {
     "regex-metric-name": (one("A", '{__name__=~"x.*"} > 0'), "names no metric"),
     "missing-record": (one("A", "job:x:rate5m > 0"), "does not define"),
     "tenant-label": (one("A", "x > 0", labels={"tenant": "db-b"}), "label tenant"),
-    "component-label": (one("A", "x > 0", labels={"component": "mysql"}), "label component"),
+    "migrated-label": (one("A", "x > 0", labels={"da_migrated": "false"}), "label da_migrated"),
     "owner-label": (one("A", "x > 0", labels={"owner": "someone"}), "owner is a label"),
     "other-owner": (one("A", "x > 0", annotations={"owner": "someone"}), "annotation owner"),
     "other-expiry": (one("A", "x > 0", annotations={"expiry": "2030-01-01"}),
@@ -206,12 +207,12 @@ REFUSED = {
     "lint-denied-function": (one("A", "predict_linear(x[1h], 3600) < 0"),
                              "lint of the migrated rules"),
     "lint-range": (one("A", "rate(x[7d]) > 0"), "lint of the migrated rules"),
-    "keeps-component-by": (one("A", "sum by (component) (rate(x_total[5m])) > 1"),
-                           "keeps component (by(component))"),
-    "keeps-component-matcher": (one("A", 'x{component="db"} > 1'), "a component matcher"),
-    "keeps-component-on": (one("A", "x * on(component) group_left y > 1"), "on/group_*"),
-    "writes-component": (one("A", 'label_replace(x, "component", "$1", "job", "(.*)") > 1'),
-                         'label_replace(…, "component", …)'),
+    "keeps-migrated-by": (one("A", "sum by (da_migrated) (rate(x_total[5m])) > 1"),
+                          "keeps da_migrated (by(da_migrated))"),
+    "keeps-migrated-matcher": (one("A", 'x{da_migrated="db"} > 1'), "a da_migrated matcher"),
+    "keeps-migrated-on": (one("A", "x * on(da_migrated) group_left y > 1"), "on/group_*"),
+    "writes-migrated": (one("A", 'label_replace(x, "da_migrated", "$1", "job", "(.*)") > 1'),
+                        'label_replace(…, "da_migrated", …)'),
     # review of #4341: the migrated record carries tenant, sum(y) does not
     "record-matches-differently": (yaml.safe_dump({"groups": [{"name": "g", "rules": [
         {"record": "job:x:sum", "expr": "sum(app_x)"},
@@ -423,8 +424,21 @@ def test_everything_but_the_expression_is_kept_and_the_marks_are_added(tmp_path)
     assert proc.returncode == 0, proc.stderr
     got = by_name(rules_of(out))["Slow"]
     assert got == {**rule, "expr": 'app_latency_seconds{tenant="db-a"} > 2',
-                   "labels": {**rule["labels"], "tenant": TENANT, "component": "migrated"},
+                   "labels": {**rule["labels"], "tenant": TENANT, "da_migrated": "true"},
                    "annotations": {**rule["annotations"], "owner": OWNER, "expiry": EXPIRY}}
+
+
+@pytest.mark.parametrize("component", ["custom", "sentinel", "synthetic-probe", "mysql"])
+def test_the_series_own_component_is_kept(tmp_path, component):
+    # #4355: the migrated mark is da_migrated, so a component the rule writes
+    # or its expression keeps is the series' own, not overwritten or refused
+    text = one("A", f'sum by (component, tenant) (x{{component="{component}"}}) > 0',
+               labels={"component": component})
+    proc, out = run(tmp_path, text)
+    assert proc.returncode == 0, proc.stderr
+    got = by_name(rules_of(out))["A"]
+    assert got["labels"] == {"component": component, "tenant": TENANT, "da_migrated": "true"}
+    assert f'component="{component}"' in got["expr"]
 
 
 def test_a_tenant_or_owner_already_written_as_this_run_writes_it_is_kept(tmp_path):
@@ -453,7 +467,8 @@ def test_the_expiry_alert_fires_from_two_weeks_before_the_expiry(tmp_path):
     alert = by_name(doc)[mr.EXPIRY_ALERT]
     warn_at = datetime.datetime(2099, 12, 17, tzinfo=datetime.timezone.utc)
     assert alert["expr"] == f"vector(time()) > {int(warn_at.timestamp())}"
-    assert alert["labels"] == {"severity": "warning", "tenant": TENANT, "component": "migrated"}
+    # #4355 (F5): no da_migrated — it routes as the tenant's other alerts
+    assert alert["labels"] == {"severity": "warning", "tenant": TENANT}
     assert alert["annotations"]["owner"] == OWNER
     assert alert["annotations"]["expiry"] == EXPIRY
 
@@ -570,7 +585,7 @@ def test_another_tenants_series_does_not_fire_the_migrated_alert(tmp_path):
                 {"series": 'app_queue_length{tenant="db-a",instance="i3"}', "values": "50x5"}],
                 "alert_rule_test": [{"eval_time": "3m", "alertname": "High", "exp_alerts": [
                     {"exp_labels": {"tenant": "db-a", "instance": "i3",
-                                    "component": "migrated"},
+                                    "da_migrated": "true"},
                      "exp_annotations": {"owner": OWNER, "expiry": EXPIRY}}]}]}]}
     path = tmp_path / "t.yml"
     path.write_text(yaml.safe_dump(test), encoding="utf-8")
@@ -593,7 +608,7 @@ def _promtool(tmp_path, rule_files, input_series, alert_tests):
     assert res.returncode == 0, res.stdout + res.stderr
 
 
-_MARKS = {"tenant": TENANT, "component": "migrated"}
+_MARKS = {"tenant": TENANT, "da_migrated": "true"}
 _ANN = {"owner": OWNER, "expiry": EXPIRY}
 
 

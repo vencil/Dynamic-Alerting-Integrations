@@ -9,11 +9,11 @@
    加 ``tenant="<租戶>"``；kube-state-metrics 有 namespace 的物件與 cAdvisor／kubelet 的基礎設施指標加
    ``namespace="<租戶>", tenant=""``；其餘（叢集層級物件、平台自己的序列、每個
    抓取目標都有的序列、告警自己的序列）沒有一種注入只選到一個租戶，結束碼 2。
-2. 標記：labels 加 ``tenant: <租戶>``、``component: migrated``（靜態值，切換前後
-   不變）；annotations 加 ``owner``、``expiry``（放 label 的話，續期改 expiry 會讓
-   ``for:`` 重新計時）。
+2. 標記：labels 加 ``tenant: <租戶>``，告警再加 ``da_migrated: "true"``（靜態值，
+   切換前後不變；#4355）；annotations 加 ``owner``、``expiry``（放 label 的話，續期改
+   expiry 會讓 ``for:`` 重新計時）。序列自己的 ``component`` 原樣保留。
 3. 到期伴隨告警：``vector(time()) > <expiry − 14 天的 Unix 秒數>``，不依賴任何
-   指標資料。
+   指標資料。它不帶 ``da_migrated``：照租戶一般的告警路由，影子期也送得到（#4355）。
 
 同一個來源檔裡被遷移的告警讀到的 recording rule 一起遷移（加 ``tenant``），並改名為
 ``migrated:<租戶>:<原名>``（租戶的 ``-`` 寫成 ``_``），讀它的 migrated 規則一起改：
@@ -21,10 +21,10 @@ migrated 檔與 legacy 規則載入同一台 Prometheus，同名的話 legacy �
 record 的序列（多出一條不走影子路由的告警），或兩條規則寫同一組序列。讀到檔裡沒有
 的 record，結束碼 2。
 
-``component: migrated`` 蓋掉序列自己的 ``component``：運算式明寫保留它的（matcher、
-``by``／``on``／``group_left``、``label_replace`` 等寫入）結束碼 2；序列從抓取帶來的
-看不出來，報告提醒（多條只差 component 的序列會變成同一組 label，Prometheus 不評估）。字典（metric-dictionary.yaml）命中的告警平台 rule
-pack 已涵蓋，只在報告裡點名改用黃金標準，不產生 migrated 規則。
+``da_migrated`` 是 migrated 告警自己寫的：運算式明寫保留它的（matcher、
+``by``／``on``／``group_left``、``label_replace`` 等寫入）結束碼 2。字典
+（metric-dictionary.yaml）命中的告警平台 rule pack 已涵蓋，只在報告裡點名改用黃金標準，
+不產生 migrated 規則。
 
 任何一條規則被拒，就逐條列出原因、結束碼 2、一個檔都不寫。寫之前，migrate 對
 自己的輸出跑 ``lint_custom_rules``（租戶隔離、owner／expiry 治理；``--policy``
@@ -406,7 +406,9 @@ def expiry_alert(tenant, owner, expiry):
     return {
         "alert": EXPIRY_ALERT,
         "expr": f"vector(time()) > {int(warn_at.timestamp())}",
-        "labels": {"severity": "warning", TENANT_LABEL: tenant, MIGRATED_LABEL: MIGRATED_VALUE},
+        # #4355 (F5): no MIGRATED_LABEL — the shadow route would keep it from a
+        # tenant that never cuts over; it routes as the tenant's other alerts.
+        "labels": {"severity": "warning", TENANT_LABEL: tenant},
         "annotations": {
             "summary": (f"Migrated rules of tenant {tenant} expire on {expiry.isoformat()}: "
                         "promote them to platform rules or renew the expiry"),
@@ -724,10 +726,6 @@ def render_report(plan, tenant, owner, expiry):
         lines.append(f"一起遷移的 recording rule（{len(plan.migrated_records)}，改名以免與 "
                      "legacy 的同名 record 互讀）：")
         lines += [f"  - {r} → {plan.renamed[r]}" for r in plan.migrated_records]
-    if plan.migrated_alerts:
-        lines += ["", f"注意：每條 migrated 告警寫 {MIGRATED_LABEL}={MIGRATED_VALUE}，蓋掉序列自己的 "
-                  f"{MIGRATED_LABEL}。序列本身帶 {MIGRATED_LABEL}（從抓取來）、多條只差它的，"
-                  "會變成同一組 label，Prometheus 不評估這條告警（規則的 health 是 err）。"]
     if plan.golden:
         lines += ["", "改用黃金標準（平台 rule pack 已涵蓋，未產生 migrated 規則）："]
         for alert, metric, hit in plan.golden:
@@ -759,7 +757,7 @@ def lint_output(text, tenant, policy_doc=None, policy_path=None):
         os.makedirs(os.path.dirname(path))
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
-        results, _ = lint_custom_rules.lint_file(path, policy, tenant=tenant)
+        results, _ = lint_custom_rules.lint_file(path, policy, tenant=tenant, migrated=True)
     def line(r):
         return f"{r.rule_name or '<file>'}: {r.message}"
     return ([line(r) for r in results if r.severity == "ERROR"],
@@ -820,7 +818,7 @@ def main():
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="把一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則：每個 selector "
-                    "注入租戶隔離，加 tenant／component=migrated label 與 owner／expiry "
+                    "注入租戶隔離，加 tenant／da_migrated=true label 與 owner／expiry "
                     "annotation，附到期伴隨告警（#4226）"
     )
     # #4040：規則檔由 _lib_input 讀一次；da-read 讀的是那份文字，不再開檔。

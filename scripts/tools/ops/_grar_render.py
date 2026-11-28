@@ -65,7 +65,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
-    _build_migrated_alert_routes, MIGRATED_SHADOW_RECEIVER,
+    _build_migrated_alert_routes, MIGRATED_SHADOW_RECEIVER, MIGRATED_LABEL, MIGRATED_VALUE,
     _build_sentinel_sinkhole_route)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#3276)
@@ -200,7 +200,10 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict], *,
         return 'component="sentinel"' in r.get("matchers", [])
 
     def _is_migrated(r: dict) -> bool:
-        return 'component="migrated"' in r.get("matchers", [])
+        # #4355: the one spelling (`_grar_routes.MIGRATED_LABEL`); an older
+        # output's route (`component="migrated"`) is known by its receiver.
+        return (f'{MIGRATED_LABEL}="{MIGRATED_VALUE}"' in r.get("matchers", [])
+                or r.get("receiver") == MIGRATED_SHADOW_RECEIVER)
 
     # #4277: the migrated-alerts shadow route, built from *migrated_active*
     # (the tenants whose `_routing_migrated` is `active`; none: every tenant
