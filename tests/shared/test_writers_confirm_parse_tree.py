@@ -1145,18 +1145,14 @@ def _regen_setup(tmp_path, monkeypatch, dev_text=None, seed_text=None):
     monkeypatch.setattr(lib, "_REPO_ROOT", str(root))
     monkeypatch.setattr(lib, "DEV_DEFAULTS_PATH", str(dev))
     monkeypatch.setattr(lib, "TRY_LOCAL_DEFAULTS_PATH", str(seed))
-    # …and the generated RULE_PACKS module, so no regen here writes the repo.
-    module = root / "ops" / "_rule_packs_generated.py"
-    module.parent.mkdir(parents=True)
-    module.write_text("# stale\n", encoding="utf-8")
-    monkeypatch.setattr(lib, "RULE_PACKS_MODULE_PATH", str(module))
-    # …and the two generated Go tables, for the same reason.
-    for attr, name in (("RETIRED_KEYS_GO_PATH", "retired_threshold_keys_gen.go"),
-                       ("BUILTIN_DEFAULTS_GO_PATH", "builtin_defaults_gen.go")):
-        go = root / "go" / name
-        go.parent.mkdir(parents=True, exist_ok=True)
-        go.write_text("// stale\n", encoding="utf-8")
-        monkeypatch.setattr(lib, attr, str(go))
+    # …and every whole file regen writes (`GENERATED_FILES`, #4346), so no
+    # regen here writes the repo.
+    for attr, _what, _render, _check in lib.GENERATED_FILES:
+        name = os.path.basename(getattr(lib, attr))
+        out = root / {".py": "ops", ".go": "go"}.get(os.path.splitext(name)[1], "rulepacks") / name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(("// stale\n" if name.endswith(".go") else "# stale\n"), encoding="utf-8")
+        monkeypatch.setattr(lib, attr, str(out))
     real = lib.surface_specs
     monkeypatch.setattr(lib, "surface_specs",
                         lambda doc: [s for s in real(doc) if s.get("confd")])
