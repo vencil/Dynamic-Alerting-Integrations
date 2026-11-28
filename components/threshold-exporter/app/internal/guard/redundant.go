@@ -23,10 +23,13 @@ package guard
 //     (the exporter's own build and resolve), and no other finding owns the
 //     line by that finding's own verdict (the shared key verdict,
 //     value_not_served). No reading of values here.
-//   - A reserved `_` key or a leaf nested under one: its YAML value equals
-//     the inherited one (scalarsEqual). These are read by readers other
-//     than /metrics' rows (the route generator, metadata, ops gauges); their
-//     counterfactual is #4331.
+//   - A reserved `_` key (whole, never a leaf nested under it) the registry
+//     names the exporter as the one reader of, in every layer it can be
+//     inherited from (config.RedundancyJudgedByValue): its scalar value
+//     equals the inherited one (scalarsEqual). Every other reserved key —
+//     one the route generator, the annotation or the custom-alert compiler
+//     reads, a mapping or a list — is not judged (#4331: no oracle sees an
+//     `expires:`, a weekday window, or a field another reader reads).
 
 import (
 	"fmt"
@@ -104,16 +107,24 @@ func checkRedundantOverrides(input CheckInput) []Finding {
 			flush(tenantID)
 			continue // no reserved key, or no defaults context for this tenant
 		}
-		leaves := flattenLeaves(reserved)
-		for _, path := range sortedKeys(leaves) {
-			defaultValue, exists := defaultLeaves[path]
-			if !exists || !scalarsEqual(leaves[path], defaultValue) {
+		// A reserved key is judged whole, never a leaf nested under it, and
+		// only where the registry makes its value the line's one effect
+		// (config.RedundancyJudgedByValue, #4331): an equal scalar is then
+		// what the exporter reads either way. A mapping or a list
+		// (scalarsEqual) can carry an `expires:`, a weekday window or a field
+		// another reader reads, which no value comparison sees.
+		for _, key := range sortedKeys(reserved) {
+			if !config.RedundancyJudgedByValue(key) {
 				continue
 			}
-			if inheritedFromRefusedSubtreeKey(input, tenantID, path) {
+			defaultValue, exists := defaultLeaves[key]
+			if !exists || !scalarsEqual(reserved[key], defaultValue) {
 				continue
 			}
-			emit(path)
+			if inheritedFromRefusedSubtreeKey(input, tenantID, key) {
+				continue
+			}
+			emit(key)
 		}
 		flush(tenantID)
 	}

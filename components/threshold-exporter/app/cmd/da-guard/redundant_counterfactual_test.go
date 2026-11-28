@@ -142,3 +142,56 @@ func TestGuard_RedundantOverrideIsTheCounterfactual(t *testing.T) {
 		})
 	}
 }
+
+// #4331: a reserved key is judged by its value only where the registry names
+// the exporter as its one reader in every layer it can be inherited from —
+// end to end, over a root platform file's `tenants:` entry and a profile.
+func TestGuard_RedundantReservedKeyFollowsTheRegistry(t *testing.T) {
+	t.Parallel()
+	const root = "defaults:\n  pg_connections: 80\n"
+	for _, tc := range []struct {
+		name      string
+		files     map[string]string
+		field     string
+		redundant bool
+	}{
+		{"silent mode repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _silent_mode: warning\n",
+				"tx.yaml": "tenants:\n  tx:\n    _silent_mode: warning\n"},
+			"_silent_mode", true},
+		{"silent mode repeating the profile",
+			map[string]string{"_defaults.yaml": root, "_profiles.yaml": "profiles:\n  std:\n    _silent_mode: warning\n",
+				"tx.yaml": "tenants:\n  tx:\n    _profile: std\n    _silent_mode: warning\n"},
+			"_silent_mode", true},
+		// The route generator reads it too.
+		{"severity dedup repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _severity_dedup: disable\n",
+				"tx.yaml": "tenants:\n  tx:\n    _severity_dedup: disable\n"},
+			"_severity_dedup", false},
+		{"routing profile repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _routing_profile: p1\n",
+				"tx.yaml": "tenants:\n  tx:\n    _routing_profile: p1\n"},
+			"_routing_profile", false},
+		// A silence with an end date: deleting the line moves the end.
+		{"silence with its own end date",
+			map[string]string{"_defaults.yaml": root,
+				"_platform.yaml": "tenants:\n  tx:\n    _silent_mode: {target: all, expires: \"2099-01-01T00:00:00Z\", reason: freeze}\n",
+				"tx.yaml":        "tenants:\n  tx:\n    _silent_mode: {target: all, expires: \"2099-02-01T00:00:00Z\", reason: freeze}\n"},
+			"_silent_mode", false},
+		// A field another reader reads (environment) differs; owner does not.
+		{"metadata sharing one field with the profile",
+			map[string]string{"_defaults.yaml": root,
+				"_profiles.yaml": "profiles:\n  std:\n    _metadata: {owner: team-p, environment: production}\n",
+				"tx.yaml":        "tenants:\n  tx:\n    _profile: std\n    _metadata: {owner: team-p, environment: staging}\n"},
+			"_metadata.owner", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := allFindings(t, "--config-dir", writeReservedConfD(t, tc.files))
+			reported := slices.Contains(got, "warn redundant_override tx "+tc.field)
+			if reported != tc.redundant {
+				t.Errorf("redundant_override on %s = %v, want %v (findings %q)", tc.field, reported, tc.redundant, got)
+			}
+		})
+	}
+}
