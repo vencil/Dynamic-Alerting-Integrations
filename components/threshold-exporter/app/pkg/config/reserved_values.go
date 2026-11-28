@@ -8,6 +8,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 )
 
@@ -233,4 +234,44 @@ func sortedCopy(in []string) []string {
 	out := append([]string(nil), in...)
 	sort.Strings(out)
 	return out
+}
+
+// redundancyLayers are the tenant's own file and the layers a judged
+// reserved key's inherited value can come from: the platform `tenants:`
+// entry and the profile (the exporter reads none of these keys in a
+// `defaults:` block).
+var redundancyLayers = []string{"tenant", "platform_tenants", "profile"}
+
+// RedundancyJudgedByValue reports whether da-guard may judge a tenant's
+// reserved key k redundant by comparing its value with the inherited one
+// (#4331). Only when the registry (reserved_keys.json) names the exporter
+// as k's one reader, the exporter reads k in every layer it can be
+// inherited from, and k's value shape is no mapping or list: then the
+// exporter's reading of a scalar is the only effect of the line, and an
+// equal scalar read in its place has the same one. Not a key the route
+// generator reads (`_routing*` only it, `_severity_dedup` with the
+// exporter), the annotation (`_namespaces`) or the custom-alert compiler
+// (`_custom_alerts`); not one the exporter skips in a layer it could come
+// from (`_profile` in a profile); not a mapping or list key (`_metadata`,
+// `_expected_exporters`). Taken from the registry, so a key added there is
+// judged by what it declares.
+func RedundancyJudgedByValue(k string) bool {
+	readers, ok := RegisteredReaders(k)
+	if !ok || len(readers) != 1 {
+		return false
+	}
+	layers, ok := readers["exporter"]
+	if !ok {
+		return false
+	}
+	for _, want := range redundancyLayers {
+		if !slices.Contains(layers, want) {
+			return false
+		}
+	}
+	switch reservedValueShapes[k] {
+	case ShapeMapping, ShapeList:
+		return false
+	}
+	return true
 }

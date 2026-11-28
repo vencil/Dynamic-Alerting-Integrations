@@ -899,3 +899,32 @@ def test_the_keys_waiting_for_a_ratio_form_are_these():
                      if e.get("portability") == "ratio_pending")
     assert pending == ["rabbitmq_connections", "redis_connected_clients",
                        "redis_memory_used_bytes"], pending
+
+
+# ── the pre-commit hook fires on every file --regen writes (#4346) ─────────
+
+def _hook_files_regex():
+    import re
+    import yaml
+    cfg = yaml.safe_load((REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    hooks = [h for repo in cfg["repos"] for h in repo["hooks"]
+             if h["id"] == "threshold-registry-check"]
+    assert len(hooks) == 1, hooks
+    return re.compile(hooks[0]["files"])
+
+
+def test_the_hook_files_pattern_matches_every_file_regen_writes():
+    """`files:` of the threshold-registry-check hook is a second, hand-written
+    list. It is read against the one list of what `--regen` writes — `GENERATED_FILES` and the spliced `surface_specs` —
+    so a generated table added there and not to `files:` turns this red
+    (two Go tables and the digest promtool test were missing before #4346)."""
+    import os
+    rx = _hook_files_regex()
+    paths = lib.generated_file_paths()
+    paths += [spec["path"] for spec in lib.surface_specs(lib.load_registry())]
+    assert len(lib.generated_file_paths()) == len(lib.GENERATED_FILES) >= 7
+    rels = {os.path.relpath(p, REPO_ROOT).replace(os.sep, "/") for p in paths}
+    missing = sorted(r for r in rels if not rx.match(r))
+    assert not missing, (
+        "the threshold-registry-check hook does not fire when these files change; "
+        f"add them to its `files:` in .pre-commit-config.yaml: {missing}")

@@ -84,7 +84,8 @@ checks (T2 is the generated copy); the platform pack is in T1 and is read,
 it simply carries no `metric_group` today. Not over the compiler's
 `slo_{{…}}` groups nor anything migrate writes for a customer — those
 outputs are not in this tree and are pinned by their own tests
-(custom_alert_compile_test.go, tests/ops/test_migrate_per_cluster.py).
+(custom_alert_compile_test.go, tests/ops/test_migrate_rule.py; migrate keeps
+the customer's rules as written and writes no `metric_group` of its own).
 
 Not judged (the scope check passes these, and Alertmanager sees otherwise):
 the scope is check_cluster_identity's, so what that lint does not read

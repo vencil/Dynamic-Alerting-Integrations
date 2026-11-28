@@ -156,13 +156,13 @@ graph TB
 
 ### 1.3 Customer Migration & GitOps Governance Pipeline (Day-0 / Day-1 / Day-2)
 
-The customer migration pipeline strings together three lifecycle phases — "Day-0 import existing PromRule corpus", "Day-1 GitOps PR governance", "Day-2 runtime hot-reload" — into an end-to-end flow that runs offline, in air-gapped environments, and with independently-verifiable supply-chain provenance. Bulk import producing `_custom_alerts` recipes is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226) and not shipped yet:
+The customer migration pipeline strings together three lifecycle phases — "Day-0 import existing PromRule corpus", "Day-1 GitOps PR governance", "Day-2 runtime hot-reload" — into an end-to-end flow that runs offline, in air-gapped environments, and with independently-verifiable supply-chain provenance. The per-tenant `migrate` migrates rules verbatim into a migrated rule file, loaded by the Prometheus that scrapes the raw metrics (or the federation edge); on the conf.d side only the cutover lives (`_routing_migrated`, [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)):
 
 ```mermaid
 graph LR
     subgraph Day0["Day-0: Customer Migration"]
         PR["PromRule corpus<br/>(CRD / YAML)"] -->|da-parser| JSON["Canonical JSON<br/>+ prom_portable flag"]
-        PR -->|per-tenant migrate| MIG["conf.d tenant file<br/>(.migration/conf.d/&lt;id&gt;.yaml)"]
+        PR -->|per-tenant migrate| MIG["migrated rule file<br/>(.migration/migrated/&lt;id&gt;/rules.yml)"]
     end
 
     subgraph Day1["Day-1: GitOps Governance"]

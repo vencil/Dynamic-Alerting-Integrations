@@ -330,3 +330,21 @@ def test_docs_are_grouped_under_their_section_heading(tmp_path):
     assert "- Start Doc: start.md" in start_block, f"start 應在快速入門底下\n{out}"
     assert "- Start Doc" not in arch_block, f"start 不該出現在核心架構區塊\n{out}"
     assert "- Arch Doc" not in start_block, f"arch 不該出現在快速入門區塊\n{out}"
+
+
+def test_a_rule_packs_md_the_bridge_does_not_list_is_not_drafted(tmp_path):
+    """#4347：`rule-packs/` 裡有什麼 md 不等於站台發布什麼。只有 mkdocs bridge 的
+    `RULE_PACK_DOCS`（經 `_lib_site_pages.bridged_pages()` 讀）是站台頁；不在清單裡的
+    md 不在站台上，也就不能是 nav 條目。還原成 `glob('rule-packs/*.md')` 這條會紅。"""
+    repo = _tree(tmp_path, docs={"docs/a.md": _fm("Doc A")})
+    (repo / "rule-packs").mkdir()
+    listed = [p.name for p in gn._lib_site_pages.bridged_pages()]
+    for name in listed:
+        (repo / "rule-packs" / name).write_text(_fm(f"Listed {name}"), encoding="utf-8")
+    (repo / "rule-packs" / "zz-unlisted.md").write_text(_fm("Unlisted"), encoding="utf-8")
+
+    out = _draft(repo)
+    for name in listed:
+        if not name.endswith(".en.md"):
+            assert f"rule-packs/{name}" in out, f"清單裡的頁要進草稿：{name}\n{out}"
+    assert "zz-unlisted" not in out, f"不在 bridge 清單的 md 不該進草稿\n{out}"

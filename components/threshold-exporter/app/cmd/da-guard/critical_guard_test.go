@@ -130,7 +130,9 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 		// skips them; resolveBaseRows serves no row for them either), and get
 		// no root_defaults_critical_key warning. /metrics is the same with or
 		// without the tenant's line. An unregistered one (`_silent_mode_critical`)
-		// stays an inherited value, so it is redundant as before; a
+		// has no reader for its value to be judged by (#4331,
+		// config.RedundancyJudgedByValue), so it is not reported redundant
+		// (inert); a
 		// registered `_state_` one is a reserved key the root hands no tenant
 		// (#3250, config.RootDefaultsReservedKey): there is no inheritance to
 		// rely on, so it is not reported redundant (inert), and the root line
@@ -138,9 +140,9 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 		{name: "root-state-prefixed-critical-key-is-not-inherited",
 			files: map[string]string{"_defaults.yaml": root + "  _state_maintenance_critical: 60\n"},
 			tfile: "tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: "_state_maintenance_critical: 60", inert: true},
-		{name: "root-silent-prefixed-critical-key-is-redundant",
+		{name: "root-silent-prefixed-critical-key-is-not-judged",
 			files: map[string]string{"_defaults.yaml": root + "  _silent_mode_critical: 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: "_silent_mode_critical: 60", redundant: true},
+			tfile: "tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: "_silent_mode_critical: 60", inert: true},
 		// Control: a plain root key is still redundant.
 		{name: "root-plain-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root},

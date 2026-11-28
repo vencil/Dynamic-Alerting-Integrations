@@ -23,7 +23,7 @@ updated_at: 2026-11-28
 
 2026-11-24 修訂：改寫為現行行為。決策不變。
 
-2026-11-28 修訂：閾值鍵的多餘覆寫改為反事實判定（刪掉這行後 exporter 送出的不變才算多餘），不再比較兩個值（[#4330](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4330)）。
+2026-11-28 修訂：閾值鍵的多餘覆寫改為反事實判定（刪掉這行後 exporter 送出的不變才算多餘），不再比較兩個值（[#4330](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4330)）；保留鍵只在登錄檔讓 exporter 成為唯一讀者時才比值（[#4331](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4331)）。
 
 ## 決策
 
@@ -92,8 +92,7 @@ da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租�
 ## 後果與已知限制
 
 - **多餘的覆寫只是警告，不擋 merge。** 執行時它無害，只是讓租戶檔變長、讓意圖變模糊。要擋就在 CI 加 `--warn-as-error`。
-- **`_` 開頭的保留鍵與它底下的值仍比對 YAML 的值與型別。** 這些鍵不經閾值列送出，由 route generator、metadata 等各自的讀者讀取，反事實還沒涵蓋它們；da-guard 只在值與型別都相同時才報（[#4331](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4331)）。
-- **保留鍵只比對單一值。** 保留鍵的 mapping 會攤平到每個葉節點逐一比對；list 不比對，內容相同也不報（`internal/guard/guard_test.go` 的 `TestCheckRedundantOverrides_SkipsStructuredValues`）。
+- **`_` 開頭的保留鍵，只在它的值是這一行唯一的作用時才判斷。** 要判斷的保留鍵，租戶從根平台檔的 `tenants:` 或 profile 繼承（exporter 不在 `defaults:` 讀這些鍵）。保留鍵登錄檔（`reserved_keys.json`）要同時寫明三件事：exporter 是這個鍵唯一的讀者、exporter 在租戶檔、平台檔與 profile 三層都讀它、值的形狀不是 mapping 或 list。符合這三件事、且租戶寫的是與繼承值同值同型別的純量時，da-guard 才報；目前符合的是 `_silent_mode` 與 `_state_` 開頭的鍵。另有 finding 負責的行也不報（一個原因一條 finding）：值被拒收的（`value_not_served`），以及 `da-guard key-verdict` 點名的行，例如根目錄沒宣告的 state filter。其餘一律不報：route generator 讀的鍵（`_routing*` 只有它讀，`_severity_dedup` 它與 exporter 都讀），annotation 或 custom alert 編譯器讀的鍵（`_namespaces`、`_custom_alerts`），`_profile`（exporter 不在 profile 這一層讀它），mapping 與 list 形狀的鍵（`_metadata`、`_expected_exporters`），也包括寫成 mapping 的 `_silent_mode` 與 `_state_maintenance`（帶 `expires:` 或每週時段）。拿刪行前後整份 `/metrics` 來比，這些鍵判不準：靜默的結束日期或依星期的時段改變的是之後某一天送出的東西，不在執行的那一刻；`_metadata.environment` 這類欄位則由 `/metrics` 以外的讀者讀取（[#4331](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4331)）。
 - **子目錄 `_defaults.yaml` 不生效的鍵不判。** 子目錄 `_defaults.yaml` 裡 `_` 開頭的鍵（例如 `_silent_mode`），exporter 不套用（ADR-017 決策 4），租戶自己那一行才是生效的值；這種覆寫不算多餘，da-guard 也不報（`cmd/da-guard/subtree_reserved_test.go` 的 `TestGuard_RedundantOverrideSkipsRefusedSubtreeKey`）。
 - **租戶只能覆寫有宣告的閾值。** 租戶檔寫了一個 `_defaults.yaml` 沒宣告的閾值鍵，`/metrics` 不送它；da-guard 主報告不報，`da-guard key-verdict` 與 tenant-api 的寫入判定則把它判為 unread error。哪些算已宣告（根目錄、內建層、`optional_overrides:`）見 ADR-017 決策 3、4、11。
 - **要關掉繼承來的閾值，寫 `"disable"`，不要寫 `null`。** 租戶檔寫 `null` 等於這一層沒寫，仍拿到上層的值（ADR-017 決策 4）；而且 `check_confd_schema.py` 會擋下租戶檔裡寫成 `null` 的閾值。
