@@ -8,7 +8,7 @@
 # threshold.
 #
 # FIDELITY CONTRACT (TRK-339 WS4a-1): `for:` / severity / raw-metric selectors below
-# mirror the SHIPPED values verbatim — enforced by
+# mirror the SHIPPED values verbatim (keep_firing_for too) — enforced by
 # tests/rulepacks/test_reference_validation_sync.py against
 # rule-packs/rule-pack-kubernetes.yaml. Every deliberate divergence (shipped alerts
 # not mirrored here, the throttle working-hard floor, the NodeNotReady tenant-

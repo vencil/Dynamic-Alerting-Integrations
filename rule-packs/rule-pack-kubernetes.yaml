@@ -1465,7 +1465,9 @@ groups:
       #       behaves the same under both: each series counts only what it saw
       #       itself, so a healthy node stays silent, and a node already
       #       flapping fires later (measured: 21m instead of 16m when KSM was
-      #       replaced 5m in — the new series starts its count from zero).
+      #       replaced 5m in — the new series starts its count from zero). A
+      #       second replica that merely JOINS mid-flap changes nothing under
+      #       `max`; the lower count (`min`) would restart the 15m.
       #   (2) no `and kube_node_spec_unschedulable == 0` (upstream skips
       #       cordoned nodes). This pack reads that metric nowhere else, so a
       #       deployment that does not scrape it would have a silently dead
@@ -1480,8 +1482,10 @@ groups:
       # length of the SECOND dip, so the alert fires ~15m after the second dip
       # starts and lasts about as long as that dip did: measured, three 30s
       # dips 5m apart fire for one evaluation at 20m, three 2m dips for 1m30,
-      # four 30s dips 5m apart for 5m. Sustained flapping (30s/30s, 1m/4m,
-      # 2m/3m) fires once at 16-20m and resolves ~9-14m after it stops.
+      # four 30s dips 5m apart for 5m. Sustained flapping fires once, at 16m
+      # (30s/30s) or 20m (1m/4m, 2m/3m), and resolves when the third-from-last
+      # transition is 15m old: measured 13m30s (30s/30s) and 9m30s (1m/4m,
+      # 2m/3m) after the last NotReady ends.
       # Outages longer than 3m are NodeNotReady's; a rolling upgrade (each node
       # NotReady once) does not alert.
       # Engine difference: MetricsQL counts a series' first sample as a change,
@@ -1490,6 +1494,11 @@ groups:
       # new-born series reads 0 and 1. Neither case alerts on either engine,
       # and every waveform measured gave the same firing episodes on both
       # (resolve times differ by one evaluation).
+      # Evaluated at a central Prometheus (edge/central split), `for: 15m` reads
+      # the federated record, so the three-short-dips edge case — which holds
+      # for barely more than 15m — is not guaranteed to fire there: it depends
+      # on the phase of the federation scrape and the evaluation interval.
+      # Sustained flapping is not affected.
       # The join on the raw kube_* series is a recording rule, as for NodeNotReady:
       # in an edge/central split the raw series exist only at the edge, and the
       # alert reads this tenant-labelled record (#1168).

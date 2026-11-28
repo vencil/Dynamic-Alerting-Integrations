@@ -137,7 +137,8 @@ tests:
   #      node-2 (db-y)  NotReady from T+0 on      firing from T+3m
   #    T+2m30s neither (pending); T+3m45s both — first fire unchanged at 3m;
   #    T+12m30s node-1 still firing 9m after it recovered (keep_firing_for);
-  #    T+14m30s node-1 resolved, node-2 still firing. ──
+  #    T+14m node-1 resolved (upper bound: with 11m it would still fire),
+  #    node-2 still firing. ──
   - name: notready-single-outage-and-sustained
     interval: 15s
     input_series:
@@ -223,7 +224,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-      - eval_time: 34m30s
+      - eval_time: 34m
         alertname: NodeNotReady
         exp_alerts:
           - exp_labels:
@@ -810,15 +811,23 @@ tests:
               owner: ""
               tier: ""
 
-  # ── NodeReadinessFlapping, kube-state-metrics seen twice — same answer as once:
+  # ── NodeReadinessFlapping, kube-state-metrics seen twice — same answer as once.
+  #    The copies of a node's series are never identical here, so the choice of
+  #    aggregation shows:
   #      node-1 (db-x)  two 30s dips 10m apart, scraped from TWO KSM replicas
   #                     -> silent (summing the replicas reads 8 changes and
   #                     fires T+15m30s .. T+24m30s)
-  #      node-2 (db-y)  30s/30s flapping, two KSM replicas -> firing from T+16m
+  #      node-2 (db-y)  30s/30s flapping; a SECOND replica (ksm-1) starts at
+  #                     T+12m and counts from zero -> still firing from T+16m
+  #                     (taking the lower count would restart the 15m at T+12m)
   #      node-3 (db-z)  healthy; KSM is replaced at T+0 (ksm-0 goes stale, ksm-1
   #                     appears 60s later) -> silent
-  #    T+10m none; T+22m node-2 only; no firing sample for node-1 / node-3 over
-  #    the whole test. ──
+  #      node-4 (db-w)  30s/30s flapping; KSM is REPLACED mid-flap (ksm-0 stale
+  #                     at T+5m, ksm-1 from T+6m). No series carries the count
+  #                     across, so it fires from T+21m, not T+16m (vmalert-tool
+  #                     T+21m15s).
+  #    T+10m none; T+20m node-2 only; T+22m30s node-2 and node-4; no firing
+  #    sample for node-1 / node-3 over the whole test. ──
   - name: flapping-two-ksm-replicas
     interval: 15s
     input_series:
@@ -841,11 +850,11 @@ tests:
       - series: 'kube_pod_status_phase{namespace="db-y", pod="app-0", uid="u-db-y-app-0", phase="Running", instance="ksm-0"}'
         values: '1x200'
       - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="true", instance="ksm-1"}'
-        values: '1x79 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0'
+        values: '_x127 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0'
       - series: 'kube_pod_info{namespace="db-y", pod="app-0", uid="u-db-y-app-0", node="node-2", instance="ksm-1"}'
-        values: '1x200'
+        values: '_x127 1x72'
       - series: 'kube_pod_status_phase{namespace="db-y", pod="app-0", uid="u-db-y-app-0", phase="Running", instance="ksm-1"}'
-        values: '1x200'
+        values: '_x127 1x72'
       - series: 'kube_node_status_condition{node="node-3", condition="Ready", status="true", instance="ksm-0"}'
         values: '1x79 stale _x119'
       - series: 'kube_pod_info{namespace="db-z", pod="app-0", uid="u-db-z-app-0", node="node-3", instance="ksm-0"}'
@@ -858,11 +867,23 @@ tests:
         values: '_x83 1x116'
       - series: 'kube_pod_status_phase{namespace="db-z", pod="app-0", uid="u-db-z-app-0", phase="Running", instance="ksm-1"}'
         values: '_x83 1x116'
+      - series: 'kube_node_status_condition{node="node-4", condition="Ready", status="true", instance="ksm-0"}'
+        values: '1x79 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 stale _x99'
+      - series: 'kube_pod_info{namespace="db-w", pod="app-0", uid="u-db-w-app-0", node="node-4", instance="ksm-0"}'
+        values: '1x99 stale _x99'
+      - series: 'kube_pod_status_phase{namespace="db-w", pod="app-0", uid="u-db-w-app-0", phase="Running", instance="ksm-0"}'
+        values: '1x99 stale _x99'
+      - series: 'kube_node_status_condition{node="node-4", condition="Ready", status="true", instance="ksm-1"}'
+        values: '_x103 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0'
+      - series: 'kube_pod_info{namespace="db-w", pod="app-0", uid="u-db-w-app-0", node="node-4", instance="ksm-1"}'
+        values: '_x103 1x96'
+      - series: 'kube_pod_status_phase{namespace="db-w", pod="app-0", uid="u-db-w-app-0", phase="Running", instance="ksm-1"}'
+        values: '_x103 1x96'
     alert_rule_test:
       - eval_time: 30m
         alertname: NodeReadinessFlapping
         exp_alerts: []
-      - eval_time: 42m
+      - eval_time: 40m
         alertname: NodeReadinessFlapping
         exp_alerts:
           - exp_labels:
@@ -880,7 +901,107 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
+      - eval_time: 42m30s
+        alertname: NodeReadinessFlapping
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-w
+              node: node-4
+            exp_annotations:
+              summary: "Kubernetes node node-4 readiness is flapping — affects db-w"
+              summary_zh: "Kubernetes 節點 node-4 的就緒狀態反覆變動 — 影響 db-w"
+              platform_summary: "[] db-w: node node-4 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[] db-w: 節點 node-4 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-y
+              node: node-2
+            exp_annotations:
+              summary: "Kubernetes node node-2 readiness is flapping — affects db-y"
+              summary_zh: "Kubernetes 節點 node-2 的就緒狀態反覆變動 — 影響 db-y"
+              platform_summary: "[] db-y: node node-2 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[] db-y: 節點 node-2 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
     promql_expr_test:
       - expr: count_over_time(ALERTS{alertstate="firing", alertname="NodeReadinessFlapping", node=~"node-[13]"}[50m])
+        eval_time: 50m
+        exp_samples: []
+
+  # ── NodeReadinessFlapping counts only the Ready=true series. kube-state-metrics
+  #    exports every condition as three series (status true / false / unknown),
+  #    exactly one of them 1:
+  #      node-1 (db-x)  Ready stays true; MemoryPressure flips 30s/30s (its true
+  #                     and false series each change 9 times per 15m)
+  #      node-2 (db-y)  NotReady from T+0 on (Ready=true goes 1 -> 0 once), and
+  #                     the control plane alternates between NotReady and
+  #                     Unknown every 30s: Ready/false and Ready/unknown flip,
+  #                     Ready/true does not.
+  #    Neither is readiness flapping: no ALERTS sample for the alert, pending or
+  #    firing, over the whole test. (node-2 is NodeNotReady's — firing at T+5m.) ──
+  - name: flapping-reads-only-ready-true
+    interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '1x200'
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="false"}'
+        values: '0x200'
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="unknown"}'
+        values: '0x200'
+      - series: 'kube_node_status_condition{node="node-1", condition="MemoryPressure", status="true"}'
+        values: '0x79 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1'
+      - series: 'kube_node_status_condition{node="node-1", condition="MemoryPressure", status="false"}'
+        values: '1x79 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0'
+      - series: 'kube_node_status_condition{node="node-1", condition="MemoryPressure", status="unknown"}'
+        values: '0x200'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-0", uid="u-db-x-app-0", node="node-1"}'
+        values: '1x200'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-0", uid="u-db-x-app-0", phase="Running"}'
+        values: '1x200'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="true"}'
+        values: '1x79 0x120'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="false"}'
+        values: '0x79 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="unknown"}'
+        values: '0x81 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-0", uid="u-db-y-app-0", node="node-2"}'
+        values: '1x200'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-0", uid="u-db-y-app-0", phase="Running"}'
+        values: '1x200'
+    alert_rule_test:
+      - eval_time: 42m
+        alertname: NodeReadinessFlapping
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-y
+              node: node-2
+            exp_annotations:
+              summary: "Kubernetes node node-2 NotReady — affects db-y"
+              summary_zh: "Kubernetes 節點 node-2 NotReady — 影響 db-y"
+              platform_summary: "[] db-y: node node-2 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-y: 節點 node-2 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+    promql_expr_test:
+      - expr: count_over_time(ALERTS{alertname="NodeReadinessFlapping"}[50m])
         eval_time: 50m
         exp_samples: []
