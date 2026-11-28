@@ -13,7 +13,7 @@ lang: en
 >
 > **First time migrating?** Start with the [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md); multi-system simultaneous swaps (Prom→VM + rules + AM) follow the [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.en.md).
 >
-> **⚠️ Migration Safety Guarantee:** The flow is **incremental and rollback-friendly**. Migrated rules written by `da-tools migrate` carry `component: migrated` and, until cutover, go only to a shadow receiver in Alertmanager that notifies no one; Projected Volume's `optional: true` lets you unmount any rule pack at any time without affecting Prometheus.
+> **⚠️ Migration Safety Guarantee:** The flow is **incremental and rollback-friendly**. Migrated alerts written by `da-tools migrate` carry `da_migrated: "true"` and, until cutover, go only to a shadow receiver in Alertmanager that notifies no one; Projected Volume's `optional: true` lets you unmount any rule pack at any time without affecting Prometheus.
 >
 > **Alerts wired to automation (webhooks)?** Re-sends, replays, and dual-running during migration are double-execution risks for the **action layer** — read [Beyond Actionable §4–§5](alerting-best-practices.en.md) (idempotency gates and irreversible-action defenses) first.
 >
@@ -132,12 +132,12 @@ python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner
 ```
 
 - **Kept as written, tenant isolation injected**: the expr semantics, `for`, labels, annotations and alertname do not change; a tenant matcher is injected into every selector on the parse tree (`tenant="db-a"`; for kube-state-metrics series of a namespaced object and cAdvisor's / the kubelet's infrastructure series, `namespace="db-a", tenant=""`). Cluster-scoped objects (`kube_node_*`), series every scrape target yields (`up`) and Prometheus' / Alertmanager's own series have no injection that selects one tenant: those are platform-level rules, listed one by one, exit 2, nothing written
-- **Marking and governance**: every alert gets the `tenant` and `component: migrated` labels and the `owner` and `expiry` annotations, plus `MigratedRulesExpiring`, which fires from 14 days before the expiry; before writing, the tool runs the custom rule lint on its own output and writes nothing on an ERROR
+- **Marking and governance**: every alert gets the `tenant` and `da_migrated: "true"` labels and the `owner` and `expiry` annotations (the series' own `component` is kept; ⚠️ Breaking, it used to be `component: migrated`, [#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)), plus `MigratedRulesExpiring`, which fires from 14 days before the expiry (it carries no `da_migrated`, so it routes as the tenant's other alerts and arrives in the shadow period too); before writing, the tool runs the custom rule lint on its own output and writes nothing on an ERROR
 - **Golden standard**: an alert that reads a single metric for which `metric-dictionary.yaml` has a golden rule is not migrated; the report points it at the platform Rule Pack
 - **Multi-cluster**: a `by(...)` / `on(...)` in the original expression that names an identity label without `da_cluster` is only flagged in the report, never rewritten
 - **Output**: `.migration/migrated/<tenant>/rules.yml` (the rule file), `.migration/mapping/<tenant>.yaml` (each rule's selectors before and after injection), `migration-report-<tenant>.txt`
 
-⛔ The rule file is loaded by **the Prometheus that scrapes the raw metrics** (a single Prometheus, or the edge in a federation setup), not mounted in the platform Rule Packs' projected volume. Alertmanager sends `component="migrated"` alerts to a name-only shadow receiver until the tenant sets `_routing_migrated: active` ([`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)); after the shadow comparison a human decides whether to promote them to platform rules (the three-piece set of §8) or recipes.
+⛔ The rule file is loaded by **the Prometheus that scrapes the raw metrics** (a single Prometheus, or the edge in a federation setup), not mounted in the platform Rule Packs' projected volume. Alertmanager sends `da_migrated="true"` alerts to a name-only shadow receiver until the tenant sets `_routing_migrated: active` ([`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)); the other platform routes and the source of every inhibit rule exclude it, so a migrated alert is not taken by a platform route and mutes no alert; after the shadow comparison a human decides whether to promote them to platform rules (the three-piece set of §8) or recipes.
 
 Engine details (the injection table, recording rules migrated along, refusals): [`migration-engine.en.md`](migration-engine.en.md). CLI flags and exit codes: [`cli-reference.md#migrate`](cli-reference.md#migrate).
 
@@ -318,7 +318,7 @@ Supported DB types (with a Rule Pack): only add the default in `_defaults.yaml` 
 
 **Q: Can the old and new alerts coexist during the migration window?**
 
-Yes. `migrate` keeps the alertname, so old and new alerts share it and are told apart by label: migrated alerts carry `component: migrated` and go to a name-only shadow receiver until the tenant sets `_routing_migrated: active`, so nothing is notified twice; the recording rules they read are renamed `migrated:<tenant>:<original name>` and never read the old rules' series. Recommended: deploy the migrated rules first, observe, confirm behavioral equivalence, then remove the old rules.
+Yes. `migrate` keeps the alertname, so old and new alerts share it and are told apart by label: migrated alerts carry `da_migrated: "true"` and go to a name-only shadow receiver until the tenant sets `_routing_migrated: active`, so nothing is notified twice; the recording rules they read are renamed `migrated:<tenant>:<original name>` and never read the old rules' series. Recommended: deploy the migrated rules first, observe, confirm behavioral equivalence, then remove the old rules.
 
 **Q: Can dimension keys be set under defaults?**
 

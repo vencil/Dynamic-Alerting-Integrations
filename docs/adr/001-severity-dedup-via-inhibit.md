@@ -100,6 +100,7 @@ inhibit_rules:
   - metric_group=~".+"
   - tenant=~".+"
   - da_cluster=~".+"
+  - da_migrated=""
   target_matchers:
   - severity="warning"
   - metric_group=~".+"
@@ -115,6 +116,7 @@ inhibit_rules:
   - metric_group=~".+"
   - tenant=~".+"
   - da_cluster=""
+  - da_migrated=""
   target_matchers:
   - severity="warning"
   - metric_group=~".+"

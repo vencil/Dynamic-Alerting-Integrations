@@ -13,7 +13,7 @@ lang: zh
 >
 > **第一次遷移？** 先讀 [漸進式遷移 Playbook](scenarios/incremental-migration-playbook.md)；多系統同步換（Prom→VM + 規則 + AM）走 [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.md)。
 >
-> **⚠️ 遷移安全保證：** 流程**漸進式且可回退**。`da-tools migrate` 產生的 migrated 規則帶 `component: migrated`，切換前在 Alertmanager 只送到不通知任何人的 shadow receiver；Projected Volume `optional: true` 允許隨時卸載任何規則包不影響 Prometheus 運行。
+> **⚠️ 遷移安全保證：** 流程**漸進式且可回退**。`da-tools migrate` 產生的 migrated 告警帶 `da_migrated: "true"`，切換前在 Alertmanager 只送到不通知任何人的 shadow receiver；Projected Volume `optional: true` 允許隨時卸載任何規則包不影響 Prometheus 運行。
 >
 > **告警接了自動化動作（webhook）？** 遷移期間的重送／重放／雙跑對**動作層**是 double-execution 風險——先讀 [Actionable 之後 §4–§5](alerting-best-practices.md)（冪等閘與不可逆動作防線）。
 >
@@ -132,12 +132,12 @@ python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner
 ```
 
 - **原樣保留、注入租戶隔離**：expr 語意、`for`、labels、annotations、alertname 不變；每個 selector 以語法樹注入租戶 matcher（`tenant="db-a"`；kube-state-metrics 有 namespace 的物件與 cAdvisor／kubelet 的基礎設施指標是 `namespace="db-a", tenant=""`）。叢集層級的物件（`kube_node_*`）、每個抓取目標都有的序列（`up`）、Prometheus／Alertmanager 自己的序列沒有一種注入只選到一個租戶：那是平台層級的規則，逐條列出、結束碼 2、一個檔都不寫
-- **標記與治理**：每條告警加 `tenant`、`component: migrated` label 與 `owner`、`expiry` annotation，另附到期前 14 天起響的 `MigratedRulesExpiring`；寫之前對自己的輸出跑 custom rule lint，有 ERROR 就不寫
+- **標記與治理**：每條告警加 `tenant`、`da_migrated: "true"` label 與 `owner`、`expiry` annotation（序列自己的 `component` 原樣保留；⚠️ Breaking，以前是 `component: migrated`，[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)），另附到期前 14 天起響的 `MigratedRulesExpiring`（不帶 `da_migrated`，照租戶一般的告警路由，影子期也送得到）；寫之前對自己的輸出跑 custom rule lint，有 ERROR 就不寫
 - **黃金標準**：只讀一個指標、而 `metric-dictionary.yaml` 有黃金標準規則的告警不遷移，報告點名改用平台 Rule Pack
 - **多叢集**：原式子點名身分 label 卻沒有 `da_cluster` 的 `by(...)`／`on(...)` 只在報告標出，不改寫
 - **輸出**：`.migration/migrated/<tenant>/rules.yml`（規則檔）、`.migration/mapping/<tenant>.yaml`（每條規則的 selector 注入前後對照）、`migration-report-<tenant>.txt`
 
-⛔ 規則檔由**抓取原始指標的那台 Prometheus** 載入（單一 Prometheus，或 federation 架構下的 edge），不掛進平台 Rule Pack 的 projected volume。Alertmanager 把 `component="migrated"` 的告警送到只有名字的 shadow receiver，直到租戶設 `_routing_migrated: active`（[`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)）；影子比對之後，再由人決定提升成平台規則（§8 的三件套）或 recipe。
+⛔ 規則檔由**抓取原始指標的那台 Prometheus** 載入（單一 Prometheus，或 federation 架構下的 edge），不掛進平台 Rule Pack 的 projected volume。Alertmanager 把 `da_migrated="true"` 的告警送到只有名字的 shadow receiver，直到租戶設 `_routing_migrated: active`（[`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)）；其他平台路由與每條 inhibit rule 的 source 都排除它，migrated 告警不會被平台路由攔走、也不靜音任何告警；影子比對之後，再由人決定提升成平台規則（§8 的三件套）或 recipe。
 
 引擎細節（注入方式對照、recording rule 連帶遷移、拒絕條件）：[`migration-engine.md`](migration-engine.md)。CLI flag 與結束碼：[`cli-reference.md#migrate`](cli-reference.md#migrate)。
 
@@ -318,7 +318,7 @@ Exporter 每 30 秒 reload 一次，K8s ConfigMap propagation 約 1-2 分鐘。�
 
 **Q: 遷移過渡期可以新舊並存嗎？**
 
-可以。`migrate` 保留 alertname，新舊告警同名，以 label 區分：migrated 告警帶 `component: migrated`，在租戶設 `_routing_migrated: active` 之前送到只有名字的 shadow receiver，不會重複通知；它讀的 recording rule 改名為 `migrated:<租戶>:<原名>`，不與舊規則互讀。建議先部署 migrated 規則觀察，確認行為一致後再移除舊 rules。
+可以。`migrate` 保留 alertname，新舊告警同名，以 label 區分：migrated 告警帶 `da_migrated: "true"`，在租戶設 `_routing_migrated: active` 之前送到只有名字的 shadow receiver，不會重複通知；它讀的 recording rule 改名為 `migrated:<租戶>:<原名>`，不與舊規則互讀。建議先部署 migrated 規則觀察，確認行為一致後再移除舊 rules。
 
 **Q: 維度 key 可以設定在 defaults 裡嗎？**
 

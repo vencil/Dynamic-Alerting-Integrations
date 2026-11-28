@@ -67,7 +67,7 @@ Organizations migrating from legacy alerting systems (vendor-specific rule sets 
 Dynamic Alerting provides an end-to-end migration workflow:
 
 1. **Compliance scanning** (`onboard_platform.py`) — Parse the legacy Alertmanager config and rule files, generate routing snippets and a migration plan
-2. **Rule migration** (`migrate_rule.py`) — Migrate old rules verbatim into migrated rules (tenant isolation injected into every selector; the alerts carry a `component: migrated` label)
+2. **Rule migration** (`migrate_rule.py`) — Migrate old rules verbatim into migrated rules (tenant isolation injected into every selector; the alerts carry a `da_migrated: "true"` label)
 3. **Parallel validation** (`validate_migration.py`) — Continuously compare new vs old outputs until auto-detecting convergence
 4. **One-click cutover** (`cutover_tenant.py`) — In order: stop the shadow monitor job, delete the old recording rules, remove the shadow label and the Alertmanager intercept, then confirm the tenant's threshold metrics exist
 5. **Rollback** — The tool has no automatic rollback; if cutover fails, restore by hand per [Shadow Monitoring SOP §7.2](../shadow-monitoring-sop.en.md) (`cutover_tenant.py` prints the same pointer when it fails)
@@ -203,7 +203,8 @@ python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
   --tenant db-a --owner team-db --expiry 2027-03-31 --output-dir migration_output/
 # Output (migration_output/):
 #   - .migration/migrated/db-a/rules.yml (rules kept verbatim, tenant isolation injected; alerts
-#     carry the component: migrated label and owner / expiry annotations, plus MigratedRulesExpiring)
+#     carry the da_migrated: "true" label and owner / expiry annotations, plus
+#     MigratedRulesExpiring, which carries no da_migrated)
 #   - .migration/mapping/db-a.yaml (each rule's selectors before and after injection;
 #     validate_migration support for it comes in #4227)
 #   - migration-report-db-a.txt (migration report)
@@ -232,9 +233,9 @@ kubectl rollout restart deployment alertmanager -n monitoring
 > ⚠️ **The new migrate's output does not feed the automated validation and cutover from 3.1 on yet**: it writes `.migration/mapping/db-a.yaml`, and `validate_migration.py` reads it from [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227) on. Until then 3.1 applies only to the old migrate's `prefix-mapping.yaml`, so the `validation-report.csv` and `cutover-readiness.json` that 3.2 and Phase 4 need are not produced. Before #4227 the new output can only be compared by hand, and **matching alert counts are not convergence**:
 >
 > 1. **Whether each selector selects data**: for every `legacy` / `pinned` pair in the mapping, run `count(<selector>)` against the target Prometheus. A pair where legacy has series and pinned has none is an injection that selects nothing — commonly a recording rule of another rule file whose producer does not write `tenant`.
-> 2. **The alerts' label sets**: during the shadow period, query both expressions below repeatedly (and again with `alertstate="pending"`); both should be empty. Scope both sides to the one tenant first — otherwise `ignoring(tenant)` lets another tenant's alert with the same other labels hide this tenant's difference. The migrated side takes `tenant="db-a"`; fill the legacy side's `<legacy tenant matcher>` with `tenant="db-a"` or `namespace="db-a"`, whichever label that alert's output carries. An alert whose aggregation keeps neither cannot be split by tenant with these expressions; compare it by hand. `MigratedRulesExpiring` is the added expiry alert with no legacy counterpart, so it is excluded; fill `<alert names in the file>` with the migrated file's alertnames.
->    - Firing only on the migrated side: `ALERTS{component="migrated", tenant="db-a", alertstate="firing", alertname!="MigratedRulesExpiring"} unless ignoring(tenant, component) ALERTS{component!="migrated", <legacy tenant matcher>, alertstate="firing"}`
->    - Firing only on the legacy side: `ALERTS{component!="migrated", <legacy tenant matcher>, alertstate="firing", alertname=~"<alert names in the file>"} unless ignoring(tenant, component) ALERTS{component="migrated", tenant="db-a", alertstate="firing"}`
+> 2. **The alerts' label sets**: during the shadow period, query both expressions below repeatedly (and again with `alertstate="pending"`); both should be empty. Scope both sides to the one tenant first — otherwise `ignoring(tenant)` lets another tenant's alert with the same other labels hide this tenant's difference. The migrated side takes `tenant="db-a"`; fill the legacy side's `<legacy tenant matcher>` with `tenant="db-a"` or `namespace="db-a"`, whichever label that alert's output carries. An alert whose aggregation keeps neither cannot be split by tenant with these expressions; compare it by hand. `MigratedRulesExpiring` is the added expiry alert with no legacy counterpart: it carries no `da_migrated`, so the migrated side does not select it, and `<alert names in the file>` leaves it out of the legacy side; fill `<alert names in the file>` with the migrated file's alertnames. Both sides keep the series' own `component`, so `ignoring` leaves out only `tenant` and `da_migrated`.
+>    - Firing only on the migrated side: `ALERTS{da_migrated="true", tenant="db-a", alertstate="firing"} unless ignoring(tenant, da_migrated) ALERTS{da_migrated="", <legacy tenant matcher>, alertstate="firing"}`
+>    - Firing only on the legacy side: `ALERTS{da_migrated="", <legacy tenant matcher>, alertstate="firing", alertname=~"<alert names in the file>"} unless ignoring(tenant, da_migrated) ALERTS{da_migrated="true", tenant="db-a", alertstate="firing"}`
 
 ```bash
 # 3.1 Start parallel validation (only for the old migrate's prefix-mapping.yaml; see the note above)

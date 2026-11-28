@@ -1961,7 +1961,7 @@ da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir federation-sp
 
 **用途**：GitOps 配置管理；自動產生告警路由與通知接收器。
 
-**migrated 告警的影子與切換（`_routing_migrated`，[#4277](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4277)）**：migrate-rule 寫回的 legacy 規則帶 `component="migrated"`。產生器在平台路由的第 5 條（sentinel sink 之後、enforced NOC 路由之前）放一條路由，把它們送到只有名字、不通知任何人的 `migrated-alerts-shadow`：影子期新舊規則並存，同一件事不能 page 兩次；告警仍看得到（Alertmanager UI、ALERTS series），供影子比對。租戶設定 `_routing_migrated: active`（租戶檔或根目錄平台檔的 `tenants:`）時，這條路由以 `tenant!~` 排除該租戶，它的 migrated 告警就與它的其他告警走同一條路（自己的路由、enforced NOC、root）。不寫或 null 是 `shadow`；`shadow`、`active` 以外的值（`yes`、`Active`、布林、mapping）整棵樹拒收，結束碼 1，finding kind `routing_migrated_invalid`。切換只改 conf.d 再重新產生，規則不動，所以告警的 label set 前後相同。
+**migrated 告警的影子與切換（`_routing_migrated`，[#4277](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4277)）**：migrate-rule 寫回的 legacy 告警帶 `da_migrated="true"`（⚠️ Breaking：以前是 `component="migrated"`，[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）。其他每條平台路由（Watchdog、custom 隔離、synthetic probe、sentinel sink）都帶 `da_migrated=""`，所以名叫 `Watchdog`、或序列自帶 `component=custom`／`sentinel`／`synthetic-probe` 的 migrated 告警不會被它們攔走；每條 inhibit rule 的 source 也都帶 `da_migrated=""`，migrated 告警不靜音任何告警（`--strict` 下有 source 沒排除就拒絕、結束碼 1，不帶時 WARN）。產生器在平台路由的第 5 條（sentinel sink 之後、enforced NOC 路由之前）放一條路由，把它們送到只有名字、不通知任何人的 `migrated-alerts-shadow`：影子期新舊規則並存，同一件事不能 page 兩次；告警仍看得到（Alertmanager UI、ALERTS series），供影子比對。租戶設定 `_routing_migrated: active`（租戶檔或根目錄平台檔的 `tenants:`）時，這條路由以 `tenant!~` 排除該租戶，它的 migrated 告警就與它的其他告警走同一條路（自己的路由、enforced NOC、root）。不寫或 null 是 `shadow`；`shadow`、`active` 以外的值（`yes`、`Active`、布林、mapping）整棵樹拒收，結束碼 1，finding kind `routing_migrated_invalid`。切換只改 conf.d 再重新產生，規則不動，所以告警的 label set 前後相同。
 
 **模式（恰好一個，[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)）**
 
@@ -2310,7 +2310,7 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 
 #### migrate
 
-把一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則：每個 selector 注入租戶隔離，加上 `tenant`／`component: migrated` label 與 `owner`／`expiry` annotation，另附一條到期伴隨告警（[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)）。引擎說明見 [migration-engine.md](migration-engine.md)。
+把一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則：每個 selector 注入租戶隔離，加上 `tenant` label（告警另加 `da_migrated: "true"`）與 `owner`／`expiry` annotation，另附一條到期伴隨告警（[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)）。引擎說明見 [migration-engine.md](migration-engine.md)。
 
 ⚠️ **Breaking**：不再轉換成 `custom_` threshold key、租戶 conf.d 檔、根目錄 `_defaults` 片段、平台 recording／alert rule、prefix mapping 與 triage CSV；`--interactive`、`--triage`、`--prefix`、`--no-prefix` 已移除，`--owner`、`--expiry` 改為必填。⚠️ v2.9.0 映像仍是舊的轉換引擎 <!-- image-caveat: v2.9.0 -->
 
@@ -2353,8 +2353,8 @@ expr 語意、`for`、labels、annotations、alertname 原樣保留，只做三�
     | 叢集層級的 kube-state-metrics 物件（例如 `kube_node_*`）、kube-state-metrics 自己的序列（`kube_state_metrics_*`）、Prometheus／Alertmanager 自己的序列、每個抓取目標都有的序列（例如 `up`、`go_*`）、`ALERTS` | 拒絕：平台層級的規則，不逐租戶遷移 |
 
     原式子已有的 `tenant`／`namespace` matcher 不是上表那個等值、或 selector 沒有以等值點名指標名，也拒絕。
-2. **標記**：labels 加 `tenant: <ID>`、`component: migrated`（靜態值，切換前後不變；recording rule 只加 `tenant`）；annotations 加 `owner`、`expiry`（放 label 的話，續期改 expiry 會讓 `for:` 重新計時）。原規則已寫了不同值的 `tenant`／`component` label、把 `owner`／`expiry` 寫成 label，或 annotation 與旗標不同，拒絕。運算式明寫保留 `component` 的告警（`component` matcher、`by(component)`、`on(component)`／`group_left(component)`，或寫入它的 `label_replace`／`label_join`／`count_values`）也拒絕：`component: migrated` 會蓋掉它；序列從抓取帶來的 `component` 從運算式看不出來，報告提醒（多條只差 `component` 的序列會變成同一組 label，Prometheus 不評估該告警）。
-3. **到期伴隨告警**：group `migrated-expiry` 裡的 `MigratedRulesExpiring`，`vector(time()) > <expiry 前 14 天的 Unix 秒數>`，不讀任何指標。來源檔已有同名的 alert 或 group，拒絕。
+2. **標記**：labels 加 `tenant: <ID>`，告警再加 `da_migrated: "true"`（靜態值，切換前後不變；recording rule 只加 `tenant`）；annotations 加 `owner`、`expiry`（放 label 的話，續期改 expiry 會讓 `for:` 重新計時）。序列自己的 `component` 原樣保留。原規則已寫了不同值的 `tenant`／`da_migrated` label、把 `owner`／`expiry` 寫成 label，或 annotation 與旗標不同，拒絕。運算式明寫保留 `da_migrated` 的告警（`da_migrated` matcher、`by(da_migrated)`、`on(da_migrated)`／`group_left(da_migrated)`，或寫入它的 `label_replace`／`label_join`／`count_values`）也拒絕。⚠️ Breaking（[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）：以前寫的是 `component: migrated`，會蓋掉序列的 `component`；寫了或保留 `component` 的規則以前拒絕，現在照遷移。已產出的 migrated 規則檔要用新版重跑。
+3. **到期伴隨告警**：group `migrated-expiry` 裡的 `MigratedRulesExpiring`，`vector(time()) > <expiry 前 14 天的 Unix 秒數>`，不讀任何指標。它不帶 `da_migrated`，照租戶一般的告警路由，影子期也送得到（[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）。來源檔已有同名的 alert 或 group，拒絕。
 
 被遷移的告警讀到的同檔 recording rule（遞移地）一起遷移，並改名為 `migrated:<租戶>:<原名>`（租戶的 `-` 寫成 `_`，例如 `migrated:db_a:job:redis_queue_length:max`），讀它的 migrated 規則一併改寫：migrated 規則檔與 legacy 規則載入同一台 Prometheus，同名的話 legacy 告警會讀到 migrated record 的序列。讀到檔裡沒定義的 record，拒絕；改名後的名字已是檔裡另一條 record 的，拒絕；migrated record 帶 `tenant`，所以向量對向量的運算（沒有 `on(…)` 排除 tenant）一邊讀它、另一邊不帶 tenant（例如 `job:x:sum / sum(y)`）時兩邊配不上，拒絕並點名那個運算（兩邊都是 migrated record、或 `on()` 不含 tenant 則照常遷移）；沒被讀到的 record 不遷移，只在報告列出。只讀一個指標（每個 selector 都讀它）、而該指標在 `metric-dictionary.yaml` 有黃金標準規則的告警，不產生 migrated 規則，只在報告的「改用黃金標準」點名。原式子點名 `tenant`／`instance`／`pod`／`namespace`／`node` 卻沒有 `da_cluster` 的 `by(...)`／`on(...)`（或點名 `da_cluster` 的 `without(...)`／`ignoring(...)`），只在報告標出「在持有多個叢集資料的 Prometheus 上」會配對或合併不同叢集的序列，請人確認，不改寫。
 
@@ -2368,7 +2368,7 @@ expr 語意、`for`、labels、annotations、alertname 原樣保留，只做三�
 
 YAML 寫在點開頭的 `.migration/`：conf.d 的每個讀取端都整棵略過它（[#3997](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3997)），`-o` 落在一棵 conf.d 裡也不會被讀成設定檔。三個檔先確認都寫得進去才寫第一個。沒有要遷移的規則（每條告警都改用黃金標準，或檔裡沒有告警）時只印報告、不寫檔；`-o` 裡還留著該租戶先前那次的規則檔或對照時，另印一行 `[WARN]` 點名它們（它們不是這份來源的遷移結果，請移除），結束碼仍是 `0`。
 
-**切換**：Alertmanager 裡帶 `component="migrated"` 的告警送到只有名字的 shadow receiver，直到該租戶設定 `_routing_migrated: active`（見 [generate-routes](#generate-routes)，[#4277](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4277)）。
+**切換**：Alertmanager 裡帶 `da_migrated="true"` 的告警送到只有名字的 shadow receiver，直到該租戶設定 `_routing_migrated: active`（見 [generate-routes](#generate-routes)，[#4277](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4277)）。
 
 **範例**
 
@@ -2391,7 +2391,7 @@ da-tools migrate ./legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-
   labels:
     severity: critical
     tenant: db-a
-    component: migrated
+    da_migrated: 'true'
   annotations:
     summary: Redis queue {{ $labels.queue }} is too long
     owner: team-db

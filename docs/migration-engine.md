@@ -30,7 +30,7 @@ flowchart LR
     style H fill:#ffcdd2,stroke:#c62828
 ```
 
-`da-tools migrate`（`migrate_rule.py`，[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)）不轉換規則：每條規則的 expr 語意、`for`、labels、annotations、alertname 原樣保留，只做三件事——每個 selector 注入租戶隔離；labels 加 `tenant: <租戶>`、`component: migrated`，annotations 加 `owner`、`expiry`；附一條到期伴隨告警 `MigratedRulesExpiring`（`vector(time()) > <expiry 前 14 天>`，不讀任何指標）。
+`da-tools migrate`（`migrate_rule.py`，[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)）不轉換規則：每條規則的 expr 語意、`for`、labels、annotations、alertname 原樣保留，只做三件事——每個 selector 注入租戶隔離；labels 加 `tenant: <租戶>`、告警再加 `da_migrated: "true"`（序列自己的 `component` 原樣保留），annotations 加 `owner`、`expiry`；附一條到期伴隨告警 `MigratedRulesExpiring`（`vector(time()) > <expiry 前 14 天>`，不讀任何指標；不帶 `da_migrated`，照租戶一般的告警路由，影子期也送得到）。⚠️ Breaking（[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）：以前寫的是 `component: migrated`。
 
 運算式只由 Prometheus 自己的 parser 讀（`da-read`，與部署的 Prometheus 同一份程式碼），不掃文字。注入也在 Prometheus 的語法樹上做（`da-read promql-pin`），與 prom-label-proxy、Prometheus Operator `enforcedNamespaceLabel` 同一做法；規則檔裡的 expr 是 Prometheus 印出的注入後運算式。
 
@@ -54,19 +54,19 @@ flowchart LR
 
 ## 拒絕與自我 lint
 
-任何一條規則被拒——選不出一個租戶的 selector、衝突的 matcher、讀到檔外的 record、改名後撞名的 record、因 migrated record 帶 `tenant` 而配對方式會改變的向量運算、原規則已寫了不同值的 `tenant`／`component` label、把 `owner`／`expiry` 寫成 label、與旗標不同的 `owner`／`expiry` annotation、含 `{{` 的 `--owner`（annotation 是模板）、運算式明寫保留 `component` 的告警（matcher、`by`／`on`／`group_left`，或 `label_replace`／`label_join`／`count_values` 寫入它：`component: migrated` 會蓋掉它）、與到期伴隨告警同名的 alert 或 group——就逐條列出原因、結束碼 2、一個檔都不寫。沒有降級路徑：退回原式等於出貨一條沒有租戶限定的規則。
+任何一條規則被拒——選不出一個租戶的 selector、衝突的 matcher、讀到檔外的 record、改名後撞名的 record、因 migrated record 帶 `tenant` 而配對方式會改變的向量運算、原規則已寫了不同值的 `tenant`／`da_migrated` label、把 `owner`／`expiry` 寫成 label、與旗標不同的 `owner`／`expiry` annotation、含 `{{` 的 `--owner`（annotation 是模板）、運算式明寫保留 `da_migrated` 的告警（matcher、`by`／`on`／`group_left`，或 `label_replace`／`label_join`／`count_values` 寫入它）、與到期伴隨告警同名的 alert 或 group——就逐條列出原因、結束碼 2、一個檔都不寫。沒有降級路徑：退回原式等於出貨一條沒有租戶限定的規則。
 
-寫之前，工具對自己的輸出跑 `lint_custom_rules`（租戶隔離、owner／expiry 治理；`--policy` 可換政策），有 ERROR 一樣結束碼 2、不寫；WARN 列在報告。序列從抓取帶來的 `component` 從運算式看不出來，報告提醒：多條只差 `component` 的序列會變成同一組 label，Prometheus 不評估該告警。
+寫之前，工具對自己的輸出跑 `lint_custom_rules`（租戶隔離、owner／expiry 治理；`--policy` 可換政策），有 ERROR 一樣結束碼 2、不寫；WARN 列在報告。`da_migrated` 只有 migrated 告警能寫：其他租戶規則寫它，lint 回報 ERROR。
 
 ## 輸出與載入點
 
 `-o` 底下（YAML 都在點開頭的 `.migration/`，conf.d 的讀取端整棵略過）：
 
 - `.migration/migrated/<租戶>/rules.yml` — migrated 規則檔。⛔ 由客戶**抓取原始指標的那台 Prometheus** 載入：單一 Prometheus，或 federation 架構下的 edge（只帶 namespace 的 kube-state-metrics 序列不會被拉到中央，載入中央的話這些規則永遠不響）。它不掛進參考 stack 的 projected volume，與 [ADR-005](adr/005-projected-volume-for-rule-packs.md) 的 custom alerts 相同。
-- `.migration/mapping/<租戶>.yaml` — 每條規則的 group、alert 或 record，與 selector 注入前（`legacy`）後（`pinned`）的 instant selector；record 另有 `migrated_record`（改名後的名字），到期伴隨告警帶 `added: true`。⚠️ `validate-migration` 目前還不讀這份檔（它讀的是舊的 `prefix-mapping.yaml`），接上它是 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227) 的範圍；在那之前影子比對要另行比較 legacy 與 `component="migrated"` 的告警。
+- `.migration/mapping/<租戶>.yaml` — 每條規則的 group、alert 或 record，與 selector 注入前（`legacy`）後（`pinned`）的 instant selector；record 另有 `migrated_record`（改名後的名字），到期伴隨告警帶 `added: true`。⚠️ `validate-migration` 目前還不讀這份檔（它讀的是舊的 `prefix-mapping.yaml`），接上它是 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227) 的範圍；在那之前影子比對要另行比較 legacy 與 `da_migrated="true"` 的告警。
 - `migration-report-<租戶>.txt` — 遷移報告（每個租戶一份）。沒有要遷移的規則時只印報告、不寫檔；`-o` 裡還留著該租戶先前的規則檔或對照時印 `[WARN]` 點名它們。
 
-**切換**：`component="migrated"` 的告警在 Alertmanager 先送到只有名字的 shadow receiver，租戶設 `_routing_migrated: active` 才與它的其他告警走同一條路（[`generate-routes`](cli-reference.md#generate-routes)）。影子比對之後，提升成平台規則或 recipe 由人決定。
+**切換**：`da_migrated="true"` 的告警在 Alertmanager 先送到只有名字的 shadow receiver，租戶設 `_routing_migrated: active` 才與它的其他告警走同一條路（[`generate-routes`](cli-reference.md#generate-routes)）。其他平台路由（Watchdog、custom 隔離、synthetic probe、sentinel sink）與每條 inhibit rule 的 source 都排除 `da_migrated`：migrated 告警不會被它們攔走，也不靜音任何告警；代價是切換後帶 `component=custom` 的 migrated 告警不走 custom 隔離，而 migrated critical 不 dedup 平台的 warning（反方向保留）（[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）。影子比對之後，提升成平台規則或 recipe 由人決定。
 
 完整 flag 與結束碼：[`cli-reference.md#migrate`](cli-reference.md#migrate)。
 

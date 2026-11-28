@@ -11,7 +11,7 @@ lang: en
 >
 > **Audience**: SRE / Platform Engineer / DevOps
 > **Prerequisites**: Completed `da-tools migrate` conversion with new and old Recording Rules running simultaneously in Prometheus
-> **Note**: the current `da-tools migrate` migrates rules verbatim (alerts carry `component: migrated`) and its migration mapping is now `.migration/mapping/<tenant>.yaml`; this SOP's `prefix-mapping.yaml` and `migration_status: shadow` belong to the earlier migrate, and `validate` support for the new mapping comes in the follow-up [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)
+> **Note**: the current `da-tools migrate` migrates rules verbatim (alerts carry `da_migrated: "true"`) and its migration mapping is now `.migration/mapping/<tenant>.yaml`; this SOP's `prefix-mapping.yaml` and `migration_status: shadow` belong to the earlier migrate, and `validate` support for the new mapping comes in the follow-up [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)
 > **Tools**: `da-tools validate` (`--watch` continuous mode / single-run mode), `da-tools diagnose` (health checks)
 
 ---
