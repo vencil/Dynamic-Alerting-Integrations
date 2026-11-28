@@ -39,7 +39,7 @@ Responsible for alert rule configuration, Rule Pack management, custom rule revi
 | [Quick Start](getting-started/for-domain-experts.en.md) | 30-minute onboarding for Domain Experts: Rule Pack concepts, custom rule governance |
 | [Rule Packs](rule-packs/README.md) | Rule Pack directory + optional uninstall instructions |
 | [Custom Rule Governance](custom-rule-governance.en.md) | Three-tier governance model, linting, schema validation, best practices |
-| [Migration Engine](migration-engine.en.md) | AST migration engine architecture, cross-dialect rule transformation, triage logic |
+| [Migration Engine](migration-engine.en.md) | AST migration engine architecture: rules kept verbatim, tenant isolation injected on the parse tree, refusals and load point |
 
 ### 👤 Tenant Team — SRE, DBA, On-call
 
@@ -85,7 +85,7 @@ In-depth discussions on specific technical domains.
 | System Design | [architecture-and-design.en.md](architecture-and-design.en.md) | Severity Dedup, Sentinel Alert, alert routing, per-rule overrides, platform enforced routing, regex dimensions, scheduled thresholds, dynamic runbook injection, recurring maintenance |
 | Performance Analysis | [benchmarks.en.md](benchmarks.en.md) | idle, under-load, routing, alertmanager, reload benchmarks; detailed testing methodology |
 | Governance & Audit | [governance-security.en.md](governance-security.en.md) | RBAC, audit logs, cardinality guards, schema validation, secret management, security best practices |
-| Migration Engine | [migration-engine.en.md](migration-engine.en.md) | AST architecture, dialect support, triage, dictionary mapping, prefix management, transformation rules |
+| Migration Engine | [migration-engine.en.md](migration-engine.en.md) | AST architecture, injection table, recording rules migrated along, dictionary golden standard, self-lint, outputs and load point |
 | Migration Guide | [migration-guide.en.md](migration-guide.en.md) | Step-by-step migration instructions, checklists, prerequisites, validation steps |
 | Troubleshooting | [troubleshooting.en.md](troubleshooting.en.md) | Common issues, debug commands, log analysis, edge case handling |
 | Shadow Monitoring | [shadow-monitoring-sop.md](shadow-monitoring-sop.md) | Shadow mode operations, value comparison, auto-convergence detection, SLA verification |

@@ -16,10 +16,11 @@ const docUrl = (relative) => `${REPO_BASE}/${relative}`;
  *
  * Two onboarding entry points per planning §C-3:
  *   - Import Journey (existing assets): Migration Toolkit → C-8 parser →
- *     da-tools migrate (migrate-rule) → place into conf.d via the
- *     customer's own PR → C-12 dangling-defaults guard. (C-9 Profile
- *     Builder and C-10 Batch PR were retired in issue 4228, decision
- *     in issue 4211; bulk recipe import is issue 4226.)
+ *     da-tools migrate (migrate-rule: rules kept verbatim, tenant
+ *     isolation injected, issue 4226) → rule file to the customer's
+ *     Prometheus + cutover key in conf.d via the customer's own PR →
+ *     C-12 dangling-defaults guard. (C-9 Profile Builder and C-10 Batch
+ *     PR were retired in issue 4228, decision in issue 4211.)
  *   - Wizard Journey (greenfield): CI/CD Setup Wizard → Deployment Wizard
  *     → [alert-builder, routing-trace TBD v2.8.x]
  *
@@ -53,25 +54,25 @@ const IMPORT_STEPS = [
   },
   {
     id: 'migrate',
-    title: () => t('3. 轉換成 conf.d 租戶檔', '3. Convert into conf.d tenant files'),
+    title: () => t('3. 原樣遷移成 migrated 規則', '3. Migrate into migrated rules'),
     desc: () => t(
-      'da-tools migrate（migrate-rule）逐租戶把既有規則轉成 conf.d 租戶檔（threshold 寫在 tenants.<id> 底下）與平台規則，並列出需人工審閱的規則。輸出寫在 .migration/ 底下，不會被服務中的讀取端讀到。產出 _custom_alerts recipe 的批次導入見 issue 4226。',
-      'da-tools migrate (migrate-rule) converts existing rules per tenant into a conf.d tenant file (thresholds under tenants.<id>) plus platform rules, and lists the rules that need human review. Output lands under .migration/, which no serving reader reads. Bulk import producing _custom_alerts recipes is tracked in issue 4226.'
+      'da-tools migrate（migrate-rule）逐租戶把既有規則原樣保留，只在每個 selector 注入租戶隔離，加 tenant／component=migrated label 與 owner／expiry annotation，另附到期伴隨告警。選不出一個租戶的平台層級規則（kube_node_*、up）整批拒絕、結束碼 2。輸出寫在 .migration/ 底下：migrated/<id>/rules.yml、mapping/<id>.yaml 與報告。',
+      'da-tools migrate (migrate-rule) keeps one tenant\'s existing rules verbatim, only injecting tenant isolation into every selector and adding the tenant / component=migrated labels, the owner / expiry annotations and an expiry companion alert. Platform-level rules that select no single tenant (kube_node_*, up) are refused, exit code 2. Output lands under .migration/: migrated/<id>/rules.yml, mapping/<id>.yaml and a report.'
     ),
     cta: () => t('Migration Playbook', 'Migration Playbook'),
     href: docUrl('docs/scenarios/incremental-migration-playbook.md'),
-    cmd: 'da-tools migrate legacy-rules.yml \\\n  --tenant tenant-a \\\n  -o ./migration_output/',
+    cmd: 'da-tools migrate legacy-rules.yml \\\n  --tenant tenant-a --owner team-a --expiry 2027-03-31 \\\n  -o ./migration_output/',
   },
   {
     id: 'place',
-    title: () => t('4. 放進客戶 repo 的 conf.d 樹', '4. Place into the customer repo conf.d tree'),
+    title: () => t('4. 交給客戶的 Prometheus 載入、conf.d 管切換', '4. Load in the customer Prometheus, cut over in conf.d'),
     desc: () => t(
-      '把 .migration/conf.d/ 底下的租戶檔放進客戶 repo 的 conf.d 目錄，並把同目錄 _defaults.yaml 的 defaults: 區塊合併進 conf.d 根的 _defaults.yaml（合併，不要整份覆蓋；沒宣告的 key，exporter 不會發射閾值），再走客戶自己的 Git PR 流程。目錄即 default 的規則見 ADR-018。',
-      'Move the tenant files under .migration/conf.d/ into the customer repo conf.d directory, merge the defaults: block of the _defaults.yaml beside them into the _defaults.yaml at the conf.d root (merge, do not overwrite; the exporter emits no threshold for a key that is not declared there), then open a PR through the customer Git flow. The directory-as-default rule is ADR-018.'
+      '把 .migration/migrated/<id>/rules.yml 放進客戶 repo，交給抓取原始指標的那台 Prometheus 載入（單一 Prometheus，或 federation 架構下的 edge），走客戶自己的 Git PR 流程。component=migrated 的告警在 Alertmanager 先走 shadow receiver；影子比對沒問題後，在 conf.d 的租戶檔設 _routing_migrated: active 切換。租戶檔在 conf.d 樹的位置規則見 ADR-018。',
+      'Put .migration/migrated/<id>/rules.yml in the customer repo for the Prometheus that scrapes the raw metrics to load (a single Prometheus, or the edge in a federation setup), through the customer Git PR flow. component=migrated alerts go to a shadow receiver in Alertmanager first; once the shadow comparison is clean, set _routing_migrated: active in the tenant file in conf.d to cut over. Where tenant files sit in the conf.d tree is ADR-018.'
     ),
     cta: () => t('ADR-018', 'ADR-018'),
     href: docUrl('docs/adr/018-profile-as-directory-default.md'),
-    cmd: 'cp migration_output/.migration/conf.d/tenant-a.yaml \\\n  customer-repo/conf.d/db/tenant-a.yaml\n# merge the defaults: block of .migration/conf.d/_defaults.yaml\n# into customer-repo/conf.d/_defaults.yaml (merge, do not overwrite)\n# then open a PR in the customer repo',
+    cmd: 'cp migration_output/.migration/migrated/tenant-a/rules.yml \\\n  customer-repo/prometheus/rules/tenant-a.yml\n# the scraping Prometheus (or edge) lists it in rule_files\n# cutover later: _routing_migrated: active in the tenant file\n# then open a PR in the customer repo',
   },
   {
     id: 'guard',
@@ -242,7 +243,7 @@ export default function MasterOnboarding() {
             )}
             bullets={[
               t('安裝 Migration Toolkit (binary / Docker / air-gapped tar)', 'Install Migration Toolkit (binary / Docker / air-gapped tar)'),
-              t('Parser → Migrate → conf.d PR → Guard 管線（migrate 逐租戶轉換）', 'Parser → Migrate → conf.d PR → Guard pipeline (migrate converts per tenant)'),
+              t('Parser → Migrate → conf.d PR → Guard 管線（migrate 逐租戶原樣遷移）', 'Parser → Migrate → conf.d PR → Guard pipeline (migrate migrates per tenant, verbatim)'),
               t('適合：巨型客戶、有既有資產、conf.d/ 大批次', 'For: large customers with existing assets, big-batch conf.d/'),
             ]}
             ctaLabel={t('開始 Import 路徑', 'Start Import Path')}

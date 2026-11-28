@@ -13,47 +13,62 @@ lang: en
 
 ---
 
-## Architecture: read the parse tree, insert by position
+## Architecture: keep as written, inject on the parse tree
 
 ```mermaid
 flowchart LR
-    A["Original rule file"] --> B["da-read prometheus-rules<br/>(Prometheus' rule loader)"]
-    B --> C["da-read promql-shape<br/>(the whole file read into parse trees at once)"]
-    C --> D["Read off the tree: threshold, metrics,<br/>label matchers, semantic-break functions"]
-    D --> E["rewrite_expr_tenant_label()<br/>inject tenant at each selector's byte offset"]
-    E --> F["Read again: does Prometheus accept it?"]
-    F -->|"✅"| G["Output rewritten PromQL"]
-    F -->|"❌"| H["rc 2, naming the expression"]
+    A["One tenant's legacy rule file"] --> B["da-read prometheus-rules<br/>(Prometheus' rule loader)"]
+    B --> C["da-read promql-shape<br/>(each expression as a parse tree)"]
+    C --> D["Pick the injection per selector<br/>(pin_form)"]
+    D -->|"any selects no single tenant"| H["rc 2, each listed, nothing written"]
+    D --> E["da-read promql-pin<br/>inject matchers on the parse tree"]
+    E --> F["lint_custom_rules<br/>(self-lint)"]
+    F -->|"ERROR"| H
+    F -->|"✅"| G["migrated rule file + mapping + report"]
 
     style G fill:#c8e6c9,stroke:#2e7d32
     style H fill:#ffcdd2,stroke:#c62828
 ```
 
-An expression is read only by Prometheus' own parser (`da-read`, the same code the deployed Prometheus runs), never scanned as text: the rule file goes through the rule loader first, then every alert's expression is read into its parse tree in one run. The threshold is the right side of a root `LHS <comparison> number`; the metrics are the names each selector pins with a `__name__` equality matcher. Multi-line expressions, comments and whitespace between a name and `{` read the same, and words inside label values or string literals are never taken for metrics or functions.
+`da-tools migrate` (`migrate_rule.py`, [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)) does not convert rules: each rule's expr semantics, `for`, labels, annotations and alertname are kept as written. It does three things — injects tenant isolation into every selector; adds the `tenant: <tenant>` and `component: migrated` labels and the `owner` and `expiry` annotations; and appends an expiry companion alert `MigratedRulesExpiring` (`vector(time()) > <expiry − 14 days>`, which reads no metric).
 
-**Why not re-serialize the whole tree?** Inserting `tenant=~".+"` at each selector's position in the original keeps the rest of the expression (layout, comments, parentheses) as written; the result is read again, and an expression Prometheus does not accept ends the run with rc 2, naming it, instead of falling back to the original — that would ship a recording rule with no tenant restriction.
+Expressions are read only by Prometheus' own parser (`da-read`, the same code as the deployed Prometheus), never by scanning text. The injection is done on Prometheus' parse tree too (`da-read promql-pin`), the approach of prom-label-proxy and the Prometheus Operator's `enforcedNamespaceLabel`; each expr in the rule file is the injected expression as Prometheus prints it.
 
-## Core Capabilities
+## Injection
 
-| Capability | Description |
-|------------|-------------|
-| `parse_expr()` | Splits LHS, comparison operator and threshold off the parse tree; a root that is no comparison, or a semantic-break function, makes the rule unparseable |
-| `extract_label_matchers()` | The business-dimension labels each selector pins with `=` (job / instance / namespace and the like excluded) |
-| `rewrite_expr_tenant_label()` | Injects `tenant=~".+"` by position: after `{` where there is one, `{tenant=~".+"}` after the name where there is not, and after `{` for a bare `{__name__="x"}` |
-| `SEMANTIC_BREAK_FUNCS` | Functions that do not migrate (`absent()`, `predict_linear()`, ...); a test holds every name to one the deployed Prometheus knows |
+The metric a selector reads decides (`_lib_metric_sources.pin_form`, the platform's one answer):
 
-An expression Prometheus' parser refuses ends the run with rc 2 when the rule file is read; there is no fallback path.
+| Metric | Injected |
+|--------|----------|
+| A metric whose series carry `tenant` (including customer metrics whose source the platform does not know) | `tenant="<tenant>"` |
+| kube-state-metrics series of a namespaced object (for example `kube_pod_*`), and cAdvisor's and the kubelet's infrastructure series (`container_*`, `kubelet_*`): they name the tenant by `namespace` and carry no `tenant` | `namespace="<tenant>", tenant=""` |
+| kube-state-metrics series of a cluster-scoped object (for example `kube_node_*`), kube-state-metrics' own series (`kube_state_metrics_*`), Prometheus' / Alertmanager's own series, series every scrape target yields (for example `up`, `go_*`), an alert's own series (`ALERTS`) | refused: no injection selects one tenant; this is a platform-level rule |
 
-## Enterprise Migration Workflow
+A `tenant` / `namespace` matcher already in the expression that is not the equality above is refused; so is a selector that names no metric by equality (which series it reads is not known).
 
-The complete migration path integrates the AST engine, Shadow Monitoring, and Triage mode:
+## What Is Migrated
 
-1. **Triage**: `migrate_rule.py --triage` produces a CSV inventory, categorizing each rule's migration strategy (direct / prefix / skip)
-2. **Migration execution**: the AST engine injects the tenant label. The `custom_` prefix goes only on threshold keys and recording rule names, not on source metric names: the source series come from the customer's existing exporters, so renaming them would leave the recording rule empty (issue 1818). The generated recording rule is `<sum|max> by(tenant, da_cluster) (…)`: on a Prometheus holding several clusters' data it is evaluated per cluster (`sum` / `max` no longer merge one tenant's clusters) and alerts carry `da_cluster`; on a single Prometheus whose series have no `da_cluster` the result equals `by(tenant)` ([ADR-006](adr/006-tenant-mapping-topologies.en.md); the v2.9.0 image still generates `by(tenant)` <!-- image-caveat: v2.9.0 -->). This does not cover a rule whose own aggregation already drops `tenant` (`sum(rate(x))`, `sum by(instance) (…)`), which yields no per-tenant value before or after migration. A `by(...)` / `on(...)` the original expression wrote itself goes in as written: one that names `tenant`, `instance`, `pod`, `namespace` or `node` without `da_cluster` is flagged for a human decision in the report, the rule file and the tenant file's notes, because on a multi-cluster Prometheus it pairs or merges same-named series of different clusters (`on(instance)` can fail as many-to-many), and whether to add `da_cluster` depends on whether both sides of the match carry the label, which the tool cannot tell. Because the alerts read these recording rules, `$labels` only carries `tenant` and `da_cluster`, so other labels the original annotations reference are rewritten (`{{ $labels.da_cluster }}` is kept as written): a label the original expression pins to one value with `=` gets that value, and the rest read `$labels.tenant` and are listed in the report
-3. **Shadow Monitoring**: `validate_migration.py` verifies numerical consistency before and after migration (tolerance ≤ 5%); old and new are paired by (tenant, `da_cluster`), and a cluster present on one side only is a `mismatch`
-4. **Go-live**: `scaffold_tenant.py` generates the complete tenant configuration package
+- **Recording rules**: recording rules of the same file that the migrated alerts read (transitively) are migrated too, with a `tenant` label, renamed `migrated:<tenant>:<original name>` (the tenant's `-` written `_`), and every migrated rule reading them is rewritten with the new name — the migrated rule file is loaded on the same Prometheus as the legacy rules, and under the same name legacy alerts would read the migrated record's series, or two rules would write one set of series; reading a record the file does not define is refused (migrate it with the file that defines it); a record no migrated alert reads is not migrated and is listed in the report.
+- **Golden standard**: an alert that reads a single metric for which `metric-dictionary.yaml` has a `golden_rule` is already covered by a platform Rule Pack, so no migrated rule is emitted; the report names it under "改用黃金標準" (use the golden standard). `--no-dictionary` turns the match off.
+- **Multi-cluster**: a `by(...)` / `on(...)` in the original expression that names `tenant`, `instance`, `pod`, `namespace` or `node` without `da_cluster`, or a `without(...)` / `ignoring(...)` that names `da_cluster`, is flagged in the report: on a Prometheus holding several clusters' data it pairs or merges same-named series of different clusters, for a human to confirm. The tool only detects, never rewrites: whether to add `da_cluster` depends on whether both sides of the match carry the label, which the parse tree cannot tell ([ADR-006](adr/006-tenant-mapping-topologies.en.md)).
 
-> **Why 5% tolerance?** PromQL query results before and after migration cannot be perfectly identical due to three inherent sources of variance: (1) **Evaluation timing offset** — old and new rules are evaluated in different cycles, causing sampling differences for time-sensitive functions like `rate()` / `irate()`; (2) **Aggregation path change** — migrating from inline PromQL to recording rule references introduces an additional evaluation cycle of temporal offset; (3) **Floating-point precision** — different expression paths may produce minor differences in trailing decimal places. The 5% threshold is designed to be "tolerant enough to absorb these natural fluctuations, yet strict enough to detect semantic errors" (e.g., missing label filters or incorrect aggregation). If a specific scenario requires tighter or looser tolerance, use the `--tolerance` flag to adjust.
+## Refusals and Self-Lint
+
+If any rule is refused — a selector that selects no single tenant, a conflicting matcher, a record read from outside the file, a record whose new name is already taken, a vector operation whose matching the migrated record's added `tenant` would change, a `tenant` / `component` label already written with another value, `owner` / `expiry` written as labels, an `owner` / `expiry` annotation that differs from the flag, an `--owner` holding `{{` (annotations are templates), an alert whose expression keeps `component` (a matcher, `by` / `on` / `group_left`, or `label_replace` / `label_join` / `count_values` writing it: `component: migrated` would overwrite it), an alert or group named like the expiry companion — every reason is listed, exit 2, and no file is written. There is no fallback: falling back to the original expression would ship a rule with no tenant scope.
+
+Before writing, the tool runs `lint_custom_rules` on its own output (tenant isolation, owner / expiry governance; `--policy` overrides the policy); any ERROR is likewise exit 2 with nothing written; WARNs go in the report. A `component` the series bring from the scrape cannot be seen in the expression; the report warns that series differing only in `component` would collapse into one label set, which Prometheus does not evaluate.
+
+## Outputs and Load Point
+
+Under `-o` (all YAML in the dot-prefixed `.migration/`, which conf.d readers skip whole):
+
+- `.migration/migrated/<tenant>/rules.yml` — the migrated rule file. ⛔ It is loaded by **the customer's Prometheus that scrapes the raw metrics**: a single Prometheus, or the edge in a federation setup (namespace-only kube-state-metrics series are not federated to central, so loaded centrally those rules never fire). It is not mounted in the reference stack's projected volume, the same as [ADR-005](adr/005-projected-volume-for-rule-packs.en.md)'s custom alerts.
+- `.migration/mapping/<tenant>.yaml` — per rule its group, alert or record, and the instant selectors before (`legacy`) and after (`pinned`) injection; a record also carries `migrated_record` (its new name), and the expiry alert carries `added: true`. ⚠️ `validate-migration` does not read it yet (it reads the old `prefix-mapping.yaml`); wiring it in is [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)'s scope, and until then the shadow comparison has to compare the legacy alerts with the `component="migrated"` ones by other means.
+- `migration-report-<tenant>.txt` — the migration report (one per tenant). With no rule to migrate only the report is printed and nothing is written; if `-o` still holds that tenant's rule file or mapping from an earlier run, a `[WARN]` names them.
+
+**Cutover**: `component="migrated"` alerts first go to a name-only shadow receiver in Alertmanager; once the tenant sets `_routing_migrated: active` they follow the tenant's other alerts ([`generate-routes`](cli-reference.en.md#generate-routes)). After the shadow comparison, a human decides on promotion to platform rules or recipes.
+
+Full flags and exit codes: [`cli-reference.en.md#migrate`](cli-reference.en.md#migrate).
 
 ---
 

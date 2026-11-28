@@ -21,7 +21,7 @@ lang: zh
 PromRule corpus → da-parser（分診）→ da-tools migrate（逐租戶）→ da-guard validation → conf.d/
 ```
 
-轉換步驟見 [`migrate`](cli-reference.md#migrate)；產出 `_custom_alerts` recipe 的批次導入見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
+遷移步驟見 [`migrate`](cli-reference.md#migrate)：規則原樣保留、注入租戶隔離，產出的規則檔交給抓取原始指標的那台 Prometheus（或 federation 的 edge）載入；conf.d 這一側只管切換（`_routing_migrated`）。
 
 Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gapped 環境跑、可 自動驗 binary integrity 的客戶可用工具集。
 

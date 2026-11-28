@@ -225,6 +225,63 @@ def tenant_presence(metric: str) -> "str | None":
     return None
 
 
+#: kube-state-metrics families of objects with no namespace (#4226): their
+#: series carry neither ``tenant`` nor ``namespace``, so no pin selects one
+#: tenant's. Upstream's cluster-scoped resources (kube-state-metrics
+#: docs/metrics: Node, PersistentVolume, StorageClass, ClusterRole(Binding),
+#: CertificateSigningRequest, the webhook configurations, IngressClass,
+#: VolumeAttachment). `kube_persistentvolume_` is not a prefix of
+#: `kube_persistentvolumeclaim_` (the claim is namespaced).
+KSM_CLUSTER_SCOPED_PREFIXES = (
+    "kube_node_", "kube_persistentvolume_", "kube_storageclass_",
+    "kube_clusterrole_", "kube_clusterrolebinding_",
+    "kube_certificatesigningrequest_", "kube_mutatingwebhookconfiguration_",
+    "kube_validatingwebhookconfiguration_", "kube_ingressclass_",
+    "kube_volumeattachment_",
+)
+
+#: kube-state-metrics' own series (`kube_state_metrics_list_total`, …): about
+#: the exporter, labelled by resource and result, not by any namespace.
+KSM_SELF_PREFIX = "kube_state_metrics_"
+
+#: The source kube-state-metrics' families resolve to (FAMILY_TABLE).
+_KSM_SOURCE = ("service", ("monitoring", "kube-state-metrics"))
+
+
+def pin_form(metric: str) -> "tuple[str | None, str | None]":
+    """⛔ THE one answer to "how is a selector of the raw *metric* pinned to
+    one tenant" (#4226, migrate-rule): → ``("tenant", None)`` — its series
+    carry ``tenant`` (``tenant_presence`` None); ``("namespace", None)`` —
+    kube-state-metrics' series of a namespaced object, or an infrastructure
+    family's (cAdvisor, the kubelet's volume stats, #4178), which name the
+    tenant by ``namespace`` and carry no ``tenant``; ``(None, why)`` — no pin
+    selects one tenant's series (a cluster-scoped object, Prometheus' or
+    Alertmanager's own, a per-target series whose job decides, an alert's)."""
+    presence = tenant_presence(metric)
+    if presence is None:
+        return "tenant", None
+    if presence == "by-job":
+        return None, ("a series every scrape target yields: whether it carries tenant is "
+                      "its job's business, not this metric's")
+    if presence == "unknown":
+        return None, "an alert's own series: whether it carries tenant is each alert's business"
+    fam = resolve_family(metric)
+    if fam is not None and fam[1] == "name-filtered":
+        # cAdvisor's and the kubelet's volume stats: the tenant is the
+        # namespace, on every install (#4178).
+        return "namespace", None
+    if fam is not None and (fam[1], fam[2]) == _KSM_SOURCE:
+        if metric.startswith(KSM_SELF_PREFIX):
+            return None, ("kube-state-metrics' own series (its telemetry): they carry no "
+                          "namespace and no tenant")
+        if metric.startswith(KSM_CLUSTER_SCOPED_PREFIXES):
+            return None, ("kube-state-metrics' series of a cluster-scoped object: they carry "
+                          "no namespace and no tenant")
+        return "namespace", None
+    return None, ("the platform's own series (its job writes no tenant and names no "
+                  "tenant's namespace)")
+
+
 def federated_infra_families() -> "tuple[str, ...]":
     """The name-filtered families (cAdvisor's `container_`, the kubelet's
     `kubelet_`): infrastructure series a tenant's recipe may read, which carry

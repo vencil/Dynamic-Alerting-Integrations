@@ -188,7 +188,8 @@ def _instance_mapping(cell: pathlib.Path) -> None:
 
 def _alert_rules(cell: pathlib.Path) -> None:
     """One plain threshold alert, outside the tree: the input the two
-    rule-reading writers turn into conf.d files."""
+    rule-reading writers turn into conf.d files (onboard_platform) and a
+    migrated rule file (migrate_rule)."""
     (cell / "rules.yaml").write_text(
         "groups:\n- name: g\n  rules:\n  - alert: HighConnections\n"
         "    expr: mysql_global_status_threads_connected > 100\n"
@@ -295,7 +296,8 @@ TOOLS: dict[str, Tool] = {
                                "--dry-run")),
     "gitops_check": Tool((_PY, _T + "ops/gitops_check.py", "local", "--dir", "{conf}")),
     "guard_dispatch": Tool((_PY, _T + "ops/guard_dispatch.py", "defaults-impact", "--config-dir", "{conf}")),
-    # The three writers below write conf.d files into an output directory;
+    # The writers below write files into an output directory (scaffold_tenant
+    # and onboard_platform conf.d files, migrate_rule its migrated rules);
     # here that directory is the tree under test (an EXISTING conf.d), which
     # the write must first pass the shared refusal over
     # (`_lib_write_check.require_output_tree`).
@@ -304,11 +306,11 @@ TOOLS: dict[str, Tool] = {
     "onboard_platform": Tool((_PY, _T + "ops/onboard_platform.py", "--rule-files",
                               "{cell}/rules.yaml", "-o", "{conf}"), prep=_alert_rules),
     "migrate_rule": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml",
-                          "--tenant", "newt", "-o", "{conf}"), prep=_alert_rules),
+                          "--tenant", "newt", "--owner", "team", "--expiry", "2099-12-31",
+                          # the alert is a dictionary hit: migrated, not named golden
+                          "--no-dictionary", "-o", "{conf}"), prep=_alert_rules),
     # Every other write mode of those writers: each writes into the tree
     # without a conf.d file to confirm, or a different one.
-    "migrate_rule --triage": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml",
-                                   "--triage", "-o", "{conf}"), prep=_alert_rules),
     "onboard_platform --scrape-config": Tool((_PY, _T + "ops/onboard_platform.py",
                                               "--scrape-config", "{cell}/scrape.yaml",
                                               "-o", "{conf}"), prep=_scrape_config),

@@ -22,7 +22,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 :   The alert routing and notification component in the Prometheus ecosystem. This platform uses its `inhibit_rules` for Severity Dedup and a `config-reloader` sidecar (prometheus-operator's prometheus-config-reloader) for automatic configuration reloading.
 
 **AST Migration Engine**
-:   The core of `migrate_rule.py` — parses traditional PromQL alert rules into an Abstract Syntax Tree (AST) and automatically converts them to Dynamic Alerting's YAML threshold format. Supports Triage, Prefix, and Dictionary inference modes.
+:   The core of `migrate_rule.py` — reads legacy rules on Prometheus' own Abstract Syntax Tree (AST), keeps every rule as written and only injects a tenant matcher into each selector (`da-read promql-pin`), adding owner / expiry governance and an expiry companion alert; alerts that hit a golden standard in the dictionary are not migrated. See [Migration Engine](migration-engine.en.md).
 
 ## B
 
