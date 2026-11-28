@@ -114,29 +114,45 @@ class TestExtraction:
 
 
 class TestDirectionParsing:
-    """Grammar-space guards for _direction_before (self-review hardening)."""
+    """Direction and scaling, read on Prometheus' tree (#4264)."""
+
+    @staticmethod
+    def _tree(expr):
+        return L._shapes([expr])[0]
 
     def test_prefix_sibling_does_not_steal_direction(self):
-        # A composite expr referencing BOTH <key> and <key>_critical: the bare
-        # str.find would match ':cpu' inside ':cpu_critical' first and read the
-        # wrong operator. Word-boundary matching must read each token's own dir.
-        expr = (
+        # A composite expr referencing BOTH <key> and <key>_critical: each key
+        # reads the comparison it stands in.
+        t = self._tree(
             "tenant:x:max < on(tenant) tenant:alert_threshold:mysql_threads_running_critical "
             "or tenant:y:max > on(tenant) tenant:alert_threshold:mysql_threads_running"
         )
-        assert L._direction_before(expr, "mysql_threads_running") == ">"
-        assert L._direction_before(expr, "mysql_threads_running_critical") == "<"
+        assert L._directions(t, "mysql_threads_running") == {">"}
+        assert L._directions(t, "mysql_threads_running_critical") == {"<"}
 
     def test_ge_le_resolve_to_gt_lt(self):
-        assert L._direction_before("a >= tenant:alert_threshold:k", "k") == ">"
-        assert L._direction_before("a <= tenant:alert_threshold:k", "k") == "<"
+        assert L._directions(self._tree("a >= tenant:alert_threshold:k"), "k") == {">"}
+        assert L._directions(self._tree("a <= tenant:alert_threshold:k"), "k") == {"<"}
 
-    def test_scaling_regex_catches_paren_scalar(self):
-        assert L.SCALING_RE.search("foo * 100")
-        assert L.SCALING_RE.search("foo * (100)")
-        assert L.SCALING_RE.search("foo / 1024")
-        # the metadata join must NOT look like scaling
-        assert not L.SCALING_RE.search("x * on(tenant) group_left(owner) tenant_metadata_info")
+    def test_threshold_on_the_left_reads_the_observed_side(self):
+        # #4264: the text scan looked only before the threshold token.
+        assert L._directions(self._tree("tenant:alert_threshold:k < a"), "k") == {">"}
+        assert L._directions(self._tree("max(tenant:alert_threshold:k) > a"), "k") == {"<"}
+
+    def test_a_threshold_in_a_string_or_comment_is_not_read(self):
+        t = self._tree('label_replace(a, "x", "tenant:alert_threshold:k", "", "") > 1 # tenant:alert_threshold:j')
+        assert L._threshold_keys(t) == set()
+
+    def test_scaling(self):
+        for expr in ("foo * 100", "foo * (100)", "foo / 1024", "100 * foo", "(foo / (1024))"):
+            assert L._scaled(self._tree(expr)), expr
+        # a vector match is not numeric
+        assert not L._scaled(self._tree("x * on(tenant) group_left(owner) tenant_metadata_info"))
+        assert not L._scaled(self._tree("x > 100"))
+
+    def test_an_expr_the_parser_refuses_is_named(self):
+        with pytest.raises(L._lib_consumer_read.InputRefused, match="sum by"):
+            L._shapes(["sum by (tenant"])
 
 
 class TestResolveObserved:

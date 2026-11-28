@@ -9,8 +9,10 @@ SAME unit/topology as the threshold (the alert compares them directly), so no
 unit conversion is needed and P95(observed) is a directly-usable threshold value.
 
 This module derives ``conf.d key -> observed recording-rule series`` from the
-rule packs via a robust **containment check** (no PromQL AST parsing — see #709
-catastrophic-backtracking lesson). It is shared by:
+rule packs on Prometheus' own parse tree of each alert (``da-read
+promql-shape``, #4264): the metric names a rule reads, the comparison its
+threshold stands in, and any number it scales by are read off the tree, never
+off the text. It is shared by:
 
   - ``threshold_recommend --generate-observed-map`` (writes the committed map)
   - ``check_threshold_observed_map.py`` (CI drift-guard: map <-> rule packs)
@@ -42,17 +44,74 @@ except ImportError:  # pragma: no cover - environments without pyyaml
     yaml = None  # type: ignore
 
 # A threshold reference: tenant:alert_threshold:<key> or
-# tenant_version:alert_threshold:<key> (ADR-024 version-aware packs).
+# tenant_version:alert_threshold:<key> (ADR-024 version-aware packs), matched
+# against a whole metric NAME the tree reads (never against the expr text).
 THRESHOLD_RE = re.compile(r"tenant(?:_version)?:alert_threshold:([A-Za-z0-9_]+)")
 # An observed recording rule: tenant:NAME:AGG or tenant_version:NAME:AGG.
 # The colon convention naturally excludes tenant_metadata_info / user_state_filter
 # (underscore, no colon) — part of the R3 denylist.
 OBSERVED_RE = re.compile(r"tenant(?:_version)?:[A-Za-z0-9_:]+")
-# Numeric scaling adjacent to an operand (e.g. "* 100", "/ 1024", "* (100)").
-# A vector match such as "* on(tenant) group_left(...) <series>" (rule packs no
-# longer join tenant_metadata_info, #3483) is NOT numeric, so it is not matched here. The optional "(" covers parenthesised
-# scalars like "* (100)".
-SCALING_RE = re.compile(r"[*/]\s*\(?\s*[0-9]")
+_COMPARISONS = {">": ">", ">=": ">", "<": "<", "<=": "<"}
+_FLIPPED = {">": "<", "<": ">"}
+
+
+def _shapes(exprs: "list[str]") -> "list[dict]":
+    """Prometheus' tree of each expr; an expr its parser refuses raises
+    ``_lib_consumer_read.InputRefused`` naming it (#4264: a rule that cannot
+    be read is not taken as reading nothing)."""
+    return _lib_consumer_read.promql_shape_each(list(exprs), raise_refused=True)
+
+
+def _threshold_keys(tree: dict) -> "set[str]":
+    out: set[str] = set()
+    for name in _lib_consumer_read.shape_metric_names(tree):
+        m = THRESHOLD_RE.fullmatch(name)
+        if m:
+            out.add(m.group(1))
+    return out
+
+
+def _observed(tree: dict) -> "set[str]":
+    return {n for n in _lib_consumer_read.shape_metric_names(tree)
+            if OBSERVED_RE.fullmatch(n) and not THRESHOLD_RE.fullmatch(n)}
+
+
+def _unparen(node: dict) -> dict:
+    while node.get("kind") == "paren":
+        node = node["expr"]
+    return node
+
+
+def _scaled(tree: dict) -> bool:
+    """A ``*`` or ``/`` by a number anywhere in the expr (``* 100``,
+    ``/ (1024)``, ``100 *``): the bare recording rule is then off by a
+    factor (the scaling guard of the module docstring)."""
+    for node in _lib_consumer_read.shape_nodes(tree):
+        if node.get("kind") == "binary" and node["op"] in ("*", "/") and (
+                _unparen(node["lhs"]).get("kind") == "number"
+                or _unparen(node["rhs"]).get("kind") == "number"):
+            return True
+    return False
+
+
+def _reads_key(node: dict, key: str) -> bool:
+    return key in _threshold_keys(node)
+
+
+def _directions(tree: dict, key: str) -> "set[str]":
+    """The direction of every comparison *key*'s threshold stands in, as the
+    observed side relates to it: ``x > thr`` and ``thr < x`` are both ``>``;
+    ``>=`` / ``<=`` fold to ``>`` / ``<``."""
+    out: set[str] = set()
+    for node in _lib_consumer_read.shape_nodes(tree):
+        if node.get("kind") != "binary" or node["op"] not in _COMPARISONS:
+            continue
+        op = _COMPARISONS[node["op"]]
+        if _reads_key(node["rhs"], key) and not _reads_key(node["lhs"], key):
+            out.add(op)
+        elif _reads_key(node["lhs"], key) and not _reads_key(node["rhs"], key):
+            out.add(_FLIPPED[op])
+    return out
 
 
 def _alert_rules(doc: dict) -> list[dict]:
@@ -62,31 +121,6 @@ def _alert_rules(doc: dict) -> list[dict]:
             if isinstance(r, dict) and "alert" in r:
                 out.append(r)
     return out
-
-
-def _direction_before(expr: str, key: str) -> Optional[str]:
-    """Comparison operator (``>``/``<``) in the window before the threshold token.
-
-    Scans backwards from the ``tenant:alert_threshold:<key>`` occurrence; skips
-    ``=`` so ``>=`` / ``<=`` resolve to ``>`` / ``<``. The ``unless ... == 1``
-    maintenance filter appears AFTER the comparison, so it is not picked up.
-
-    The token is matched with a trailing word-boundary so ``key="cpu"`` does NOT
-    match the ``cpu_critical`` token (a bare ``str.find`` would land on the
-    prefix-sharing sibling when both appear in one composite expr and read the
-    wrong operator — latent across the 14 ``<key>``/``<key>_critical`` pairs).
-    """
-    pat = re.compile(
-        r"tenant(?:_version)?:alert_threshold:" + re.escape(key) + r"(?![A-Za-z0-9_])"
-    )
-    m = pat.search(expr)
-    if m is None:
-        return None
-    window = expr[max(0, m.start() - 100):m.start()]
-    for ch in reversed(window):
-        if ch in "<>":
-            return ch
-    return None
 
 
 def read_packs(pack_paths: list[str]) -> dict[str, dict]:
@@ -109,25 +143,20 @@ def extract_pack(path: str, doc: Optional[dict] = None) -> dict[str, dict[str, A
     if doc is None:
         doc = read_packs([path])[path]
     by_key: dict[str, dict[str, Any]] = {}
-    for rule in _alert_rules(doc):
-        expr = rule.get("expr", "") or ""
-        keys = set(THRESHOLD_RE.findall(expr))
+    rules = _alert_rules(doc)
+    for rule, tree in zip(rules, _shapes([r.get("expr", "") or "" for r in rules])):
+        keys = _threshold_keys(tree)
         if not keys:
             continue
-        cands = {
-            m for m in OBSERVED_RE.findall(expr)
-            if "alert_threshold" not in m  # exclude tenant[_version]:alert_threshold:*
-        }
-        scaled = bool(SCALING_RE.search(expr))
+        cands = _observed(tree)
+        scaled = _scaled(tree)
         for key in keys:
             e = by_key.setdefault(
                 key,
                 {"candidates": set(), "directions": set(), "scaled": False, "alerts": set()},
             )
             e["candidates"].update(cands)
-            d = _direction_before(expr, key)
-            if d:
-                e["directions"].add(d)
+            e["directions"].update(_directions(tree, key))
             e["scaled"] = e["scaled"] or scaled
             e["alerts"].add(rule.get("alert", "?"))
     return by_key
@@ -338,14 +367,21 @@ def build_map(pack_paths: list[str]) -> dict[str, Any]:
 
 
 def all_threshold_keys(pack_paths: list[str]) -> set[str]:
-    """Every conf.d threshold key referenced by any rule pack (for coverage)."""
+    """Every conf.d threshold key of any rule pack (for coverage): a
+    recording rule that records one (``record: tenant:alert_threshold:<key>``)
+    and the threshold metrics every rule's expr reads, all read through
+    Prometheus' rule loader and parser. #4264: this used to scan the file's
+    text, so a key named only in a comment or an annotation counted."""
     keys: set[str] = set()
-    if yaml is None:
-        return keys
-    for p in pack_paths:
-        with open(p, encoding="utf-8") as fh:
-            text = fh.read()
-        keys.update(THRESHOLD_RE.findall(text))
+    for doc in read_packs(list(pack_paths)).values():
+        rules = [r for g in doc.get("groups", []) or [] for r in g.get("rules", []) or []
+                 if isinstance(r, dict)]
+        for r in rules:
+            m = THRESHOLD_RE.fullmatch(str(r.get("record") or ""))
+            if m:
+                keys.add(m.group(1))
+        for tree in _shapes([r.get("expr", "") or "" for r in rules]):
+            keys.update(_threshold_keys(tree))
     return keys
 
 
@@ -918,8 +954,9 @@ def alert_referenced_keys(pack_paths: list[str]) -> set[str]:
     """
     keys: set[str] = set()
     for doc in read_packs(list(pack_paths)).values():
-        for rule in _alert_rules(doc):
-            keys.update(THRESHOLD_RE.findall(rule.get("expr", "") or ""))
+        rules = _alert_rules(doc)
+        for tree in _shapes([r.get("expr", "") or "" for r in rules]):
+            keys.update(_threshold_keys(tree))
     return keys
 
 
