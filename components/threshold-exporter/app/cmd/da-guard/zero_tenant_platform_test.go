@@ -310,6 +310,13 @@ var zeroTenantRoutingCases = map[string]zeroTenantPlatformCase{
 			"\n  group_by: [\"alertname\", 5]\n"},
 		was: "routing_group_by_invalid",
 	},
+	// #4368: a matcher on da_migrated, the generator's warning
+	// routing_enforced_match_migrated (never blocking; never a Go kind).
+	"enforced match on da_migrated": {
+		files: map[string]string{"_noc.yaml": "_routing_enforced:\n  enabled: true\n  receiver: " + webhookReceiver +
+			"\n  match: ['da_migrated=\"true\"']\n"},
+		was: "routing_enforced_match_migrated",
+	},
 }
 
 // #2904 (absorbs #2991): every routing-tree problem on a scope with no

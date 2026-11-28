@@ -46,6 +46,7 @@ var findingKinds = map[string]bool{
 	"routing_enforced_below_root":         true,
 	"routing_enforced_enabled_invalid":    true,
 	"routing_enforced_match_invalid":      true,
+	"routing_enforced_match_migrated":     true,
 	"routing_group_by_invalid":            true,
 	"routing_in_unread_location":          true,
 	"routing_key_ignored":                 true,

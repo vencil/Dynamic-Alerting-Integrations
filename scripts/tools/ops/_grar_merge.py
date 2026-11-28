@@ -172,6 +172,11 @@ FINDING_KINDS: dict[str, str] = {
         "_routing_enforced.match is written but is not a list of matcher "
         "strings (e.g. a {severity: critical} mapping); no enforced route "
         "is rendered.",
+    "routing_enforced_match_migrated":
+        "A _routing_enforced.match matcher on da_migrated, the label only "
+        "migrate-rule's alerts carry (#4368): rendered as written, it leaves "
+        "the NOC route only cut-over tenants' migrated alerts or none of "
+        "them. A warning; never blocks.",
     "routing_value_not_string":
         "A matcher value YAML does not read as a string (quote it).",
     "routing_group_by_invalid":
