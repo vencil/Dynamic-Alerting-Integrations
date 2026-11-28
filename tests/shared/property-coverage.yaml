@@ -51,6 +51,7 @@ modules:
       - detect_cli_lang
       - i18n_text
     excluded:
+      re2_fullmatch: "#4355 Python re fullmatch with None where RE2 may differ (POSIX class, a pattern re cannot compile); example-pinned by test_generate_routes_migrated.py::test_a_source_must_exclude_migrated_alerts (POSIX, RE2-only, plain) and the HA lint tests that call it through _regex_accepts"
       is_threshold_number_text: "#3457 fullmatch of the pattern generated from the recipe contract; held row by row to Go's grammar_ok column of threshold_value_matrix.json and to the grammar written as a digit count over 150k generated strings by tests/shared/test_threshold_value_parity.py"
       threshold_number: "#3457 is_threshold_number_text then float + isfinite; held row by row to Go's float_ok column and number by the same file (test_python_reads_a_threshold_number_as_the_matrix_says)"
       threshold_number_text: "#3457 repr, or the 17-digit exponent form when repr is outside the grammar; round trip through threshold_number run over 50k random floats and the edge values by test_threshold_number_text_reads_back_as_the_number"
@@ -205,6 +206,12 @@ modules:
       same_file: "#3615 → #1560 ⑤-a realpath + samefile judgement (I/O); symlink and hard-link cases pinned by generate-routes' output-clash tests and tests/ops/test_migrate_credentials.py::test_a_manifest_that_is_a_confd_file_is_refused"
       _nearest_existing: "#4250 lexists walk up to the closest existing ancestor (I/O); pinned by test_a_directory_still_to_be_made_is_judged_by_the_one_it_is_made_in in tests/shared/test_multi_target_write_judges_every_target_first.py"
       check_writable_artifact: "#4250 check_repo_artifact + os.access(W_OK) on the file or W_OK|X_OK on the directory it would be made in (I/O, uid-bound); every case pinned by example in tests/shared/test_multi_target_write_judges_every_target_first.py"
+      _private_dir_problem: "#3981 lstat result → the refusal of a runtime directory (symlink, not a directory, another uid's, a group/other mode bit); environment-bound (owner, euid), every case pinned by example in tests/shared/test_lib_output_runtime_entry.py"
+      _make_private_dir: "#3981 mkdir 0700 + fchmod, or the private-directory check (side-effecting I/O, uid-bound); pinned in tests/shared/test_lib_output_runtime_entry.py and the generator-service control run of tests/ops/test_gsvc_runtime_writes.py"
+      _create_private_file: "#3981 lstat, unlink, O_CREAT|O_EXCL|O_NOFOLLOW 0600 (side-effecting I/O); pinned in tests/shared/test_lib_output_runtime_entry.py"
+      make_runtime_dir: "#3981 _make_private_dir raising OutputWriteError; same files"
+      open_runtime_file: "#3981 _create_private_file raising OutputWriteError; same files"
+      write_runtime_file: "#3981 open_runtime_file + one write of the bytes as given (I/O); the failure cases pinned in tests/shared/test_lib_output_runtime_entry.py"
       write_repo_artifacts: "#4250 judge the whole batch, then write_repo_artifact each (side-effecting I/O); order, OutputBatchStopped and modes pinned in tests/shared/test_multi_target_write_judges_every_target_first.py"
 
   scripts/tools/_lib_yaml_strict.py:
@@ -479,6 +486,9 @@ modules:
       _side_atoms: "#3899 one side of a rule as (name, op, value) atoms, *_matchers and legacy *_match / *_match_re alike; covered by test_grar_dedup_rule_shape.py's legacy and multi-matcher cases"
       find_ungated_equal_label_inhibits: "#1132 ungated-equal-label finder; covered by TestEqualLabelGatedInvariant (gated/ungated/partial/legacy-map/malformed) + the committed-configmap regression guard"
       assert_equal_labels_gated: "Raises-wrapper over find_ungated_equal_label_inhibits; covered by TestEqualLabelGatedInvariant + the strict-raise/warn enforce test"
+      _atom_matches: "#4355 one (name, op, value) matcher against one value (unreadable regex reads as a match: fail closed); its operators example-pinned by test_generate_routes_migrated.py::test_a_source_must_exclude_migrated_alerts"
+      find_migrated_sourced_inhibits: "#4355 migrated-source finder; closed case list (gate, !=, !~, =~ that matches, element of several, match-all, unreadable, legacy map) example-pinned by test_generate_routes_migrated.py and judged on the generator's output by Alertmanager's inhibitor (tests/alertmanager-inhibit TestGeneratedMigratedInhibit)"
+      assert_migrated_alerts_mute_nothing: "#4355 raises-wrapper over find_migrated_sourced_inhibits; strict-raise/warn pinned by test_generate_routes_migrated.py::test_an_ungated_source_fails_under_strict_and_warns_without"
       is_routing_tree_error: "#2326 one-line prefix test on ROUTING_TREE_ERROR_PREFIX; example-pinned by test_generate_routes_nested_tree.py (validate-config routes row FAIL)"
       is_field_type_error: "#2906 one-line prefix test on FIELD_TYPE_ERROR_PREFIX; example-pinned by test_grar_field_types.py (validate-config routes row FAIL)"
       routing_block_receivers: "#2906 closed walk (receiver / overrides[i] / routes[i] receiver per block kind), the positions ignored_routing_keys looks into; example-pinned by test_grar_field_types.py"

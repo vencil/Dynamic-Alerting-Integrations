@@ -475,7 +475,7 @@ var defaultRootReadGuard = &boundedcall.Guard{}
 // opened for them). Same merge core as validate and the write gate
 // (cfg.MergeTenantWithRootDefaults is exactly these two halves), so GET /
 // validate / write all merge identically (the consolidation that closed the
-// ADR-024 PR4 / #704 write-vs-read asymmetry).
+// #704 write-vs-read asymmetry).
 //
 // ⛔ THE ROOT READ IS BOUNDED AND SHARED (#2208, PR #2214 review). It reads
 // every root `_*.yaml`, and a read that never returns (a hung mount)

@@ -85,7 +85,7 @@ func pilotDefaultsDir(t *testing.T) string {
 // threshold is rejected at write time even if CI's da-guard is bypassed.
 //
 // The body is a real tenant-only document; the metric base key is recognised by
-// merging the on-disk _defaults.yaml (ADR-024 PR4 / #704 closed the prior
+// merging the on-disk _defaults.yaml (#704 closed the prior
 // write-vs-read asymmetry that forced tests to inline a `defaults:` block here).
 func TestValidateVersionThreshold(t *testing.T) {
 	t.Parallel()
@@ -145,8 +145,8 @@ func TestValidateMultiVersionCoexistence(t *testing.T) {
 	}
 }
 
-// TestValidate_TenantOnlyMetricBody is the regression guard for the ADR-024 PR4
-// / #704 write-vs-read defaults asymmetry. A tenant-only PUT body (the real
+// TestValidate_TenantOnlyMetricBody is the regression guard for the #704
+// write-vs-read defaults asymmetry. A tenant-only PUT body (the real
 // conf.d/{id}.yaml shape) carrying plain metric thresholds must validate clean
 // once the _defaults.yaml chain is merged — the same body POST /validate already
 // blesses. Before the fix, validate() saw an empty Defaults map and flagged every

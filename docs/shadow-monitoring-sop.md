@@ -11,7 +11,7 @@ lang: zh
 
 > **受眾**: SRE / Platform Engineer / DevOps
 > **前提**: 已完成 `da-tools migrate` 轉換，新舊 Recording Rule 同時在 Prometheus 運行
-> **注意**: 現在的 `da-tools migrate` 把規則原樣遷移（告警帶 `component: migrated`），遷移對照改為 `.migration/mapping/<tenant>.yaml`；本 SOP 的 `prefix-mapping.yaml` 與 `migration_status: shadow` 屬於舊版 migrate，`validate` 讀新對照的支援在後續的 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)
+> **注意**: 現在的 `da-tools migrate` 把規則原樣遷移（告警帶 `da_migrated: "true"`），遷移對照改為 `.migration/mapping/<tenant>.yaml`；本 SOP 的 `prefix-mapping.yaml` 與 `migration_status: shadow` 屬於舊版 migrate，`validate` 讀新對照的支援在後續的 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)
 > **工具**: `da-tools validate`（`--watch` 持續模式 / 單次模式）、`da-tools diagnose`（健康檢查）
 
 ---

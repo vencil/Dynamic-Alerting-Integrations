@@ -266,7 +266,7 @@ _GUARDED_FILES_CEILING = 20  # #3982: generate_tenant_fixture / da_assembler's m
 # entry that no longer names an unguarded sink must be REMOVED, so the list
 # only shrinks.
 NOT_GUARDED: dict[str, str] = {
-    "scripts/tools/dx/run_chaos_soak.py:229":
+    "scripts/tools/dx/run_chaos_soak.py:241":
         "`trigger_reload`'s carrier perturbation. It writes into the "
         "`--config-dir` INPUT tree — that toggle IS the chaos the soak "
         "applies — and its `except OSError: continue` is the intended "
@@ -281,19 +281,11 @@ _NOT_GUARDED_CEILING = 1
 # scanner reports as an unguarded sink, or `test_not_guarded_entries_point_at_
 # real_unguarded_sinks` calls it stale. That means an unwrapped write which is
 # not in the sink VOCABULARY cannot be listed at all — it is invisible in both
-# directions. The known ones are all in `dx/run_chaos_soak`, on the
-# long-lived CSV handle it holds open for the length of the soak:
-#
-#   * `writer.writerow(...)` + `csv_file.flush()` in the poll loop.
-#
-# The open (through `open_operator_output`, #3982) is converted — the failure
-# an operator actually causes, a bad `--output-dir`, happens there — and so
-# is the last flush, at `csv_stack.close()` in the `finally`, remembered like
-# the summary writes'. A write or a flush that fails in the LOOP means
-# the filesystem filled up or went away mid-run, and it still ends in a
-# traceback at rc=1. Wrapping them would need the wrapper to span the whole
-# soak, which would also catch every unrelated OSError in the loop. Recorded
-# because "not in the list" must not read as "not there"; the same is true of
+# directions. (`dx/run_chaos_soak`'s poll-loop `writerow` / `flush` were the
+# known ones; since #3981 the time series is kept in memory and written with
+# run-config.json through the artifact entry, so the loop does no file I/O.)
+# Recorded because "not in the list" must not read as "not there"; the same is
+# true of
 # `ops/config_history`'s deliberately unguarded READ.
 
 
@@ -1017,8 +1009,8 @@ _KNOWN_SITES = {
     # own sinks left.
     "scripts/tools/ops/assemble_config_dir.py": {"write_operator_output()"},  # #3982: mkdir → ensure_dir
     "scripts/tools/ops/state_reconcile.py": {"write_repo_artifact()"},  # #3982: mkdir → ensure_dir
-    # #3982: the `--output-dir` mkdir and opens went through ensure_dir /
-    # open_operator_output; the sink left is NOT_GUARDED's carrier toggle.
+    # #3982 / #3981: the `--output-dir` mkdir and writes go through ensure_dir /
+    # write_repo_artifacts; the sink left is NOT_GUARDED's carrier toggle.
     "scripts/tools/dx/run_chaos_soak.py": {".write_text"},
     # #2128: outside TOOLS_DIR — proves a pinned file there is really read.
     # #3982: now the operator entry.

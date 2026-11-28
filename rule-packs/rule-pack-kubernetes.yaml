@@ -440,16 +440,16 @@ groups:
             "version", "default", "version", "^$"
           )
 
-      # ADR-024 PR3-pre-3: core firing vectors (threshold-cross + maintenance
+      # ADR-024 §2: core firing vectors (threshold-cross + maintenance
       # suppression). The alert rules below fire on these directly; tenant
       # metadata (runbook_url/owner/tier) is never joined in — their annotations
       # read it with the canonical query template (#3483), so a tenant without
       # metadata config fires the same as one with it.
-      # ADR-024 Route 2: version-aware exact-or-fallback core, split PER SEVERITY.
+      # ADR-024 §2: version-aware exact-or-fallback core, split PER SEVERITY.
       # Fixing severity makes the threshold RHS a per-(tenant,version) singleton →
       # the exact branch is one-to-one and the fallback is many(versions)-to-one;
       # this avoids the version×severity many-to-many cardinality crash that a
-      # single `group_left(severity)` rule would hit (ADR-024 Pass-3). The
+      # single `group_left(severity)` rule would hit (ADR-024 §2). The
       # fallback's `group_left()` keeps the metric's REAL version (v2/v3…) for
       # on-call visibility even when it falls back to the default threshold.
       - record: rule_pack_kubernetes:pod_container_high_cpu_warning:core
@@ -492,7 +492,7 @@ groups:
             )
           )
 
-      # ADR-024 Route 2: version-aware exact-or-fallback memory core, split per
+      # ADR-024 §2: version-aware exact-or-fallback memory core, split per
       # severity — mirrors the CPU cores above (same many-to-many cardinality
       # avoidance + group_left() preserving the metric's REAL version on fallback).
       - record: rule_pack_kubernetes:pod_container_high_memory_warning:core
@@ -616,7 +616,7 @@ groups:
   # -------------------------------------------------------
   - name: kubernetes-container-alerts
     rules:
-      # ADR-024 Route 2 (warning); metadata in annotations (#3483).
+      # ADR-024 §2 (warning); metadata in annotations (#3483).
       # The version-aware core carries the metric's REAL `version` label, so the
       # firing alert tells on-call exactly which app version is in trouble.
       - alert: PodContainerHighCPU
@@ -652,8 +652,8 @@ groups:
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
-      # Critical mirror (ADR-024 Route 2: distinct alertname per severity to
-      # match the platform convention; warning's alertname is preserved above).
+      # Critical mirror (ADR-024 §2: one rule per severity; a distinct
+      # alertname per severity is the platform convention; warning's alertname is preserved above).
       - alert: PodContainerHighCPUCritical
         expr: |
           rule_pack_kubernetes:pod_container_high_cpu_critical:core
@@ -677,7 +677,7 @@ groups:
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
-      # ADR-024 Route 2 (warning) — version-aware memory core carries the metric's
+      # ADR-024 §2 (warning) — version-aware memory core carries the metric's
       # REAL version so on-call sees which app version is in trouble.
       - alert: PodContainerHighMemory
         # Metadata in annotations, not joined (#3483) — see PodContainerHighCPU.
@@ -703,7 +703,7 @@ groups:
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
-      # Critical mirror (ADR-024 Route 2: distinct alertname per severity).
+      # Critical mirror (ADR-024 §2: one rule per severity; distinct alertname by platform convention).
       - alert: PodContainerHighMemoryCritical
         expr: |
           rule_pack_kubernetes:pod_container_high_memory_critical:core
@@ -1417,6 +1417,18 @@ groups:
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
         for: 3m
+        # A node that keeps dropping out for longer than `for:` and coming back
+        # (4m NotReady / 1m Ready for an hour) resolved and re-fired once per
+        # cycle: 12 notifications. 10m holds the alert across the Ready
+        # stretches, so that hour is one firing episode (measured on promtool
+        # and vmalert-tool); first fire is still at 3m. Accepted costs, pinned
+        # in rule-pack-kubernetes-node-flapping_test.yaml: the alert resolves
+        # ~10m after the node recovers or the tenant's pod leaves the node, and
+        # a tenant that enters maintenance while it is firing keeps it for 10m
+        # more (the `unless` empties the expr, keep_firing_for then holds it —
+        # #4348 tracks the platform-wide policy). Flapping SHORTER than `for:`
+        # never fires this alert at all; NodeReadinessFlapping below owns that.
+        keep_firing_for: 10m
         labels:
           severity: warning
           maintenance: mute
@@ -1429,6 +1441,97 @@ groups:
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 節點 {{ $labels.node }} NotReady — 請檢查節點健康 / Pod 重新調度"
           description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
           description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+
+      # Readiness flapping (#1177). NodeNotReady needs 3 unbroken minutes of
+      # NotReady, so a node that drops out for 30s-2m again and again never
+      # fires it, while the tenant's pods keep losing their endpoints.
+      #
+      # ADOPTED, NOT DIY: the core is kubernetes-mixin's KubeNodeReadinessFlapping
+      # (shipped in every kube-prometheus install) — more than 2 changes of the
+      # Ready=true condition gauge in 15m, held `for: 15m` — wrapped in the
+      # platform's tenant model the same way NodeNotReady is: tenant-owned nodes
+      # only (tenant:node_owner:info on (node, da_cluster)), maintenance
+      # opt-out, tenant + node labels, metadata in annotations (#3483).
+      # What differs from upstream, and why:
+      #   (1) `max by(node, da_cluster)`, upstream `sum by(cluster, node)`.
+      #       With two kube-state-metrics replicas scraped, each transition is
+      #       counted once per replica, so `sum` reads double: two 30s dips 10m
+      #       apart (4 transitions -> 8) alert under `sum` and not under `max`
+      #       (measured). `max` answers the same with one replica or two. A KSM
+      #       pod replacement (the series returns under another `instance`)
+      #       behaves the same under both: each series counts only what it saw
+      #       itself, so a healthy node stays silent, and a node already
+      #       flapping fires later (measured: 21m instead of 16m when KSM was
+      #       replaced 5m in — the new series starts its count from zero). A
+      #       second replica that merely JOINS mid-flap changes nothing under
+      #       `max`; the lower count (`min`) would restart the 15m.
+      #   (2) no `and kube_node_spec_unschedulable == 0` (upstream skips
+      #       cordoned nodes). This pack reads that metric nowhere else, so a
+      #       deployment that does not scrape it would have a silently dead
+      #       alert; NodeNotReady has no such clause either. A cordoned node
+      #       that still hosts the tenant's Running pod and flaps is reported.
+      #   (3) no threshold key, no critical twin — same as NodeNotReady.
+      # No keep_firing_for: `changes(...[15m])` already holds the condition for
+      # ~15m after the transitions stop.
+      # WHAT COUNTS AS FLAPPING (upstream's definition, kept as is): three
+      # NotReady dips inside 15m. Two dips never alert (4 transitions; `> 2`
+      # holds for less than 15m). With three, `> 2` holds for 15m plus the
+      # length of the SECOND dip, so the alert fires ~15m after the second dip
+      # starts and lasts about as long as that dip did: measured, three 30s
+      # dips 5m apart fire for one evaluation at 20m, three 2m dips for 1m30,
+      # four 30s dips 5m apart for 5m. Sustained flapping fires once, at 16m
+      # (30s/30s) or 20m (1m/4m, 2m/3m), and resolves when the third-from-last
+      # transition is 15m old: measured 13m30s (30s/30s) and 9m30s (1m/4m,
+      # 2m/3m) after the last NotReady ends.
+      # Outages longer than 3m are NodeNotReady's; a rolling upgrade (each node
+      # NotReady once) does not alert.
+      # Engine difference: MetricsQL counts a series' first sample as a change,
+      # PromQL does not. A node that joins NotReady for 60s and dips once more
+      # 5m later peaks at 3 on promtool and 4 on vmalert-tool; a healthy
+      # new-born series reads 0 and 1. Neither case alerts on either engine,
+      # and every waveform measured gave the same firing episodes on both
+      # (resolve times differ by one evaluation).
+      # Evaluated at a central Prometheus (edge/central split), `for: 15m` reads
+      # the federated record, so the three-short-dips edge case — which holds
+      # for barely more than 15m — is not guaranteed to fire there: it depends
+      # on the phase of the federation scrape and the evaluation interval.
+      # Sustained flapping is not affected.
+      # The join on the raw kube_* series is a recording rule, as for NodeNotReady:
+      # in an edge/central split the raw series exist only at the edge, and the
+      # alert reads this tenant-labelled record (#1168).
+      - record: rule_pack_kubernetes:node_readiness_flapping:core
+        expr: |
+          (
+            tenant:node_owner:info
+            and on(node, da_cluster)
+              (
+                max by(node, da_cluster) (
+                  changes(kube_node_status_condition{condition="Ready", status="true"}[15m])
+                ) > 2
+              )
+          )
+
+      - alert: NodeReadinessFlapping
+        expr: |
+          rule_pack_kubernetes:node_readiness_flapping:core
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 15m
+        labels:
+          severity: warning
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+          node: "{{ $labels.node }}"
+        annotations:
+          summary: "Kubernetes node {{ $labels.node }} readiness is flapping — affects {{ $labels.tenant }}"
+          summary_zh: "Kubernetes 節點 {{ $labels.node }} 的就緒狀態反覆變動 — 影響 {{ $labels.tenant }}"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: node {{ $labels.node }} readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 節點 {{ $labels.node }} 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+          description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+          description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

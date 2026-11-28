@@ -26,7 +26,7 @@ const ServiceReserve = 5 * time.Second
 // MinJudgeTime is the least time left at which a judgement is asked for:
 // the service's reserve plus one second to judge in. With less, the write is
 // refused as retryable (ReasonNoTime) without asking — the service would
-// only answer `deadline` (ADR-036 §3 "剩餘時間不夠重驗").
+// only answer `deadline` (ADR-036 §3 "剩餘時間不夠判定或不夠重驗").
 const MinJudgeTime = ServiceReserve + time.Second
 
 // FallbackDeadline is the request time assumed for a ctx that carries no

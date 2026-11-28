@@ -274,6 +274,9 @@ jobs:
           # #1200: a key in the registry's retired_keys is named nowhere a
           # reader learns keys from (docs, samples, scripts, portal).
           pre-commit run retired-keys-not-taught --all-files
+          # #4290: ADR-015 rule 1 — no Tailwind `dark:` variant in portal
+          # source (pygrep; no other CI entry point).
+          pre-commit run jsx-no-dark-variant --all-files
           pre-commit run skip-a11y-justification-check --all-files
           # CI-ROI 6C blind-spot fix: these 4 lints' live-dogfood pytest
           # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as
@@ -716,7 +719,7 @@ jobs:
         # below carries --retry so a transient upstream blip doesn't flake the required
         # job; steady state is a cache hit (no download at all).
         run: |
-          pip install pytest -c requirements/ci-constraints.txt
+          pip install pytest pytest-xdist -c requirements/ci-constraints.txt
           # VM engine version comes from the single pins SSOT
           # (tests/rulepacks/vm_engine_version) shared with the equivalence
           # anchor (test_vm_backend_parity.py)
@@ -761,7 +764,13 @@ jobs:
         # --durations: the slowest fixtures are printed at the end of the log, so one
         # creeping toward the per-fixture limit (_VMALERT_TIMEOUT_S) is seen before it
         # fails the required check (#4118).
-        run: python -m pytest tests/rulepacks/test_vm_alert_parity.py -v --durations=15 --durations-min=5.0
+        # -n auto --dist worksteal: every fixture is its own vmalert-tool process
+        # and they share nothing but a per-worker translated copy (xlate_dir), so
+        # they run side by side. On a 4-core machine, 110 fixtures took 689 s
+        # serial, 391 s with xdist's default split and 301 s with worksteal: an
+        # idle worker takes queued fixtures from a busy one, so the two heaviest
+        # (~170 s and ~115 s) do not leave the others waiting behind them (#4224).
+        run: python -m pytest tests/rulepacks/test_vm_alert_parity.py -v -n auto --dist worksteal --durations=15 --durations-min=5.0
 
       # pint (ADR-025 supporting check): static analysis of the rule-pack SOURCE.
       # The high-ROI check is alerts/template — it mechanically catches the
@@ -803,24 +812,24 @@ jobs:
       - name: Lint Prometheus rules (pint — alerts/template label-flow gate)
         run: python3 scripts/tools/lint/check_pint.py --ci
 
-      # ADR-024 PR3-pre Commit 4: the configmap↔source copy is now a HARD gate.
+      # The configmap↔source copy is a HARD gate.
       # The DEPLOYED configmaps (k8s/03-monitoring/configmap-rules-*.yaml, the
       # production source of truth via ADR-005 projected volume) must never drift
       # from rule-packs/ source again — that ~2-month silent drift is exactly what
       # caused the onboarding-vacuum bug (#709). Edit a rule pack → run
       # `make rulepack-configmaps` (or generate_rulepack_configmaps.py) → commit
       # both. The pre-commit `rulepack-configmap-drift` hook catches this locally.
-      - name: "Rule-pack configmap drift (HARD gate — ADR-024 Commit 4)"
+      - name: "Rule-pack configmap drift (HARD gate)"
         run: python scripts/tools/dx/generate_rulepack_configmaps.py --check
 
-      # ADR-024 PR3-pre: rule-packs/ ↔ configmap copies must match
+      # rule-packs/ ↔ configmap copies must match
       # semantically. The third copy (committed operator-manifests/
       # PrometheusRule CRDs) is gone (#3427) — it drifted on the `release`
       # selector label, which this content comparison never saw. The CRDs are
       # generated on demand; what operator-generate writes is pinned by
       # tests/ops/test_operator_generate_rule_copies.py (Python Tests). The
       # pre-commit `rulepack-3copy-drift` hook catches drift locally.
-      - name: "Rule-pack copy sync (HARD gate — ADR-024 PR3-pre)"
+      - name: "Rule-pack copy sync (HARD gate)"
         run: python scripts/tools/lint/check_rulepack_sync.py --ci
 
       # #3206 (ADR-036 §12): the manifests are read through da-crdecode

@@ -56,8 +56,8 @@ const IMPORT_STEPS = [
     id: 'migrate',
     title: () => t('3. 原樣遷移成 migrated 規則', '3. Migrate into migrated rules'),
     desc: () => t(
-      'da-tools migrate（migrate-rule）逐租戶把既有規則原樣保留，只在每個 selector 注入租戶隔離，加 tenant／component=migrated label 與 owner／expiry annotation，另附到期伴隨告警。選不出一個租戶的平台層級規則（kube_node_*、up）整批拒絕、結束碼 2。輸出寫在 .migration/ 底下：migrated/<id>/rules.yml、mapping/<id>.yaml 與報告。',
-      'da-tools migrate (migrate-rule) keeps one tenant\'s existing rules verbatim, only injecting tenant isolation into every selector and adding the tenant / component=migrated labels, the owner / expiry annotations and an expiry companion alert. Platform-level rules that select no single tenant (kube_node_*, up) are refused, exit code 2. Output lands under .migration/: migrated/<id>/rules.yml, mapping/<id>.yaml and a report.'
+      'da-tools migrate（migrate-rule）逐租戶把既有規則原樣保留，只在每個 selector 注入租戶隔離，加 tenant／da_migrated="true" label（序列自己的 component 原樣保留）與 owner／expiry annotation，另附到期伴隨告警。選不出一個租戶的平台層級規則（kube_node_*、up）整批拒絕、結束碼 2。輸出寫在 .migration/ 底下：migrated/<id>/rules.yml、mapping/<id>.yaml 與報告。',
+      'da-tools migrate (migrate-rule) keeps one tenant\'s existing rules verbatim, only injecting tenant isolation into every selector and adding the tenant / da_migrated="true" labels (the series\' own component is kept), the owner / expiry annotations and an expiry companion alert. Platform-level rules that select no single tenant (kube_node_*, up) are refused, exit code 2. Output lands under .migration/: migrated/<id>/rules.yml, mapping/<id>.yaml and a report.'
     ),
     cta: () => t('Migration Playbook', 'Migration Playbook'),
     href: docUrl('docs/scenarios/incremental-migration-playbook.md'),
@@ -67,8 +67,8 @@ const IMPORT_STEPS = [
     id: 'place',
     title: () => t('4. 交給客戶的 Prometheus 載入、conf.d 管切換', '4. Load in the customer Prometheus, cut over in conf.d'),
     desc: () => t(
-      '把 .migration/migrated/<id>/rules.yml 放進客戶 repo，交給抓取原始指標的那台 Prometheus 載入（單一 Prometheus，或 federation 架構下的 edge），走客戶自己的 Git PR 流程。component=migrated 的告警在 Alertmanager 先走 shadow receiver；影子比對沒問題後，在 conf.d 的租戶檔設 _routing_migrated: active 切換。租戶檔在 conf.d 樹的位置規則見 ADR-018。',
-      'Put .migration/migrated/<id>/rules.yml in the customer repo for the Prometheus that scrapes the raw metrics to load (a single Prometheus, or the edge in a federation setup), through the customer Git PR flow. component=migrated alerts go to a shadow receiver in Alertmanager first; once the shadow comparison is clean, set _routing_migrated: active in the tenant file in conf.d to cut over. Where tenant files sit in the conf.d tree is ADR-018.'
+      '把 .migration/migrated/<id>/rules.yml 放進客戶 repo，交給抓取原始指標的那台 Prometheus 載入（單一 Prometheus，或 federation 架構下的 edge），走客戶自己的 Git PR 流程。da_migrated="true" 的告警在 Alertmanager 先走 shadow receiver；影子比對沒問題後，在 conf.d 的租戶檔設 _routing_migrated: active 切換。租戶檔在 conf.d 樹的位置規則見 ADR-018。',
+      'Put .migration/migrated/<id>/rules.yml in the customer repo for the Prometheus that scrapes the raw metrics to load (a single Prometheus, or the edge in a federation setup), through the customer Git PR flow. da_migrated="true" alerts go to a shadow receiver in Alertmanager first; once the shadow comparison is clean, set _routing_migrated: active in the tenant file in conf.d to cut over. Where tenant files sit in the conf.d tree is ADR-018.'
     ),
     cta: () => t('ADR-018', 'ADR-018'),
     href: docUrl('docs/adr/018-profile-as-directory-default.md'),

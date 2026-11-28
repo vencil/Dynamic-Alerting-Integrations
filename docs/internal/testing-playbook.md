@@ -1537,7 +1537,7 @@ if comment_only(src, old):
   而 `ast.Constant.value` 是**解析後**的值。實測對 `tests/shared/_mutation_pilot.py` 的 78 個 anchor
   **全部 78 個誤判為「不在程式碼裡」**，等於這條規則一條都套不上。
 - **「span 碰到 COMMENT token 就擋」** —— 多行程式碼 anchor 夾一行註解是常態。實測 catalog 裡
-  就有一個 `if "{" in key: → if False:` 的 anchor，中間夾著 `# ADR-024 OQ-6: …`；
+  就有一個 `if "{" in key: → if False:` 的 anchor，中間夾著一行 `# …` 註解；
   用這個判準會把它誤擋成註解命中。**要問的是「有沒有實質 token」，不是「有沒有碰到註解」。**
 
 上面的 `comment_only` 對 catalog 78 個 anchor **零誤擋**，而合成的純註解命中確實被擋下。

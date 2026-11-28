@@ -49,6 +49,7 @@ route:
 # ...
     - matchers:
         - alertname="Watchdog"
+        - da_migrated=""
       group_by: ["alertname"]
       group_wait: 0s
       group_interval: 1m
@@ -147,7 +148,7 @@ Supporting checks:
 
 - **Static rule checking (pint)**: CI runs pint's `alerts/template` check on the rule sources, catching "an aggregation drops a label the alert template uses, so the alert never fires"; the platform rule pack that holds `Watchdog` is in scope. The config is in `.pint.hcl`.
 - **Backend compatibility**: on every PR, `tests/rulepacks/test_vm_alert_parity.py` runs all promtool test data through `vmalert-tool unittest` (VictoriaMetrics' MetricsQL engine); a difference not registered in `tests/rulepacks/vm_deviation_catalog.yaml` fails the check. `tests/rulepacks/test_vm_backend_parity.py` verifies the two are equivalent against a real vmsingle when the VictoriaMetrics version pin changes; `tests/rulepacks/test_vm_replay_staleness.py` measures nightly, with `vmalert -replay`, the timing difference when data stops arriving (staleness).
-- **Synthetic-probe interop**: an alert carrying `component="synthetic-probe"` always lands in `synthetic-receiver` with `continue: false`, so a customer can verify end-to-end delivery with their own existing prober and a test alert never pages a person (see [Synthetic-Probe Interop](../integration/synthetic-probe-interop.en.md)).
+- **Synthetic-probe interop**: an alert carrying `component="synthetic-probe"` and no `da_migrated` always lands in `synthetic-receiver` with `continue: false`, so a customer can verify end-to-end delivery with their own existing prober and a test alert never pages a person (see [Synthetic-Probe Interop](../integration/synthetic-probe-interop.en.md)). The legacy rules `da-tools migrate` moves over as written label their alerts `da_migrated="true"`, which this route excludes: in the shadow period such an alert goes to a shadow receiver that notifies no one, and once the tenant cuts over it follows that tenant's routes (the NOC included), even with `component="synthetic-probe"`.
 
 ## Alternatives considered
 

@@ -10,7 +10,7 @@ package handler
 // UX so a tenant can pick a metric to write a custom-alert recipe
 // against without knowing PromQL.
 //
-// Stateless proxy (ADR-024 §3 "Dumb Pipes, Smart Endpoints"): every
+// Stateless proxy (ADR-024 §3, metric autocomplete): every
 // call re-queries Prometheus; no catalog state is held. Cross-tenant
 // isolation is two-layered — route middleware enforces the caller's
 // RBAC read permission on {id}, and the discoverer force-builds a
@@ -21,10 +21,11 @@ package handler
 // disk-backed reads), but it is already covered by the global per-caller
 // sliding-window limiter (TA_RATE_LIMIT_PER_MIN, default 100/min → 429),
 // and every backend call is triple-bounded (timeout + io.LimitReader +
-// `limit=`). A dedicated, stricter per-endpoint limit is deferred-with-
-// trigger (ADR-024 §3 Reef 1) — add it only if discovery-specific abuse
-// is observed; building a second limiter subsystem now would be
-// redundant against the abuse vector the global limiter already bounds.
+// `limit=`). A dedicated, stricter per-endpoint limit is not built:
+// ADR-024 §3 bounds this endpoint by the existing per-caller limiter. Add it
+// only if discovery-specific abuse is observed; building a second limiter subsystem
+// now would be redundant against the abuse vector the global limiter
+// already bounds.
 
 import (
 	"log/slog"

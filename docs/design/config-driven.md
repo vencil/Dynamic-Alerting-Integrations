@@ -579,6 +579,7 @@ inhibit_rules:
       - metric_group=~".+"
       - tenant=~".+"
       - da_cluster=~".+"
+      - da_migrated=""          # #4355：migrated 告警不當 source
     target_matchers:
       - severity="warning"
       - metric_group=~".+"
@@ -592,6 +593,7 @@ inhibit_rules:
       - metric_group=~".+"
       - tenant=~".+"
       - da_cluster=""
+      - da_migrated=""          # #4355：migrated 告警不當 source
     target_matchers:
       - severity="warning"
       - metric_group=~".+"
@@ -603,6 +605,7 @@ inhibit_rules:
   # Silent Mode: 壓制 warning 通知
   - source_matchers:
       - alertname="TenantSilentWarning"
+      - da_migrated=""
     target_matchers:
       - severity="warning"
     equal: ["tenant"]
@@ -610,6 +613,7 @@ inhibit_rules:
   # Silent Mode: 壓制 critical 通知
   - source_matchers:
       - alertname="TenantSilentCritical"
+      - da_migrated=""
     target_matchers:
       - severity="critical"
     equal: ["tenant"]
@@ -651,7 +655,7 @@ flowchart TD
 可選化以**兩條**全域 inhibit rule 加排除清單實現（規則數不隨租戶數成長；[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)、[#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)）：
 
 1. `generate_alertmanager_routes.py` 掃描所有 tenant YAML 的 `_severity_dedup` 設定
-2. 產出兩條規則：source `severity="critical"`、target `severity="warning"`，兩側都要求 `metric_group=~".+"` 與 `tenant=~".+"`，差別只在怎麼讀叢集標籤 `da_cluster`（每個 Prometheus 的 `external_labels.da_cluster`，[ADR-006](../adr/006-tenant-mapping-topologies.md)）：
+2. 產出兩條規則：source `severity="critical"`（另帶 `da_migrated=""`：migrate 寫回的 migrated 告警不當 source，[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）、target `severity="warning"`，兩側都要求 `metric_group=~".+"` 與 `tenant=~".+"`，差別只在怎麼讀叢集標籤 `da_cluster`（每個 Prometheus 的 `external_labels.da_cluster`，[ADR-006](../adr/006-tenant-mapping-topologies.md)）：
     - 兩側都帶（`da_cluster=~".+"`）：`equal: ["tenant", "metric_group", "da_cluster"]`——同租戶、同 `metric_group`、同叢集才抑制；租戶跑在多個叢集時，一個叢集的 critical 不抑制另一個叢集的 warning
     - 兩側都不帶（`da_cluster=""`，Prometheus 沒設這個 external label）：`equal: ["tenant", "metric_group"]`——同租戶、同 `metric_group` 就抑制，所以兩個都沒設標籤的叢集仍會互相抑制
 

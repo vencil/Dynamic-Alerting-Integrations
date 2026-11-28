@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -53,6 +54,7 @@ import _lib_input  # noqa: E402  (#3445: --metric-dictionary is read by the lib)
 # ADR-036 step 4 (#2906): conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#4264: a filter is read by Prometheus' parser)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -108,11 +110,14 @@ def _h(key: str) -> str:
 class MappingEntry:
     """One instance → tenant mapping entry."""
 
-    __slots__ = ('tenant', 'filter_expr')
+    __slots__ = ('tenant', 'filter_expr', 'matchers')
 
     def __init__(self, tenant: str, filter_expr: str) -> None:
         self.tenant = tenant
         self.filter_expr = filter_expr
+        #: parse_filter_to_matchers' answer, once main has read every filter
+        #: in one batch (#4264); None until then.
+        self.matchers: list[str] | None = None
 
     def __repr__(self) -> str:
         return f"MappingEntry(tenant={self.tenant!r}, filter={self.filter_expr!r})"
@@ -258,29 +263,80 @@ def metrics_in_dictionary(data: dict) -> list[str]:
 # Rule generation
 # ---------------------------------------------------------------------------
 
-_LABEL_MATCHER_RE = re.compile(r'^(\w+)\s*(=~|!=|=)\s*"(.*)"$')
+class FilterRefused(ValueError):
+    """A mapping entry's `filter` is not a list of PromQL label matchers."""
+
+
+def _promql_string(value: str) -> str:
+    """*value* as a PromQL double-quoted string: JSON's escapes are a subset
+    of the Go string syntax PromQL reads."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+_LEGACY_LABEL_NAME = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
+
+
+def _promql_label_name(name: str) -> str:
+    """*name* as a matcher writes it: bare when it is a legacy label name,
+    quoted otherwise (a UTF-8 name such as `my.label`)."""
+    return name if _LEGACY_LABEL_NAME.fullmatch(name) else _promql_string(name)
+
+
+_SENTINEL = "__mapping_filter__"
+
+
+def _matchers_of(filter_expr: str, tree) -> list[str]:
+    if isinstance(tree, _lib_consumer_read.InputRefused):
+        raise FilterRefused(f"filter {filter_expr!r} is not a list of PromQL label matchers: "
+                            f"{_lib_consumer_read.error_text(tree)}")
+    if tree.get("kind") != "selector" or tree.get("range"):
+        raise FilterRefused(f"filter {filter_expr!r} is not a list of PromQL label matchers")
+    out: list[str] = []
+    for m in tree["matchers"]:
+        if m["name"] == "__name__":
+            if m["type"] == "=" and m["value"] == _SENTINEL:
+                continue
+            raise FilterRefused(f"filter {filter_expr!r} names the metric (__name__); "
+                                "the metric comes from the dictionary")
+        out.append(f'{_promql_label_name(m["name"])}{m["type"]}{_promql_string(m["value"])}')
+    return out
+
+
+def parse_filters(filters: list[str]) -> "list[list[str] | FilterRefused]":
+    """parse_filter_to_matchers of every filter, read in one da-read run:
+    per filter its matchers, or the FilterRefused that says why not."""
+    out: "list[list[str] | FilterRefused | None]" = [[] if not f.strip() else None for f in filters]
+    todo = [i for i, v in enumerate(out) if v is None]
+    trees = _lib_consumer_read.promql_shape_each(
+        [_SENTINEL + "{" + filters[i] + "}" for i in todo])
+    for i, tree in zip(todo, trees):
+        try:
+            out[i] = _matchers_of(filters[i], tree)
+        except FilterRefused as exc:
+            out[i] = exc
+    return out  # type: ignore[return-value]
 
 
 def parse_filter_to_matchers(filter_expr: str) -> list[str]:
-    """Parse filter string into PromQL label matchers.
+    """The PromQL label matchers of a mapping entry's `filter`, read by
+    Prometheus' parser as the label block of a selector and written back in
+    one spelling, e.g.
 
-    Supports comma-separated matchers:
       'schema=~"app_a_.*"'
       'schema=~"app_a_.*", tablespace="ts_a"'
+
+    #4264: read on the tree, so a comma or a quote inside a value is part of
+    the value (the text split cut `schema=~"a,b"` in two). A filter the parser
+    refuses, or one that names the metric (`__name__`), raises FilterRefused.
     """
-    matchers: list[str] = []
-    for part in filter_expr.split(','):
-        part = part.strip()
-        if not part:
-            continue
-        m = _LABEL_MATCHER_RE.match(part)
-        if m:
-            label, op, value = m.group(1), m.group(2), m.group(3)
-            matchers.append(f'{label}{op}"{value}"')
-        else:
-            # Pass through as-is (user knows PromQL)
-            matchers.append(part)
-    return matchers
+    [got] = parse_filters([filter_expr])
+    if isinstance(got, FilterRefused):
+        raise got
+    return got
+
+
+def _entry_matchers(entry: "MappingEntry") -> list[str]:
+    return entry.matchers if entry.matchers is not None else parse_filter_to_matchers(entry.filter_expr)
 
 
 def generate_recording_rules(
@@ -296,9 +352,9 @@ def generate_recording_rules(
     for mapping in mappings:
         rules: list[dict] = []
         for entry in mapping.entries:
-            filter_matchers = parse_filter_to_matchers(entry.filter_expr)
+            filter_matchers = _entry_matchers(entry)
             # Build label selector: instance + filter matchers
-            all_matchers = [f'instance="{mapping.instance}"'] + filter_matchers
+            all_matchers = [f'instance={_promql_string(mapping.instance)}'] + filter_matchers
             selector = ', '.join(all_matchers)
 
             for metric in metrics:
@@ -380,7 +436,11 @@ def validate_mappings(
             seen_tenants.setdefault(entry.tenant, []).append(mapping.instance)
 
             # Validate filter syntax
-            matchers = parse_filter_to_matchers(entry.filter_expr)
+            try:
+                matchers = _entry_matchers(entry)
+            except FilterRefused as exc:
+                messages.append(f"ERROR: instance={mapping.instance}, tenant={entry.tenant}: {exc}")
+                continue
             if not matchers:
                 messages.append(
                     f"WARN: instance={mapping.instance}, tenant={entry.tenant}: "
@@ -454,6 +514,20 @@ def main() -> None:
     if not mappings:
         print("INFO: no valid mappings found in _instance_mapping.yaml", file=sys.stderr)
         sys.exit(EXIT_OK)
+    # #4264 / #3445: a filter Prometheus' parser cannot read is an unreadable
+    # input — named, exit 2, nothing generated.
+    pairs = [(m, e) for m in mappings for e in m.entries]
+    try:
+        parsed = parse_filters([e.filter_expr for _m, e in pairs])
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    for (mapping, entry), got in zip(pairs, parsed):
+        if isinstance(got, FilterRefused):
+            print(f"ERROR: {mapping_path}: instance={mapping.instance}, "
+                  f"tenant={entry.tenant}: {got}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+        entry.matchers = got
 
     # Resolve metrics list
     if args.metrics:

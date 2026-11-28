@@ -21,9 +21,11 @@ purpose: |
 
   When a CLI flag or message changes, re-run and re-capture — do not
   hand-edit the output. Guards in tests/dx/test_platform_demo_commands.py:
-  argv accepted by each tool's own argparse (every phase), and migrate's
+  argv accepted by each tool's own argparse (every phase), migrate's
   terminal + sample equal a fresh run of its command (the error message
-  of that test prints the regenerated block).
+  of that test prints the regenerated block), and generate-routes'
+  sample equals a fresh run of scaffold + its command (its terminal is
+  captured with da-read on PATH, not compared).
 
   Public API:
     DEMO_TRANSCRIPTS   { [phaseId]: { command, terminal[], sample? } }
@@ -88,7 +90,7 @@ groups:
     labels:
       severity: critical
       tenant: demo-tenant
-      component: migrated
+      da_migrated: 'true'
     annotations:
       summary: MySQL instance is down
       owner: team-db
@@ -100,7 +102,6 @@ groups:
     labels:
       severity: warning
       tenant: demo-tenant
-      component: migrated
     annotations:
       summary: 'Migrated rules of tenant demo-tenant expire on 2099-12-31: promote them to platform rules or renew the expiry'
       owner: team-db
@@ -147,7 +148,7 @@ groups:
       'Config files: 2 read, 0 skipped',
       'Found 1 tenant(s) with routing config: demo-tenant',
       'Found 1 tenant(s) for severity dedup: demo-tenant',
-      'NOTICE: amtool not found on PATH; generated Alertmanager config was NOT validated by Alertmanager',
+      'Alertmanager\'s config loader (da-read) accepted the alertmanager.yml',
       'WARN: the root route\'s receiver \'default\' has no integration (no non-empty *_configs) — every alert no child route matches, including the platform\'s own self-monitoring alerts, ends there and notifies no one. Not an error; to deliver platform alerts see docs/integration/byo-alertmanager-integration.en.md §11 "Delivering Platform Self-Monitoring Alerts".',
       'WARN: the built-in base\'s (no --base-config: it is unwired by design, so --strict does not escalate this) \'watchdog-heartbeat\' receiver has no integration (no non-empty *_configs) — the always-firing Watchdog heartbeat reaches no external dead-man\'s switch, so a dead alerting pipeline goes unnoticed. Wire it to one: see docs/integration/alerting-plane-self-liveness.en.md.',
       'Written to alertmanager.yml (1 routes, 1 receivers, 2 inhibit rules)',
@@ -167,6 +168,7 @@ route:
   routes:
   - matchers:
     - alertname="Watchdog"
+    - da_migrated=""
     group_by:
     - alertname
     group_wait: 0s
@@ -176,6 +178,7 @@ route:
     continue: false
   - matchers:
     - component="custom"
+    - da_migrated=""
     group_by:
     - tenant
     - alertname
@@ -189,6 +192,7 @@ route:
       receiver: tenant-demo-tenant
   - matchers:
     - component="synthetic-probe"
+    - da_migrated=""
     group_by:
     - alertname
     group_wait: 0s
@@ -198,10 +202,18 @@ route:
     continue: false
   - matchers:
     - component="sentinel"
+    - da_migrated=""
     group_by:
     - tenant
     - alertname
     receiver: sentinel-sinkhole
+    continue: false
+  - matchers:
+    - da_migrated="true"
+    group_by:
+    - tenant
+    - alertname
+    receiver: migrated-alerts-shadow
     continue: false
   - matchers:
     - tenant="demo-tenant"
@@ -221,12 +233,14 @@ receivers:
 - name: custom-alerts-firehose
 - name: synthetic-receiver
 - name: sentinel-sinkhole
+- name: migrated-alerts-shadow
 inhibit_rules:
 - source_matchers:
   - severity="critical"
   - metric_group=~".+"
   - tenant=~".+"
   - da_cluster=~".+"
+  - da_migrated=""
   target_matchers:
   - severity="warning"
   - metric_group=~".+"
@@ -241,6 +255,7 @@ inhibit_rules:
   - metric_group=~".+"
   - tenant=~".+"
   - da_cluster=""
+  - da_migrated=""
   target_matchers:
   - severity="warning"
   - metric_group=~".+"

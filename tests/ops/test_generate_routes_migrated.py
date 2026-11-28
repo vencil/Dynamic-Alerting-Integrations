@@ -1,4 +1,4 @@
-"""#4277：migrate-rule 寫出的 migrated 規則（`component="migrated"`）在 Alertmanager 的隔離。
+"""#4277：migrate-rule 寫出的 migrated 告警（`da_migrated="true"`，#4355）在 Alertmanager 的隔離。
 
 影子期新舊規則並存，migrated 告警不能通知任何人；切換（`_routing_migrated:
 active`）之後，它與該租戶的其他告警走同一條路。切換只動 conf.d 與 Alertmanager，
@@ -23,6 +23,9 @@ pytestmark = pytest.mark.usefixtures("judging_run")
 import _grar_render as render  # noqa: E402
 import _grar_routes as routes_mod  # noqa: E402
 import generate_alertmanager_routes as gar  # noqa: E402
+
+#: #4355: the one spelling, `_grar_routes.MIGRATED_LABEL` / `MIGRATED_VALUE`.
+MIG = f'{routes_mod.MIGRATED_LABEL}="{routes_mod.MIGRATED_VALUE}"'
 
 _GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
         / "generate_alertmanager_routes.py")
@@ -66,14 +69,14 @@ def _render(conf: Path) -> tuple[subprocess.CompletedProcess, dict | None]:
 
 def _migrated_routes(am: dict) -> list[tuple[int, dict]]:
     return [(i, r) for i, r in enumerate(am["route"]["routes"])
-            if 'component="migrated"' in (r.get("matchers") or [])]
+            if MIG in (r.get("matchers") or [])]
 
 
 def test_every_tenant_is_in_shadow_by_default(tmp_path):
     proc, am = _render(_tree(tmp_path, {"t-a": ..., "t-b": ...}))
     assert proc.returncode == 0, proc.stderr
     (idx, route), = _migrated_routes(am)
-    assert route["matchers"] == ['component="migrated"']
+    assert route["matchers"] == [MIG]
     assert route["receiver"] == "migrated-alerts-shadow" and route["continue"] is False
     assert idx == 4, [r.get("matchers") for r in am["route"]["routes"]]
     (recv,) = [r for r in am["receivers"] if r["name"] == "migrated-alerts-shadow"]
@@ -84,7 +87,7 @@ def test_an_active_tenant_is_left_to_its_own_routing(tmp_path):
     proc, am = _render(_tree(tmp_path, {"t-a": "active", "t-b": "shadow", "t-c": ...}))
     assert proc.returncode == 0, proc.stderr
     (_, route), = _migrated_routes(am)
-    assert route["matchers"] == ['component="migrated"', 'tenant!~"t-a"']
+    assert route["matchers"] == [MIG, 'tenant!~"t-a"']
 
 
 def test_the_platform_tenants_layer_counts_too(tmp_path):
@@ -93,7 +96,7 @@ def test_the_platform_tenants_layer_counts_too(tmp_path):
     proc, am = _render(_tree(tmp_path, {"t-a": ..., "t-b": ...}, root_states={"t-b": "active"}))
     assert proc.returncode == 0, proc.stderr
     (_, route), = _migrated_routes(am)
-    assert route["matchers"] == ['component="migrated"', 'tenant!~"t-b"']
+    assert route["matchers"] == [MIG, 'tenant!~"t-b"']
 
 
 @pytest.mark.parametrize("value", ["yes", "Active", "true", "on", "{state: active}", "1"])
@@ -109,7 +112,7 @@ def test_null_is_shadow(tmp_path):
     proc, am = _render(_tree(tmp_path, {"t-a": "null"}))
     assert proc.returncode == 0, proc.stderr
     (_, route), = _migrated_routes(am)
-    assert route["matchers"] == ['component="migrated"']
+    assert route["matchers"] == [MIG]
 
 
 def test_the_route_is_pinned_ahead_of_the_enforced_routes(tmp_path):
@@ -133,7 +136,7 @@ def test_the_route_is_pinned_ahead_of_the_enforced_routes(tmp_path):
 def test_a_merge_given_no_set_puts_every_tenant_in_shadow():
     """A caller with no tenant tree: the safe default."""
     out_routes, out_receivers = render._inject_custom_alert_isolation([], [])
-    assert out_routes[4]["matchers"] == ['component="migrated"']
+    assert out_routes[4]["matchers"] == [MIG]
     assert "migrated-alerts-shadow" in {r["name"] for r in out_receivers}
 
 
@@ -141,7 +144,7 @@ def test_a_stale_migrated_route_is_replaced_by_this_runs():
     """Re-merging an output (or a base that held one) keeps one: this run's."""
     stale = routes_mod._build_migrated_alert_routes(["old"])[0]
     out_routes, _ = render._inject_custom_alert_isolation(stale, [], migrated_active=["new"])
-    found = [r for r in out_routes if 'component="migrated"' in r["matchers"]]
+    found = [r for r in out_routes if MIG in r["matchers"]]
     assert found == routes_mod._build_migrated_alert_routes(["new"])[0]
 
 
@@ -170,7 +173,7 @@ def test_a_tenant_with_routing_disabled_still_cuts_over(tmp_path):
     proc, am = _render(conf)
     assert proc.returncode == 0, proc.stderr
     (_, route), = _migrated_routes(am)
-    assert route["matchers"] == ['component="migrated"', 'tenant!~"t-off"']
+    assert route["matchers"] == [MIG, 'tenant!~"t-off"']
 
 
 def test_a_notifier_on_the_shadow_receiver_is_refused(tmp_path):
@@ -241,3 +244,113 @@ def test_the_verdict_assembles_with_the_set_it_was_given(monkeypatch):
     monkeypatch.setattr(render, "assemble_configmap", spy)
     render.evaluate_generated_config([], [], [], [], migrated_active=["t-a"])
     assert seen == [{"t-a"}]
+
+
+# ── #4355: migrated alerts reach no other platform route, mute nothing ──
+
+GATE = f'{routes_mod.MIGRATED_LABEL}=""'
+
+
+def test_every_platform_route_but_the_migrated_one_excludes_migrated_alerts():
+    out_routes, _ = render._inject_custom_alert_isolation([], [])
+    platform = out_routes[:render.PLATFORM_ROUTE_COUNT]
+    assert [GATE in r["matchers"] for r in platform] == [True, True, True, True, False]
+    assert MIG in platform[-1]["matchers"]
+
+
+def test_re_injecting_an_injected_tree_does_not_repeat_the_gate():
+    once, _ = render._inject_custom_alert_isolation([], [])
+    twice, _ = render._inject_custom_alert_isolation(once, [])
+    assert twice == once
+    assert all(r["matchers"].count(GATE) <= 1 for r in twice)
+
+
+def test_the_builders_routes_are_not_modified_in_place():
+    """The gate is added to the injected copy; a second call starts clean."""
+    before = routes_mod._build_watchdog_route()[0][0]["matchers"]
+    render._inject_custom_alert_isolation([], [])
+    assert routes_mod._build_watchdog_route()[0][0]["matchers"] == before
+
+
+_UNGATED = {"source_matchers": ['alertname="TenantSilentWarning"', 'tenant=~".+"'],
+            "target_matchers": ['severity="warning"', 'tenant=~".+"', 'alert_source=""'],
+            "equal": ["tenant"]}
+
+
+@pytest.mark.parametrize("source, offending", [
+    (['alertname="X"'], True),
+    (['alertname="X"', 'da_migrated=""'], False),
+    (['alertname="X"', 'da_migrated!="true"'], False),
+    (['alertname="X"', 'da_migrated!~"t.*"'], False),
+    (['alertname="X"', 'da_migrated=~".*"'], True),     # matches "true"
+    (['alertname="X"', 'da_migrated!="false"'], True),  # matches "true"
+    (['{alertname="X", da_migrated=""}'], False),        # several in one element
+    ([], True),                                          # match-all source
+    (['alertname="X'], True),                            # unreadable: fail closed
+    # CodeRabbit on #4366: Go's regexp matches "true" with a POSIX class,
+    # Python's `re` reads `[[:alpha:]]` as another set — not confirmable,
+    # so it counts as matching (fail closed), either operator
+    (['alertname="X"', 'da_migrated=~"[[:alpha:]]+"'], True),
+    (['alertname="X"', 'da_migrated!~"[[:alpha:]]+"'], True),
+    (['alertname="X"', 'da_migrated!~"\\pL+"'], True),  # RE2-only syntax
+])
+def test_a_source_must_exclude_migrated_alerts(source, offending):
+    import _grar_validate as validate
+    rule = {"source_matchers": source, "target_matchers": ['severity="warning"']}
+    assert bool(validate.find_migrated_sourced_inhibits([rule])) is offending
+
+
+def test_the_legacy_source_match_form_is_judged_too():
+    import _grar_validate as validate
+    assert validate.find_migrated_sourced_inhibits(
+        [{"source_match": {"alertname": "X", "da_migrated": ""}, "target_match": {}}]) == []
+    assert validate.find_migrated_sourced_inhibits(
+        [{"source_match": {"alertname": "X"}, "target_match": {}}])
+
+
+def test_an_ungated_source_fails_under_strict_and_warns_without(capsys):
+    with pytest.raises(ValueError, match="#4355"):
+        render._enforce_migrated_alerts_mute_nothing([_UNGATED], strict=True)
+    render._enforce_migrated_alerts_mute_nothing([_UNGATED], strict=False)
+    assert "inhibit_rules[0]" in capsys.readouterr().err
+
+
+def test_the_merge_refuses_an_ungated_base_rule_under_strict(tmp_path):
+    conf = _tree(tmp_path, {"t-a": ...})
+    base = tmp_path / "base.yml"
+    base.write_text(yaml.safe_dump({"route": {"receiver": "default"},
+                                    "receivers": [{"name": "default"}],
+                                    "inhibit_rules": [_UNGATED]}), encoding="utf-8")
+    out = tmp_path / "am.yml"
+    argv = [sys.executable, "-s", str(_GAR), "--config-dir", str(conf), "--output-alertmanager",
+            "--base-config", str(base), "-o", str(out)]
+    strict = subprocess.run([*argv, "--strict"], capture_output=True, text=True,
+                            encoding="utf-8", timeout=300)
+    assert strict.returncode == 1 and "#4355" in strict.stderr, strict.stderr
+    assert not out.exists()
+    plain = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert plain.returncode == 0 and "WARN: inhibit_rules[0]" in plain.stderr, plain.stderr
+
+
+def test_the_generated_dedup_rules_exclude_migrated_sources():
+    rules, _ = routes_mod.generate_inhibit_rules({"t-a": "enable"})
+    import _grar_validate as validate
+    assert validate.find_migrated_sourced_inhibits(rules) == []
+
+
+@pytest.mark.parametrize("tenant_shape", [False, True])
+def test_an_enforced_route_matching_the_migrated_label_is_kept(tenant_shape):
+    """CodeRabbit on #4366: the platform's shadow route is known by its
+    receiver, so a `_routing_enforced.match` with `da_migrated="true"` (the
+    single or the {{tenant}} shape) is not taken for it and dropped."""
+    enforced = {"receiver": {"type": "webhook", "url": "https://noc.example.com/{{tenant}}"
+                             if tenant_shape else "https://noc.example.com/a"},
+                "match": [MIG]}
+    routing = {"t-a": {"receiver": {"type": "webhook", "url": "https://hooks.example.com/t-a"}}}
+    gen, _recv, _w = routes_mod.generate_routes(routing, enforced_routing=enforced, tenants=())
+    enforced_routes = [r for r in gen if str(r.get("receiver", "")).startswith("platform-enforced")]
+    assert enforced_routes and all(MIG in r["matchers"] for r in enforced_routes)
+    out, _ = render._inject_custom_alert_isolation(gen, [])
+    assert [r for r in out if str(r.get("receiver", "")).startswith("platform-enforced")] \
+        == enforced_routes
+    assert [r["receiver"] for r in out].count(routes_mod.MIGRATED_SHADOW_RECEIVER) == 1

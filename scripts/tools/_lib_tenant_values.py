@@ -509,8 +509,8 @@ class TenantValues(NamedTuple):
 
 
 #: The kinds of a key check — Go's `config.KeyCheckKinds`
-#: (pkg/config/key_check.go): a dimensional key's `version` label (ADR-024
-#: OQ-6) and a key in a retired spelling (#1231). A closed set: a kind
+#: (pkg/config/key_check.go): a dimensional key's `version` label
+#: (ADR-024 §1) and a key in a retired spelling (#1231). A closed set: a kind
 #: outside it is output this reader cannot read.
 #: tests/shared/test_key_check_kinds_parity.py reads the Go constants and
 #: holds both sets to them.
@@ -519,7 +519,7 @@ KEY_CHECK_KINDS = frozenset({
     "renamed_shadowed", "renamed_critical_dimensional", "renamed",
 })
 #: The kinds about a retired spelling (Go's `KeyCheckKind.IsRenamed`): an
-#: advisory; the others are about a `version` label the exporter refuses.
+#: advisory; the others are about a `version` label that fails the exporter's check.
 KEY_CHECK_RENAMED_KINDS = frozenset({"renamed_shadowed", "renamed_critical_dimensional", "renamed"})
 
 

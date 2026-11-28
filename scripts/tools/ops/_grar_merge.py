@@ -316,8 +316,8 @@ FINDING_KINDS: dict[str, str] = {
         "error in a tenant file, a notice in a profile or a root platform "
         "file's `tenants:` entry.",
     "key_version_label":
-        "A dimensional key's `version` label the exporter refuses (ADR-024 "
-        "OQ-6): the exporter's check, named by its kind, metric and key.",
+        "A dimensional key's `version` label that fails the exporter's check: "
+        "the exporter's check, named by its kind, metric and key.",
     "key_renamed":
         "A key written in a retired spelling (#1231): the exporter's check, "
         "named by its kind, metric, key and replacement; advisory.",

@@ -33,6 +33,7 @@ ARTIFACT_FILE_FLAGS = [
     ("../ops/configmap_assemble.py", "--output"),  # #3107 ④, owner 2026-10-24
     ("ops/state_reconcile.py", "--manifest-path"),  # #3107 ④, owner 2026-11-15
     ("ops/generate_alertmanager_routes.py", "-o/--output"),
+    ("lint/trufflehog_to_sarif.py", "--output"),  # #3981, owner 2026-11-28
 ]
 
 REFUSAL = "'-' is standard output, and this flag names a file that is replaced whole"

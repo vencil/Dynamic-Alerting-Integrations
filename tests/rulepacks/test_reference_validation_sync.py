@@ -11,8 +11,8 @@ WHY this exists (TRK-339 WS4a-1, ADR-030 harness fidelity):
   the epic's threshold decisions (#1175/#1176/#1196) will be based on.
 
 Contract (exit-lock shape, mirroring the #1195 KNOWN_UNWIRED pattern):
-  For every candidate alert, `for:` / severity / raw-metric selectors must equal
-  the shipped values, OR the divergence must be declared in
+  For every candidate alert, `for:` / `keep_firing_for:` / severity / raw-metric
+  selectors must equal the shipped values, OR the divergence must be declared in
   reference-validation/divergence-ledger.yaml. Ledger entries are themselves
   asserted against reality — an entry whose divergence no longer exists (alert
   added to candidate, shipped evidence text gone, matcher no longer present)
@@ -223,6 +223,11 @@ def test_for_and_severity_aligned(pack):
             continue
         for field, cand_val, shipped_val in (
             ("for", _dur_s(cand.get("for", "0s")), _dur_s(shipped.get("for", "0s"))),
+            # Per alert, read from the parsed rule: a `shipped_evidence` substring
+            # cannot pin this one, since several alerts carry the same
+            # `keep_firing_for: 10m` text and any of them satisfies the search.
+            ("keep_firing_for", _dur_s(cand.get("keep_firing_for", "0s")),
+             _dur_s(shipped.get("keep_firing_for", "0s"))),
             ("severity", cand.get("labels", {}).get("severity"),
              shipped.get("labels", {}).get("severity")),
         ):
@@ -233,6 +238,18 @@ def test_for_and_severity_aligned(pack):
                     f"[{pack}] {name} {field}: ledger declares a divergence but candidate "
                     "and shipped now AGREE — remove the stale ledger entry"
                 )
+                if field == "keep_firing_for":
+                    # The entry names the shipped value it was reasoned about; a
+                    # different one (10m -> 30m) is a new decision, not this entry.
+                    declared = entry.get("shipped_value")
+                    assert declared is not None, (
+                        f"[{pack}] {name} keep_firing_for: ledger entry needs shipped_value"
+                    )
+                    assert _dur_s(declared) == shipped_val, (
+                        f"[{pack}] {name} keep_firing_for: ledger declares shipped_value "
+                        f"{declared!r} but the shipped rule has {shipped_val}s — re-verify "
+                        "the divergence and update the ledger"
+                    )
                 continue
             assert cand_val == shipped_val, (
                 f"[{pack}] {name} {field} drift: candidate={cand_val!r} shipped={shipped_val!r} "
