@@ -271,6 +271,9 @@ jobs:
           pre-commit run forbid-legacy-mariadb-threshold-name --all-files
           pre-commit run forbid-legacy-mysql-cpu-key --all-files
           pre-commit run forbid-legacy-mysql-cpu-selector --all-files
+          # #1200: a key in the registry's retired_keys is named nowhere a
+          # reader learns keys from (docs, samples, scripts, portal).
+          pre-commit run retired-keys-not-taught --all-files
           pre-commit run skip-a11y-justification-check --all-files
           # CI-ROI 6C blind-spot fix: these 4 lints' live-dogfood pytest
           # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as

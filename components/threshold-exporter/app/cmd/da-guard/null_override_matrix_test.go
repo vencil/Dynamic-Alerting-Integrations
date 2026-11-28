@@ -145,7 +145,7 @@ func nullMatrixObserve(t *testing.T, dir, tenantKey string) nullMatrixObs {
 		}
 	}
 
-	report, err := guard.CheckDefaultsImpact(buildCheckInput(tree, &flags{}, fixedNow))
+	report, err := guard.CheckDefaultsImpact(checkInputOf(t, tree, &flags{}, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}

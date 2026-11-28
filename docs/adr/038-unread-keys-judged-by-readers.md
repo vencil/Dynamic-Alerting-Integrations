@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-11-22
+updated_at: 2026-11-28
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -70,7 +70,7 @@ updated_at: 2026-11-22
 ```yaml
 # _defaults.yaml
 defaults:
-  mysql_connections: 80
+  mysql_connection_usage_percent: 80
   mysql_slave_lag: 30
   redis_memory: 70
 ```
@@ -79,7 +79,7 @@ defaults:
 # db-a.yaml
 tenants:
   db-a:
-    mysql_conections: "70"        # 拼錯
+    mysql_conection_usage_percent: "70"  # 拼錯
     mysql_slave_lagg: disable     # 拼錯，原意是關掉 mysql_slave_lag
     _routng: disable              # 拼錯，原意是停用路由
     redis_memory: disable         # 關掉這個告警
@@ -87,12 +87,12 @@ tenants:
     _namespaces: [prod-ns]        # 給工具看的標註
 ```
 
-起草時（2026-10-16）在 main 上實跑的結果：
+在 2026-10-16 的 main 上，這份輸入得到的結果：
 
 | 工具 | 結果 |
 |---|---|
-| exporter 實際送出（served-values） | `mysql_connections: 80`、`mysql_slave_lag: 30`、`redis_memory_critical: 90`；沒有送出的：`mysql_conections`、`mysql_slave_lagg`、`_routng`、`redis_memory`、`_namespaces` |
-| 產生器 `--validate --strict` | rc 0，三行警告：`unknown reserved key '_routng' (typo?)`、`unknown key 'mysql_conections' not in defaults`、`unknown key 'mysql_slave_lagg' not in defaults` |
+| exporter 實際送出（served-values） | `mysql_connection_usage_percent: 80`、`mysql_slave_lag: 30`、`redis_memory_critical: 90`；沒有送出的：`mysql_conection_usage_percent`、`mysql_slave_lagg`、`_routng`、`redis_memory`、`_namespaces` |
+| 產生器 `--validate --strict` | rc 0，三行警告：`unknown reserved key '_routng' (typo?)`、`unknown key 'mysql_conection_usage_percent' not in defaults`、`unknown key 'mysql_slave_lagg' not in defaults` |
 | validate-config | rc 1：schema 擋下 `_routng`；兩個閾值鍵的拼錯只列警告 |
 | da-guard | rc 0，沒有任何 finding |
 
@@ -453,13 +453,13 @@ _defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode (valid:
 
 ```
 db-a
-  key                     source        read_by     verdict  disable
-  mysql_conections        db-a.yaml     —           unread   —        ← error：沒有讀取端讀
-  mysql_slave_lagg        db-a.yaml     —           unread   noop     ← warning：沒關到任何東西，mysql_slave_lag 仍送出 30
-  _routng                 db-a.yaml     —           unread   —        ← error
-  redis_memory            db-a.yaml     exporter    read     effective
-  redis_memory_critical   db-a.yaml     exporter    read     —        ← warning：跟著 redis_memory 關掉（disable_cascade），不送
-  _namespaces             db-a.yaml     annotation  read     —
+  key                            source        read_by     verdict  disable
+  mysql_conection_usage_percent  db-a.yaml     —           unread   —        ← error：沒有讀取端讀
+  mysql_slave_lagg               db-a.yaml     —           unread   noop     ← warning：沒關到任何東西，mysql_slave_lag 仍送出 30
+  _routng                        db-a.yaml     —           unread   —        ← error
+  redis_memory                   db-a.yaml     exporter    read     effective
+  redis_memory_critical          db-a.yaml     exporter    read     —        ← warning：跟著 redis_memory 關掉（disable_cascade），不送
+  _namespaces                    db-a.yaml     annotation  read     —
 ```
 
 輸入與今天的實測輸出見「背景」；這張表是本 ADR 規定的判決，各欄位依決定 1、4、8、9 產生。
