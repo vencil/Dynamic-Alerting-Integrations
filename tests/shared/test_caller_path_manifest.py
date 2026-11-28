@@ -768,8 +768,8 @@ def test_a_pinning_test_is_a_collected_test_function(tmp_path):
     here = "tests/shared/test_caller_path_manifest.py"
     assert _test_exists(f"{here}::test_a_pinning_test_is_a_collected_test_function")
     # a method of a test class counts
-    assert _test_exists("tests/ops/test_migrate_rule_outputs.py::"
-                        "test_missing_input_file_exits_caller_error")
+    assert _test_exists("tests/lint/test_check_cli_contract.py::"
+                        "test_the_tree_is_green_under_the_ledger")
     # product code, a conftest docstring, a non-test name: not tests
     assert not _test_exists("scripts/tools/ops/lint_custom_rules.py::load_policy")
     assert not _test_exists("tests/conftest.py::test_x")

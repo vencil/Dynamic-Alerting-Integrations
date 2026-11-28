@@ -178,8 +178,9 @@ commands:
   lint:
     "--exclude": not_path
   migrate:
+    "--expiry": not_path
     "--output-dir": output
-    "--prefix": not_path
+    "--owner": not_path
     "--tenant": not_path
   migrate-credentials:
     "--manifests-out": output

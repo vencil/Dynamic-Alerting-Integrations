@@ -19,6 +19,7 @@
 //	da-read promql-reads -
 //	da-read promql-names -
 //	da-read promql-shape -
+//	da-read promql-pin -
 //	da-read prometheus-features -
 //	da-read self-check
 //
@@ -179,6 +180,7 @@ func usage(stderr io.Writer) int {
 	say(stderr, "       %s promql-reads -\n", programName)
 	say(stderr, "       %s promql-names -\n", programName)
 	say(stderr, "       %s promql-shape -\n", programName)
+	say(stderr, "       %s promql-pin -\n", programName)
 	say(stderr, "       %s prometheus-features -\n", programName)
 	say(stderr, "       %s %s\n", programName, selfCheckCmd)
 	say(stderr, "Reads an Alertmanager config, a prometheus.yml or Prometheus rule files with "+
@@ -194,7 +196,9 @@ func usage(stderr io.Writer) int {
 		"per expression, its tree: every aggregation, binary operator, call and selector with "+
 		"its grouping and matching labels; promql-names reads a JSON array of names and prints, "+
 		"per name, whether a rule can call it (a function or aggregation the rule loader's "+
-		"parser accepts); prometheus-features reads a JSON array of --enable-feature values "+
+		"parser accepts); promql-pin reads {\"tenant\", \"namespace_form\", \"expressions\"} and prints, "+
+		"per expression, it with every selector pinned to the tenant (or the selector a pin conflicts with); "+
+		"prometheus-features reads a JSON array of --enable-feature values "+
 		"and prints how each option bears on what da-read reads, beside the options its "+
 		"rule parser is built from. Exit 2 when the input is refused, "+
 		"with {\"answer\": \"refused\"} on stdout (prometheus-rules: beside \"files\"); "+
@@ -227,6 +231,7 @@ var subcommands = map[string]subcommand{
 	"promql-reads":      runReads,
 	"promql-names":      runNames,
 	"promql-shape":      runShape,
+	"promql-pin":        runPin,
 
 	"prometheus-features": runFeatures,
 }
@@ -367,6 +372,30 @@ func runShape(operands []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		return exitCallerErr
 	}
 	out, err := readPromQLShape(exprs)
+	if err != nil {
+		say(stderr, "%s: %s: %v\n", programName, stdinName, err)
+		return refuse(stdout, stderr)
+	}
+	return write(stdout, stderr, append(out, '\n'), exitOK)
+}
+
+// runPin is `promql-pin -` (promql_pin.go).
+func runPin(operands []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(operands) != 1 || operands[0] != "-" {
+		return usage(stderr)
+	}
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
+	}
+	req, err := pinRequestOf(data)
+	if err != nil {
+		// the caller's framing: no answer about the input
+		say(stderr, "%s: standard input is not a promql-pin request: %v\n", programName, err)
+		return exitCallerErr
+	}
+	out, err := readPromQLPin(req)
 	if err != nil {
 		say(stderr, "%s: %s: %v\n", programName, stdinName, err)
 		return refuse(stdout, stderr)

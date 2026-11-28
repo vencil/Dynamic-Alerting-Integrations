@@ -116,7 +116,7 @@ docker run --rm \
 |------|------|----------|
 | `init` | 在客戶 repo bootstrap Dynamic Alerting 整合骨架（CI/CD + conf.d + Kustomize） | `--ci both --tenants db-a --rule-packs mariadb` |
 | `scaffold` | 產 tenant 配置（互動 / 非互動，支援 1:1 / N:1 / 1:N 拓撲） | `--tenant <name> --db <types>` |
-| `migrate` | 傳統 Prometheus 規則 → 動態格式（AST + regex 雙引擎，含 `--triage` 報告） | `<input_file>` |
+| `migrate` | 一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則（以語法樹注入租戶隔離，加 owner／expiry） | `<input_file> --tenant <ID> --owner <OWNER> --expiry <YYYY-MM-DD>` |
 | `grafana-import` | Grafana Dashboard JSON 匯入轉 conf.d 結構 | `<dashboard.json>` |
 
 ### 4.3 Validate（pre-flight gate）
@@ -226,6 +226,7 @@ $DA diagnose db-a
 $DA baseline --tenant db-a --duration 300
 
 # 3. Shadow Monitoring 雙軌比對（auto-convergence）
+#    --mapping 讀舊版 migrate 的 prefix-mapping.yaml；讀新對照 .migration/mapping/<tenant>.yaml 的支援在 #4227
 docker run --rm --network=host \
   -v $(pwd)/migration_output/.migration/prefix-mapping.yaml:/data/prefix-mapping.yaml:ro \
   -e PROMETHEUS_URL=$PROM \
@@ -241,11 +242,14 @@ docker run --rm \
   -v $(pwd)/my-rules.yml:/data/my-rules.yml \
   -v $(pwd)/output:/data/output \
   ghcr.io/vencil/da-tools \
-  migrate /data/my-rules.yml -o /data/output --dry-run --triage
+  migrate /data/my-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o /data/output --dry-run
 
-# 產出（--triage 只做分桶分析，不產生規則檔）：
-#   /data/output/triage-report.csv  ← 每條規則的分桶與建議處置，供人工審閱
-# 拿掉 --dry-run --triage 才會在 -o 目錄產生規則三件套與 prefix-mapping.yaml（YAML 在 -o/.migration/）
+# --dry-run 只印報告（已遷移、改用黃金標準、需人工確認的多叢集分組），不寫檔；
+# 有規則被拒（例如讀 kube_node_*、up 這類選不出一個租戶的序列）時逐條列出、結束碼 2。
+# 拿掉 --dry-run 才會在 -o 目錄寫出：
+#   .migration/migrated/db-a/rules.yml  ← 交給抓取原始指標的那台 Prometheus（或 federation 的 edge）載入
+#   .migration/mapping/db-a.yaml        ← 每條規則的 selector 注入前後對照
+#   migration-report-db-a.txt
 ```
 
 ### 5.3 GitOps 完整 ConfigMap 產出
@@ -287,7 +291,7 @@ docker run --rm \
 
 ### 5.5 導入客戶既有規則
 
-逐租戶用 [`migrate`](../../docs/cli-reference.md#migrate) 把既有規則轉成 conf.d 租戶檔，放進客戶 repo 後走客戶自己的 PR 流程。產出 `_custom_alerts` recipe 的批次導入見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
+逐租戶用 [`migrate`](../../docs/cli-reference.md#migrate) 把既有規則原樣遷移成 migrated 規則（每個 selector 注入租戶隔離，[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)），規則檔放進客戶 repo、走客戶自己的 PR 流程，由抓取原始指標的那台 Prometheus 載入。告警在 Alertmanager 先走 shadow receiver，租戶設 `_routing_migrated: active` 才切換；影子比對之後再由人提升成平台規則或 `_custom_alerts` recipe。
 
 ### 5.6 Rollback 驗證（v2.8.0）
 

@@ -633,37 +633,61 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 //     the tenant's own base `disable` switches off). The key verdict is asked
 //     whenever a line is left unchanged.
 //
+// ownedReserved is, for every reserved key of a tenant's own file the guard
+// may judge by value (config.RedundancyJudgedByValue, #4331), whether
+// another finding owns the line by the same rule — value_not_served, or a
+// finding of the key verdict naming it — so redundant_override leaves it to
+// that finding (one cause, one finding).
+//
 // A counterfactual or key verdict that cannot be had is named on the process
-// log and judges no threshold key redundant: redundant_override is advice,
-// and advice that could not be confirmed is not given.
+// log and judges no key redundant: redundant_override is advice, and advice
+// that could not be confirmed is not given (every reserved candidate is then
+// owned).
 //
 // ⛔ The key verdict walks the tree again, after the run's last bracketing
 // walk (sameWalks in runWith): a tree changed since the run's first walk is
 // the error (#3965 — one run, one tree; the caller ends the run with exit 2),
 // never ownership read from another tree.
 func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[string]map[string]any,
-	notServed map[string]map[string]config.NotServedKey, now time.Time) (map[string]map[string]bool, error) {
+	notServed map[string]map[string]config.NotServedKey, now time.Time,
+) (out, ownedReserved map[string]map[string]bool, err error) {
 	if f.skipRedundant {
-		return nil, nil
+		return nil, nil, nil
 	}
 	cands := map[string][]string{}
+	reserved := map[string][]string{}
 	for tenant, m := range overrides {
 		for k := range m {
-			if !strings.HasPrefix(k, "_") {
+			switch {
+			case !strings.HasPrefix(k, "_"):
 				cands[tenant] = append(cands[tenant], k)
+			case config.RedundancyJudgedByValue(k):
+				reserved[tenant] = append(reserved[tenant], k)
 			}
 		}
 		sort.Strings(cands[tenant])
 	}
-	if len(cands) == 0 {
-		return nil, nil
+	if len(cands) == 0 && len(reserved) == 0 {
+		return nil, nil, nil
 	}
-	out, err := scoped.ServedUnchangedWithout(cands, now)
-	if err != nil {
-		log.Printf("WARN: redundant_override not judged for threshold keys: %v", err)
-		return nil, nil
+	// No advice on a reserved candidate until its ownership is known.
+	ownedReserved = map[string]map[string]bool{}
+	allReservedOwned := func() map[string]map[string]bool {
+		for tenant, keys := range reserved {
+			ownedReserved[tenant] = map[string]bool{}
+			for _, k := range keys {
+				ownedReserved[tenant][k] = true
+			}
+		}
+		return ownedReserved
 	}
-	asks := false // an unchanged line the key verdict may own (a `disable` that switches nothing off)
+	if len(cands) > 0 {
+		if out, err = scoped.ServedUnchangedWithout(cands, now); err != nil {
+			log.Printf("WARN: redundant_override not judged for threshold keys: %v", err)
+			out = nil
+		}
+	}
+	asks := len(reserved) > 0 // a line the key verdict may own (a `disable` that switches nothing off)
 	for tenant, keys := range out {
 		for key, same := range keys {
 			if !same {
@@ -677,7 +701,7 @@ func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[s
 		}
 	}
 	if !asks {
-		return out, nil
+		return out, nil, nil
 	}
 	if betweenWalks != nil {
 		betweenWalks(scoped.ScanRoot())
@@ -687,7 +711,7 @@ func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[s
 	if err != nil || !sameWalks(scoped.TreeIdentity, opts.factsIdentity, io.Discard) {
 		// The facts' walk failed on, or read other than, the tree the run's
 		// first walk read: the tree changed meanwhile.
-		return nil, fmt.Errorf("--config-dir changed during this run (its walks read %s, then %s); nothing was judged — run it again",
+		return nil, nil, fmt.Errorf("--config-dir changed during this run (its walks read %s, then %s); nothing was judged — run it again",
 			scoped.TreeIdentity, walkName(opts.factsIdentity))
 	}
 	// keyVerdictOf compares its own walks with the facts' (factsIdentity)
@@ -695,11 +719,11 @@ func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[s
 	opts.scan = config.ScanOptions{SkipDuplicated: true}
 	kv, err := keyVerdictOf(root, opts, now)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !kv.judged {
-		log.Printf("WARN: redundant_override not judged for threshold keys (the key verdict: %v)", kv.why)
-		return nil, nil
+		log.Printf("WARN: redundant_override not judged (the key verdict: %v)", kv.why)
+		return nil, allReservedOwned(), nil
 	}
 	// The key verdict's own findings name the lines it reports — whatever
 	// their kind (unread, retired, disable_noop, disable_cascade, …): such a
@@ -722,7 +746,18 @@ func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[s
 			}
 		}
 	}
-	return out, nil
+	for tenant, keys := range reserved {
+		for _, key := range keys {
+			ns, listed := notServed[tenant][key]
+			if owned[tenant][key] || listed && config.NotServedOwnedElsewhere(key, ns.Reason) {
+				if ownedReserved[tenant] == nil {
+					ownedReserved[tenant] = map[string]bool{}
+				}
+				ownedReserved[tenant][key] = true
+			}
+		}
+	}
+	return out, ownedReserved, nil
 }
 
 // buildCheckInput assembles a guard.CheckInput from the scoped
@@ -782,7 +817,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) (gua
 		}
 	}
 	refused, rejected, blockErrs := customAlertVerdicts(scoped)
-	redundant, err := redundantThresholds(scoped, f, tenantOverrides, notServed, now)
+	redundant, ownedReserved, err := redundantThresholds(scoped, f, tenantOverrides, notServed, now)
 	if err != nil {
 		return guard.CheckInput{}, err
 	}
@@ -803,10 +838,12 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) (gua
 		RequiredFields:  splitNonEmpty(f.requiredFields),
 		TenantOverrides: tenantOverrides,
 		// #4330: redundant_override's counterfactual for threshold keys.
-		RedundantThresholds:  redundant,
-		NewDefaultsByTenant:  newDefaultsByTenant,
-		CardinalityLimit:     f.cardinalityLimit,
-		CardinalityWarnRatio: f.cardinalityWarnRatio,
+		RedundantThresholds: redundant,
+		// #4331: the reserved keys another finding owns.
+		ReservedOwnedElsewhere: ownedReserved,
+		NewDefaultsByTenant:    newDefaultsByTenant,
+		CardinalityLimit:       f.cardinalityLimit,
+		CardinalityWarnRatio:   f.cardinalityWarnRatio,
 		// #3380: what the exporter's own resolver produces, not a key count.
 		PredictedRowCounts: rowCounts,
 		ExporterRowCap:     exporterCap,

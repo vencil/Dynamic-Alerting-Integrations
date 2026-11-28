@@ -9,7 +9,7 @@
      這個 key。migrate 把這兩個欄位原樣告訴使用者，錯了就是在教錯的設定。
 
 v2.4.0 新增：DX Tooling Backlog 候選項目。
-migrate_rule.py 依賴 metric-dictionary.yaml 做遷移映射，
+migrate_rule.py 依 metric-dictionary.yaml 點名「改用黃金標準」的規則（#4226），
 stale 或 undocumented entry 會導致遷移建議不完整。
 
 用法:

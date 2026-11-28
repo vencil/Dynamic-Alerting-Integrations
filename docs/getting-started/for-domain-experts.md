@@ -160,7 +160,7 @@ python3 scripts/tools/lint/check_threshold_registry.py --ci
 
 ### 使用指標字典
 
-`scripts/tools/metric-dictionary.yaml` 把傳統規則常用的原始指標對到平台的閾值 key。`migrate_rule.py` 轉換既有規則時會查這份字典：原始指標已經有黃金標準告警的，工具會建議直接設閾值，而不是轉出一條重複的 `custom_` 規則。以其中一筆為例：
+`scripts/tools/metric-dictionary.yaml` 把傳統規則常用的原始指標對到平台的閾值 key。`migrate_rule.py` 遷移既有規則時會查這份字典：只讀一個原始指標、而它已經有黃金標準告警的，工具不產生 migrated 規則，只在報告點名改用黃金標準（直接設閾值）。以其中一筆為例：
 
 ```yaml {.quote src="scripts/tools/metric-dictionary.yaml"}
 mysql_global_status_threads_connected:
@@ -174,7 +174,7 @@ mysql_global_status_threads_connected:
 
 ## 遷移工作流
 
-### 從既有規則遷移到 Rule Pack
+### 從既有規則遷移
 
 ```bash
 # 1. 反向分析既有的 Prometheus 規則檔
@@ -182,20 +182,16 @@ python3 scripts/tools/ops/onboard_platform.py \
   --rule-files rules/ \
   -o onboard_output/
 
-# 2. 轉換規則（AST + Triage + Prefix + Dictionary）
+# 2. 原樣遷移一個租戶的規則（注入租戶隔離 + owner／expiry + 字典比對）
 python3 scripts/tools/ops/migrate_rule.py rules/alert.yml \
-  --tenant db-a -o migration_output/
+  --tenant db-a --owner team-db --expiry 2027-03-31 -o migration_output/
 
-# 3. 驗證遷移（Shadow Monitoring：比對新舊 recording rule 的數值）
-# ⚠️ 生產環境請使用 HTTPS
-python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
-  --prometheus https://prometheus:9090
+# 3. 影子比對：migrated 告警先送到 shadow receiver，與舊規則並行觀察
 ```
 
 - **步驟 1**：`--rule-files` 吃檔或目錄（可多個，目錄遞迴取 `*.yaml`／`*.yml`），不展開 glob（v2.9.0 映像仍把值當成一個 glob、只收一個值，給目錄什麼檔都選不到（WARN、結束碼 1）；用那個映像時給加引號的 glob（`'rules/*.yaml'`）或單一檔 <!-- image-caveat: v2.9.0 -->）。只給規則檔時，輸出是規則分析；`onboard-hints.json` 只有在另外給 `--alertmanager-config`、而且從中找到租戶時才會寫出。
-- **步驟 2**：輸出不是 Rule Pack 檔，是一組平台規則加租戶配置：`.migration/platform-recording-rules.yaml`、`.migration/platform-alert-rules.yaml`、`.migration/conf.d/<tenant>.yaml`（閾值寫在 `tenants.<tenant>` 底下，租戶 id 由 `--tenant` 給）、`.migration/conf.d/_defaults.yaml`、`.migration/prefix-mapping.yaml`，以及 `migration-report.txt`、`triage-report.csv` 兩份報告。`--prefix` 是閾值 key 與 recording rule 名稱的前綴（預設 `custom_`），不是租戶前綴，也不會改來源指標名；直接產出 Rule Pack 檔，工具尚未實作。產生的 recording rule 與上方「第一部分」一樣是 `by(tenant, da_cluster)`：在收了多個叢集資料的 Prometheus 上，遷移後的規則逐叢集評估（`sum`／`max` 不再把同一個租戶的幾個叢集合在一起），告警帶 `da_cluster`；原式子自己寫的 `on(...)`／`by(...)` 照抄，點名身分 label 卻沒有 `da_cluster` 的會標出來請人確認。⚠️ 先把 `.migration/conf.d/_defaults.yaml` 的 `defaults:` 區塊合併進 conf.d 根的 `_defaults.yaml`（合併，不要整份覆蓋）：exporter 只發射宣告過的 key，沒合併時租戶檔的值不會生效。有 warning 配對的 critical 層不能放 defaults，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡。⚠️ v2.9.0 映像的 migrate 還沒有這些修正（閾值 selector 對不上 exporter 發射的 `component`／`metric`、recording rule 讀的是加了前綴的指標名、分組是 `by(tenant)`、沒有 `defaults-snippet.yaml`）；用那個版本時，套用前請照上方「第二部分」人工核對。 <!-- image-caveat: v2.9.0 -->
-- **步驟 3**：比對的是同一個 Prometheus 上的新舊兩組查詢，`--mapping` 讀步驟 2 產出的 `prefix-mapping.yaml`；單組比對用 `--old '<舊查詢>' --new '<新查詢>'`。兩個 Prometheus 之間互相比對、指定比對的時間範圍，這兩件事工具尚未實作；要持續觀察用 `--watch --interval <秒> --rounds <輪>`，加 `--auto-detect-convergence` 會在數值收斂時自動停止。完整流程見 [Shadow Monitoring SOP](../shadow-monitoring-sop.md)。
+- **步驟 2**：輸出不是 Rule Pack 檔，也不是閾值設定：規則原樣保留，每個 selector 注入租戶 matcher，告警加 `tenant`、`component: migrated` label 與 `owner`、`expiry` annotation，另附到期伴隨告警 `MigratedRulesExpiring`。寫出 `.migration/migrated/<tenant>/rules.yml`（由抓取原始指標的那台 Prometheus 載入：單一 Prometheus，或 federation 架構下的 edge）、`.migration/mapping/<tenant>.yaml`（selector 注入前後對照）與 `migration-report-<tenant>.txt`。叢集層級或平台自己的序列（`kube_node_*`、`up`）選不出一個租戶，整批拒絕、結束碼 2；原式子沒帶 `da_cluster` 的 `by(...)`／`on(...)` 只在報告標出。字典命中的告警不遷移，報告點名改用黃金標準。細節見 [CLI Reference — migrate](../cli-reference.md#migrate)。⚠️ v2.9.0 映像的 migrate 仍是舊的轉換引擎（`custom_` key、平台 recording／alert rule、租戶 conf.d 檔） <!-- image-caveat: v2.9.0 -->
+- **步驟 3**：`validate_migration.py --mapping` 讀的是舊版 migrate 的 `prefix-mapping.yaml`；讀新對照 `.migration/mapping/<tenant>.yaml` 的支援在後續的 #4227。在那之前可用 `--old '<舊查詢>' --new '<新查詢>'` 單組比對對照檔裡的 `legacy`／`pinned` selector。完整流程見 [Shadow Monitoring SOP](../shadow-monitoring-sop.md)。
 
 ### 回測閾值變更
 

@@ -62,7 +62,7 @@ da-tools alert-quality --prometheus http://localhost:9090 --period 30d \
 Dynamic Alerting 提供端到端的遷移工作流，包含：
 
 1. **合規性掃描**（`onboard_platform.py`）— 解析舊的 Alertmanager 設定與規則檔，產出路由片段與遷移計畫
-2. **規則轉換**（`migrate_rule.py`）— 舊規則 → 平台的 recording／alert rule 與租戶配置，alert rule 帶 `migration_status: shadow` label
+2. **規則遷移**（`migrate_rule.py`）— 舊規則原樣遷移成 migrated 規則（每個 selector 注入租戶隔離，告警帶 `component: migrated` label）
 3. **並行驗證**（`validate_migration.py`）— 連續比對新舊規則輸出，直到自動檢測到收斂
 4. **一鍵切換**（`cutover_tenant.py`）— 依序停止 shadow monitor job、刪除舊 recording rule、移除 shadow label 與 Alertmanager 攔截，最後確認租戶的閾值指標存在
 5. **回退** — 工具沒有自動回退；切換失敗時照 [Shadow Monitoring SOP §7.2](../shadow-monitoring-sop.md) 手動恢復（`cutover_tenant.py` 失敗時也會印出這個指引）
@@ -73,7 +73,7 @@ Dynamic Alerting 提供端到端的遷移工作流，包含：
 graph LR
     A["現有告警<br/>（舊系統）"] -->|導入| B["onboard_platform.py<br/>反向分析"]
     B -->|產出| C["migration-plan.csv<br/>遷移計畫"]
-    C -->|參考| D["migrate_rule.py<br/>規則轉換"]
+    C -->|參考| D["migrate_rule.py<br/>規則遷移"]
     D -->|部署| E["新規則<br/>migration_status: shadow<br/>（被 AM 攔截）"]
     A -->|並行運行| E
     E -->|驗證| F["validate_migration.py<br/>--watch 持續監測"]
@@ -189,26 +189,23 @@ python3 scripts/tools/ops/validate_config.py \
 
 ### 階段 2：轉換（Day 0）
 
-```bash
-# 2.1 執行規則轉換（輸入是舊的 Prometheus 規則檔，一次一個檔）
-python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
-  --tenant db-a --output-dir migration_output/
-# 產出（migration_output/）：
-#   - .migration/platform-recording-rules.yaml、.migration/platform-alert-rules.yaml
-#     （新規則；alert rule 帶 migration_status: shadow label）
-#   - .migration/conf.d/_defaults.yaml（它的 defaults: 區塊先合併進 conf.d 根的 _defaults.yaml，合併、
-#     不要整份覆蓋；exporter 只發射宣告過的 key。值取自原規則，warning 層對所有租戶生效）
-#   - .migration/conf.d/db-a.yaml（--tenant 給的租戶，閾值寫在 tenants.db-a 底下。warning 層只有要和預設值
-#     不同的租戶才需要；<key>_critical 不能放 defaults，要 critical 的租戶都要寫進自己的
-#     conf.d 檔；只有 critical 的舊規則例外，它改讀 base 列，值已在 _defaults.yaml）
-#   - .migration/prefix-mapping.yaml（階段 3 validate_migration 的比對組）
-#   - migration-report.txt、triage-report.csv（轉換報告）
-# 工具沒有「只轉某些租戶」的選項；某個租戶不要這條告警，在該租戶檔把 key 設成 "disable"。
-# ⚠️ v2.9.0 映像的 migrate 還沒有這些修正（閾值 selector 對不上 exporter 發射的 label、
-#    recording rule 讀加了前綴的指標名、沒有 defaults-snippet.yaml），用它時部署前請人工核對。
+> 直接跑 `migrate_rule.py` 需要 da-read、da-guard、da-crdecode 三支執行檔：照[遷移指南 §4](../migration-guide.md#4-遷移既有規則da-tools-migrate) 建好並設環境變數。
 
-# 2.2 部署新規則（shadow 狀態）：把兩份規則檔合併進 Prometheus 的規則 ConfigMap
-#     （具體操作依環境：ConfigMap 或 Helm）
+```bash
+# 2.1 執行規則遷移（輸入是一個租戶的舊 Prometheus 規則檔，一次一個檔）
+python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
+  --tenant db-a --owner team-db --expiry 2027-03-31 --output-dir migration_output/
+# 產出（migration_output/）：
+#   - .migration/migrated/db-a/rules.yml（規則原樣保留、注入租戶隔離；告警帶 component: migrated
+#     label 與 owner／expiry annotation，另附 MigratedRulesExpiring）
+#   - .migration/mapping/db-a.yaml（每條規則的 selector 注入前後；validate_migration 讀它的支援在 #4227）
+#   - migration-report-db-a.txt（遷移報告）
+# 選不出一個租戶的平台層級規則（kube_node_*、up）整批拒絕、結束碼 2、一個檔都不寫。
+# ⚠️ v2.9.0 映像的 migrate 仍是舊的轉換引擎（平台 recording／alert rule、租戶 conf.d 檔、
+#    prefix-mapping.yaml），用它時本節的產出不適用。
+
+# 2.2 部署新規則（shadow 狀態）：把規則檔交給抓取原始指標的那台 Prometheus
+#     （federation 架構下是 edge）載入（具體操作依環境：ConfigMap 或 Helm）
 
 # 2.3 更新 Alertmanager，攔截 shadow alert
 kubectl patch configmap alertmanager-config -n monitoring \
@@ -222,8 +219,15 @@ kubectl rollout restart deployment alertmanager -n monitoring
 
 ### 階段 3：驗證（Day 1–14）
 
+> ⚠️ **新版 migrate 的產出目前接不上 3.1 之後的自動驗證與切換**：它寫的是 `.migration/mapping/db-a.yaml`，`validate_migration.py` 讀它的支援在 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)。在那之前 3.1 只適用舊版 migrate 的 `prefix-mapping.yaml`，也就產不出 3.2 與階段 4 要的 `validation-report.csv`、`cutover-readiness.json`。新產出在 #4227 之前只能手動比對，且**告警數量一致不算收斂**：
+>
+> 1. **selector 有沒有選到資料**：對 mapping 每一組 `legacy`／`pinned`，在目標 Prometheus 各跑一次 `count(<selector>)`。legacy 有、pinned 沒有的，代表注入選不到——常見原因是它其實是另一個規則檔的 recording rule，而那邊沒寫 `tenant`。
+> 2. **告警的 label 組合**：shadow 期間反覆查以下兩式（`alertstate` 換成 `pending` 再查一次），兩邊都應為空。兩側都要先限定到同一個租戶——否則 `ignoring(tenant)` 會讓別的租戶的同名告警遮掉這個租戶的差異。migrated 側用 `tenant="db-a"`；legacy 側的 `<legacy 的租戶 matcher>` 照該告警輸出帶的 label 填 `tenant="db-a"` 或 `namespace="db-a"`，聚合後兩者都不剩的告警無法用這兩式分租戶，要逐條人工比對。`MigratedRulesExpiring` 是新增的到期告警，沒有對應的 legacy 告警，所以排除；`<本檔告警名>` 填遷移檔裡的 alertname。
+>    - 只在 migrated 響：`ALERTS{component="migrated", tenant="db-a", alertstate="firing", alertname!="MigratedRulesExpiring"} unless ignoring(tenant, component) ALERTS{component!="migrated", <legacy 的租戶 matcher>, alertstate="firing"}`
+>    - 只在 legacy 響：`ALERTS{component!="migrated", <legacy 的租戶 matcher>, alertstate="firing", alertname=~"<本檔告警名>"} unless ignoring(tenant, component) ALERTS{component="migrated", tenant="db-a", alertstate="firing"}`
+
 ```bash
-# 3.1 啟動並行驗證
+# 3.1 啟動並行驗證（只適用舊版 migrate 的 prefix-mapping.yaml，見上方說明）
 python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \

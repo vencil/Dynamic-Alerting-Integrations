@@ -834,10 +834,6 @@ _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
     "scripts/tools/ops/da_assembler.py":
         "passes an operator-supplied `defaults` block through into a conf.d "
         "document; the keys are the operator's own",
-    "scripts/tools/ops/migrate_rule.py":
-        "render_defaults_snippet PROJECTS the base of a rule the customer is "
-        "migrating — the customer's own threshold, printed for review; pinned by "
-        "tests/ops/test_migrate_threshold_wiring.py",
     "scripts/tools/ops/policy_opa_bridge.py":
         "READS `_defaults.yaml` (`load_defaults`); the census hit is the dict "
         "shape in its module docstring",
