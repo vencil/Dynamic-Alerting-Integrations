@@ -67,7 +67,7 @@ func TestCustomAlertSelector_MultilineValueReadsBack(t *testing.T) {
 
 // The arbitrary-mapping branch writes through the same marshal: a value under
 // a mapping without `default` reads back too. Only values: a multi-line key is
-// not covered (hasMultilineString).
+// not covered (hasUnkeptBlockString).
 func TestScheduledValue_MappingMultilineStringReadsBack(t *testing.T) {
 	t.Parallel()
 	for _, v := range multilineSelectorValues {
@@ -84,6 +84,49 @@ func TestScheduledValue_MappingMultilineStringReadsBack(t *testing.T) {
 		if err != nil || back["k"] != v || back["j"] != "plain" {
 			t.Errorf("%q: read back as %q (err %v)\nDefault:\n%s", v, back, err, sv.Default)
 		}
+	}
+}
+
+// A reserved mapping that carries a `default` key (`_routing`, `_metadata`)
+// takes another path in a tenant file (keepReservedBodies); its body must read
+// back too, or the whole block is read as not written.
+func TestReservedMappingWithDefault_MultilineStringReadsBack(t *testing.T) {
+	t.Parallel()
+	for _, v := range multilineSelectorValues {
+		data := []byte("tenants:\n  t1:\n    _routing:\n      default: x\n" +
+			"      note: " + strconv.Quote(v) + "\n")
+		cfg, err := ParseTenantFile(data)
+		if err != nil {
+			t.Fatalf("%q: parse: %v", v, err)
+		}
+		sv := cfg.Tenants["t1"]["_routing"]
+		node, _, err := structureOf(sv)
+		var back map[string]string
+		if err == nil {
+			err = node.Decode(&back)
+		}
+		if err != nil || back["note"] != v || back["default"] != "x" {
+			t.Errorf("%q: read back as %q (err %v)\nDefault:\n%s", v, back, err, sv.Default)
+		}
+	}
+}
+
+// A tree whose every multi-line string reads back from its literal block
+// keeps yaml.Marshal's exact output: only a string the block cannot carry is
+// written another way.
+func TestMarshalStable_KeptBlockString_OutputUnchanged(t *testing.T) {
+	t.Parallel()
+	in := map[string]any{"note": "a\nb", "lead": "\n.*"}
+	want, err := yaml.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := marshalStable(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("output changed:\n--- got ---\n%s--- want ---\n%s", got, want)
 	}
 }
 
