@@ -9,9 +9,9 @@
 # binaries at HEAD on a two-week-old cache took 139.9 s, on a cold cache
 # 164.0 s, on a current one 0.5 s; CI paid ~131 s of it per Python shard.
 #
-# Here the key is a hash of what the build reads — the Go version,
-# scripts/ops/go_build.sh (the flags), every go.mod, go.sum and .go file of
-# the modules built — and a miss falls back to the newest entry for the same Go
+# Here the key is a hash of what the build reads — the Go version, the git
+# object ids of scripts/ops/go_build.sh (the flags) and of each built
+# module's tree — and a miss falls back to the newest entry for the same Go
 # version (`restore-keys`), so a PR that changed some Go recompiles only that.
 # ⛔ This action only RESTORES. The one writer is go-build-cache.yaml, on
 # every push to main, and it keeps ONE entry (it deletes the older ones): an
@@ -65,10 +65,22 @@ runs:
       shell: bash
       env:
         GO_VERSION: ${{ steps.go.outputs.go-version }}
-        SOURCES: ${{ hashFiles('scripts/ops/go_build.sh', 'components/threshold-exporter/app/**/go.mod', 'components/threshold-exporter/app/**/go.sum', 'components/threshold-exporter/app/**/*.go', 'components/da-read/go.mod', 'components/da-read/go.sum', 'components/da-read/**/*.go', 'components/tenant-api/go.mod', 'components/tenant-api/go.sum', 'components/tenant-api/**/*.go') }}
+      # The git object ids of what the build reads: go_build.sh (the flags) and
+      # the tree of each module the Makefile's $(GO_BUILD) recipes build —
+      # every go.mod, go.sum and .go file under it, content-addressed by git.
+      # ⛔ Not `hashFiles(...)`: that READS every file it hashes, and the
+      # path-traced jobs (backtest, image-ref-resolve) measure their inputs by
+      # access time, so every `_test.go` would become one of their inputs
+      # (#3756). `git rev-parse` reads .git, not the working tree.
       run: |
+        set -euo pipefail
+        sources=$(git rev-parse \
+          HEAD:scripts/ops/go_build.sh \
+          HEAD:components/threshold-exporter/app \
+          HEAD:components/da-read \
+          HEAD:components/tenant-api | sha256sum | cut -c1-64)
         echo "prefix=go-build-${RUNNER_OS}-${GO_VERSION}-" >> "$GITHUB_OUTPUT"
-        echo "key=go-build-${RUNNER_OS}-${GO_VERSION}-${SOURCES}" >> "$GITHUB_OUTPUT"
+        echo "key=go-build-${RUNNER_OS}-${GO_VERSION}-${sources}" >> "$GITHUB_OUTPUT"
 
     - name: Restore the Go build and module caches
       id: restore

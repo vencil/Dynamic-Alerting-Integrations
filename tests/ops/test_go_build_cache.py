@@ -19,9 +19,11 @@ plus go-build-cache.yaml (the one writer, on push to main). Held here:
     (`cache: true`) — that is the go.sum-only key that went stale.
     `go test` / bench jobs are not ruled: `-race` and test binaries compile to
     other entries, and the bench jobs keep their own caches on purpose.
-  * the composite turns setup-go's cache off, only restores, and its key
-    hashes go_build.sh and the go.mod / go.sum / .go files of every module
-    the Makefile's $(GO_BUILD) recipes build.
+  * the composite turns setup-go's cache off, only restores, and its key is
+    the git object ids (`git rev-parse HEAD:<path>`) of go_build.sh and of
+    every module tree the Makefile's $(GO_BUILD) recipes build — never
+    `hashFiles()`, which reads the files and so makes every `_test.go` an
+    input of the path-traced jobs (backtest went red on exactly that).
   * the warm workflow runs on push to main, builds every package a $(GO_BUILD)
     recipe builds,
     saves under the composite's key and paths, and is the only workflow that
@@ -186,15 +188,14 @@ def composite_problems(action: dict, module_dirs) -> list[str]:
         out.append("the composite saves a cache; only go-build-cache.yaml may")
     if not any(_uses(s).startswith("actions/cache/restore") for s in steps):
         out.append("the composite restores nothing")
-    key_text = "\n".join(yaml.safe_dump(s) for s in steps)
-    hashed = set(re.findall(r"'([^']+)'", " ".join(re.findall(r"hashFiles\(([^)]*)\)", key_text))))
-    need = {"scripts/ops/go_build.sh"}
-    for d in module_dirs:
-        globbed = {p for p in hashed if p.startswith(d + "/")}
-        for suffix in ("go.mod", "go.sum", "*.go"):
-            if not any(p.endswith(suffix) for p in globbed):
-                need.add(f"{d}/…{suffix}")
-    missing = sorted(n for n in need if n not in hashed)
+    key_text = "\n".join(str(s.get("run", "")) for s in steps)
+    if "hashFiles(" in "\n".join(yaml.safe_dump(s) for s in steps):
+        out.append("the key uses hashFiles(), which reads every file it hashes "
+                   "and so turns them into inputs of the path-traced jobs")
+    hashed = set(re.findall(r"HEAD:(\S+)", key_text))
+    need = {"scripts/ops/go_build.sh", *module_dirs}
+    missing = sorted(n for n in need
+                     if not any(n == h or n.startswith(h.rstrip("/") + "/") for h in hashed))
     if missing:
         out.append(f"the cache key does not hash {missing} — a change there "
                    f"would restore a build of another tree as an exact hit")
@@ -211,8 +212,9 @@ def test_the_composite_rule_can_fail() -> None:
     dirs = _module_dirs()
     for mutate, why in [
         (lambda s: s.replace("cache: false", "cache: true"), "setup-go cache on"),
-        (lambda s: s.replace("'scripts/ops/go_build.sh', ", ""), "flags not hashed"),
-        (lambda s: s.replace("'components/da-read/**/*.go', ", ""), "a module's sources"),
+        (lambda s: s.replace("HEAD:scripts/ops/go_build.sh", ""), "flags not hashed"),
+        (lambda s: s.replace("HEAD:components/da-read ", ""), "a module's tree"),
+        (lambda s: s.replace("${sources}", "${{ hashFiles('**/*.go') }}"), "hashFiles reads"),
         (lambda s: s.replace("actions/cache/restore@", "actions/cache@"), "saves"),
     ]:
         text = mutate(ACTION_FILE.read_text(encoding="utf-8"))
