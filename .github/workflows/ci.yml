@@ -318,6 +318,9 @@ jobs:
           pre-commit run vmalert-coverage-check --all-files
           # #3833: rule packs read only what their query-exporter config serves.
           pre-commit run exporter-queries-check --all-files
+          # #3833: every rule pack is checked against its real exporter or
+          # listed as not (the static half; the capture is its own job).
+          pre-commit run exporter-capture-check --all-files
           # #4097: rules keep da_cluster wherever they keep an identity label
           # (zero findings; a deliberate tenant-wide read is declared above its rule).
           pre-commit run cluster-identity-check --all-files

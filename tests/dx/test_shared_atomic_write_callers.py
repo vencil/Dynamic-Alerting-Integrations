@@ -239,10 +239,10 @@ CALLERS: dict[str, Caller] = {
         "generate_rule_pack_readme", "scripts/tools/dx/generate_rule_pack_readme.py:361",
         None, _setup_rule_pack_readme),
     "alert_reference_zh": Caller(
-        "generate_alert_reference", "scripts/tools/dx/generate_alert_reference.py:560",
+        "generate_alert_reference", "scripts/tools/dx/generate_alert_reference.py:588",
         None, _setup_alert_reference_zh),
     "alert_reference_en": Caller(
-        "generate_alert_reference", "scripts/tools/dx/generate_alert_reference.py:562",
+        "generate_alert_reference", "scripts/tools/dx/generate_alert_reference.py:590",
         None, _setup_alert_reference_en),
     "repo_name_fix": Caller(
         "check_repo_name", "scripts/tools/lint/check_repo_name.py:127",
