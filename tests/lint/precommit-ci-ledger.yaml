@@ -24,7 +24,7 @@ hooks:
   evidence:
     reason: Compares the working tree with HEAD (NUL bytes added, file shrunk by more than
       50%); a CI checkout IS HEAD, so it is green by construction. NUL bytes are gated in
-      CI by head-blob-hygiene (docs-ci) and file-hygiene (Lint).
+      CI by documentation-checks (docs-ci) and file-hygiene (Lint).
 - id: secrets-scan-staged
   category: exempt
   evidence:
@@ -117,19 +117,19 @@ hooks:
   category: a
   evidence:
     workflow: .github/workflows/docs-ci.yaml
-    job: check-links
+    job: documentation-checks
     note: Runs the same check_doc_links.py --ci; no job `if:`, no workflow paths.
 - id: html-doc-links-check
   category: a
   evidence:
     workflow: .github/workflows/docs-ci.yaml
-    job: check-links
+    job: documentation-checks
     note: Runs the same lint_html_doc_links.py --ci; no job `if:`.
 - id: head-blob-hygiene
   category: a
   evidence:
     workflow: .github/workflows/docs-ci.yaml
-    job: head-blob-hygiene
+    job: documentation-checks
     note: Runs the same check_head_blob_hygiene.py --ci; no job `if:`.
 - id: cli-coverage-check
   category: b

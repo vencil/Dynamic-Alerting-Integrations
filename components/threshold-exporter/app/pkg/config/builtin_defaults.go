@@ -435,7 +435,7 @@ func (c *ThresholdConfig) InheritedRootDisables(tenant string, at time.Time) []s
 				break
 			}
 		}
-		if written && !isThresholdExpired(sv, at) && servesNumberAllDay(sv) {
+		if written && !isThresholdExpired(sv, c.expiryReadAt(at)) && servesNumberAllDay(sv) {
 			continue
 		}
 		out = append(out, k)

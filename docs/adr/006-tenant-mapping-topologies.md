@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-03-16
-updated_at: 2026-11-25
+updated_at: 2026-11-28
 ---
 # ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N)
 
@@ -19,7 +19,7 @@ updated_at: 2026-11-25
 
 ✅ **Accepted**（v2.1.0）。
 
-2026-06-14 修訂：磁碟、PVC、節點這類基礎設施指標只支援 1:1 歸屬（見「基礎設施指標的租戶歸屬（Addendum）」）。
+2026-06-14 修訂：磁碟、PVC、節點這類基礎設施指標只支援 1:1 歸屬（見「基礎設施指標的租戶歸屬」）。
 
 2026-11-21 修訂：同一個租戶跑在多個叢集時，以每台 Prometheus 的 external label `da_cluster` 標出叢集，規則與告警逐叢集計算（見「多叢集同租戶」）。
 
@@ -28,6 +28,8 @@ updated_at: 2026-11-25
 2026-11-23 修訂：租戶自助告警（`Custom_*`）逐叢集判定，只有 `absence` recipe 維持整個租戶；`da-tools byo-check prometheus` 與 `da-tools onboard` 也指出沒設 `da_cluster` 的 Prometheus。
 
 2026-11-24 修訂：改寫為現行行為。決策不變。補上兩項限制：產生的 1:N 映射規則不在平台附的 Prometheus 部署裡，平台的規則包也不讀映射後的序列。
+
+2026-11-28 修訂：基礎設施指標在抓取時不再把 `namespace` 寫成 `tenant`；需要租戶的規則與自助告警從 `namespace` 推出租戶，平台附的 Prometheus、自建的 Prometheus 與 Prometheus Operator 三種安裝方式都一樣（見「基礎設施指標的租戶歸屬」）。
 
 2026-11-25 修訂：同一個 `metric_group` 的 warning 與 critical 必須有相同的叢集範圍，由 CI 檢查；「多叢集同租戶」哪些逐叢集、哪些不逐叢集改寫為現況，補上 `MariaDBNoPrimary` 與 `da-tools migrate` 兩項限制。
 
@@ -178,11 +180,21 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 
 三分鐘後有一則告警：`TenantExporterAbsent{tenant="db-a", pack="mariadb", da_cluster="edge-a"}`。`edge-b` 的 MariaDB 與只寫種類的 Redis 都不告警。同樣的序列，若租戶只寫 `_expected_exporters: [mariadb, redis]`，沒有任何告警：`edge-b` 有一台在回報就算存在。這兩種情形是 `tests/rulepacks/rule-pack-liveness-per-cluster_test.yaml` 的 L1 與 L2（測試用的叢集名是 `east`、`west`）。
 
-### 基礎設施指標的租戶歸屬（Addendum）
+### 基礎設施指標的租戶歸屬
 
 **磁碟、PVC、節點這類基礎設施指標，只支援 1:1 的租戶歸屬（一個 namespace 是一個租戶）。**
 
-[ADR-024](024-version-aware-threshold-via-dimensional-label.md) 的自助告警讓租戶對平台的基礎設施指標（例如 kubelet 的 `kubelet_volume_stats_*`）設條件。這些指標原生只帶 `namespace`、不帶 `tenant`，所以在抓取階段直接把 `namespace` 複製成 `tenant`。平台附的 Prometheus 設定（`k8s/03-monitoring/configmap-prometheus.yaml`）在 kubelet 抓取 job 的 `metric_relabel_configs` 這樣做，只保留 `db-` 開頭的 namespace。
+[ADR-024](024-version-aware-threshold-via-dimensional-label.md) 的自助告警讓租戶對平台的基礎設施指標（例如 kubelet 的 `kubelet_volume_stats_*`）設條件。這些指標來自 cAdvisor、kubelet 與 kube-state-metrics，原生只帶 `namespace`、不帶 `tenant`。
+
+**抓取時不寫 `tenant`；需要租戶的地方從 `namespace` 推出來，一個 namespace 就是一個租戶。** 平台附的 Prometheus 設定（`k8s/03-monitoring/configmap-prometheus.yaml`）的 kubelet 抓取 job 只保留 `db-` 開頭的 namespace，不寫 `tenant`；自建的 Prometheus 與 Prometheus Operator 的 kubelet ServiceMonitor 也不必寫。推導發生在三處：
+
+- 平台規則包的 recording rule 以 `label_replace` 把 `namespace` 複製成 `tenant`。
+- 自助告警的編譯器讀這類指標時，序列已帶 `tenant` 就沿用，沒有才從 `namespace` 補上。哪些指標屬於這類，由 `rule-packs/threshold-registry.yaml` 裡沒有 `presence` 的 pack（kubernetes）的 `metric_prefixes` 決定：`container_`、`kube_`、`kubelet_`。
+- 租戶自己寫的規則以 `namespace="<租戶>", tenant=""` 選這類序列；寫成 `tenant="<租戶>"` 會被自訂規則 lint 擋下，因為那樣選不到任何序列。
+
+多叢集集中評估時，邊緣只送帶 `tenant` 的序列，外加租戶 namespace 裡的 cAdvisor（`container_*`）與 kubelet（`kubelet_*`）序列，自訂告警在中央從 `namespace` 推出租戶（[Federation 整合指南](../integration/federation-integration.md) §4）。kube-state-metrics 的原始序列不送，讀 `kube_*` 的自訂告警在這種部署不會觸發。
+
+例：kubelet 送出 `kubelet_volume_stats_available_bytes{namespace="db-a", persistentvolumeclaim="data"}` 與同名的 `_capacity_bytes` 時，看門告警讀的 recording rule 得到 `tenant:kubelet_volume_stats:count{tenant="db-a"}`；只帶 `tenant`、沒有 `namespace` 的序列不算任何租戶的（`tests/rulepacks/rule-pack-kubernetes-custom-disk-inert_test.yaml` 的 B 與 B2 兩個案例）。
 
 ## 背景
 
@@ -201,7 +213,7 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 - **互相遮蔽。** 存活判定寫成「預期存在的實例，扣掉有成功回報的實例」，兩邊以 `on(tenant, instance)` 配對。兩個叢集各有一台位址相同的實例時（各叢集內部網段重複很常見），健康的那台會把故障的那台消掉，故障的叢集不告警。
 - **悄悄合併。** `sum by(tenant)` 會把兩個叢集加在一起，`max by(tenant)` 只留下較大的那個。值班人員看不出是哪個叢集，數值也不再對應任何一個資料庫。
 
-**基礎設施指標。** 本 ADR 的 N:1 與 1:N 靠額外的映射規則，而基礎設施指標走的是抓取階段的直接改名，拿不到那層映射：
+**基礎設施指標。** 本 ADR 的 N:1 與 1:N 靠額外的映射規則，而基礎設施指標直接以 `namespace` 當租戶，拿不到那層映射：
 
 - **N:1 會靜默漏告警。** 指標被標成 `tenant="db-a-read"`，但租戶的設定用的是 `db-a` 這個名字，兩者對不上，告警永遠不觸發。
 - **1:N 本質上做不到。** 一顆 PVC 無法按 schema／tablespace 拆給不同租戶。
@@ -254,6 +266,11 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 - **在 exporter 內建映射**：單一元件處理，但 exporter 的職責是把 YAML 設定轉成指標，映射屬於資料正規化，放進去就越界；映射一改就要重啟 exporter，影響所有租戶的指標；HA 部署下兩個 exporter 還得維持一致的映射。
 - **在 Alertmanager 映射**：只影響通知路徑，但太晚：Alertmanager 只處理已觸發的告警，無法在指標層級拆分；Grafana 這類工具直接查 Prometheus，看不到映射。
 - **外部 proxy**：完全解耦，但多一個元件、多一段延遲、運維更複雜。
+
+### 基礎設施指標的租戶在哪裡寫
+
+- **抓取時把 `namespace` 寫成 `tenant`**：規則可以直接讀 `tenant`。但這要每一種安裝方式都照做才成立，平台只控制得了自己附的 Prometheus 設定。Prometheus Operator 的安裝裡，kubelet 的 ServiceMonitor 來自上游 chart（kube-prometheus-stack）；Helm 覆寫 list 時整份取代，客戶加一條 relabel 就得連同上游預設的那幾條 drop 一起抄，而那些預設會隨 chart 版本改變，平台的文件守不住。漏做的安裝上，讀這些指標的規則選不到序列、不會告警。kube-state-metrics 的指標本來就只以 `namespace` 讀，兩種做法並存也讓「這類指標帶不帶 `tenant`」沒有單一答案。
+- **在規則裡從 `namespace` 推導**（採用）：與安裝方式無關，也與 kube-state-metrics 的讀法一致。代價是每條讀這類指標的規則都要推導一次，由規則包的 recording rule 與自助告警的編譯器負責，租戶自己寫的規則則由 lint 檢查寫法。
 
 ### 多叢集的叢集身分
 

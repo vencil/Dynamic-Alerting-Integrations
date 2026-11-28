@@ -64,6 +64,48 @@ tests:
               owner: team-shop
               tier: gold
 
+  # ── shop-a again, as the kubelet serves the series (#4178): `namespace` only, no
+  #    scrape-written `tenant`. The compiler takes the tenant from `namespace`, so the
+  #    same PVC fires for the same tenant. (The case above keeps a `tenant` that
+  #    differs from `namespace`: a series that carries one keeps it.) ──
+  - interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="shop-a", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '800-1.2x540'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="shop-a", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '1000+0x540'
+      # healthy large volume that WOULD mask the data PVC under a by(tenant) sum.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="shop-a", persistentvolumeclaim="config-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '9000+0x540'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="shop-a", persistentvolumeclaim="config-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+        values: '10000+0x540'
+      - series: 'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim", tenant="shop-a", severity="warning", name="disk_will_fill", mode="page"}'
+        values: '0.15+0x540'
+      - series: 'tenant_metadata_info{tenant="shop-a", runbook_url="http://rb/shop", owner="team-shop", tier="gold"}'
+        values: '1x540'
+    alert_rule_test:
+      - eval_time: 520m
+        alertname: Custom_forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              component: custom
+              severity: warning
+              tenant: shop-a
+              recipe: forecast
+              name: disk_will_fill
+              mode: page
+              version: default
+              persistentvolumeclaim: data-shop-0
+            exp_annotations:
+              summary: "Custom alert [disk_will_fill] for shop-a"
+              summary_zh: "shop-a 的自訂告警 [disk_will_fill] 觸發"
+              description: 'forecast on kubelet_volume_stats_available_bytes: value 0.00 crossed the configured threshold'
+              description_zh: 'kubelet_volume_stats_available_bytes 的 forecast: 值 0.00 已越過設定閾值'
+              runbook_url: "http://rb/shop"
+              owner: team-shop
+              tier: gold
+
   # ── stable-c: ratio flat at 0.5 with plenty of data → predicted ratio ≈ 0.5,
   #    never < 0.15 → MUST NOT fire (forecast is the signal, not a static level). ──
   - interval: 1m

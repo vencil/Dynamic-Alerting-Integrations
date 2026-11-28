@@ -836,8 +836,9 @@ def test_slo_objective_disable_still_compiles(tmp_path):
 
 # --- D. disk-recipe prerequisite notice (#692 P0③ W3) ----------------------
 # A recipe over kubelet_volume_stats_* compiles fine but only fires if the cluster
-# has CSI NodeGetVolumeStats + a volume-stats scrape job + a namespace→tenant
-# relabel — plumbing the compiler can't verify. main() surfaces it at author-time
+# has CSI NodeGetVolumeStats + a volume-stats scrape job keeping the tenant
+# namespaces — plumbing the compiler can't verify (it derives `tenant` from
+# `namespace` itself, #4178, so no relabel is asked for). main() surfaces it at author-time
 # (honest: it INFORMS, does not assert). byo_check.py verifies the live flow.
 def test_disk_recipe_emits_prereq_notice(tmp_path, capsys):
     _write_tree(tmp_path, {
@@ -850,7 +851,9 @@ def test_disk_recipe_emits_prereq_notice(tmp_path, capsys):
     sys.argv = ["compile_custom_alerts.py", "--config-dir", str(tmp_path),
                 "--out", str(tmp_path / "pack.yaml")]
     assert cc.main() == 0
-    assert "disk-recipe prerequisite" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "disk-recipe prerequisite" in err
+    assert "relabel" not in err
 
 
 def test_nondisk_recipe_no_prereq_notice(tmp_path, capsys):
@@ -869,7 +872,7 @@ def test_nondisk_recipe_no_prereq_notice(tmp_path, capsys):
 
 # --- D2. disk-IOPS-recipe prerequisite notice (#692 P0④) -------------------
 # A rate recipe over container_fs_* compiles fine but only fires if cadvisor scrapes
-# container_fs with a namespace→tenant relabel AND the storage exposes I/O to cgroup
+# container_fs from the tenant namespaces AND the storage exposes I/O to cgroup
 # blkio (network volumes bypass it). main() surfaces it at author-time; byo_check is
 # the live fidelity gate.
 def test_iops_recipe_emits_prereq_notice(tmp_path, capsys):
@@ -881,7 +884,9 @@ def test_iops_recipe_emits_prereq_notice(tmp_path, capsys):
     sys.argv = ["compile_custom_alerts.py", "--config-dir", str(tmp_path),
                 "--out", str(tmp_path / "pack.yaml")]
     assert cc.main() == 0
-    assert "disk-IOPS-recipe prerequisite" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "disk-IOPS-recipe prerequisite" in err
+    assert "relabel" not in err
 
 
 # --- E. CLI default ↔ CI canonical source (drift gate) ----------------------

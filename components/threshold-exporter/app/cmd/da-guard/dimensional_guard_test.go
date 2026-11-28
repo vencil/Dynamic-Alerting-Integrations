@@ -12,6 +12,13 @@ package main
 // tx, label set and value, gathered through the exporter's own collector —
 // with and without the key: redundant ⇔ the two sets are equal. Comparing
 // metric name and value alone would miss exactly this shape.
+//
+// Since ADR-038 §11 a dimensional key is served only when every label of its
+// selector is declared under `dimensions:` (a regex label as `<label>_re`),
+// so each case declares its labels: without them neither arm serves a
+// labelled series, the oracle's two sets are trivially equal, and the case
+// tests nothing (#4329). The premise therefore also requires the labelled
+// series to be on /metrics with the override.
 
 import (
 	"fmt"
@@ -71,7 +78,8 @@ func servedSeries(t *testing.T, dir string) []string {
 
 func TestGuard_RedundantOverrideOnDimensionalKeys(t *testing.T) {
 	t.Parallel()
-	const root = "defaults:\n  mysql_connections: 80\n  pg_connections: 100\n"
+	const dims = "dimensions:\n  pg_connections: [env, db_re]\n"
+	const root = dims + "defaults:\n  mysql_connections: 80\n  pg_connections: 100\n"
 	const dim = `pg_connections{env="prod"}`
 	cases := []struct {
 		name      string
@@ -112,8 +120,10 @@ func TestGuard_RedundantOverrideOnDimensionalKeys(t *testing.T) {
 		{"root-and-subtree-dimensional-key-is-redundant",
 			map[string]string{"_defaults.yaml": root + "  " + dim + ": 50\n", "sub/_defaults.yaml": "defaults:\n  " + dim + ": 50\n"},
 			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true, false},
+		// `dimensions:` is read from the root carrier only, so the root
+		// carrier declares the labels and writes no `defaults:`.
 		{"subtree-dimensional-key-with-no-root-defaults-is-redundant",
-			map[string]string{"sub/_defaults.yaml": "defaults:\n  pg_connections: 100\n  " + dim + ": 50\n"},
+			map[string]string{"_defaults.yaml": dims, "sub/_defaults.yaml": "defaults:\n  pg_connections: 100\n  " + dim + ": 50\n"},
 			"sub/tx.yaml", "    pg_connections: 90\n", dim + ": 50", true, false},
 		{"platform-entry-dimensional-key-is-redundant",
 			map[string]string{"_defaults.yaml": root + "tenants:\n  tx:\n    " + dim + ": 50\n"},
@@ -158,6 +168,9 @@ func TestGuard_RedundantOverrideOnDimensionalKeys(t *testing.T) {
 			write(without + "    " + tc.line + "\n") // leaves the tenant file WITH the override
 			withS := servedSeries(t, dir)
 			unchanged := strings.Join(withS, " ") == strings.Join(withoutS, " ")
+			if !hasDimensionalSeries(withS, tc.line) {
+				t.Fatalf("premise: /metrics %v with the override serves no series labelled by %s — the case tests nothing (#4329)", withS, tc.line)
+			}
 			if unchanged != tc.redundant {
 				t.Fatalf("premise: /metrics %v with the override, %v without — want redundant=%v", withS, withoutS, tc.redundant)
 			}
@@ -168,4 +181,32 @@ func TestGuard_RedundantOverrideOnDimensionalKeys(t *testing.T) {
 			}
 		})
 	}
+}
+
+// hasDimensionalSeries reports whether series holds a user_threshold series
+// carrying a label of line's dimensional selector (`env=prod`, or a regex
+// label as `<label>_re`), or line is not dimensional (a control case).
+func hasDimensionalSeries(series []string, line string) bool {
+	key := strings.SplitN(line, ": ", 2)[0]
+	i := strings.Index(key, "{")
+	if i < 0 {
+		return true
+	}
+	sel := strings.TrimSuffix(key[i+1:], "}")
+	label := sel
+	for _, op := range []string{"=~", "="} {
+		if j := strings.Index(sel, op); j > 0 {
+			label = sel[:j]
+			if op == "=~" {
+				label += config.RegexLabelSuffix
+			}
+			break
+		}
+	}
+	for _, s := range series {
+		if strings.Contains(s, ","+label+"=") || strings.Contains(s, "{"+label+"=") {
+			return true
+		}
+	}
+	return false
 }

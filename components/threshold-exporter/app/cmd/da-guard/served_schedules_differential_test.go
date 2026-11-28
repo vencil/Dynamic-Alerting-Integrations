@@ -255,7 +255,14 @@ func addSchedulesWholeTree(cfg *config.ThresholdConfig, at time.Time, tenants ma
 			expiryOf[te.Tenant] = map[string]config.ResolvedThresholdExpiry{}
 		}
 		if prev, dup := expiryOf[te.Tenant][canon]; dup {
-			return nil, fmt.Errorf("internal: tenant %s: keys %q and %q both time-box %q", te.Tenant, prev.MetricKey, te.MetricKey, canon)
+			// #4263: the expired value that gave way and the time-boxed one
+			// now served; the served one's `expires:` is the key's.
+			if prev.Expired == te.Expired {
+				return nil, fmt.Errorf("internal: tenant %s: keys %q and %q both time-box %q", te.Tenant, prev.MetricKey, te.MetricKey, canon)
+			}
+			if !prev.Expired {
+				continue
+			}
 		}
 		expiryOf[te.Tenant][canon] = te
 	}
@@ -291,12 +298,8 @@ func addSchedulesWholeTree(cfg *config.ThresholdConfig, at time.Time, tenants ma
 			}
 			sch := servedSchedule{Segments: daySegments(cuts, ends, passes, gatherErrs, tenant, k, why)}
 			if te, ok := expiryOf[tenant][k]; ok {
-				sv, written := cfg.Tenants[tenant][te.MetricKey]
-				if !written || sv.Expiry == nil {
-					return nil, fmt.Errorf("internal: tenant %s: the expiry of %q has no `expires:` in the merged config", tenant, te.MetricKey)
-				}
 				expired := te.Expired
-				sch.Expires = sv.Expiry.Expires
+				sch.Expires = te.ExpiresText // #4263: as written; may be out of the merge
 				sch.Expired = &expired
 			}
 			schedules[k] = sch

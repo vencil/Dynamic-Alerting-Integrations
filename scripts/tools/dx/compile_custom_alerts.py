@@ -695,8 +695,9 @@ def main() -> int:
 
     # Prerequisite notice (#692 P0③ W3): disk-fill recipes (kubelet_volume_stats_*)
     # depend on cluster-side plumbing the compiler CANNOT verify — a CSI driver
-    # implementing NodeGetVolumeStats, a kubelet volume-stats scrape job, and a
-    # namespace→tenant relabel (ADR-006 §Addendum). Surface it at author-time so the
+    # implementing NodeGetVolumeStats and a kubelet volume-stats scrape job that keeps
+    # the tenant namespaces (the compiler derives `tenant` from `namespace`, #4178).
+    # Surface it at author-time so the
     # GitOps author wires it (honest: we INFORM, we do not assert the prereq is met).
     # byo_check.py verifies the live flow; CustomRecipeDiskInert is the runtime backstop.
     byo_check = ("da-tools byo-check prometheus" if repo is None
@@ -704,19 +705,19 @@ def main() -> int:
     if any("kubelet_volume_stats_" in r.get("expr", "")
            for g in groups for r in g.get("rules", [])):
         print("  ⚠ disk-recipe prerequisite: a disk-fill recipe (kubelet_volume_stats_*) "
-              "compiled — it only fires if the cluster has CSI NodeGetVolumeStats, a kubelet "
-              "volume-stats scrape job, and a namespace→tenant relabel. Verify the live flow "
+              "compiled — it only fires if the cluster has CSI NodeGetVolumeStats and a kubelet "
+              "volume-stats scrape job that keeps the tenant namespaces. Verify the live flow "
               f"with `{byo_check}`.", file=sys.stderr)
 
     # Prerequisite notice (#692 P0④): disk-IOPS recipes (container_fs_*) depend on a
-    # cadvisor container_fs scrape + namespace→tenant relabel AND on the storage exposing
+    # cadvisor container_fs scrape keeping the tenant namespaces AND on the storage exposing
     # I/O to cgroup blkio — network volumes (NFS/EFS) bypass blkio and emit 0. It is
     # PER-CONTAINER, not per-PVC. We INFORM at author-time; byo_check.py is the live
     # fidelity gate (no runtime sentinel — an inert IOPS recipe is always platform-side).
     if any("container_fs_" in r.get("expr", "")
            for g in groups for r in g.get("rules", [])):
         print("  ⚠ disk-IOPS-recipe prerequisite: a disk-IOPS recipe (container_fs_*) compiled "
-              "— it only fires if cadvisor scrapes container_fs with a namespace→tenant relabel "
+              "— it only fires if cadvisor scrapes container_fs from the tenant namespaces "
               "AND the storage exposes I/O to cgroup blkio (network volumes like NFS/EFS bypass "
               f"it → 0). Per-CONTAINER, not per-PVC. Verify the live flow with `{byo_check}` "
               "after a representative load test.", file=sys.stderr)

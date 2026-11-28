@@ -479,7 +479,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 			}
 		}
 	}
-	parseFailed, unreachable, reserved, stateFilters, rootNull, built, err := scopeParseFailed(scan, filepath.ToSlash(rel), logger, opts.QuietBuild)
+	parseFailed, unreachable, reserved, stateFilters, rootNull, built, err := scopeParseFailed(scan, filepath.ToSlash(rel), logger, opts.QuietBuild, now)
 	if err != nil {
 		return nil, err
 	}
@@ -638,7 +638,7 @@ func anyDuplicated(scan *TreeScan, ids map[string]struct{}) bool {
 // that build itself, for EffectiveTree's not-served tables (#2296). logger
 // takes the build's log lines — among them why a file is dropped
 // (EffectiveTreeLogged); discardLogger for none.
-func scopeParseFailed(scan *TreeScan, scopeRel string, logger *log.Logger, quiet bool) (
+func scopeParseFailed(scan *TreeScan, scopeRel string, logger *log.Logger, quiet bool, now time.Time) (
 	parseFailed []string, unreachable map[string][]string, reserved map[string]map[string][]SubtreeReservedWrite,
 	stateFilters map[string]bool, rootNull map[string][]RootNullKey, built *FlatBuild, err error,
 ) {
@@ -654,6 +654,7 @@ func scopeParseFailed(scan *TreeScan, scopeRel string, logger *log.Logger, quiet
 		profileLogf = discardLogf
 	}
 	in := loadDirBuildInput(scan, scan.AbsRoot, logger, profileLogf)
+	in.At = now // #4263: the scope answers for the instant it reads at
 	b, err := BuildFlatConfig(scan, in)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, err

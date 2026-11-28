@@ -203,9 +203,13 @@ TENANT_LABEL = "tenant"
 def tenant_presence(metric: str) -> "str | None":
     """⛔ THE one answer to "do the series of this raw metric carry
     ``tenant``" (#4137), as ``da-read promql-label-flow`` takes it:
-    ``"without"`` — a family of a static or service source (prometheus,
-    alertmanager, kube-state-metrics: jobs that write no tenant, pinned by
-    tests/lint/test_check_scrape_reachability.py); ``"by-job"`` — a per-target
+    ``"without"`` — a family of a static, service or name-filtered source
+    (prometheus, alertmanager, kube-state-metrics, cAdvisor, the kubelet's
+    volume stats: jobs that write no tenant, pinned by
+    tests/lint/test_check_scrape_reachability.py). The infrastructure
+    families name the tenant only as ``namespace``, on every install (#4178):
+    a rule that needs ``tenant`` derives it from ``namespace``
+    (``_lib_consumer_read.LABEL_ALIASES``); ``"by-job"`` — a per-target
     series (``PER_TARGET_*``); ``"unknown"`` — an alert's series; ``None`` —
     taken to carry it: the tenant exporters' job writes it on every series
     (the scrape contract), and a chart's own families are the exporter's
@@ -216,9 +220,34 @@ def tenant_presence(metric: str) -> "str | None":
     if metric in PER_TARGET_EXACT or metric.startswith(PER_TARGET_PREFIXES):
         return "by-job"
     fam = resolve_family(metric)
-    if fam is not None and fam[1] in ("static", "service"):
+    if fam is not None and fam[1] in ("static", "service", "name-filtered"):
         return "without"
     return None
+
+
+def federated_infra_families() -> "tuple[str, ...]":
+    """The name-filtered families (cAdvisor's `container_`, the kubelet's
+    `kubelet_`): infrastructure series a tenant's recipe may read, which carry
+    the tenant only as ``namespace`` (#4178). kube-state-metrics' `kube_` is
+    not among them: its series are many, and no central rule reads them raw."""
+    return tuple(sorted(p for p, kind, _src in FAMILY_TABLE if kind == "name-filtered"))
+
+
+def federated_infra_selector() -> str:
+    """The `match[]` selector a central Prometheus federates the
+    ``federated_infra_families`` with, beside ``{tenant!=""}``: the tenant
+    namespaces' series, whose tenant the recipe compiler derives centrally
+    (docs/integration/federation-integration.md §4, pinned by
+    tests/rulepacks/test_exporter_metric_prefixes.py)."""
+    alt = "|".join(p.rstrip("_") for p in federated_infra_families())
+    return '{__name__=~"(' + alt + ')_.+", namespace=~"db-.+"}'
+
+
+def federated_infra_keep_regex() -> str:
+    """The remote-write keep over ``[tenant, __name__, namespace]`` that sends
+    what ``{tenant!=""}`` and ``federated_infra_selector`` select together."""
+    alt = "|".join(p.rstrip("_") for p in federated_infra_families())
+    return ".+;.*;.*|;(" + alt + ")_.+;db-.+"
 
 
 def label_flow(label: str, exprs: "list[str]", records: "dict[str, list[dict]] | None" = None):

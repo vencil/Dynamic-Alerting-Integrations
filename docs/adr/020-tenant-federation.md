@@ -110,7 +110,7 @@ prom-label-proxy：對每個查詢強制注入 tenant="<X>"
 - **只用 series metadata API**（`GET /api/v1/series`），不用 range query。後者會把 24 小時的原始樣本載進記憶體，高基數指標可能讓 Prometheus 記憶體耗盡。
 - **先問 `metric{tenant!=""}`**，過濾由 TSDB（Prometheus 的時間序列資料庫）的索引完成，幾乎不花成本；非空就通過。空的再問 `metric` 本身有沒有 series。
 - 每次呼叫三重限制：`limit=1`、回應本文最多讀 1 MiB、單次 5 秒逾時，檢查本身不會變成資源黑洞。一次 `PUT` 最多新增 30 個指標，最多 8 個並行檢查。
-- 擋下的判準是「**沒有任何** series 帶 `tenant`」，不是「有 series 缺 `tenant`」。共享的 Kubernetes 叢集裡，`up`、`container_*` 這類指標在租戶 pod 上帶 `tenant`、在平台 pod（kube-system、API server）上不帶；proxy 注入後每個租戶只看得到自己的 series，那些沒標籤的平台 series 無害。若以「任一 series 缺標籤」為準，所有 Kubernetes 原生指標都會永遠進不了白名單。
+- 擋下的判準是「**沒有任何** series 帶 `tenant`」，不是「有 series 缺 `tenant`」。共享的 Kubernetes 叢集裡，`up` 這類指標在租戶的抓取目標上帶 `tenant`、在平台的目標（kube-system、API server）上不帶；proxy 注入後每個租戶只看得到自己的 series，那些沒標籤的平台 series 無害。若以「任一 series 缺標籤」為準，所有 Kubernetes 原生指標都會永遠進不了白名單。
 
 | 觀察結果 | 處置 | 理由 |
 |---|---|---|

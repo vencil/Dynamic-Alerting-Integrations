@@ -247,7 +247,7 @@ Load pre-written Recording Rules + Alert Rules into your Prometheus to enable dy
 | `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 16R + 12A |
 | `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 7A |
 | `prometheus-rules-nginx` | `nginx-recording.yml`, `nginx-alert.yml` | 9R + 7A |
-| `prometheus-rules-platform` | `platform-alert.yml` | 1R + 57A |
+| `prometheus-rules-platform` | `platform-alert.yml` | 1R + 58A |
 | `prometheus-rules-liveness` | `liveness-alert.yml` | 0R + 3A |
 | `prometheus-rules-operational` | `operational-alert.yml` | 0R + 4A |
 <!-- BYO_RULEPACK_TABLE_END -->
@@ -396,9 +396,9 @@ Let tenants self-serve "disk is filling up" alerts — a `forecast` (predict exh
 
 > **Why only 1:1 tenant attribution** (disk / PVC / node infrastructure metrics do not support N:1): see [ADR-006 Tenant-Mapping Topologies](../adr/006-tenant-mapping-topologies.md).
 
-### Step A: Scrape kubelet volume-stats and inject `tenant`
+### Step A: Scrape kubelet volume-stats
 
-volume-stats carry `namespace` and `persistentvolumeclaim` natively, but **not `tenant`**. Add a scrape job for the kubelet's main `/metrics` endpoint, and use `metric_relabel_configs` to rewrite `namespace` into `tenant` (1:1, same effect as Step 1; but because `namespace` is a **native metric label** on kubelet metrics, this uses `metric_relabel_configs` rather than Step 1's `relabel_configs`):
+volume-stats carry `namespace` and `persistentvolumeclaim` natively, not `tenant`. Add a scrape job for the kubelet's main `/metrics` endpoint that keeps the tenant namespaces' series. **Do not** write `namespace` into `tenant`: the platform's rules and recipes derive the tenant from `namespace` (one namespace, one tenant), the way kube-state-metrics' series are read. A `tenant` written at scrape makes a tenant's custom rules select nothing on these series, and `byo-check` warns about it. `namespace` is a **native metric label** on kubelet metrics, so the keep goes in `metric_relabel_configs`:
 
 ```yaml
 scrape_configs:
@@ -427,9 +427,6 @@ scrape_configs:
       - source_labels: [__name__]
         action: keep
         regex: "kubelet_volume_stats_.*"
-      # ★ Core: 1:1 inject namespace as tenant (same effect as Step 1's relabel)
-      - source_labels: [namespace]
-        target_label: tenant
 ```
 
 > The platform's own reference deployment already ships this job; for the full runnable version see `kubelet-volume-stats` in [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml). The job needs `nodes/proxy` RBAC (same as the existing kubelet-cadvisor job). On a non-CSI cluster it is **harmless** — the `metric_relabel_configs` keeps drop everything to 0 series.
@@ -461,7 +458,7 @@ For the full example (threshold / rate / ratio / p99 / absence / `==` recipes) s
 da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 ```
 
-`byo-check`'s disk-recipe step checks whether **tenants that declared a disk recipe AND have Running pods actually receive tenant-attributed volume-stats**. When they don't, it names the three things to check: CSI / scrape job / relabel.
+`byo-check`'s disk-recipe step checks whether **tenants that declared a disk recipe AND have Running pods actually receive volume-stats from their namespaces**. When they don't, it names what to check: CSI and the scrape job.
 
 **✅ Pass criteria**: the disk-recipe step is `pass` (or `skip` when no tenant has declared a disk recipe yet).
 
@@ -470,7 +467,7 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 Even if you skip the byo-check above, the platform has a runtime safety net: when a tenant has **declared a disk recipe, has a Running pod, but the attributed volume-stats are absent**, `CustomRecipeDiskInert` fires and lists the three most common causes in order:
 
 1. the workload mounts no persistent volume (most common; e.g. a stateless Pod, a PVC stuck `Pending`, or a StatefulSet missing `volumeClaimTemplates`) → check the tenant's deployment;
-2. the kubelet volume-stats scrape job or `namespace→tenant` relabel is missing (Step A skipped);
+2. the kubelet volume-stats scrape job is missing, or it does not keep the tenant's namespace (Step A skipped);
 3. the CSI driver does not implement NodeGetVolumeStats (prerequisite unmet).
 
 When one tenant runs in several clusters, this alert is judged per cluster ([ADR-006](../adr/006-tenant-mapping-topologies.en.md), "One tenant in several clusters"): on a Prometheus that holds every cluster's data, it fires once for each cluster where the tenant has a Running pod and no volume-stats, and the alert's `da_cluster` and annotations say which one; "no volume-stats" means either of `kubelet_volume_stats_available_bytes` and `kubelet_volume_stats_capacity_bytes` is missing, so finding one of them is not enough; volume-stats in another cluster do not keep it quiet. Check the three causes above in that cluster.
@@ -488,9 +485,9 @@ Let tenants alert on disk-I/O spikes — runaway queries, backup storms, and sim
 > - **Network storage is invisible**: cgroup blkio only counts block-layer I/O. **Network volumes (NFS / EFS / Azure Files) go through the network stack, bypass blkio → `container_fs` is always 0** ([cAdvisor #1702](https://github.com/google/cadvisor/issues/1702)). Such environments **cannot** use this alert (byo-check says so loudly).
 > - **It is not saturation**: raw IOPS/throughput ≠ "disk saturated" (that is node-level %util / latency — a platform-SRE concern, not splittable per tenant). Use it as an **anomaly-relative-to-baseline** signal (`da-tools baseline` for a recommended threshold), not an absolute SLA.
 
-### Step A: Scrape container_fs and inject `tenant`
+### Step A: Scrape container_fs
 
-The platform's reference `kubelet-cadvisor` job already adds `container_fs_{reads,writes}_total` + `_bytes_total` to its keep, applies a `namespace→tenant` relabel, and drops `container=""`/`"POD"` (to avoid pod-root double-counting) — see the `kubelet-cadvisor` job in [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml). A BYO Prometheus should mirror it (tight keep + relabel + container drop; do NOT use a broad `container_fs_.*` — the `device` label blows up cardinality). The same keep must also include `container_cpu_cfs_throttled_periods_total` + `container_cpu_cfs_periods_total` (the data source for the CFS-throttle alert `PodContainerCPUThrottled`; only cpu-limited containers emit them, a cardinality subset of the cpu-usage series, #944).
+The platform's reference `kubelet-cadvisor` job already adds `container_fs_{reads,writes}_total` + `_bytes_total` to its keep and drops `container=""`/`"POD"` (to avoid pod-root double-counting); it writes no `tenant`, for the reason given in the disk-fill Step A — see the `kubelet-cadvisor` job in [`k8s/03-monitoring/configmap-prometheus.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-prometheus.yaml). A BYO Prometheus should mirror it (tight keep + container drop; do NOT use a broad `container_fs_.*` — the `device` label blows up cardinality). The same keep must also include `container_cpu_cfs_throttled_periods_total` + `container_cpu_cfs_periods_total` (the data source for the CFS-throttle alert `PodContainerCPUThrottled`; only cpu-limited containers emit them, a cardinality subset of the cpu-usage series, #944).
 
 ### Step B: A tenant declares an IOPS recipe
 
@@ -519,17 +516,17 @@ Whether container_fs can actually **see** I/O on your cluster is answerable only
 # 2) During it, confirm container_fs tracks the load via byo-check:
 da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 #   step5_disk_iops_recipe_prereq:
-#     pass → container_fs arrives tenant-attributed = the signal is high-fidelity, safe to enable
+#     pass → container_fs arrives for the declaring tenants = the signal is high-fidelity, safe to enable
 #     fail → none arrives (not scraped, or storage bypasses blkio) → unusable here, do not rely on it
 ```
 
-**✅ Pass criteria**: byo-check's `step5` is `pass`, and during the load `rate(container_fs_reads_total{tenant="<you>"}[5m])` **or** `..._writes_total` shows sane non-zero values (a read-heavy workload need only show reads — matching the gate's reads-OR-writes). **If it fails / both are 0, honestly do NOT enable it** — an I/O alert that measures nothing is more dangerous than none.
+**✅ Pass criteria**: byo-check's `step5` is `pass`, and during the load `rate(container_fs_reads_total{namespace="<you>"}[5m])` **or** `..._writes_total` shows sane non-zero values (a read-heavy workload need only show reads — matching the gate's reads-OR-writes). **If it fails / both are 0, honestly do NOT enable it** — an I/O alert that measures nothing is more dangerous than none.
 
 > **Re-run after infrastructure changes**: a cgroup version change (v1→v2 migration) or a storage-driver swap alters the underlying blkio accounting — re-running this fidelity gate re-verifies that container_fs is still high-fidelity on the new setup, with no static assumption to trust.
 
 ### When it breaks: byo-check step5 reports fail
 
-Check in order: (1) is `container_fs_*` in the cadvisor scrape keep AND does that job carry a `namespace→tenant` relabel (Step A); (2) does your storage go over the network (NFS/EFS) and thus **bypass cgroup blkio** — then container_fs is structurally 0, and the platform SRE should monitor node-level `node_disk_*` instead; (3) is the tenant workload actually writing to disk (baseline should be non-zero under load).
+Check in order: (1) is `container_fs_*` in the cadvisor scrape keep, and is the tenant's namespace kept (Step A); (2) does your storage go over the network (NFS/EFS) and thus **bypass cgroup blkio** — then container_fs is structurally 0, and the platform SRE should monitor node-level `node_disk_*` instead; (3) is the tenant workload actually writing to disk (baseline should be non-zero under load).
 
 > **Node-level saturation is platform-SRE scope**: true "disk saturated" (%util, await/latency) is node/device-level and can't be split per tenant — the platform SRE monitors it with `node_disk_*`. It is out of scope for this tenant recipe (same as disk-fill's thin-provisioning boundary).
 
