@@ -502,6 +502,21 @@ def _string_of(node):
     return node.get("value") if isinstance(node, dict) and node.get("kind") == "string" else None
 
 
+def _written_labels(node):
+    """The label names one parse-tree node writes from something other than
+    the series it reads: ``label_replace`` / ``label_join``'s destination,
+    ``count_values``' label, the labels ``group_left`` / ``group_right``
+    copy. Shared by ``isolation_problems`` and ``migrated_label_problems``."""
+    kind = node["kind"]
+    if kind == "call" and node["name"] in ("label_replace", "label_join") and len(node["args"]) > 1:
+        return [_string_of(node["args"][1])]
+    if kind == "aggregate" and node["op"] == "count_values":
+        return [_string_of(node["param"])]
+    if kind == "binary" and node["matching"] is not None:
+        return list(node["matching"]["include"])
+    return []
+
+
 def isolation_problems(rules, tenant, label, filepath, shapes_of=None, flow_of=None):
     """ERRORs (and WARNs) for the rules of *tenant*'s rule file (#4136):
     *rules* are ``(rule_name, is_record, expr, labels)`` — labels as
@@ -557,14 +572,7 @@ def isolation_problems(rules, tenant, label, filepath, shapes_of=None, flow_of=N
                         f"\"{tenant}\" with {label}=\"\"; if not (Prometheus' or "
                         f"Alertmanager's own series, a node's), it is no tenant's to read"))
                 continue
-            written = []
-            if kind == "call" and node["name"] in ("label_replace", "label_join") and len(node["args"]) > 1:
-                written = [_string_of(node["args"][1])]
-            elif kind == "aggregate" and node["op"] == "count_values":
-                written = [_string_of(node["param"])]
-            elif kind == "binary" and node["matching"] is not None:
-                written = node["matching"]["include"]
-            for w in sorted(set(written) & set(guarded)):
+            for w in sorted(set(_written_labels(node)) & set(guarded)):
                 what = node.get("name") or node.get("op") or "the join"
                 results.append(LintResult(filepath, name, None, "ERROR",
                     f"{what} writes {w} from something other than the series read: "
@@ -653,12 +661,39 @@ def lint_labels(labels, policy, filepath, rule_name, is_recording):
     return results
 
 
+def migrated_expression_problems(rules, filepath, shapes_of=None):
+    """ERRORs for an expression that writes ``MIGRATED_LABEL`` (#4355):
+    ``label_replace`` / ``label_join`` into it, ``count_values`` into it,
+    ``group_left`` / ``group_right`` copying it (``_written_labels``).
+    *rules* are ``(rule_name, expr)``. An ERROR with or without *migrated*:
+    migrate-rule writes the label in ``labels:`` only, and refuses an
+    expression that keeps it. A write names the label as a string, so only
+    expressions holding its name are read (``promql_shape``, *shapes_of*)."""
+    judged = [(n, e) for n, e in rules if isinstance(e, str) and MIGRATED_LABEL in e]
+    if not judged:
+        return []
+    shapes_of = shapes_of or _lib_consumer_read.promql_shape
+    results = []
+    for (name, _expr), tree in zip(judged, shapes_of([e for _, e in judged])):
+        for node in _lib_consumer_read.shape_nodes(tree):
+            if MIGRATED_LABEL in _written_labels(node):
+                what = node.get("name") or node.get("op") or "the join"
+                results.append(LintResult(
+                    filepath, name, None, "ERROR",
+                    f"{what} writes '{MIGRATED_LABEL}' into the result: only migrate-rule "
+                    f"writes it, as {MIGRATED_LABEL}={MIGRATED_VALUE} in a migrated alert's "
+                    "labels; every other platform route and every inhibit source exclude "
+                    "it, so a rule writing it would leave the platform's routing; remove it"))
+    return results
+
+
 def migrated_label_problems(labels, filepath, rule_name, is_recording, migrated):
-    """ERRORs for a rule that writes ``MIGRATED_LABEL`` (#4355). Every platform
-    route but the migrated-alerts one and every inhibit source exclude it, so
-    a rule writing it leaves the custom isolation, the sentinel sink and the
-    inhibit sources. Only migrate-rule's own alerts (*migrated*: its
-    self-lint) write it, with ``MIGRATED_VALUE``."""
+    """ERRORs for a rule that writes ``MIGRATED_LABEL`` in its labels (#4355;
+    an expression writing it: ``migrated_expression_problems``). Every
+    platform route but the migrated-alerts one and every inhibit source
+    exclude it, so a rule writing it leaves the custom isolation, the
+    sentinel sink and the inhibit sources. Only migrate-rule's own alerts
+    (*migrated*: its self-lint) write it, with ``MIGRATED_VALUE``."""
     if MIGRATED_LABEL not in (labels or {}):
         return []
     value = str(labels[MIGRATED_LABEL])
@@ -874,6 +909,10 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, r
                 results.extend(governance_problems(
                     {**(group.get("labels") or {}), **(labels or {})},
                     rule.get("annotations"), filepath, rule_name))
+
+    # #4355: no expression writes the migrated label, migrated file or not
+    results.extend(migrated_expression_problems(
+        [(n, e) for n, _r, e, _l in isolated], filepath))
 
     # #4136: a tenant's rule file reads and writes only that tenant
     if tenant is not None:

@@ -219,10 +219,12 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict], *,
         return 'component="sentinel"' in r.get("matchers", [])
 
     def _is_migrated(r: dict) -> bool:
-        # #4355: the one spelling (`_grar_routes.MIGRATED_LABEL`); an older
-        # output's route (`component="migrated"`) is known by its receiver.
-        return (f'{MIGRATED_LABEL}="{MIGRATED_VALUE}"' in r.get("matchers", [])
-                or r.get("receiver") == MIGRATED_SHADOW_RECEIVER)
+        # #4355: the platform's own route, known as the platform builds it —
+        # by its receiver, which an older output's route (`component=
+        # "migrated"`) has too. Not by the matcher: a `_routing_enforced.match`
+        # holding `da_migrated="true"` puts it on the enforced route, which
+        # must be kept.
+        return r.get("receiver") == MIGRATED_SHADOW_RECEIVER
 
     # #4277: the migrated-alerts shadow route, built from *migrated_active*
     # (the tenants whose `_routing_migrated` is `active`; none: every tenant

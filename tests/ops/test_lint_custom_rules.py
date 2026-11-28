@@ -2015,3 +2015,33 @@ def test_the_cli_takes_migrated_and_refuses_it_with_rule_pack_dir(tmp_path):
     both = subprocess.run([*run, "--rule-pack-dir", scan, "--migrated"], capture_output=True,
                           text=True, encoding="utf-8", timeout=120)
     assert both.returncode == 2 and "--migrated" in both.stderr, both.stderr
+
+
+@pytest.mark.parametrize("expr", [
+    'label_replace(x{tenant="t1"}, "da_migrated", "true", "tenant", "t1") > 0',
+    'label_join(x{tenant="t1"}, "da_migrated", ",", "tenant") > 0',
+    'count_values("da_migrated", x{tenant="t1"}) > 0',
+    'x{tenant="t1"} * on(tenant) group_left(da_migrated) y{tenant="t1"} > 0',
+])
+@pytest.mark.parametrize("migrated", [False, True])
+def test_an_expression_writing_the_migrated_label_is_an_error(tmp_path, expr, migrated):
+    """CodeRabbit on #4366: a write in the expression reaches the alert as
+    surely as one in labels: (it would land in the shadow receiver, past every
+    platform route and inhibit gate). migrate never writes one, so --migrated
+    does not allow it either."""
+    f = tmp_path / "scan" / "t1" / "rules.yml"
+    f.parent.mkdir(parents=True)
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [{
+        "alert": "A", "expr": expr, "labels": {"tenant": "t1"},
+        "annotations": {"owner": "o", "expiry": "2099-01-01"}}]}]}), encoding="utf-8")
+    assert _migrated_errors(f, migrated), expr
+
+
+def test_an_expression_only_reading_the_migrated_label_is_no_write(tmp_path):
+    f = tmp_path / "scan" / "t1" / "rules.yml"
+    f.parent.mkdir(parents=True)
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [{
+        "alert": "A", "expr": 'label_replace(x{tenant="t1"}, "dst", "$1", "da_migrated", "(.*)") > 0',
+        "labels": {"tenant": "t1"},
+        "annotations": {"owner": "o", "expiry": "2099-01-01"}}]}]}), encoding="utf-8")
+    assert _migrated_errors(f, False) == []

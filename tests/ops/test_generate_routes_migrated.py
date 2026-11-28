@@ -287,6 +287,12 @@ _UNGATED = {"source_matchers": ['alertname="TenantSilentWarning"', 'tenant=~".+"
     (['{alertname="X", da_migrated=""}'], False),        # several in one element
     ([], True),                                          # match-all source
     (['alertname="X'], True),                            # unreadable: fail closed
+    # CodeRabbit on #4366: Go's regexp matches "true" with a POSIX class,
+    # Python's `re` reads `[[:alpha:]]` as another set — not confirmable,
+    # so it counts as matching (fail closed), either operator
+    (['alertname="X"', 'da_migrated=~"[[:alpha:]]+"'], True),
+    (['alertname="X"', 'da_migrated!~"[[:alpha:]]+"'], True),
+    (['alertname="X"', 'da_migrated!~"\\pL+"'], True),  # RE2-only syntax
 ])
 def test_a_source_must_exclude_migrated_alerts(source, offending):
     import _grar_validate as validate
@@ -330,3 +336,21 @@ def test_the_generated_dedup_rules_exclude_migrated_sources():
     rules, _ = routes_mod.generate_inhibit_rules({"t-a": "enable"})
     import _grar_validate as validate
     assert validate.find_migrated_sourced_inhibits(rules) == []
+
+
+@pytest.mark.parametrize("tenant_shape", [False, True])
+def test_an_enforced_route_matching_the_migrated_label_is_kept(tenant_shape):
+    """CodeRabbit on #4366: the platform's shadow route is known by its
+    receiver, so a `_routing_enforced.match` with `da_migrated="true"` (the
+    single or the {{tenant}} shape) is not taken for it and dropped."""
+    enforced = {"receiver": {"type": "webhook", "url": "https://noc.example.com/{{tenant}}"
+                             if tenant_shape else "https://noc.example.com/a"},
+                "match": [MIG]}
+    routing = {"t-a": {"receiver": {"type": "webhook", "url": "https://hooks.example.com/t-a"}}}
+    gen, _recv, _w = routes_mod.generate_routes(routing, enforced_routing=enforced, tenants=())
+    enforced_routes = [r for r in gen if str(r.get("receiver", "")).startswith("platform-enforced")]
+    assert enforced_routes and all(MIG in r["matchers"] for r in enforced_routes)
+    out, _ = render._inject_custom_alert_isolation(gen, [])
+    assert [r for r in out if str(r.get("receiver", "")).startswith("platform-enforced")] \
+        == enforced_routes
+    assert [r["receiver"] for r in out].count(routes_mod.MIGRATED_SHADOW_RECEIVER) == 1

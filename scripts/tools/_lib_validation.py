@@ -1401,6 +1401,21 @@ def duration_rule() -> tuple[re.Pattern[str], int, str]:
     return _DURATION_RULE
 
 
+def re2_fullmatch(pattern: str, value: str) -> "bool | None":
+    """Whether the anchored regex *pattern* matches *value* as Prometheus /
+    Alertmanager match it (Go ``regexp``, RE2 syntax), or None when Python
+    ``re`` cannot tell the way RE2 would: a POSIX class (``[[:alpha:]]``,
+    which Python reads as another set) or a pattern Python cannot compile
+    (``\\pL``). Other RE2 / ``re`` differences in a regex both accept are not
+    modelled. A caller asking whether a matcher CAN match takes None as yes."""
+    if "[:" in pattern:
+        return None
+    try:
+        return re.fullmatch(pattern, value) is not None
+    except re.error:
+        return None
+
+
 def am_duration_seconds(value: Any) -> Optional[float]:
     """Seconds Alertmanager reads from a routing timing *value*, or ``None``
     when Alertmanager refuses it (#2490).

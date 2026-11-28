@@ -51,6 +51,7 @@ import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads 
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import shown_file  # noqa: E402  (#3703: conf.d paths into messages)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
+from _lib_validation import re2_fullmatch  # noqa: E402  (#4355: Go regexp, fail closed)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
 from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
 from _lib_validation import (  # noqa: E402  (#1560)
@@ -454,17 +455,17 @@ def assert_equal_labels_gated(inhibit_rules: list[dict] | None) -> None:
 
 def _atom_matches(atom: "tuple[str, str, str]", value: str) -> bool:
     """Whether one ``(name, op, value)`` matcher of ``_side_atoms`` matches a
-    label whose value is *value* (Alertmanager: a regex is anchored; a
-    regex Python cannot read is taken to match — the fail-closed answer for
-    the callers, which ask whether a side CAN match)."""
+    label whose value is *value* (Alertmanager: a regex is anchored). A
+    regex whose meaning in Go Python cannot confirm (``re2_fullmatch``: a
+    POSIX class, RE2-only syntax) is taken to match, either operator — the
+    fail-closed answer for the callers, which ask whether a side CAN match."""
     _name, op, want = atom
     if op == "=":
         return value == want
     if op == "!=":
         return value != want
-    try:
-        hit = re.fullmatch(want, value) is not None
-    except re.error:
+    hit = re2_fullmatch(want, value)
+    if hit is None:
         return True
     return hit if op == "=~" else not hit
 
