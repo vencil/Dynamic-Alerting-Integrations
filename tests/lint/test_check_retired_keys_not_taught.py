@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -530,6 +531,30 @@ def test_main_cannot_pass_where_git_lists_nothing(tmp_path, capsys):
     root, _ = _tree(tmp_path, {"docs/a.md": "x\n"})     # not a git work tree
     assert lint.main(["--repo-root", str(root), "--ci"]) == 2
     assert "ERROR:" in capsys.readouterr().err
+
+
+def _git_repo(root: Path) -> None:
+    for argv in (["init", "-q"], ["add", "-A"],
+                 ["-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                  "commit", "-q", "--no-verify", "-m", "x"]):
+        subprocess.run(["git", *argv], cwd=str(root), check=True,
+                       capture_output=True, timeout=60)
+
+
+def test_repo_root_is_not_overridden_by_an_inherited_git_dir(tmp_path, monkeypatch, capsys):
+    """`--repo-root A` inside a hook of repository B scans A, not B's listing.
+
+    git's GIT_DIR / GIT_WORK_TREE outrank cwd: left in the environment, the
+    scan lists B's files (docs/ok.md only), reads them out of A, and passes
+    while A's tracked docs/bad.md teaches a retired key."""
+    a, _ = _tree(tmp_path / "a", {"docs/ok.md": "x\n", "docs/bad.md": f"`{KEY}: 80`\n"})
+    b, _ = _tree(tmp_path / "b", {"docs/ok.md": "x\n"})
+    _git_repo(a)
+    _git_repo(b)
+    monkeypatch.setenv("GIT_DIR", str(b / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(b))
+    assert lint.main(["--repo-root", str(a), "--ci"]) == 1
+    assert "docs/bad.md:1" in capsys.readouterr().err
 
 
 # --- the shipped tree ------------------------------------------------------------

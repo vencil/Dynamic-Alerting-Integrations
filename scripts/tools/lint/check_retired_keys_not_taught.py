@@ -335,9 +335,40 @@ def scan_text(rel: str, text: str, judged: dict,
     return findings, exempted
 
 
-def tracked_files(root: Path) -> list:
+def _git_env_for(root: Path) -> dict:
+    """The environment for git commands that must answer for *root*.
+
+    git's repo-local variables (``GIT_DIR``, ``GIT_WORK_TREE``,
+    ``GIT_INDEX_FILE``, … — the names come from git itself) outrank ``cwd``:
+    left in, a ``--repo-root A`` run inside a hook of repository B would list
+    B's files and read them out of A.
+    """
     try:
-        res = subprocess.run(["git", "ls-files", "-z"], cwd=str(root),
+        names = subprocess.run(
+            ["git", "rev-parse", "--local-env-vars"], cwd=str(root),
+            capture_output=True, timeout=60, check=True,
+        ).stdout.decode("utf-8", "replace").split()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise MeasureError(f"`git rev-parse --local-env-vars` failed: {exc}") from exc
+    if "GIT_DIR" not in names:
+        raise MeasureError("git did not name GIT_DIR among its repo-local "
+                           "environment variables; cannot isolate the scan")
+    return {k: v for k, v in os.environ.items() if k not in names}
+
+
+def tracked_files(root: Path) -> list:
+    """git's tracked files under *root*.
+
+    For any tree but this file's own repository, git's repo-local environment
+    variables are dropped first. The tool's own tree keeps them: inside a
+    commit hook only the hook's index holds what is being committed, and
+    ``require_git_project_root`` has already refused a ``GIT_DIR`` that
+    points elsewhere.
+    """
+    own = os.path.realpath(str(root)) == os.path.realpath(_GENERATOR_ROOT)
+    env = None if own else _git_env_for(root)
+    try:
+        res = subprocess.run(["git", "ls-files", "-z"], cwd=str(root), env=env,
                              capture_output=True, timeout=120, check=True)
     except (OSError, subprocess.SubprocessError) as exc:
         raise MeasureError(f"`git ls-files` failed in {root}: {exc}") from exc
