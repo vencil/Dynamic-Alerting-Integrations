@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-10
-updated_at: 2026-11-24
+updated_at: 2026-11-28
 ---
 
 # ADR-037: config-diff 改為比較渲染結果
@@ -131,7 +131,6 @@ db-b 自己把 `container_memory` 設成 90，所以不受影響。兩個範例�
 | 載體 | 延後理由 | 什麼時候做 |
 |---|---|---|
 | 平台層的 `_custom_alerts`（`_` 檔頂層的 recipe） | 沒有讀取端：exporter 不送出，custom-alert 編譯器照 exporter 的讀法編譯、也不編它（見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3） | 有讀取端讀它時 |
-| `instance_tenant_mapping` | 由 tenant mapping 產生器讀，不是兩支渲染程式 | 該產生器有穩定的輸出格式 |
 | `max_metrics_per_tenant` | served-values 不輸出上限值本身 | 有人需要時 |
 
 **由 CI 檢查負責的載體。** `domain_policies` 由路由產生器的 `--validate --strict` 擋下違規；`_policies` 由 `validate-config` 檢查，`severity: error` 的規則違反、或規則寫法讀不了時失敗。寫在檢查會讀的位置時（`domain_policies` 在 `_domain_policy.yaml`，`_policies` 在根目錄的預設檔）只列為提示，不影響結束碼。`_policies` 寫在其他位置時列為 `Not read where it is written`，結束碼 1，免得報告暗示一條沒有人讀的規則有被執行。`domain_policies` 寫在 `_domain_policy.yaml` 以外的檔時，路由產生器拒收整棵樹，所以 PR 側的路由面「沒有計算」、結束碼 2，原因點名該檔。需要看「新增了哪些違規」時，讀產生器的 `--findings-json`。

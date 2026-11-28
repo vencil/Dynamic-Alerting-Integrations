@@ -101,8 +101,6 @@ class TestDispatcherInjectsNothing:
     @pytest.mark.parametrize("command, argv", [
         ("threshold-recommend", ["--config-dir", "conf.d", "--dry-run"]),
         ("diagnose", ["db-a"]),
-        ("discover-mappings", ["--job", "mysql"]),
-        ("discover-mappings", ["--endpoint", "http://exporter:9104/metrics"]),
         ("alert-quality", ["--json"]),
     ])
     @pytest.mark.parametrize("env", ["http://env:9090", "ftp://bad"])
@@ -158,15 +156,6 @@ class TestEveryPrometheusFlagDeclaresItsFallback:
             f"declared, or required), beyond NO_FALLBACK: "
             f"{sorted(set(undeclared) - set(self.NO_FALLBACK))}; listed but now declared: "
             f"{sorted(set(self.NO_FALLBACK) - set(undeclared))}")
-
-    def test_discover_mappings_keeps_endpoint_and_prometheus_exclusive(self):
-        """issue 1513's group stays: one source or the other. Neither given is
-        allowed now — Prometheus at $PROMETHEUS_URL, else localhost."""
-        parser = _captured_parsers()["discover-mappings"].parser
-        groups = [g for g in parser._mutually_exclusive_groups
-                  if {"--endpoint", "--prometheus"} <= {o for a in g._group_actions
-                                                        for o in a.option_strings}]
-        assert len(groups) == 1 and not groups[0].required, groups
 
 
 # ── Version Display ────────────────────────────────────────────────

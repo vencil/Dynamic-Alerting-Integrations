@@ -36,7 +36,7 @@ lang: zh
 | `ADR-003` | adr | ADR-003: Sentinel Alert 模式 | exporter | — | [docs/adr/003-sentinel-alert-pattern.md](../adr/003-sentinel-alert-pattern.md) |
 | `ADR-004` | adr | ADR-004: Federation 架構——中央 Exporter 優先 | exporter | — | [docs/adr/004-federation-central-exporter-first.md](../adr/004-federation-central-exporter-first.md) |
 | `ADR-005` | adr | ADR-005: 投影卷掛載 Rule Pack | k8s | — | [docs/adr/005-projected-volume-for-rule-packs.md](../adr/005-projected-volume-for-rule-packs.md) |
-| `ADR-006` | adr | ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N) | exporter | — | [docs/adr/006-tenant-mapping-topologies.md](../adr/006-tenant-mapping-topologies.md) |
+| `ADR-006` | adr | ADR-006: 租戶映射拓撲 (1:1, N:1) | exporter | — | [docs/adr/006-tenant-mapping-topologies.md](../adr/006-tenant-mapping-topologies.md) |
 | `ADR-007` | adr | ADR-007: 跨域路由設定檔與域策略 | tenant-api | — | [docs/adr/007-cross-domain-routing-profiles.md](../adr/007-cross-domain-routing-profiles.md) |
 | `ADR-008` | adr | ADR-008: Operator-Native 整合路徑 | k8s | — | [docs/adr/008-operator-native-integration-path.md](../adr/008-operator-native-integration-path.md) |
 | `ADR-009` | adr | ADR-009: Tenant Manager CRUD API 架構 | tenant-api | — | [docs/adr/009-tenant-manager-crud-api.md](../adr/009-tenant-manager-crud-api.md) |

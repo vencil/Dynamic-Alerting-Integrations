@@ -450,25 +450,6 @@ const LINT_RULES = [
       return findings;
     },
   },
-  {
-    id: 'instance-mapping-missing-partition',
-    severity: 'warning',
-    category: t('實例映射', 'Instance Mapping'),
-    check: (tenants) => {
-      const findings = [];
-      const mappings = tenants['_instance_mapping'];
-      if (!Array.isArray(mappings)) return findings;
-      for (const m of mappings) {
-        if (!m.partition_label) {
-          findings.push({ tenant: '_instance_mapping', key: m.instance || '?', message: t(`映射缺少 partition_label`, `Mapping missing partition_label`) });
-        }
-        if (!m.partitions || m.partitions.length === 0) {
-          findings.push({ tenant: '_instance_mapping', key: m.instance || '?', message: t(`映射缺少 partitions 列表`, `Mapping missing partitions list`) });
-        }
-      }
-      return findings;
-    },
-  },
 ];
 
 /* ── Lint engine: parse, run every rule, tag + severity-sort findings ── */

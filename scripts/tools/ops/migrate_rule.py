@@ -193,8 +193,8 @@ def load_metric_dictionary(script_dir=None):
         dict_path = str(Path(script_dir) / "metric-dictionary.yaml")
     if dict_path and os.path.exists(dict_path):
         # #4064: the one reading of a YAML file (strict: a key given twice
-        # is refused, YamlFileError naming the file), as analyze-gaps and
-        # generate-tenant-mapping read the same dictionary.
+        # is refused, YamlFileError naming the file), as analyze-gaps reads
+        # the same dictionary.
         return load_yaml_file(dict_path, default={}) or {}
     return {}
 

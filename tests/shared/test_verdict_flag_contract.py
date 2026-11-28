@@ -442,19 +442,6 @@ def _confd_with_group_wait(tmp: Path, group_wait: str) -> str:
     return str(d)
 
 
-def _confd_with_instance_mapping(tmp: Path, mapped_tenant: str) -> str:
-    """A conf.d declaring tenant-one, plus a 1:N instance mapping onto
-    `mapped_tenant` — a tenant that does or does not exist."""
-    d = tmp / f"confd-mapping-{mapped_tenant}"
-    _write(d / "tenant-one.yaml",
-           'tenants:\n  tenant-one:\n    mysql_connection_usage_percent: "90"\n')
-    _write(d / "_instance_mapping.yaml", (
-        "instance_tenant_mapping:\n  shared-db-01:\n"
-        f"    - tenant: {mapped_tenant}\n"
-        "      filter: 'schema=~\"app_.*\"'\n"))
-    return str(d)
-
-
 def _correlated_alerts(tmp: Path) -> str:
     """Two critical alerts a minute apart in one namespace with unrelated
     names: one cluster whose single pair scores 0.8 (overlap 0.4 + namespace
@@ -734,16 +721,6 @@ RECIPES: list[Recipe] = [
                                   _confd_with_policy(t, "pagerduty"), "--validate"],
       note="--validate alone passes the violation as WARN (0); --strict fails it"),
 
-    R("generate_tenant_mapping_rules", "--validate", mode="with --dry-run",
-      base=lambda t, s: ["--config-dir",
-                         _confd_with_instance_mapping(t, "tenant-ghost"),
-                         "--metrics", "m1", "--dry-run"],
-      flip=("--validate",), boundary=("--validate",),
-      boundary_base=lambda t, s: ["--config-dir",
-                                  _confd_with_instance_mapping(t, "tenant-one"),
-                                  "--metrics", "m1", "--dry-run"],
-      note="--dry-run has its own exit for a failed validation; same verdicts"),
-
     # --min-score filters which pair scores a cluster reports (score_cluster:
     # "pairs exceeding min_score"); it does NOT decide the --ci verdict, which
     # reads the root cause's severity only. Observed through the pair scores.
@@ -842,15 +819,6 @@ RECIPES: list[Recipe] = [
       observe=_risk_and_rc,
       note="20 days to the limit: within 3*7 = 21 (warning), beyond 3*6 = 18 "
            "(safe; 400 is under 80 % of 1000)"),
-
-    R("generate_tenant_mapping_rules", "--validate",
-      lambda t, s: ["--config-dir", _confd_with_instance_mapping(t, "tenant-ghost"),
-                    "--metrics", "m1"],
-      flip=("--validate",), boundary=("--validate",),
-      boundary_base=lambda t, s: ["--config-dir",
-                                  _confd_with_instance_mapping(t, "tenant-one"),
-                                  "--metrics", "m1"],
-      note="mapping onto an undeclared tenant: 0 -> 1; a declared one stays 0"),
 ]
 
 

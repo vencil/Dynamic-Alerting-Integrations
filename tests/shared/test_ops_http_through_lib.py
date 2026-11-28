@@ -48,7 +48,6 @@ RUNNER = Path(__file__).with_name("_net_hook_runner.py")
 # tool to it, the static check below holds it to the tools' imports.
 DIRECT_HTTP_ALLOWED: dict[str, str] = {
     "_federation_revocation_reconciler.py": "queries VictoriaLogs and serves its own endpoint",
-    "discover_instance_mappings.py": "scrapes an exporter's /metrics (--endpoint)",
     "generator_service.py": "is a socket server",
     "notification_tester.py": "delivers test notifications to receivers",
     "policy_opa_bridge.py": "queries OPA (its own redirect-refusing opener)",
@@ -288,8 +287,8 @@ def _ev(event, via_lib=False, **kw):
     ("notification_tester.py", [_ev("request", path="/api/v1/query", method="POST")], True),
     ("notification_tester.py", [_ev("request", path="/api/v2/alerts", method="HEAD")], True),
     ("notification_tester.py", [_ev("request", path="/api/v2/silences", method="POST")], False),
-    ("discover_instance_mappings.py", [_ev("request", path="/federate", method="GET")], True),
-    ("discover_instance_mappings.py", [_ev("request", path="/metrics", method="GET")], False),
+    ("policy_opa_bridge.py", [_ev("request", path="/federate", method="GET")], True),
+    ("policy_opa_bridge.py", [_ev("request", path="/metrics", method="GET")], False),
     ("notification_tester.py", [_ev("fetcher", argv=["sh", "-c", "curl u"])], True),
     ("check_alert.py", [_ev("python-child", argv=["python3", "-c", "x"])], True),
     ("check_alert.py", [_ev("request", via_lib=True, path="/api/v1/alerts", method="GET")], False),

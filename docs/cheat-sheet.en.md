@@ -52,7 +52,6 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `threshold-govern` | Threshold governance report: recommend→gate→list rotten thresholds (read-only, writes nothing; #656) | --config-dir <PATH>, --prometheus <URL>, --min-delta-pct, --json | `da-tools threshold-govern --help` |
 | `explain-route` | Routing merge pipeline debugger: four-layer expansion + profile (ADR-007) | --config-dir <PATH>, --tenant <NAME>, --show-profile-expansion, --trace, --alertname <NAME>, --severity <LEVEL>, --label <KEY=VALUE>, --base-config <PATH>, --json | `da-tools explain-route --help` |
 | `explain-keys` | Per key: source, readers, verdict and what a disable does; --assert checks it (ADR-038) | --config-dir <PATH>, --tenant <NAME>, --at <RFC3339>, --assert <FILE>, --json, --da-guard-binary <PATH>, --timeout <SECONDS> | `da-tools explain-keys --help` |
-| `discover-mappings` | Auto-discover 1:N instance-tenant mappings (ADR-006) | --endpoint <URL> or --prometheus <URL> --instance <INST>, --job, -o, --json | `da-tools discover-mappings --help` |
 | `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | --ci <PLATFORM>, --tenants <LIST>, --non-interactive, --dry-run | `da-tools init --help` |
 | `config-history` | Config snapshot & history tracking (snapshot / log / show / diff) | --config-dir <PATH>, -m <MSG>, --limit <N> | `da-tools config-history --help` |
 | `gitops-check` | Local conf.d structure check | local --dir <PATH> | `da-tools gitops-check --help` |
@@ -100,7 +99,6 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `test-notification` — Multi-channel notification connectivity testing
   - `explain-route` — Routing merge pipeline debugger (four-layer expansion)
   - `explain-keys` — Explain a tenant's keys (who reads them, verdict, what a disable does)
-  - `discover-mappings` — Auto-discover 1:N instance-tenant mappings
 
 - **Adoption & Initialization**
   - `init` — Project skeleton generation (CI/CD + conf.d + Kustomize)

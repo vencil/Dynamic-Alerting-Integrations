@@ -63,7 +63,6 @@ def _build_help_text(lang):
     federation-check  Prometheus Federation 健康檢查
     grafana-import    Grafana Dashboard JSON 匯入
     shadow-verify     Shadow Monitoring 雙軌比對驗證
-    discover-mappings 自動發現 1:N 實例-租戶映射 (掃描 exporter /metrics)
     init              在客戶 repo 初始化 Dynamic Alerting 整合骨架 (CI/CD + conf.d + Kustomize)
     config-history    配置快照與歷史追蹤 (snapshot / log / diff / show)
     gitops-check      conf.d 本機結構檢查 (local)
@@ -153,7 +152,6 @@ Commands (File System — offline):
     federation-check  Prometheus Federation health check
     grafana-import    Grafana Dashboard JSON import
     shadow-verify     Shadow Monitoring dual-rail comparison
-    discover-mappings Auto-discover 1:N instance-tenant mappings (scrape exporter /metrics)
     init              Bootstrap Dynamic Alerting integration in your repo (CI/CD + conf.d + Kustomize)
     config-history    Config snapshot & history tracker (snapshot / log / diff / show)
     gitops-check      Local conf.d structure check (local)
@@ -367,7 +365,6 @@ COMMAND_MAP = {
     "federation-check": "federation_check.py",
     "grafana-import": "grafana_import.py",
     "shadow-verify": "shadow_verify.py",
-    "discover-mappings": "discover_instance_mappings.py",
     "init": "init_project.py",
     "config-history": "config_history.py",
     "gitops-check": "gitops_check.py",

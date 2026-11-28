@@ -17,7 +17,7 @@ lang: en
 | `docs/adr/003-sentinel-alert-pattern.md` (.en.md) | Platform Engineers | ADR-003: Sentinel Alert Pattern |
 | `docs/adr/004-federation-central-exporter-first.md` (.en.md) | Platform Engineers | ADR-004: Federation Architecture — Central Exporter First |
 | `docs/adr/005-projected-volume-for-rule-packs.md` (.en.md) | Platform Engineers | ADR-005: Projected Volume for Rule Packs |
-| `docs/adr/006-tenant-mapping-topologies.md` (.en.md) | Platform Engineers | ADR-006: Tenant Mapping Topologies (1:1, N:1, 1:N) |
+| `docs/adr/006-tenant-mapping-topologies.md` (.en.md) | Platform Engineers | ADR-006: Tenant Mapping Topologies (1:1, N:1) |
 | `docs/adr/007-cross-domain-routing-profiles.md` (.en.md) | Platform Engineers | ADR-007: Cross-Domain Routing Profiles and Domain Policies |
 | `docs/adr/008-operator-native-integration-path.md` (.en.md) | Platform Engineers | ADR-008: Operator-Native Integration Path |
 | `docs/adr/009-tenant-manager-crud-api.md` (.en.md) | Platform Engineers, developers | ADR-009: Tenant Manager CRUD API Architecture |

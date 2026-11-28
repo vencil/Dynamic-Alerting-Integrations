@@ -23,7 +23,7 @@ SCOPE:
   routing-profiles.schema.json, which `$ref`s the tenant `routing` definition (#2245 /
   #2232 item 3) — so a profile is held to the same shape, and the same #2164 quoting
   check, as a tenant's `_routing`. All OTHER meta-files (_domain_policy /
-  _instance_mapping / _rbac ... — basename starts with "_") have their own shapes and
+  _rbac ... — basename starts with "_") have their own shapes and
   validators; they are SKIPPED and listed explicitly so coverage is never silently
   capped.
   ROOT PLATFORM `tenants:` (#2743): every `_` file at the conf.d ROOT that the exporter

@@ -172,7 +172,6 @@ sys.path.insert(0, str(TOOLS / "ops"))
 from _lib_exitcodes import CallerError, emit_result, exit_on_crash  # noqa: E402
 import byo_check  # noqa: E402
 import cutover_tenant  # noqa: E402
-import discover_instance_mappings  # noqa: E402
 import federation_check  # noqa: E402
 
 _FAIL = {"check": "x", "status": "fail", "detail": "d"}
@@ -243,10 +242,3 @@ def test_cutover_json_status(monkeypatch, capsys, tmp_path, report, status):
     assert json.loads(out.out) == report
 
 
-def test_discover_mappings_json_success_is_0(monkeypatch, capsys):
-    monkeypatch.setattr(discover_instance_mappings, "query_prometheus_label_values",
-                        lambda *a, **kw: {"schema": {"s1", "s2", "s3"}})
-    assert _rc(discover_instance_mappings.main, [
-        "--prometheus", "http://prom:9090", "--instance", "x:1", "--json"]) == 0
-    doc = json.loads(capsys.readouterr().out)
-    assert len(doc["instance_tenant_mapping"]["x:1"]) == 3

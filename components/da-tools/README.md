@@ -90,7 +90,7 @@ docker run --rm \
 
 | 階段 | 典型負責角色 | 你想做什麼 | 用哪些命令 |
 |------|------------|------------|------------|
-| **Discover** | Platform | 認識客戶現有環境，盤點待遷移範圍 | `onboard`、`discover-mappings`、`blind-spot`、`parser` |
+| **Discover** | Platform | 認識客戶現有環境，盤點待遷移範圍 | `onboard`、`blind-spot`、`parser` |
 | **Onboard** | Platform | 建立新 tenant、bootstrap CI/CD | `init`、`scaffold`、`migrate`、`grafana-import` |
 | **Validate** | Platform（custom rules 含 Domain） | Commit / PR 前驗 schema、routing、cardinality、policy | `validate-config`、`guard`、`evaluate-policy`、`opa-evaluate`、`lint`、`analyze-gaps`、`config-diff`、`drift-detect` |
 | **Cutover** | Platform | Shadow Monitoring → 正式切換 | `validate`、`shadow-verify`、`backtest`、`cutover` |
@@ -106,7 +106,6 @@ docker run --rm \
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
 | `onboard` | 分析既有 Alertmanager / Prometheus 配置產出遷移計畫 | `<config_file>` 或 `--alertmanager-config <file>` |
-| `discover-mappings` | 自動發現 1:N 實例-租戶映射（掃 exporter `/metrics`） | `--prometheus <url>` |
 | `blind-spot` | 掃 cluster targets vs `conf.d/` 找出未涵蓋的實例 | `--config-dir <dir>` |
 | `parser` ✨v2.8.0 | 解析 PrometheusRule YAML → ParseResult JSON（子命令：`import` / `allowlist`） | `import <file>` |
 
@@ -115,7 +114,7 @@ docker run --rm \
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
 | `init` | 在客戶 repo bootstrap Dynamic Alerting 整合骨架（CI/CD + conf.d + Kustomize） | `--ci both --tenants db-a --rule-packs mariadb` |
-| `scaffold` | 產 tenant 配置（互動 / 非互動，支援 1:1 / N:1 / 1:N 拓撲） | `--tenant <name> --db <types>` |
+| `scaffold` | 產 tenant 配置（互動 / 非互動，支援 1:1 / N:1 拓撲） | `--tenant <name> --db <types>` |
 | `migrate` | 一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則（以語法樹注入租戶隔離，加 owner／expiry） | `<input_file> --tenant <ID> --owner <OWNER> --expiry <YYYY-MM-DD>` |
 | `grafana-import` | Grafana Dashboard JSON 匯入轉 conf.d 結構 | `<dashboard.json>` |
 

@@ -67,13 +67,6 @@ _POLICY_VALUE = {
                       '    _metadata:\n      owner: "yes"\n'),
 }
 
-#: An `_instance_mapping.yaml` entry's `tenant:` — a tenant id, read as text
-#: (a boolean `true` is the id "true", not "yes").
-_MAPPING_TENANT = {
-    "_defaults.yaml": _DEFAULTS,
-    "_instance_mapping.yaml": ("instance_tenant_mapping:\n  i1:\n"
-                               "    - tenant: {VALUE}\n      filter: 'schema=\"a\"'\n"),
-}
 #: A root `_defaults.yaml` top-level value — OPA's `input.defaults` carries it.
 _OPA_DEFAULT = {
     "_defaults.yaml": _DEFAULTS + "flag: {VALUE}\n",
@@ -141,9 +134,6 @@ _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] 
     "lint/check_confd_schema.py": (
         "lint/check_confd_schema.py", ["--config-dir", "{d}"], _ENFORCED, (), ""),
     # ── the read-only tools switched in step E1 (#2906) ──
-    "ops/generate_tenant_mapping_rules.py": (
-        "ops/generate_tenant_mapping_rules.py",
-        ["--config-dir", "{d}", "--metrics", "cpu", "--dry-run"], _MAPPING_TENANT, (), ""),
     "ops/policy_opa_bridge.py": (
         "ops/policy_opa_bridge.py", ["--config-dir", "{d}", "--dry-run"], _OPA_DEFAULT, (), ""),
     "lint/check_path_metadata_consistency.py": (

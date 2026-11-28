@@ -62,8 +62,8 @@ const RECEIVER_RANGE = 'type decides the required fields (see tenant-config.sche
 /* ── Tenant-file schema tree ──
  * Every key below is written under tenants.<id>: in a tenant file
  * (docs/schemas/tenant-config.schema.json#/definitions/tenantConfig).
- * Platform files (_defaults.yaml, _routing_profiles.yaml, _domain_policy.yaml,
- * _instance_mapping.yaml) have their own schemas and are not listed here
+ * Platform files (_defaults.yaml, _routing_profiles.yaml, _domain_policy.yaml)
+ * have their own schemas and are not listed here
  * (#2033). tests/schema-explorer-schema.drift.test.tsx checks every path below
  * against the live tenant schema and validates every insert.
  * `<tenant_name>` stands for the tenant itself: its children sit directly

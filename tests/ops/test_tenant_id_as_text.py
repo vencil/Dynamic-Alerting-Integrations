@@ -915,12 +915,6 @@ _META2216 = ("tenants:\n  {id}:\n    _metadata:\n      domain: db\n"
              "      environment: prod\n    _expected_exporters: [postgresql]\n")
 
 
-def _ids_mapping_rules(d, spell):
-    import generate_tenant_mapping_rules as m
-    _tree(d, {"t.yaml": _T2216.format(id=spell)})
-    return m.collect_tenant_ids_from_config_dir(str(d))
-
-
 def _ids_tenant_metadata(d, spell):
     import generate_tenant_metadata as m
     _tree(d, {"t.yaml": _T2216.format(id=spell)})
@@ -969,7 +963,6 @@ def _ids_onboard_platform(d, spell):
 
 
 _READERS_2216 = {
-    "generate_tenant_mapping_rules": _ids_mapping_rules,
     "generate_tenant_metadata": _ids_tenant_metadata,
     "backtest_threshold": _ids_backtest,
     "migrate_conf_d": _ids_migrate,
@@ -1030,15 +1023,6 @@ def test_md_yaml_drift_judges_each_tenant_body(tmp_path, capsys, variant):
 # ── #2216: tenant ids written as VALUES ──────────────────────────────
 
 
-def _ids_mapping_file(d, spell):
-    import generate_tenant_mapping_rules as m
-    _tree(d, {"_instance_mapping.yaml": (
-        f"instance_tenant_mapping:\n  i1:\n    - tenant: {spell}\n"
-        "      filter: x\n")})
-    return {e.tenant for im in m.parse_mapping_file(str(d / "_instance_mapping.yaml"))
-            for e in im.entries}
-
-
 def _state_show_json(d: Path, records: dict) -> Path:
     """The `tenant-api state show --from <dir>` JSON of *records* (ADR-036
     §12: the tools read the state as tenant-api reads it). The binary is the
@@ -1062,7 +1046,6 @@ def _ids_custom_groups(d, spell):
 
 
 _VALUE_READERS_2216 = {
-    "mapping_file_tenant": _ids_mapping_file,
     "groups_members": _ids_custom_groups,
 }
 

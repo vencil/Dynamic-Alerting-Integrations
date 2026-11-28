@@ -17,7 +17,7 @@ lang: zh
 | `docs/adr/003-sentinel-alert-pattern.md` (.en.md) | Platform Engineers | ADR-003: Sentinel Alert 模式 |
 | `docs/adr/004-federation-central-exporter-first.md` (.en.md) | Platform Engineers | ADR-004: Federation 架構——中央 Exporter 優先 |
 | `docs/adr/005-projected-volume-for-rule-packs.md` (.en.md) | Platform Engineers | ADR-005: 投影卷掛載 Rule Pack |
-| `docs/adr/006-tenant-mapping-topologies.md` (.en.md) | Platform Engineers | ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N) |
+| `docs/adr/006-tenant-mapping-topologies.md` (.en.md) | Platform Engineers | ADR-006: 租戶映射拓撲 (1:1, N:1) |
 | `docs/adr/007-cross-domain-routing-profiles.md` (.en.md) | Platform Engineers | ADR-007: 跨域路由設定檔與域策略 |
 | `docs/adr/008-operator-native-integration-path.md` (.en.md) | Platform Engineers | ADR-008: Operator-Native 整合路徑 |
 | `docs/adr/009-tenant-manager-crud-api.md` (.en.md) | Platform Engineers, developers | ADR-009: Tenant Manager CRUD API 架構 |

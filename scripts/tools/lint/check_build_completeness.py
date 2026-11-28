@@ -71,7 +71,7 @@ _SIBLING_MODULE_DIRS = ("", "ops", "dx", "lint")
 #     讓映像缺檔在建置時就被擋下，而不是等到執行期才 rc 2。
 #   - analyze_rule_pack_gaps.py: DEFAULT_METRIC_DICT = <script 同目錄>/metric-dictionary.yaml
 #     （flat image layout 下即 /app/metric-dictionary.yaml）。
-# migrate_rule / generate_tenant_mapping_rules 也讀 metric-dictionary.yaml，
+# migrate_rule 也讀 metric-dictionary.yaml，
 # 但走「自動偵測」非單一同目錄預設；上面的 analyze_rule_pack_gaps 條目已足以
 # 把該資料檔錨在 TOOL_FILES，故不重複列。
 #   - _grar_validate.py: _find_platform_rules_configmap() 先找 <module 同目錄>/

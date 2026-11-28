@@ -42,8 +42,6 @@ OPERATOR_FILE_FLAGS: dict[tuple[str, str], bool] = {
     ("ops/backtest_threshold.py", "-o/--output"): True,
     ("ops/backtest_threshold.py", "--markdown-output"): True,
     ("ops/batch_diagnose.py", "-o/--output"): True,
-    ("ops/discover_instance_mappings.py", "-o/--output"): True,
-    ("ops/generate_tenant_mapping_rules.py", "-o/--output"): False,
     ("ops/validate_migration.py", "--convergence-output"): True,
 }
 
@@ -231,7 +229,6 @@ JSON_DOCUMENT_FLAGS = [
     ("ops/analyze_rule_pack_gaps.py", "-o/--output"),
     ("ops/backtest_threshold.py", "-o/--output"),
     ("ops/batch_diagnose.py", "-o/--output"),
-    ("ops/discover_instance_mappings.py", "-o/--output"),
 ]
 
 

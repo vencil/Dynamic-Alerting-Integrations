@@ -32,7 +32,6 @@ lang: en
 | `da_assembler.py` | da-assembler-controller — Lightweight ThresholdConfig CRD → YAML renderer. |
 | `deprecate_rule.py` | 規則/指標下架工具。 |
 | `diagnose.py` | Quick health check for a tenant's MariaDB and monitoring stack. |
-| `discover_instance_mappings.py` | Auto-discover 1:N instance-tenant mappings. |
 | `drift_detect.py` | Cross-Cluster Configuration Drift Detection |
 | `explain_keys.py` | `da-tools explain-keys`: per tenant, who reads each key and what it does. |
 | `explain_route.py` | Routing merge pipeline debugger (ADR-007). |
@@ -40,7 +39,6 @@ lang: en
 | `federation_keygen.py` | federation JWT 簽章金鑰的生成 / 輪替工具。 |
 | `generate_alertmanager_routes.py` | Generate Alertmanager route + receiver + inhibit config from tenant YAML. |
 | `generate_rule_pack_split.py` | Split Rule Packs into edge (Part 1) and central (Parts 2+3) YAML files. |
-| `generate_tenant_mapping_rules.py` | Generate Prometheus Recording Rules for 1:N tenant mapping. |
 | `generator_service.py` | `da-tools generator-service`: judges conf.d writes for tenant-api (ADR-036 §3). |
 | `gitops_check.py` | local conf.d structure check. |
 | `grafana_import.py` | Grafana dashboard import via ConfigMap sidecar. |

@@ -41,7 +41,7 @@ never codified, so it rotted.  This file is that gate; its harness shape
 
 SCOPE — WHAT THIS GATE ASSERTS
 ------------------------------
-* All 39 in-scope tools: 36 spell the flag ``--json``, 3 spell it
+* All 38 in-scope tools: 35 spell the flag ``--json``, 3 spell it
   ``--json-output`` (``blind_spot_discovery`` / ``config_diff`` /
   ``cutover_tenant``).  Same contract, both spellings.
   ``test_recipe_table_covers_every_json_tool`` fails if a new tool grows a JSON
@@ -94,9 +94,7 @@ HOW THE MODES ARE DRIVEN (every dependency is mocked, none is contacted)
   terminal path ("the server is up, nothing matched") and the one most likely to
   expose a "no data → print prose, skip the JSON" branch.  A ``/rich`` base-URL
   prefix serves non-empty payloads, so a tool that would otherwise early-return
-  on no-data can also be driven down its happy path (``discover_instance_mappings``
-  is gated on BOTH: the empty early-return *and* the rich happy path, because
-  they print differently).
+  on no-data can also be driven down its happy path.
 * *kubectl* → a fake ``kubectl`` on ``PATH`` (``fake_kubectl_dir``).  This is what
   makes the cluster-facing modes testable **and** safe: with the real binary
   shadowed there is no cluster to reach, so ``patch_config`` apply and
@@ -109,10 +107,10 @@ The HTTP stub is an *out-of-process server* rather than the in-process
 ``http_get_json``; the rest reach the network via ``urllib.urlopen`` or
 ``requests`` directly (``notification_tester``,
 ``policy_opa_bridge``, and partially ``byo_check`` / ``federation_check`` /
-``shadow_verify`` / ``discover_instance_mappings``).  One
+``shadow_verify``).  One
 real socket covers every one of them uniformly, and subprocess execution gives us
 the *actual, complete* stdout byte stream — which is the thing under test — with
-no import-time module-namespace crosstalk between 39 tools.
+no import-time module-namespace crosstalk between 38 tools.
 
 SCOPE — WHAT THIS GATE DOES *NOT* ASSERT (honest boundaries)
 ------------------------------------------------------------
@@ -264,13 +262,6 @@ _RICH_MATRIX = {"status": "success", "data": {"resultType": "matrix", "result": 
 
 _PLAIN_METRICS = (b"# HELP up Target up\n# TYPE up gauge\n"
                   b'mysql_up{instance="stub:9104"} 1\n')
-# Carries `schema=` — one of discover_instance_mappings' PARTITION_LABEL_CANDIDATES.
-_RICH_METRICS = (
-    b"# HELP mysql_info Info\n# TYPE mysql_info gauge\n"
-    b'mysql_info{instance="stub:9104",schema="app"} 1\n'
-    b'mysql_info{instance="stub:9104",schema="reporting"} 1\n'
-    b'mysql_info{instance="stub:9104",schema="billing"} 1\n'
-)
 
 # Go-runtime exposition, served under the `/soak` personality. This is what
 # `dx/run_chaos_soak` scrapes: it parses only UNLABELLED samples whose name is
@@ -370,10 +361,10 @@ def _stub_payload(path: str) -> tuple[int, bytes, str]:
     # Pushgateway
     if path.startswith("/metrics/job"):
         return 200, b"", "text/plain"
-    # Exporter /metrics scrape target (discover_instance_mappings --endpoint,
-    # run_chaos_soak --target-url under the `/soak` personality)
+    # Exporter /metrics scrape target (run_chaos_soak --target-url under the
+    # `/soak` personality)
     if path.rstrip("/").endswith("/metrics"):
-        body = _GO_RUNTIME_METRICS if soak else _RICH_METRICS if rich else _PLAIN_METRICS
+        body = _GO_RUNTIME_METRICS if soak else _PLAIN_METRICS
         return 200, body, "text/plain; version=0.0.4"
     return j({"status": "success", "data": {}})
 
@@ -1104,17 +1095,6 @@ RECIPES: list[Recipe] = [
                     "--show-inheritance", "--json"],
       expect_caller_error=True, expect_document=False),
 
-    # ── discover_instance_mappings  (⚠ known multi-mode trap) ──────────────
-    R("discover_instance_mappings", "prometheus",
-      lambda t, s: ["--prometheus", s, "--instance", "stub:9104", "--json"]),
-    R("discover_instance_mappings", "prometheus-with-labels",
-      lambda t, s: ["--prometheus", s + "/rich", "--instance", "stub:9104", "--json"]),
-    R("discover_instance_mappings", "output-file",
-      lambda t, s: ["--prometheus", s + "/rich", "--instance", "stub:9104",
-                    "--json", "--output", _out(t, "mappings.json")]),
-    R("discover_instance_mappings", "endpoint-scrape",
-      lambda t, s: ["--endpoint", f"{s}/rich/metrics", "--json"]),
-
     # ── drift_detect ───────────────────────────────────────────────────────
     R("drift_detect", "configmap",
       lambda t, s: ["--dirs", f"{SEED_CONF_D},{EXPORTER_CONF_D}",
@@ -1506,7 +1486,7 @@ def test_validate_config_optional_keys_are_all_produced_somewhere():
 def test_recipe_table_covers_every_json_tool():
     """A tool that grows a --json flag must gain a recipe, or this gate rots.
 
-    (36 tools spell it `--json`, 3 spell it `--json-output`; all 39 are in scope.)
+    (35 tools spell it `--json`, 3 spell it `--json-output`; all 38 are in scope.)
     """
     covered = {r.tool for r in RECIPES}
     uncovered = sorted(set(JSON_TOOLS) - covered)
@@ -1516,8 +1496,8 @@ def test_recipe_table_covers_every_json_tool():
         f"no recipe in RECIPES: {uncovered}"
     )
     assert not stale, f"RECIPES names tool(s) that no longer exist: {stale}"
-    assert len(JSON_TOOLS) == 39, (
-        f"expected 39 JSON-flag tools (36 --json + 3 --json-output), "
+    assert len(JSON_TOOLS) == 38, (
+        f"expected 38 JSON-flag tools (35 --json + 3 --json-output), "
         f"found {len(JSON_TOOLS)}: {sorted(JSON_TOOLS)}"
     )
 

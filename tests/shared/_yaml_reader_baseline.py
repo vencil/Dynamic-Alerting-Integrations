@@ -155,8 +155,6 @@ ALLOWED = {
         (1, "rule-packs/threshold-registry.yaml, the repo's own registry read only by Python tools"),
     ('scripts/tools/ops/analyze_rule_pack_gaps.py', 'load_metric_dictionary'):
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
-    ('scripts/tools/ops/generate_tenant_mapping_rules.py', 'load_metrics_from_dictionary'):
-        (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
     ('scripts/tools/ops/init_project.py', '_classify_root_file'):
         (2, "the customer repo's CI files (GitHub workflow, GitLab CI, pre-commit), read by those CI systems; no Go consumer"),
     ('scripts/tools/ops/init_project.py', '_duplicate_key_in'):
@@ -184,8 +182,6 @@ ALLOWED = {
         (1, "cutover-readiness.json (--readiness-json), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
     ('scripts/tools/ops/federation_keygen.py', 'main'):
         (1, "the JWKS to rotate into (--existing-jwks), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
-    ('scripts/tools/ops/generate_tenant_mapping_rules.py', 'main'):
-        (1, "a metric-dictionary.yaml given with --metric-dictionary, the repo's own metric catalogue read only by Python tools"),
     ('scripts/tools/ops/grafana_import.py', 'main'):
         (1, "a Grafana dashboard (--dashboard), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
     ('scripts/tools/ops/grafana_import.py', 'import_dashboard'):

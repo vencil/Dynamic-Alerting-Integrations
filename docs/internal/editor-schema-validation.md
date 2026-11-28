@@ -17,7 +17,7 @@ lang: zh
 檔案集合與 CI 閘門 `check_confd_schema.py` **同一套分類**（#1815）：副檔名 `.yaml` / `.yml` 兩種拼法、**不分大小寫**（`.YAML` / `.Yml` 也算），扁平與巢狀皆同。
 
 - ✅ **租戶檔**（檔名開頭不是 `_` 也不是 `.`）：`conf.d/<id>.yaml`、`conf.d/<id>.yml`、`conf.d/**/<id>.yaml`（含 `examples/`）、`try-local/seed/conf.d/<id>.yaml`。
-- ❌ **平台檔 `_*`** 從 tenant schema **刻意排除**（它們不是 `required: [tenants]` 結構，硬套會對合法檔亮紅勾）。其中 **檔名以 `_defaults` 開頭者（不分大小寫，含 `_defaults-multidb.yml`）改接專屬的 `platform-defaults.schema.json`**（頂層 key 守門，見下節）；其餘 `_*`（`_profiles` / `_routing_profiles` / `_rbac` / `_domain_policy` / `_instance_mapping`）各有自家 shape/validator，仍不接 schema。
+- ❌ **平台檔 `_*`** 從 tenant schema **刻意排除**（它們不是 `required: [tenants]` 結構，硬套會對合法檔亮紅勾）。其中 **檔名以 `_defaults` 開頭者（不分大小寫，含 `_defaults-multidb.yml`）改接專屬的 `platform-defaults.schema.json`**（頂層 key 守門，見下節）；其餘 `_*`（`_profiles` / `_routing_profiles` / `_rbac` / `_domain_policy`）各有自家 shape/validator，仍不接 schema。
 - ❌ **隱藏檔 `.*`**：CI 與 exporter 都跳過，編輯器也不接。
 
 排除靠 glob 的字元類 `[^_.]`（檔名第一字非底線、非點），而 `*([^/])`（extglob：零或多個非 `/` 字元）把比對鎖在檔名內。兩者都是**量出來的必要條件**，不是風格：
@@ -111,7 +111,7 @@ JetBrains 內建 YAML schema 支援（不需 yaml-language-server）：
 - **CI（`check_confd_schema.py`）與編輯器（devcontainer `yaml.schemas`）用同一 schema、同一組檔案**（兩種副檔名拼法、不分大小寫；例外見〈適用範圍〉的已知差異）。
 - ⚠️ **根目錄平台檔的 `tenants:` 區塊只有 CI 檢查，編輯器不檢查**（#2743）。exporter 與路由產生器把根目錄任一 `_` 檔（`_defaults*`、`_profiles.yaml`…）的 `tenants:` 當成該租戶自己的值合併，所以 `check_confd_schema.py`（與 `validate-config` 的 `json_schema` 列）拿 `tenant-config.schema.json` 逐筆檢查每個 `tenants.<id>`，錯誤寫成 `_defaults.yaml: … @ /tenants/<id>/…`。這個 schema 的 `tenants` 刻意維持 loose：編輯器分不出檔案在根目錄還是子目錄，而子目錄平台檔的 `tenants:` 沒有任何讀取端讀（#1576）。同一批根目錄檔 `profiles:` 區塊裡每個 profile 的 `_custom_alerts` 也只有 CI 檢查（#3647）：對照 `platform-defaults.schema.json` 的 `definitions.rootPlatformProfiles`，它以 `$ref` 指向 `tenant-config.schema.json` 的 `customAlertList`，不綁在任何屬性上，所以編輯器不套用。
 
-**仍 fast-follow（defer-with-trigger）**：(1) `_defaults` 的 **full 巢狀結構** schema（metric / filter 名動態，須真建模）——trigger＝收到 value-level「對合法亮紅 / 對錯放行」回報；(2) 其餘 `_*`（`_profiles` / `_routing_profiles` / `_rbac` / `_domain_policy` / `_instance_mapping`）的專屬 schema——形狀各異，`_routing_profiles` 等已有自家 validator（`check_routing_profiles.py`）。
+**仍 fast-follow（defer-with-trigger）**：(1) `_defaults` 的 **full 巢狀結構** schema（metric / filter 名動態，須真建模）——trigger＝收到 value-level「對合法亮紅 / 對錯放行」回報；(2) 其餘 `_*`（`_profiles` / `_routing_profiles` / `_rbac` / `_domain_policy`）的專屬 schema——形狀各異，`_routing_profiles` 等已有自家 validator（`check_routing_profiles.py`）。
 
 ## 相關
 

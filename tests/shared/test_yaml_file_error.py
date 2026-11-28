@@ -261,8 +261,6 @@ _TIMEOUT = 120
 _PROM = "http://127.0.0.1:9"   # nothing listens; every row here is Prometheus-free or skips
 BETA_DOC = b"tenants:\n  beta:\n    cpu_usage: 85\n"
 DEFAULTS_DOC = b"defaults:\n  cpu_usage: 90\n"
-MAPPING_DOC = (b"instance_tenant_mapping:\n  db1:\n"
-               b"    - tenant: alpha\n      filter: 'db=\"a\"'\n")
 POLICY_DOC = (b"policies:\n  - name: routing-required\n    description: r\n"
               b"    target: _routing\n    operator: required\n    severity: error\n")
 AM_DOC = (b"route:\n  receiver: default\n  routes:\n    - match:\n        tenant: alpha\n"
@@ -306,11 +304,6 @@ def fx(tmp_path_factory) -> dict[str, Path]:
                                         "_defaults.yaml": DEFAULTS_DOC}),
         "confd_bad_defaults": tree("confd_bad_defaults", {"alpha.yaml": CLEAN_DOC,
                                                           "_defaults.yaml": _dirty(DEFAULTS_DOC)}),
-        "map_ok": tree("map_ok", {"alpha.yaml": CLEAN_DOC, "_instance_mapping.yaml": MAPPING_DOC}),
-        "map_bad": tree("map_bad", {"alpha.yaml": CLEAN_DOC,
-                                    "_instance_mapping.yaml": _dirty(MAPPING_DOC)}),
-        "map_bad_tenant": tree("map_bad_tenant", {"alpha.yaml": XFF_DOC,
-                                                  "_instance_mapping.yaml": MAPPING_DOC}),
     }
     files = root / "files"
     files.mkdir()
@@ -339,15 +332,6 @@ _ROWS = [
      None, "metric-dictionary.bad.yaml",
      lambda f: ["--config-dir", str(f["confd_ok"]),
                 "--metric-dictionary", str(f["files"] / "metric-dictionary.yaml")], EXIT_OK),
-    ("gen_tenant_mapping mapping", OPS / "generate_tenant_mapping_rules.py",
-     lambda f: ["--config-dir", str(f["map_bad"]), "--metrics", "cpu_usage", "--dry-run"],
-     None, "_instance_mapping.yaml",
-     lambda f: ["--config-dir", str(f["map_ok"]), "--metrics", "cpu_usage", "--dry-run"], EXIT_OK),
-    ("gen_tenant_mapping tenant", OPS / "generate_tenant_mapping_rules.py",
-     lambda f: ["--config-dir", str(f["map_bad_tenant"]), "--metrics", "cpu_usage", "--dry-run",
-                "--validate"], None, "alpha.yaml",
-     lambda f: ["--config-dir", str(f["map_ok"]), "--metrics", "cpu_usage", "--dry-run",
-                "--validate"], EXIT_OK),
     ("onboard --alertmanager-config", OPS / "onboard_platform.py",
      lambda f: ["--alertmanager-config", str(f["files"] / "alertmanager.bad.yaml"), "--dry-run"],
      None, "alertmanager.bad.yaml",
@@ -662,7 +646,7 @@ def _module_aliases(tree: ast.Module) -> dict[str, str]:
 def _module_reexports_lib_root(modname: str, attr: str) -> bool:
     """Does ``<modname>.<attr>`` resolve to the lib helper (imported, not
     defined locally)? ``deprecate_rule.load_yaml_file`` is that tool's own
-    function; ``generate_tenant_mapping_rules.load_yaml_file`` is the lib's,
+    function; ``analyze_rule_pack_gaps.load_yaml_file`` is the lib's,
     re-exported."""
     for d in (TOOLS, OPS, LINT):
         p = d / f"{modname}.py"
@@ -753,7 +737,6 @@ def test_scan_sees_the_known_population():
     # above still pins its handling of an unreadable file.
     expected = {
         "analyze_rule_pack_gaps.py", "backtest_threshold.py",
-        "generate_tenant_mapping_rules.py",
         # migrate_to_operator.py, onboard_platform.py and operator_generate.py
         # left with #3206 (ADR-036 §12): their rule files are read by
         # `da-read prometheus-rules`, their manifests by da-crdecode.
@@ -865,14 +848,12 @@ def test_scanner_still_flags_a_handler_that_does_not_catch_it():
 
 
 def test_scanner_sees_reexport_through_a_tool_module():
-    """`from generate_tenant_mapping_rules import load_yaml_file` resolves to
-    the lib helper (the tool imports it and does not define its own); so
-    does `analyze_rule_pack_gaps`'s, which reads the metric dictionary with
-    it. (policy_engine was the example until #2906 moved its policy reads to
+    """`from analyze_rule_pack_gaps import load_yaml_file` resolves to the
+    lib helper (the tool imports it and does not define its own; it reads the
+    metric dictionary with it; the tenant-mapping generator was the other
+    example until #4291 removed it). (policy_engine was the example until #2906 moved its policy reads to
     parse-tree; analyze_rule_pack_gaps's strict exporter-key read left with
     its `--tenant-config` file, #2906 F2.)"""
-    assert _sites_of("from generate_tenant_mapping_rules import load_yaml_file\n"
-                     "def f(p):\n    return load_yaml_file(p)\n")
     assert _sites_of("from analyze_rule_pack_gaps import load_yaml_file\n"
                      "def f(p):\n    return load_yaml_file(p)\n")
     # control: a tool's OWN function of the same name is not the lib

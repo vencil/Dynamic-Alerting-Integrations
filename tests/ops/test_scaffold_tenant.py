@@ -605,7 +605,6 @@ class TestRunNonInteractive:
                 namespaces=None,
                 routing_profile="team-sre-apac",
                 topology="1:1",
-                mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
             with open(os.path.join(d, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
@@ -622,7 +621,6 @@ class TestRunNonInteractive:
                 namespaces=None,
                 routing_profile=None,
                 topology="1:1",
-                mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
             with open(os.path.join(d, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
@@ -646,7 +644,6 @@ class TestRunNonInteractive:
                 namespaces=None,
                 routing_profile="team-dba-global",
                 topology="1:1",
-                mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
             with open(os.path.join(d, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
@@ -656,53 +653,6 @@ class TestRunNonInteractive:
             assert t["_routing"]["receiver"]["type"] == "webhook"
 
     # ── ADR-006: --topology ───────────────────────────────────────────
-
-    def test_topology_1n_generates_mapping(self):
-        """--topology=1:N with --mapping-instance and --mapping-filter produces _instance_mapping.yaml."""
-        with tempfile.TemporaryDirectory() as d:
-            args = argparse.Namespace(
-                tenant="db-x", db="mariadb", output_dir=d,
-                profile=None, silent_mode=None,
-                severity_dedup="enable", routing_receiver=None,
-                namespaces=None,
-                routing_profile=None,
-                topology="1:N",
-                mapping_instance="oracle-prod-01",
-                mapping_filter='schema=~"app_a_.*"',
-            )
-            run_non_interactive(args)
-            mapping_path = os.path.join(d, CONFD_DIR, "_instance_mapping.yaml")
-            assert os.path.exists(mapping_path)
-            with open(mapping_path, encoding="utf-8") as f:
-                content = f.read()
-            data = yaml.safe_load(content.split("---")[-1] if "---" in content else content)
-            # May be None if comment-only; parse lines after comments
-            if data is None:
-                lines = [l for l in content.splitlines() if not l.startswith("#")]
-                data = yaml.safe_load("\n".join(lines))
-            assert "instance_tenant_mapping" in data
-            assert "oracle-prod-01" in data["instance_tenant_mapping"]
-            mapping = data["instance_tenant_mapping"]["oracle-prod-01"]
-            assert mapping[0]["tenant"] == "db-x"
-            assert mapping[0]["filter"] == 'schema=~"app_a_.*"'
-
-    def test_topology_1n_missing_args_warns(self, capsys):
-        """--topology=1:N without --mapping-instance warns and skips mapping file."""
-        with tempfile.TemporaryDirectory() as d:
-            args = argparse.Namespace(
-                tenant="db-x", db="mariadb", output_dir=d,
-                profile=None, silent_mode=None,
-                severity_dedup="enable", routing_receiver=None,
-                namespaces=None,
-                routing_profile=None,
-                topology="1:N",
-                mapping_instance=None, mapping_filter=None,
-            )
-            run_non_interactive(args)
-            mapping_path = os.path.join(d, CONFD_DIR, "_instance_mapping.yaml")
-            assert not os.path.exists(mapping_path)
-            captured = capsys.readouterr()
-            assert "WARN" in captured.err
 
     def test_topology_n1_with_namespaces(self):
         """--topology=N:1 with --namespaces generates relabel_configs."""
@@ -714,7 +664,6 @@ class TestRunNonInteractive:
                 namespaces="ns-a,ns-b",
                 routing_profile=None,
                 topology="N:1",
-                mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
             relabel_file = os.path.join(d, "relabel_configs-db-x.txt")
@@ -730,14 +679,13 @@ class TestRunNonInteractive:
                 namespaces=None,
                 routing_profile=None,
                 topology="N:1",
-                mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
             captured = capsys.readouterr()
             assert "WARN" in captured.err
 
     def test_topology_default_no_extra_files(self):
-        """Default topology (1:1) produces no mapping or relabel files."""
+        """Default topology (1:1) produces no relabel file."""
         with tempfile.TemporaryDirectory() as d:
             args = argparse.Namespace(
                 tenant="db-x", db="mariadb", output_dir=d,
@@ -746,31 +694,9 @@ class TestRunNonInteractive:
                 namespaces=None,
                 routing_profile=None,
                 topology="1:1",
-                mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
-            assert not os.path.exists(os.path.join(d, CONFD_DIR, "_instance_mapping.yaml"))
             assert not os.path.exists(os.path.join(d, "relabel_configs-db-x.txt"))
-
-    @_skipif_unix_modes
-    def test_mapping_file_permissions(self):
-        """_instance_mapping.yaml is a conf.d file `da-guard write` creates:
-        0o644, a repo artifact's mode (#3535)."""
-        with tempfile.TemporaryDirectory() as d:
-            args = argparse.Namespace(
-                tenant="db-x", db="mariadb", output_dir=d,
-                profile=None, silent_mode=None,
-                severity_dedup="enable", routing_receiver=None,
-                namespaces=None,
-                routing_profile=None,
-                topology="1:N",
-                mapping_instance="inst-01",
-                mapping_filter='schema=~"test"',
-            )
-            run_non_interactive(args)
-            mapping_path = os.path.join(d, CONFD_DIR, "_instance_mapping.yaml")
-            mode = os.stat(mapping_path).st_mode & 0o777
-            assert mode == 0o644
 
 
 # ---------------------------------------------------------------------------
@@ -1121,6 +1047,26 @@ class TestMainCLI:
             assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "Supported Exporters" in out
+
+    @pytest.mark.parametrize("argv", [
+        ["--topology", "1:N"],
+        ["--mapping-instance", "inst-01"],
+        ["--mapping-filter", 'schema=~"app_a_.*"'],
+    ])
+    def test_one_to_many_topology_is_gone(self, argv, capsys, tmp_path):
+        """#4291: the 1:N mapping hint fed a recording-rule generator whose
+        output no rule pack read (ADR-006). `--topology=1:N` and its two
+        flags are refused (rc 2) and no `_instance_mapping.yaml` is drafted."""
+        import scaffold_tenant
+        with mock.patch("sys.argv", ["scaffold_tenant.py", "--tenant", "db-x", "--db",
+                                     "mariadb", "--non-interactive", *argv,
+                                     "-o", str(tmp_path)]):
+            with pytest.raises(SystemExit) as exc_info:
+                scaffold_tenant.main()
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "invalid choice: '1:N'" in err or "unrecognized arguments" in err, err
+        assert not list(tmp_path.rglob("_instance_mapping.y*ml"))
 
     @pytest.mark.parametrize("argv", [
         ["--generate-profile", "p", "--db", "mariadb"],

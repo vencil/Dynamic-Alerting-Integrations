@@ -182,44 +182,6 @@ def test_diagnose_without_da_guard_is_exit_2(tmp_path, monkeypatch, no_parse_tre
     assert _exit_code(dg.main) == 2
 
 
-# ── generate_tenant_mapping_rules ───────────────────────────────────────
-
-_MAP = {"_instance_mapping.yaml": ("instance_tenant_mapping:\n  yes:\n"
-                                   "    - {tenant: 010, filter: 'schema=\"a\"'}\n"),
-        "team/t.yaml": "tenants:\n  '010': {}\n"}
-
-
-def _mapping_main(monkeypatch, d, *extra):
-    m = _tool("generate_tenant_mapping_rules")
-    monkeypatch.setattr(sys, "argv", ["gtmr", "--config-dir", str(d), "--metrics", "cpu",
-                                      "--dry-run", *extra])
-    return _exit_code(m.main)
-
-
-def test_mapping_rules_read_the_yaml_v3_way(tmp_path, monkeypatch, capsys):
-    """Instance `yes` is "yes" (PyYAML: True); tenant `010` is "010", and the
-    nested tenant file declares it (the exporter's walk)."""
-    assert _mapping_main(monkeypatch, _write(tmp_path, _MAP), "--validate") == 0
-    out = capsys.readouterr()
-    assert "  yes:\n    → 010 (schema=\"a\")" in out.out, out
-    assert "ERROR" not in out.err, out.err
-
-
-def test_mapping_rules_parse_no_yaml(tmp_path, monkeypatch, no_yaml_parse):
-    assert _mapping_main(monkeypatch, _write(tmp_path, _MAP), "--validate") == 0
-
-
-def test_mapping_rules_name_an_unreadable_tenant_file(tmp_path, monkeypatch, capsys):
-    d = _write(tmp_path, {**_MAP, "team/bad.yaml": "tenants:\n  a: {}\n  a: {}\n"})
-    assert _mapping_main(monkeypatch, d, "--validate") == 2
-    err = capsys.readouterr().err
-    assert "bad.yaml" in err and "duplicate_key" in err, err
-
-
-def test_mapping_rules_without_da_guard_is_exit_2(tmp_path, monkeypatch, no_parse_tree_binary):
-    assert _mapping_main(monkeypatch, _write(tmp_path, _MAP)) == 2
-
-
 # ── backtest_threshold (`--config-dir` / `--baseline`) ──────────────────
 # #3111 removed `--git-diff` and the recipe scan that read tenant files: both
 # trees, recipes included, are read by `da-guard served-values` (the

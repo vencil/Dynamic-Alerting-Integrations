@@ -88,12 +88,6 @@ commands:
   diagnose:
     "--prometheus": url
     tenant: not_path
-  discover-mappings:
-    "--endpoint": url
-    "--instance": not_path
-    "--job": not_path
-    "--output": output
-    "--prometheus": url
   drift-detect:
     "--context": not_path
     "--ignore-prefix": not_path
@@ -239,8 +233,6 @@ commands:
     "--prometheus": url
   scaffold:
     "--db": not_path
-    "--mapping-filter": not_path
-    "--mapping-instance": not_path
     "--namespaces": not_path
     "--output-dir": output
     "--profile": not_path

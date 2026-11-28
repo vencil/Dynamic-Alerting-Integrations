@@ -288,7 +288,7 @@ def test_the_url_recipes_are_there(tmp_path):
     """The test above skips a recipe that takes no URL: it must not skip all."""
     taking = {r.tool for r in contract.RECIPES if _takes_the_url(r, _fresh(tmp_path))}
     assert {"byo_check", "federation_check", "shadow_verify", "check_alert", "alert_correlate",
-            "blind_spot_discovery", "discover_instance_mappings"} <= taking, sorted(taking)
+            "blind_spot_discovery"} <= taking, sorted(taking)
     assert {rid for rid, _hostile in _NOT_THIS_LIBS_TEXT} <= {r.id for r in contract.RECIPES}
 
 
@@ -297,13 +297,6 @@ def _fresh(tmp_path: Path) -> Path:
     out = tmp_path / f"p{n}"
     out.mkdir()
     return out
-
-
-def test_discover_instance_mappings_scrape_reports_a_non_http_reply(peer):
-    import discover_instance_mappings as dim
-    url, _ = peer(_GARBAGE)
-    assert dim.scrape_metrics_endpoint(url + "/metrics", timeout=5) == (
-        None, "BadStatusLine: GARBAGE NOT HTTP")
 
 
 @pytest.fixture()
@@ -718,7 +711,6 @@ def test_the_scan_sees_the_requests_it_is_about(repo_scan):
     judged = repo_scan.judged()
     for function in ("http_get_json", "probe_health"):
         assert (LIB, function) in judged, function
-    assert ("scripts/tools/ops/discover_instance_mappings.py", "scrape_metrics_endpoint") in judged
     assert ("scripts/tools/lint/check_trk_index_coverage.py", "main") in judged   # through title_trks
     assert (SOAK, "main") in judged                                               # through fetch_metrics
     assert ("scripts/tools/lint/check_trk_index_coverage.py", "title_trks") in repo_scan.leaky
@@ -738,7 +730,6 @@ def test_the_list_without_httpexception_turns_its_users_red():
     sources[LIB] = sources[LIB].replace(whole, "OSError, ValueError)")
     found = _Scan(sources).uncovered()
     assert {(LIB, "http_get_json"), (LIB, "probe_health"),
-            ("scripts/tools/ops/discover_instance_mappings.py", "scrape_metrics_endpoint"),
             ("scripts/tools/lint/check_trk_index_coverage.py", "main"),
             ("scripts/tools/dx/generate_crd_schemas.py", "run")} <= found, sorted(found)
 

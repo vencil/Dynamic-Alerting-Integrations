@@ -72,10 +72,6 @@ _PROFILES_VARIANTS = {
     "syntax": "profiles:\n  p1: [unclosed\n",
     "dup_key": "profiles:\n  p1:\n    mysql_connection_usage_percent: 60\n    mysql_connection_usage_percent: 65\n",
 }
-# Read by generate_tenant_mapping_rules, whose `--validate` checks the ids
-# it names against the tenant files.
-_INSTANCE_MAPPING = ("instance_tenant_mapping:\n  i1:\n"
-                     "    - tenant: tenant-a\n      filter: 'db=\"x\"'\n")
 _TARGET_FILE = {"tenant": "tenant-a.yaml", "defaults": "_defaults.yaml",
                 "profiles": "_profiles.yaml"}
 
@@ -125,9 +121,6 @@ _TOOLS = {
                            ["--config-dir", "{d}", "--baseline", "{old}",
                             "--prometheus", "http://127.0.0.1:9", "--skip-if-unavailable"],
                            _T, False),
-    "generate_tenant_mapping_rules_validate": ("ops/generate_tenant_mapping_rules.py",
-                                               ["--config-dir", "{d}", "--validate",
-                                                "--dry-run"], _T, False),
     # The `--config-dir` branch reads `da-guard served-values`; the
     # single-file branch reads the file through `da-guard parse-tree`.
     "analyze_rule_pack_gaps_file": ("ops/analyze_rule_pack_gaps.py",
@@ -166,9 +159,6 @@ def _write_tree(d: str, tool: str, target: str, variant: str) -> None:
         # Only the first `tenant-a:` gets it: a duplicate stays a duplicate.
         tenant = tenant.replace("  tenant-a:\n", "  tenant-a:\n    _profile: p1\n", 1)
         pathlib.Path(d, "_profiles.yaml").write_text(profiles, encoding="utf-8")
-    if tool == "generate_tenant_mapping_rules_validate":
-        pathlib.Path(d, "_instance_mapping.yaml").write_text(_INSTANCE_MAPPING,
-                                                              encoding="utf-8")
     pathlib.Path(d, "tenant-a.yaml").write_text(tenant, encoding="utf-8")
 
 
