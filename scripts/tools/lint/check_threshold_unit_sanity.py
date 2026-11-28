@@ -333,6 +333,7 @@ def _shown_non_literal(raw) -> str:
 # Why this is needed at all: "every numeric leaf beneath a registry key is a
 # threshold literal" held only while all metadata was non-numeric. #1176 added
 # `value_counterexample: {issue: 1176, …}`, and the walker duly reported
+# (retired-key-mention: oracle_pga_allocated_bytes — the key has since been retired)
 # `oracle_pga_allocated_bytes = 1176` as a bytes value under 1 MiB — a real
 # false positive from a real contract change, not a lint quirk.
 _REGISTRY_METADATA_FIELDS = frozenset(registry_lib._FIELD_ORDER) - {"value"}

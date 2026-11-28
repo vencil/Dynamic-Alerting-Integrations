@@ -65,7 +65,7 @@ type ResolvedMaintenanceExpiry struct {
 // resolveBaseRows). v1: base standard metrics only (those in _defaults.yaml).
 type ResolvedThresholdExpiry struct {
 	Tenant    string
-	MetricKey string // full conf.d key, e.g. "mysql_connections"
+	MetricKey string // full conf.d key, e.g. "mysql_connection_usage_percent"
 	Expires   time.Time
 	// ExpiresText is the `expires:` as written (#4263: the value may be
 	// one the merge at the instant left out, so readers take it from here).
@@ -161,11 +161,11 @@ type TimeWindowOverride struct {
 //
 // Scalar format (existing):
 //
-//	mysql_connections: "70"
+//	mysql_connection_usage_percent: "70"
 //
 // Structured format (new):
 //
-//	mysql_connections:
+//	mysql_connection_usage_percent:
 //	  default: "70"
 //	  overrides:
 //	    - window: "01:00-09:00"
@@ -223,7 +223,7 @@ const DefaultMaxMetricsPerTenant = 500
 // Example config:
 //
 //	defaults:
-//	  mysql_connections: 80
+//	  mysql_connection_usage_percent: 80
 //	  mysql_threads_running: 30              # threads_running saturation, NOT host CPU% (#944; renamed from mysql_cpu, #1231)
 //	state_filters:
 //	  container_crashloop:
@@ -231,14 +231,14 @@ const DefaultMaxMetricsPerTenant = 500
 //	    severity: "critical"
 //	tenants:
 //	  db-a:
-//	    mysql_connections: "70"
+//	    mysql_connection_usage_percent: "70"
 //	    mysql_connections_backup:             # B4: scheduled override
 //	      default: "70"
 //	      overrides:
 //	        - window: "01:00-09:00"
 //	          value: "1000"
 //	  db-b:
-//	    mysql_connections: "disable"
+//	    mysql_connection_usage_percent: "disable"
 //	    _state_container_crashloop: "disable"
 type ThresholdConfig struct {
 	Defaults map[string]float64 `yaml:"defaults"`

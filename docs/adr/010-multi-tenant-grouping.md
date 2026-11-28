@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-04-06
-updated_at: 2026-11-22
+updated_at: 2026-11-28
 ---
 # ADR-010: Multi-Tenant Grouping Architecture
 
@@ -117,7 +117,7 @@ groups:
 
 ### 範例：群組不影響 `/metrics`，新欄位不進 `tenant_metadata_info`
 
-輸入：conf.d/ 裡有 `_defaults.yaml`（`defaults: {mysql_connections: 80}`）、租戶檔 `db-a.yaml`（`mysql_connections: "70"`、`_expected_exporters: [mariadb]`，`_metadata` 為第 1 節的內容），以及第 2 節的 `_groups.yaml`。
+輸入：conf.d/ 裡有 `_defaults.yaml`（`defaults: {mysql_connection_usage_percent: 80}`）、租戶檔 `db-a.yaml`（`mysql_connection_usage_percent: "70"`、`_expected_exporters: [mariadb]`，`_metadata` 為第 1 節的內容），以及第 2 節的 `_groups.yaml`。
 
 threshold-exporter 的 `/metrics` 中帶 `tenant="db-a"` 的全部輸出（不含註解行）：
 
@@ -126,10 +126,24 @@ da_tenant_metrics_over_limit{tenant="db-a"} 0
 tenant_expected_exporter{pack="mariadb",tenant="db-a"} 1
 tenant_metadata_info{owner="team-dba",runbook_url="https://wiki.example.com/db-a",tenant="db-a",tier="tier-1"} 1
 user_severity_dedup{mode="enable",tenant="db-a"} 1
-user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 70
+user_threshold{component="container",metric="cpu",severity="warning",tenant="db-a"} 80
+user_threshold{component="container",metric="cpu_throttle",severity="warning",tenant="db-a"} 25
+user_threshold{component="container",metric="memory",severity="warning",tenant="db-a"} 85
+user_threshold{component="db2",metric="log_usage_percent",severity="warning",tenant="db-a"} 75
+user_threshold{component="db2",metric="storage_path_used_percent",severity="warning",tenant="db-a"} 80
+user_threshold{component="db2",metric="tablespace_used_percent",severity="warning",tenant="db-a"} 80
+user_threshold{component="es",metric="disk_usage_percent",severity="warning",tenant="db-a"} 85
+user_threshold{component="es",metric="heap_usage_percent",severity="warning",tenant="db-a"} 85
+user_threshold{component="mysql",metric="connection_usage_percent",severity="warning",tenant="db-a"} 70
+user_threshold{component="mysql",metric="replication_lag",severity="warning",tenant="db-a"} 30
+user_threshold{component="oracle",metric="process_usage_percent",severity="warning",tenant="db-a"} 85
+user_threshold{component="oracle",metric="tablespace_used_percent",severity="warning",tenant="db-a"} 85
+user_threshold{component="pg",metric="connections",severity="warning",tenant="db-a"} 80
+user_threshold{component="pg",metric="replication_lag",severity="warning",tenant="db-a"} 30
+user_threshold{component="rabbitmq",metric="node_mem_percent",severity="warning",tenant="db-a"} 90
 ```
 
-結果：`tenant_metadata_info` 只帶 owner、runbook_url、tier 三個欄位，environment、region、domain、tags、groups 都不出現在任何指標上；宣告的 exporter 種類只出現在 `tenant_expected_exporter` 的 `pack` 標籤。拿掉 `_groups.yaml` 重跑，除了計時與 Go runtime 指標（`go_memstats_*`、`go_threads`），輸出完全相同。
+結果：`user_threshold` 裡只有 `connection_usage_percent` 那一條（70）來自租戶檔，其餘是平台內建的預設值。`tenant_metadata_info` 只帶 owner、runbook_url、tier 三個欄位，environment、region、domain、tags、groups 都不出現在任何指標上；宣告的 exporter 種類只出現在 `tenant_expected_exporter` 的 `pack` 標籤。拿掉 `_groups.yaml` 重跑，除了計時與 Go runtime 指標（`go_memstats_*`、`go_threads`），輸出完全相同。
 
 ## 理由
 
