@@ -1351,6 +1351,45 @@ def check_platform_digest_test(doc: dict, path: Optional[str] = None) -> Optiona
     return None
 
 
+#: Every whole file ``--regen`` writes, in the order it writes them, after the
+#: spliced surfaces (`surface_specs`) — the one list of them (#4346): `regen`
+#: writes these and nothing else, and the `files:` of the
+#: `threshold-registry-check` pre-commit hook must match each
+#: (tests/lint/test_check_threshold_registry.py). Each row is (the name of the
+#: module constant that holds the path, what the file is, render(doc, its
+#: current text), check(doc, path)). The path is read by name when `regen`
+#: runs, so a test that points the constant elsewhere moves the write too.
+GENERATED_FILES: "tuple[tuple[str, str, Callable[[dict, Optional[str]], str], Callable[..., Optional[str]]], ...]" = (
+    ("RULE_PACKS_MODULE_PATH", "the RULE_PACKS module",
+     lambda doc, _text: render_rule_packs_module(doc), check_rule_packs_module),
+    ("RETIRED_KEYS_GO_PATH", "the retired-keys Go table",
+     lambda doc, _text: render_retired_keys_go(doc), check_retired_keys_go),
+    ("BUILTIN_DEFAULTS_GO_PATH", "the built-in defaults Go table",
+     lambda doc, _text: render_builtin_defaults_go(doc), check_builtin_defaults_go),
+    ("UNSET_KEYS_GO_PATH", "the unset-threshold keys Go table",
+     lambda doc, _text: render_unset_keys_go(doc), check_unset_keys_go),
+    ("EXPECTED_KINDS_GO_PATH", "the exporter-kinds Go table",
+     lambda doc, _text: render_expected_kinds_go(doc), check_expected_kinds_go),
+    ("NAMESPACE_KEYED_GO_PATH", "the namespace-keyed prefixes Go table",
+     lambda doc, _text: render_namespace_keyed_go(doc), check_namespace_keyed_go),
+    ("PLATFORM_DIGEST_TEST_PATH", "the promtool test of BuiltinDefaultsDigestMismatch",
+     lambda doc, text: render_platform_digest_test(doc, _existing(text, PLATFORM_DIGEST_TEST_PATH)),
+     check_platform_digest_test),
+)
+
+
+def _existing(text: Optional[str], path: str) -> str:
+    """*text*, which a file rewritten in place (not generated whole) must have."""
+    if text is None:
+        raise FileNotFoundError(f"{path} does not exist: --regen rewrites it in place")
+    return text
+
+
+def generated_file_paths() -> list[str]:
+    """The paths of `GENERATED_FILES`, as the module constants hold them now."""
+    return [globals()[attr] for attr, _what, _render, _check in GENERATED_FILES]
+
+
 def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     """``--regen``: every generated surface from the committed registry.
 
@@ -1376,43 +1415,21 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     src = path or _repo_path_or_raise(REGISTRY_PATH, "the threshold registry")
     doc = committed_registry_doc(src)
     planned = plan_surfaces(doc)
-    module_text = render_rule_packs_module(doc)
-    go_text = render_retired_keys_go(doc)
-    go_path = _repo_path_or_raise(RETIRED_KEYS_GO_PATH, "the retired-keys Go table")
-    builtin_text = render_builtin_defaults_go(doc)
-    builtin_path = _repo_path_or_raise(BUILTIN_DEFAULTS_GO_PATH, "the built-in defaults Go table")
-    unset_text = render_unset_keys_go(doc)
-    unset_path = _repo_path_or_raise(UNSET_KEYS_GO_PATH, "the unset-threshold keys Go table")
-    kinds_text = render_expected_kinds_go(doc)
-    kinds_path = _repo_path_or_raise(EXPECTED_KINDS_GO_PATH, "the exporter-kinds Go table")
-    ns_text = render_namespace_keyed_go(doc)
-    ns_path = _repo_path_or_raise(NAMESPACE_KEYED_GO_PATH, "the namespace-keyed prefixes Go table")
-    digest_test_path = _repo_path_or_raise(
-        PLATFORM_DIGEST_TEST_PATH, "the promtool test of BuiltinDefaultsDigestMismatch")
-    with open(digest_test_path, encoding="utf-8") as fh:
-        digest_test_text = render_platform_digest_test(doc, fh.read())
+    # Every text is rendered before anything is written: a render that raises
+    # leaves every file as it was.
+    rendered = []
+    for attr, what, render, check in GENERATED_FILES:
+        out = _repo_path_or_raise(globals()[attr], what)
+        current = None
+        if os.path.isfile(out):
+            with open(out, encoding="utf-8") as fh:
+                current = fh.read()
+        rendered.append((out, render(doc, current), check))
     touched = write_planned(planned)
-    if check_rule_packs_module(doc) is not None:
-        _write_or_stop(RULE_PACKS_MODULE_PATH, module_text, touched, write_repo_artifact)
-        touched.append(RULE_PACKS_MODULE_PATH)
-    if check_retired_keys_go(doc, go_path) is not None:
-        _write_or_stop(go_path, go_text, touched, write_repo_artifact)
-        touched.append(go_path)
-    if check_builtin_defaults_go(doc, builtin_path) is not None:
-        _write_or_stop(builtin_path, builtin_text, touched, write_repo_artifact)
-        touched.append(builtin_path)
-    if check_unset_keys_go(doc, unset_path) is not None:
-        _write_or_stop(unset_path, unset_text, touched, write_repo_artifact)
-        touched.append(unset_path)
-    if check_expected_kinds_go(doc, kinds_path) is not None:
-        _write_or_stop(kinds_path, kinds_text, touched, write_repo_artifact)
-        touched.append(kinds_path)
-    if check_namespace_keyed_go(doc, ns_path) is not None:
-        _write_or_stop(ns_path, ns_text, touched, write_repo_artifact)
-        touched.append(ns_path)
-    if check_platform_digest_test(doc, digest_test_path) is not None:
-        _write_or_stop(digest_test_path, digest_test_text, touched, write_repo_artifact)
-        touched.append(digest_test_path)
+    for out, text, check in rendered:
+        if check(doc, out) is not None:
+            _write_or_stop(out, text, touched, write_repo_artifact)
+            touched.append(out)
     return {"path": src, "packs": len(doc["packs"]), "keys": len(doc["keys"])}, touched
 
 
