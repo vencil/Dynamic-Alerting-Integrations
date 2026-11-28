@@ -22,6 +22,7 @@ Revised 2026-11-24: rewritten to describe current behavior; the decision is unch
 - 2026-11-01: tenant metadata (runbook_url, owner, tier) is no longer an alert label; annotations read it (§2).
 - 2026-11-02: a custom alert's threshold record is produced only while the exporter replicas agree (see "Consequences and known limitations").
 - v2.10.0: disk and PVC alerts added (§10).
+- 2026-11-28: custom alerts reading cAdvisor, kubelet or kube-state-metrics metrics derive the tenant from `namespace`; the scrape no longer writes `tenant` (§10).
 
 ## Decision
 
@@ -322,7 +323,7 @@ Tenants can alert on disk capacity and I/O with the existing recipes (`forecast`
 
 **Two signals, two granularities.** Capacity (filling up, utilization) uses `kubelet_volume_stats_*`, one set of series per PVC (carrying `persistentvolumeclaim`); I/O (IOPS, throughput) runs the `rate` recipe over cAdvisor's `container_fs_{reads,writes}_total` and `_bytes_total`, whose granularity is per container and cannot target a specific PVC: a Pod mounting several PVCs cannot be split. The I/O signal also depends on the environment: network storage such as NFS bypasses cgroup blkio, so `container_fs_*` stays 0 (see [BYO Prometheus integration](../integration/byo-prometheus-integration.en.md)). So "down to one specific PVC" is possible on the capacity side only, and the three points below are about capacity.
 
-**Prerequisite: the PVC is provided by a CSI driver that supports volume stats.** kubelet serves `kubelet_volume_stats_*` only for storage backends that implement `NodeGetVolumeStats`. The platform's scrape config collects `kubelet_volume_stats_*` from kubelet and uses `namespace` as `tenant` directly (one namespace per tenant, see [ADR-006](006-tenant-mapping-topologies.en.md)).
+**Prerequisite: the PVC is provided by a CSI driver that supports volume stats.** kubelet serves `kubelet_volume_stats_*` only for storage backends that implement `NodeGetVolumeStats`. The platform's scrape config collects `kubelet_volume_stats_*` from kubelet and keeps `namespace` without writing `tenant`; the custom-alert compiler derives the tenant from `namespace`, keeping a `tenant` a series already carries (one namespace per tenant, see "Tenant attribution of infrastructure metrics" in [ADR-006](006-tenant-mapping-topologies.en.md)). cAdvisor's `container_fs_*` and kube-state-metrics' metrics are handled the same way.
 
 **Judge each PVC; do not let a sum hide one.** A tenant may mount several PVCs: a 10GB config disk is 99% full while a 500GB data disk is 10% full, and summed `by(tenant)` there is plenty of space left, so the alert never fires. So a recipe may write `group_by: [persistentvolumeclaim]`: the aggregation keeps that dimension, the threshold stays one per tenant and applies to each of its PVCs, any one PVC crossing it fires, and the alert names the PVC. To keep the series count bounded, `group_by` accepts only `persistentvolumeclaim`, and `absence` and `slo_burn_rate` do not support it.
 

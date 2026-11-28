@@ -56,16 +56,10 @@ required:
   - {name: Go Lint, kind: job}
   - {name: Validate Tenant Config & Routes, kind: job}
   - {name: Version Consistency, kind: job}
-  - {name: Validate Mermaid Diagrams, kind: job}
-  - {name: Check Documentation Front Matter, kind: job}
-  - {name: Check Documentation Coverage, kind: job}
-  - {name: MkDocs Build Verification, kind: job}
   - {name: Lint, kind: job}
   - {name: Lint Rule Packs, kind: job}
   - {name: Lint Documentation, kind: job}
   - {name: Container SAST (Helm L2 + raw k8s L4), kind: job}
-  - {name: Check Documentation Links, kind: job}
-  - {name: HEAD Blob Hygiene, kind: job}
   - {name: commitlint, kind: job}
   # Owner 裁決 2026-11-14（#3756）。它跟 advisory 的 `I-4 Runbook Smoke Test` 一樣要
   # 連網路，卻是必要：它驗的是跨租戶隔離的請求路徑（gateway → proxy → 儲存），沒有
@@ -77,9 +71,9 @@ required:
   # failed」的訊息結束，不會讀成檢查失敗。`pending`：job 合進 main 並回報過一次後，
   # owner 到設定加上它，再把這個旗標拿掉（見檔頭「改法」）。
   - {name: Exporter Queries Runtime (DB2), kind: job, pending: true}
-  # #4224：docs-ci 的文件檢查併成一個 job。`pending`：job 合進 main 並回報過一次後，
-  # owner 到設定加上它、移除被併進來的六個舊名稱，再拿掉這個旗標（見檔頭「改法」）。
-  - {name: Documentation Checks, kind: job, pending: true}
+  # #4224：docs-ci 的六項文件檢查（Mermaid、Links、HEAD Blob Hygiene、Front Matter、
+  # Coverage、MkDocs）併成一個 job，各自一個 step。
+  - {name: Documentation Checks, kind: job}
 
 # 刻意「紅了也不擋 merge」的檢查，附理由。這些理由以前寫在各 workflow 的註解裡，
 # 以「某日量測：不是 required」的形式存在，設定一變就過期；搬到這裡之後，測試保證

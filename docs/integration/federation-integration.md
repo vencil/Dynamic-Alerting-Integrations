@@ -183,6 +183,9 @@ scrape_configs:
       "match[]":
         # Only pull tenant-labeled metrics (DB exporters)
         - '{tenant!=""}'
+        # + cAdvisor / kubelet series of the tenant namespaces: they carry the
+        #   tenant only as `namespace`; custom recipes read them (#4178)
+        - '{__name__=~"(container|kubelet)_.+", namespace=~"db-.+"}'
     static_configs:
       - targets: ["prometheus-edge-asia-1.example.com:9090"]
         labels:
@@ -196,6 +199,7 @@ scrape_configs:
     params:
       "match[]":
         - '{tenant!=""}'
+        - '{__name__=~"(container|kubelet)_.+", namespace=~"db-.+"}'
     static_configs:
       - targets: ["prometheus-edge-europe-1.example.com:9090"]
         labels:
@@ -207,7 +211,7 @@ scrape_configs:
 注意事項：
 
 - `honor_labels: true` 確保邊緣的 `tenant`, `cluster` 標籤被保留
-- `match[]` 使用 `{tenant!=""}` 限縮只拉取有 tenant 標籤的指標，避免拉回邊緣的基礎設施指標
+- `match[]` 使用 `{tenant!=""}` 限縮只拉取有 tenant 標籤的指標，避免拉回邊緣的基礎設施指標。例外是第二條 selector：租戶 namespace 裡的 cAdvisor（`container_*`）與 kubelet（`kubelet_*`）序列。它們只以 `namespace` 標示租戶、不帶 `tenant`，而租戶的自訂磁碟與 IOPS recipe 在中央讀它們，租戶由編譯器從 `namespace` 推出（[ADR-006「基礎設施指標的租戶歸屬」](../adr/006-tenant-mapping-topologies.md)）。實際送上來的只有邊緣抓取設定保留的那幾個指標。kube-state-metrics（`kube_*`）不送：序列多，中央的規則也不讀原始 KSM，所以讀 `kube_*` 的自訂 recipe 在中央評估架構下不會觸發。
 - `scrape_interval` 建議設 30s，配合邊緣 15s 的 interval 確保資料一致性
 - Federation 端點不支援 TLS client cert by default，跨公網需額外設置 VPN 或 reverse proxy
 
@@ -222,9 +226,10 @@ scrape_configs:
 remote_write:
   - url: "https://central-prometheus.example.com/api/v1/write"
     write_relabel_configs:
-      # Only push tenant-labeled metrics
-      - source_labels: [tenant]
-        regex: ".+"
+      # Only push tenant-labeled metrics, and the cAdvisor / kubelet series of
+      # the tenant namespaces (they carry the tenant only as `namespace`, #4178)
+      - source_labels: [tenant, __name__, namespace]
+        regex: ".+;.*;.*|;(container|kubelet)_.+;db-.+"
         action: keep
     queue_config:
       max_samples_per_send: 5000
@@ -319,6 +324,7 @@ prometheus:
         params:
           "match[]":
             - '{tenant!=""}'
+            - '{__name__=~"(container|kubelet)_.+", namespace=~"db-.+"}'   # §4.1
         static_configs:
           - targets: ["edge-1.example.com:9090"]
 ```
@@ -398,7 +404,7 @@ Federation 的 scrape interval 疊加在邊緣的 scrape interval 之上。最�
 中央 Prometheus 會累積所有邊緣叢集的指標。每新增一個邊緣叢集，cardinality 成線性增長。
 
 緩解措施：
-- 邊緣 `write_relabel_configs` 只推送 `{tenant!=""}` 指標
+- 邊緣 `write_relabel_configs` 只推送 `{tenant!=""}` 指標與租戶 namespace 的 cAdvisor／kubelet 序列（§4.2）
 - Federation `match[]` 限縮拉取範圍
 - threshold-exporter `max_metrics_per_tenant` 限制每租戶指標數（只認 conf.d 根目錄的 `_defaults.yaml`；Helm 用 `thresholdConfig.max_metrics_per_tenant`；未設＝500）
 - 監控 `prometheus_tsdb_head_series` 追蹤 cardinality 趨勢
