@@ -27,8 +27,9 @@ Usage:
 
 Exit codes:
     0  — injected (or already present, no-op)
-    1  — usage error / a key or value refused
-    2  — PATH cannot be written (one line naming PATH; an existing file
+    2  — a caller error (#4320): the usage, a value that is not numeric, or
+         a key that cannot live under `defaults:` (nothing is written); or
+         PATH cannot be written (one line naming PATH; an existing file
          keeps its bytes — the rewrite is atomic, 0644 as every conf.d
          file, 0755 if it had the owner's execute bit; #3535 / #3981); a file that cannot be read or decoded is
          rc 2 too, reported as an internal error
@@ -49,6 +50,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.par
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "tools" / "ops"))
 from _registry_lib import is_flat_key  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402  (#4320)
 from _lib_validation import threshold_number, threshold_trim  # noqa: E402  (#3457)
 # #3981: a conf.d file is a repo artifact (owner ruling #3535: 0644, read by
 # the exporter as another uid), and a rerun reads it back ("already present").
@@ -85,7 +87,7 @@ def inject(path: Path, key: str, value: str) -> int:
             f"`dimensions:` declaration by hand (#1218 / #1412 / #3478)",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_CALLER_ERROR
     if not _is_numeric_str(value):
         print(
             f"[inject_default_key] ERROR: value {value!r} for key {key!r} is "
@@ -93,7 +95,7 @@ def inject(path: Path, key: str, value: str) -> int:
             f"(cycle-6 RCA, archive §S#37d)",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_CALLER_ERROR
 
     # A FIFO or a standard stream would block the read below, or be
     # truncated by the write (#3981).
@@ -143,7 +145,7 @@ def main(argv: list[str]) -> int:
             "usage: inject_default_key.py PATH KEY NUMERIC_VALUE",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_CALLER_ERROR
     return inject(Path(argv[1]), argv[2], argv[3])
 
 
