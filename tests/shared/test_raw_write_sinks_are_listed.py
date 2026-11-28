@@ -611,10 +611,18 @@ def test_a_comparison_that_cannot_be_made_is_a_failure(monkeypatch):
     """Not a skip, not a pass: a base ref that does not resolve, and a base
     that does not hold this file. Softened to either, this is what turns red."""
     assert base_commit(), "control: the base resolves on this checkout"
-    roots = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=REPO_ROOT,
-                           capture_output=True, text=True, encoding="utf-8", timeout=60)
-    root = roots.stdout.split()[0]
-    unreadable = _how_it_ends(lambda: lists_at(root))
+    # #4337: git's empty tree, not the root commit. A shallow clone's root is
+    # where the history was cut, and that commit already holds this file. The
+    # empty tree holds no file, in a shallow clone or a full one.
+    empty = subprocess.run(["git", "hash-object", "-t", "tree", "/dev/null"], cwd=REPO_ROOT,
+                           capture_output=True, text=True, encoding="utf-8", timeout=60,
+                           check=True).stdout.strip()
+    def _has(spec: str) -> bool:
+        return subprocess.run(["git", "cat-file", "-e", spec], cwd=REPO_ROOT,
+                              capture_output=True, timeout=60, check=False).returncode == 0
+    assert _has(empty), "control: the base resolves"
+    assert not _has(f"{empty}:{_SELF}"), "control: the base holds no copy of this file"
+    unreadable = _how_it_ends(lambda: lists_at(empty))
     assert unreadable.startswith("failed:") and "NOT made" in unreadable, unreadable
     monkeypatch.setenv("LINT_DIFF_BASE", "origin/no-such-branch-3981")
     unresolved = _how_it_ends(base_commit)
