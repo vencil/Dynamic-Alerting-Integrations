@@ -151,7 +151,7 @@ RESERVED_KEY_READERS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
         "exporter": ("tenant", "platform_tenants", "profile"),
     },
     "_log_projection": {
-        "log_projection": ("tenant", "platform_tenants"),
+        "log_projection": ("tenant", "platform_tenants", "profile"),
     },
     "_metadata": {
         "exporter": ("tenant", "platform_tenants", "profile"),

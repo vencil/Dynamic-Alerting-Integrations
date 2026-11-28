@@ -64,7 +64,7 @@ var reservedKeyReaders = map[string]map[string][]string{
 		"exporter": {"tenant", "platform_tenants", "profile"},
 	},
 	"_log_projection": {
-		"log_projection": {"tenant", "platform_tenants"},
+		"log_projection": {"tenant", "platform_tenants", "profile"},
 	},
 	"_metadata": {
 		"exporter": {"tenant", "platform_tenants", "profile"},

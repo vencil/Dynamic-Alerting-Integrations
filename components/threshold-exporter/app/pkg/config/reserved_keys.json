@@ -87,7 +87,7 @@
       "value": {"shape": "mapping"}
     },
     "_log_projection": {
-      "read_by": {"log_projection": ["tenant", "platform_tenants"]},
+      "read_by": {"log_projection": ["tenant", "platform_tenants", "profile"]},
       "description": "Whether Vector copies the tenant's own platform logs into its log partition (ADR-021): `enable`, or `disable` (the default). Only a tenant that also holds an AccountID in tenant-api's ledger is projected.",
       "value": {"shape": "scalar"}
     },

@@ -579,7 +579,7 @@ docker run -i --rm <部署中的 tenant-api 映像> state show --from - < tenant
 
 ### Vector 的租戶日誌投影設定：`log-projection`
 
-`log-projection` 寫出 Vector 的租戶日誌投影設定（[ADR-021](../../docs/adr/021-tenant-log-query-federation.md)、[#4212](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4212)）：把 `helm/vector` 產生的樣板填上要投影的租戶。一個租戶要投影，須**同時**滿足：帳本（`_account_registry.yaml`）有它的 AccountID，且它的 conf.d 設定寫了 `_log_projection: enable`（租戶檔，或根目錄平台檔的 `tenants:`，租戶檔優先）。帳本替每個租戶配號、退租也不收回，所以「有號碼」不等於「要投影」。三份輸入各由它唯一的讀者判讀：帳本與可見度紀錄用 server 的解析函式（同 `state show`），conf.d 用 exporter 的載入器。
+`log-projection` 寫出 Vector 的租戶日誌投影設定（[ADR-021](../../docs/adr/021-tenant-log-query-federation.md)、[#4212](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4212)）：把 `helm/vector` 產生的樣板填上要投影的租戶。一個租戶要投影，須**同時**滿足：帳本（`_account_registry.yaml`）有它的 AccountID，且它的 conf.d 設定寫了 `_log_projection: enable`（租戶檔、根目錄平台檔的 `tenants:`，或租戶引用的 profile；租戶檔優先）。帳本替每個租戶配號、退租也不收回，所以「有號碼」不等於「要投影」。三份輸入各由它唯一的讀者判讀：帳本與可見度紀錄用 server 的解析函式（同 `state show`），conf.d 用 exporter 的載入器。
 
 - `log-projection render --config-dir DIR --state-from FILE|DIR|- --template FILE [--out FILE]`：讀一次 conf.d 目錄與 state 備份（`--state-from` 收的與 `state show --from` 相同），寫到 `--out` 或 stdout。結束碼：0 已寫出、1 有輸入不能用（不寫任何東西）、2 用法錯誤。
 - `log-projection run --template FILE --out FILE --confd-configmap NAME [--confd-namespace NS]`（或 `--config-dir DIR`），加上 server 的 `--state-*` 旗標：每 `--interval`（預設 30s）讀一次輸入，讓 `--out` 與輸入一致。

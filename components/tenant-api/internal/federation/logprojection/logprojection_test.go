@@ -140,6 +140,24 @@ func TestCompute_ReadsThePlatformTenantsLayer(t *testing.T) {
 	}
 }
 
+// A profile a tenant names is a layer too (the exporter's reading of the
+// tenant holds it); the tenant's own value wins over it.
+func TestCompute_ReadsTheProfileLayer(t *testing.T) {
+	t.Parallel()
+	c := writeTree(t, map[string]string{
+		"_profiles.yaml": "profiles:\n  logs:\n    _log_projection: enable\n",
+		"t1.yaml":        "tenants:\n  t1:\n    cpu: 70\n    _profile: logs\n",
+		"t2.yaml":        "tenants:\n  t2:\n    cpu: 70\n    _profile: logs\n    _log_projection: disable\n",
+	})
+	res, err := Compute(map[string][]byte{"_account_registry.yaml": []byte(ledger)}, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(res.Projections); !reflect.DeepEqual(got, map[string]uint32{"t1": 1000}) {
+		t.Errorf("projections %v", got)
+	}
+}
+
 func TestCompute_NoLedgerProjectsNobody(t *testing.T) {
 	t.Parallel()
 	c := writeTree(t, map[string]string{"t1.yaml": tenantFile("t1", "enable")})

@@ -11,8 +11,9 @@
 // Every input is read by its one reader: the ledger by account.Parse, a
 // tenant's visibility selection by logvis.Parse (both what `tenant-api state
 // show` prints), and conf.d by the exporter's loader (config.LoadDir), whose
-// tenant map already holds the root platform file's `tenants:` entry under
-// the tenant file's own values. This package only joins them.
+// tenant map already holds the root platform file's `tenants:` entry and the
+// profile the tenant names, under the tenant file's own values. This package
+// only joins them.
 //
 // What Vector does with the result is not written here. The template is the
 // Helm-rendered Vector config with placeholders (Render); this package fills
