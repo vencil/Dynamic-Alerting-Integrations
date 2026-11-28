@@ -343,6 +343,8 @@ relabel_configs:
     target_label: tenant
 ```
 
+共享 Namespace 時，磁碟、PVC、容器這類基礎設施指標仍以 `namespace` 歸給租戶（[ADR-006](../adr/006-tenant-mapping-topologies.md)「基礎設施指標的租戶歸屬」），歸到的是 namespace 名，不是各租戶。
+
 **自動化工具**：`scaffold_tenant.py --namespaces ns1,ns2` 可自動產出 N:1 relabel_configs snippet，並在 tenant YAML 中寫入 `_namespaces` 元資料欄位供工具參考（不影響 metric 邏輯）。
 
 **一個資料庫實例服務多個租戶**（[ADR-006](../adr/006-tenant-mapping-topologies.md) 的 1:N，例如一台 Oracle 的多個 schema）**不支援**：每個 schema 各跑一個 exporter（退化成 1:1），拿不到各 schema 帳號時在抓取時自己寫 `metric_relabel_configs`，寫法見 ADR-006 的範例。

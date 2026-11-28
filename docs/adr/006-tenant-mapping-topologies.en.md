@@ -37,12 +37,14 @@ Revised 2026-11-28: one instance serving several tenants (1:N) is no longer supp
 1. **1:1 (default)**: one namespace is one tenant. The scrape writes `namespace` into `tenant`; no extra configuration.
 2. **N:1**: several namespaces belong to one tenant. A `relabel_configs` regex in the scrape configuration labels all of them with the same `tenant`; `scaffold_tenant.py --namespaces ns1,ns2` produces that snippet.
 
+When one namespace holds several tenants, each with its own exporter, the scrape configuration writes `tenant` from a Service label or annotation ([design document §2.3](../design/config-driven.en.md#23-tenant-namespace-mapping)); each exporter still belongs to one tenant, which is 1:1.
+
 A common case of N:1 is one tenant running in several clusters. Each Prometheus then also says which cluster it is in, and rules are computed per (tenant, cluster); see "One tenant in several clusters" below.
 
 **Several tenants on one instance (1:N, for example several schemas on one Oracle) are not supported.** The platform's rule packs read `tenant` on the scraped series themselves, so the tenant has to be written into those series at scrape time; producing a separate parallel series that carries `tenant` does not change which tenant an alert lands on (see "Alternatives considered"). A shared instance is handled in this order:
 
 1. **Run one exporter per schema.** Each exporter connects with that schema's own database account and is deployed in that tenant's namespace. The topology becomes 1:1 and needs no mapping.
-2. **When per-schema accounts are not available, write `metric_relabel_configs` at scrape time yourself** (relabel rules Prometheus applies to every scraped series before storing it): rewrite `tenant` from the label that tells tenants apart on the series (`schema`, `tablespace` and the like). The platform neither produces nor checks this snippet.
+2. **When per-schema accounts are not available, write `metric_relabel_configs` at scrape time yourself** (relabel rules Prometheus applies to every scraped series before storing it): rewrite `tenant` from the label that tells tenants apart on the series (`tablespace`, `schema` and the like). The platform neither produces nor checks this snippet.
 
 ### Example: `metric_relabel_configs` for a shared instance
 
@@ -50,34 +52,36 @@ Add it under the scrape job of the shared instance. `metric_relabel_configs` is 
 
 ```yaml
 metric_relabel_configs:
-  # One shared Oracle: schemas app_a_* belong to db-a, app_b_* to db-b
-  - source_labels: [schema]
-    regex: "app_a_.*"
+  # One shared Oracle: tablespaces APP_A_* belong to db-a, APP_B_* to db-b
+  - source_labels: [tablespace]
+    regex: "APP_A_.*"
     target_label: tenant
     replacement: db-a
-  - source_labels: [schema]
-    regex: "app_b_.*"
+  - source_labels: [tablespace]
+    regex: "APP_B_.*"
     target_label: tenant
     replacement: db-b
 ```
 
-Scraped series:
+Scraped series (the metric and its labels are those the platform's Oracle exporter configuration `rule-packs/exporters/oracle.yaml` defines):
 
 ```text
-oracledb_tablespace_bytes{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", schema="app_a_orders"}
-oracledb_tablespace_bytes{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", schema="app_b_billing"}
-oracledb_up{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="APP_A_DATA", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="APP_B_DATA", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="SYSTEM", type="PERMANENT"}
+query_interval{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", query="oracle_liveness"}
 ```
 
 Series stored in Prometheus:
 
 ```text
-oracledb_tablespace_bytes{instance="oracle-prod-01:9161", namespace="db-shared", schema="app_a_orders", tenant="db-a"}
-oracledb_tablespace_bytes{instance="oracle-prod-01:9161", namespace="db-shared", schema="app_b_billing", tenant="db-b"}
-oracledb_up{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="APP_A_DATA", tenant="db-a", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="APP_B_DATA", tenant="db-b", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="SYSTEM", tenant="db-shared", type="PERMANENT"}
+query_interval{instance="oracle-prod-01:9161", namespace="db-shared", query="oracle_liveness", tenant="db-shared"}
 ```
 
-A series without `schema` (for example `oracledb_up`) keeps its original `tenant`: an instance-level metric cannot be given to any one schema tenant.
+A tablespace no rule matches (`SYSTEM`) and a series without `tablespace` (the `query_interval{query="oracle_liveness"}` the liveness check reads) keep their original `tenant`: an instance-level metric cannot be given to any one schema tenant.
 
 ### One tenant in several clusters: cluster identity and alert granularity
 
@@ -198,7 +202,8 @@ In enterprise environments, the mapping between database instances and tenants i
 ### Shared instances
 
 - **One exporter per schema: connections and resources grow with the number of schemas.** Each exporter opens its own database connections and needs its own account.
-- **`metric_relabel_configs` can split only series that carry a tenant label.** Instance-level metrics (for example `up` or the connection count of the whole instance) stay with the namespace's tenant, and alerts reading them do not reach the schema tenants.
+- **`metric_relabel_configs` can split only series that carry a tenant label.** Instance-level metrics (the liveness check, the connection count of the whole instance) stay with the namespace's tenant, and alerts reading them do not reach the schema tenants.
+- **Only the namespace's tenant declares the exporter.** The series the exporter liveness check reads (for Oracle, `query_interval{query="oracle_liveness"}`) has no tablespace label and stays with the namespace's tenant. A schema tenant that declares `oracle` in `_expected_exporters` has no liveness series of its own, so `TenantExporterAbsent` keeps firing for it.
 - **The user maintains the snippet.** The platform neither produces nor checks it; a regex that matches nothing leaves the series on its original `tenant` without an error. The author has to know how schemas map to the exporter's labels.
 - **Nothing reads an `_instance_mapping.yaml` in the config directory.** threshold-exporter never read it, and the tools that produced and discovered it are removed. Leaving it causes no error and has no effect; it can be deleted.
 

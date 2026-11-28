@@ -2805,7 +2805,7 @@ def test_soak_metrics_stub_is_a_working_target():
 
     # And the pre-existing personalities are untouched: the plain exporter
     # body still carries no Go runtime metrics.
-    for path in ("/metrics", "/rich/metrics"):
+    for path in ("/metrics",):
         _, plain, _ = _jsc._stub_payload(path)
         assert not run_chaos_soak.parse_metrics(plain.decode("utf-8"))
 

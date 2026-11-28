@@ -42,12 +42,14 @@ updated_at: 2026-11-28
 1. **1:1（預設）**：一個 namespace 是一個租戶。抓取時把 `namespace` 寫成 `tenant`，不需要額外設定。
 2. **N:1**：多個 namespace 屬於同一個租戶。抓取設定用 `relabel_configs` 的 regex 把這幾個 namespace 都標成同一個 `tenant`；`scaffold_tenant.py --namespaces ns1,ns2` 產生這段設定。
 
+同一個 namespace 裡有好幾個租戶、各有自己的 exporter 時，抓取設定從 Service 的 label 或 annotation 寫 `tenant`（[設計文件 §2.3](../design/config-driven.md#23-tenant-namespace-映射模式-tenant-namespace-mapping)）；每個 exporter 仍只屬於一個租戶，等同 1:1。
+
 N:1 的一個常見情形是同一個租戶跑在好幾個叢集。這時每台 Prometheus 另外標出自己在哪個叢集，規則逐（租戶、叢集）計算，見下方「多叢集同租戶」。
 
 **一個實例裡有好幾個租戶（1:N，例如一台 Oracle 的多個 schema）不支援。** 平台的規則包讀的是抓到的原始序列上的 `tenant`，所以租戶必須在抓取時就寫進原始序列；另外產生一條帶 `tenant` 的平行序列，不會改變告警落在哪個租戶（見「考慮過的替代方案」）。共用實例照下面的順序處理：
 
 1. **每個 schema 各跑一個 exporter。** 每個 exporter 用該 schema 自己的資料庫帳號連線，部署在該租戶的 namespace。拓撲就退化成 1:1，不需要任何映射。
-2. **拿不到各 schema 的帳號時，在抓取時自己寫 `metric_relabel_configs`**（Prometheus 在每條抓到的序列存進資料庫前套用的 relabel 規則）：依序列上區分租戶的 label（`schema`、`tablespace` 這類）改寫 `tenant`。平台不產生也不檢查這段設定。
+2. **拿不到各 schema 的帳號時，在抓取時自己寫 `metric_relabel_configs`**（Prometheus 在每條抓到的序列存進資料庫前套用的 relabel 規則）：依序列上區分租戶的 label（`tablespace`、`schema` 這類）改寫 `tenant`。平台不產生也不檢查這段設定。
 
 ### 範例：共用實例的 `metric_relabel_configs`
 
@@ -55,34 +57,36 @@ N:1 的一個常見情形是同一個租戶跑在好幾個叢集。這時每台 
 
 ```yaml
 metric_relabel_configs:
-  # 一台共用的 Oracle：app_a_* 這些 schema 屬於 db-a，app_b_* 屬於 db-b
-  - source_labels: [schema]
-    regex: "app_a_.*"
+  # 一台共用的 Oracle：APP_A_* 這些 tablespace 屬於 db-a，APP_B_* 屬於 db-b
+  - source_labels: [tablespace]
+    regex: "APP_A_.*"
     target_label: tenant
     replacement: db-a
-  - source_labels: [schema]
-    regex: "app_b_.*"
+  - source_labels: [tablespace]
+    regex: "APP_B_.*"
     target_label: tenant
     replacement: db-b
 ```
 
-抓到的序列：
+抓到的序列（指標與 label 是平台附的 Oracle exporter 設定 `rule-packs/exporters/oracle.yaml` 定義的）：
 
 ```text
-oracledb_tablespace_bytes{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", schema="app_a_orders"}
-oracledb_tablespace_bytes{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", schema="app_b_billing"}
-oracledb_up{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="APP_A_DATA", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="APP_B_DATA", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="SYSTEM", type="PERMANENT"}
+query_interval{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", query="oracle_liveness"}
 ```
 
 存進 Prometheus 的序列：
 
 ```text
-oracledb_tablespace_bytes{instance="oracle-prod-01:9161", namespace="db-shared", schema="app_a_orders", tenant="db-a"}
-oracledb_tablespace_bytes{instance="oracle-prod-01:9161", namespace="db-shared", schema="app_b_billing", tenant="db-b"}
-oracledb_up{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="APP_A_DATA", tenant="db-a", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="APP_B_DATA", tenant="db-b", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="SYSTEM", tenant="db-shared", type="PERMANENT"}
+query_interval{instance="oracle-prod-01:9161", namespace="db-shared", query="oracle_liveness", tenant="db-shared"}
 ```
 
-沒有 `schema` 的序列（例如 `oracledb_up`）留在原本的 `tenant`：實例層級的指標分不給任何一個 schema 租戶。
+沒配中的 tablespace（`SYSTEM`）與沒有 `tablespace` 的序列（存活判定讀的 `query_interval{query="oracle_liveness"}`）留在原本的 `tenant`：實例層級的指標分不給任何一個 schema 租戶。
 
 ### 多叢集同租戶：叢集身分與告警粒度
 
@@ -203,7 +207,8 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 ### 共用實例
 
 - **每個 schema 一個 exporter，連線數與資源隨 schema 數增加。** 每個 exporter 各開自己的資料庫連線，也各要一組帳號。
-- **`metric_relabel_configs` 只分得開帶租戶 label 的序列。** 實例層級的指標（例如 `up`、整個實例的連線數）留在 namespace 那個租戶，讀它們的告警不會分到 schema 租戶。
+- **`metric_relabel_configs` 只分得開帶租戶 label 的序列。** 實例層級的指標（存活判定、整個實例的連線數）留在 namespace 那個租戶，讀它們的告警不會分到 schema 租戶。
+- **只有 namespace 那個租戶宣告這個 exporter。** exporter 存活判定讀的序列（Oracle 是 `query_interval{query="oracle_liveness"}`）沒有 tablespace label，留在 namespace 租戶。schema 租戶若在 `_expected_exporters` 宣告 `oracle`，`TenantExporterAbsent` 找不到它的存活序列，會一直觸發。
 - **這段設定由使用者自己維護。** 平台不產生也不檢查；regex 沒配中時序列留在原本的 `tenant`，不會報錯。寫的人得知道 schema 怎麼對應到 exporter 的 label。
 - **設定目錄裡的 `_instance_mapping.yaml` 沒有任何東西讀。** threshold-exporter 本來就不讀它，產生與探索它的工具也已移除。留著不會報錯，也不生效，可以刪掉。
 

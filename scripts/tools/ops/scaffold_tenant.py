@@ -717,10 +717,10 @@ def _die(message: str) -> None:
     sys.exit(EXIT_CALLER_ERROR)
 
 
-#: #4014: the conf.d files of a run (`<tenant>.yaml`, `_defaults.yaml`) go to this tool's draft conf.d under its own
-#: dot-directory (`_lib_write_check.DRAFT_ROOTS`, where why it is
-#: dot-prefixed and one per tool is said, once): they are a draft to copy
-#: into conf.d (the report says so), and `-o` at a served conf.d used to
+#: #4014: the conf.d files of a run (`<tenant>.yaml`, `_defaults.yaml`) go
+#: to this tool's draft conf.d under its own dot-directory
+#: (`_lib_write_check.DRAFT_ROOTS`, where why it is dot-prefixed and one per
+#: tool is said, once): they are a draft to copy into conf.d (the report says so), and `-o` at a served conf.d used to
 #: replace its root `_defaults.yaml` whole — every other tenant's keys
 #: undeclared — and serve the new tenant.
 CONFD_DIR = _lib_write_check.draft_confd_rel("scaffold_tenant")

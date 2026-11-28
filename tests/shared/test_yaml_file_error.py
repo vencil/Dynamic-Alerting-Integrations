@@ -851,9 +851,9 @@ def test_scanner_sees_reexport_through_a_tool_module():
     """`from analyze_rule_pack_gaps import load_yaml_file` resolves to the
     lib helper (the tool imports it and does not define its own; it reads the
     metric dictionary with it; the tenant-mapping generator was the other
-    example until #4291 removed it). (policy_engine was the example until #2906 moved its policy reads to
-    parse-tree; analyze_rule_pack_gaps's strict exporter-key read left with
-    its `--tenant-config` file, #2906 F2.)"""
+    example until #4291 removed it). (policy_engine was the example until
+    #2906 moved its policy reads to parse-tree; analyze_rule_pack_gaps's
+    strict exporter-key read left with its `--tenant-config` file, #2906 F2.)"""
     assert _sites_of("from analyze_rule_pack_gaps import load_yaml_file\n"
                      "def f(p):\n    return load_yaml_file(p)\n")
     # control: a tool's OWN function of the same name is not the lib

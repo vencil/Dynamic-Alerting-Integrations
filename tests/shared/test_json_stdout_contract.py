@@ -322,19 +322,6 @@ def _stub_payload(path: str) -> tuple[int, bytes, str]:
     if path.startswith("/api/v1/targets"):
         return j({"status": "success",
                   "data": {"activeTargets": [], "droppedTargets": []}})
-    if path.startswith("/api/v1/label/"):
-        # /api/v1/label/<name>/values
-        name = path[len("/api/v1/label/"):].split("/")[0]
-        if rich and name in ("schema", "database", "datname"):
-            return j({"status": "success", "data": ["app", "reporting", "billing"]})
-        return j({"status": "success", "data": []})
-    if path.startswith("/api/v1/series"):
-        if rich:
-            return j({"status": "success", "data": [
-                {"__name__": "mysql_info", "instance": "stub:9104", "schema": v}
-                for v in ("app", "reporting", "billing", "audit")
-            ]})
-        return j({"status": "success", "data": []})
     if path.startswith("/api/v1/status/buildinfo"):
         return j({"status": "success", "data": {"version": "2.51.0"}})
     if path.startswith("/api/v1/status/config"):

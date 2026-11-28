@@ -8,7 +8,7 @@ that kept the last value in silence — one file, two answers:
 
 * the metric dictionary: `migrate_rule.load_metric_dictionary` (and so
   `onboard`) and the `check_metric_dictionary` lint read it with
-  `yaml.safe_load`, while analyze-gaps and generate-tenant-mapping refused it;
+  `yaml.safe_load`, while analyze-gaps refused it;
 * a dashboard: `grafana-import --dashboard` refused it, `--dashboard-dir` and
   the ConfigMap check (`verify_dashboards`) read it with `json.loads`;
 * a state file of `state-reconcile --state-dir` (selected `*.json`, as
