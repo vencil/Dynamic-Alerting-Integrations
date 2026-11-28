@@ -73,6 +73,27 @@ func TestGuard_RedundantOverrideIsTheCounterfactual(t *testing.T) {
 				"a/_defaults.yaml": "defaults:\n  pg_connections:\n    default: \"60\"\n    overrides:\n      - {window: \"01:00-02:00\", value: \"90\"}\n",
 				"a/tx.yaml":        "tenants:\n  tx:\n    pg_connections:\n      default: \"60\"\n      overrides:\n        - {window: \"01:00-02:00\", value: \"95\"}\n"},
 			"pg_connections", false},
+		// An inherited value time-boxed to expire: deleting the line serves
+		// the root's value once it expires, so the line is not redundant.
+		{"inherited value that expires",
+			map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 100\n",
+				"a/_defaults.yaml": "defaults:\n  pg_connections:\n    default: \"50\"\n    expires: \"2099-01-01T00:00:00Z\"\n",
+				"a/tx.yaml":        "tenants:\n  tx:\n    pg_connections: \"50\"\n"},
+			"pg_connections", false},
+		// The shared key verdict owns a `disable` that switches nothing off
+		// (disable_noop): no default to switch off.
+		{"disable with nothing to switch off",
+			map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 100\n",
+				"tx.yaml": "tenants:\n  tx:\n    mysql_threads_running: disable\n"},
+			"mysql_threads_running", false},
+		{"scheduled disable with nothing to switch off",
+			map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 100\n",
+				"tx.yaml": "tenants:\n  tx:\n    mysql_threads_running:\n      default: disable\n      overrides:\n        - {window: \"01:00-02:00\", value: disable}\n"},
+			"mysql_threads_running", false},
+		{"critical disable with no critical tier",
+			map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 100\n",
+				"tx.yaml": "tenants:\n  tx:\n    container_memory_critical: disable\n"},
+			"container_memory_critical", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

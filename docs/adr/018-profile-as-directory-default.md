@@ -64,7 +64,7 @@ tenants:
 
 da-guard 的 `redundant_override` 檢查：租戶檔裡某個鍵的值，與租戶刪掉它之後會拿到的值相同時，報一筆 warning。比對的對象是這個租戶自己的繼承結果：目錄鏈上每一層的 `_defaults.yaml`，以及租戶綁定的 `_profile`（profile 給了值，就以 profile 的值為準）。
 
-閾值鍵的判定是一個反事實：在租戶自己的檔案裡刪掉這一行、重建這個租戶之後，exporter 送出的閾值列（值、severity、label）在一天中每個時段排程的切點都完全不變，才算多餘。比的不是兩個值像不像，而是 exporter 自己建構與解析的結果，所以 YAML 型別與寫法（`80`、`"80"`、`"80.0"`、`"80:warning"`）、時段排程、子目錄與 profile 的繼承，都照 exporter 的讀法決定；`"80:critical"` 送出的 severity 不同，不算。另有 finding 負責的行也不報：值被 exporter 拒收的（`value_not_served`），完全沒人讀的鍵（例如維度 label 沒在 `dimensions:` 宣告；由 `da-guard key-verdict` 判為 unread error，tenant-api 寫入時用同一個判定），以及寫了 `disable` 卻沒有東西可關的。對上例跑 `da-guard --config-dir conf.d` 指出 `db-a`（結束碼 0；Summary 與掃描清單省略）：
+閾值鍵的判定是一個反事實：在租戶自己的檔案裡刪掉這一行、重建這個租戶之後，exporter 送出的閾值列（值、severity、label）從現在起都完全不變，才算多餘：一天中每個時段排程的切點都比，租戶值或繼承值帶 `expires:` 的，到期之後也比。比的不是兩個值像不像，而是 exporter 自己建構與解析的結果，所以 YAML 型別與寫法（`80`、`"80"`、`"80.0"`、`"80:warning"`）、時段排程、子目錄與 profile 的繼承，都照 exporter 的讀法決定；`"80:critical"` 送出的 severity 不同，不算。另有 finding 負責的行也不報：值被 exporter 拒收的（`value_not_served`），完全沒人讀的鍵（例如維度 label 沒在 `dimensions:` 宣告；由 `da-guard key-verdict` 判為 unread error，tenant-api 寫入時用同一個判定），以及寫了 `disable` 卻沒有東西可關的。對上例跑 `da-guard --config-dir conf.d` 指出 `db-a`（結束碼 0；Summary 與掃描清單省略）：
 
 ```text
 ### Warnings (informational)

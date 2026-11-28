@@ -18,11 +18,11 @@ package guard
 //
 // What counts as redundant (#4330):
 //   - A threshold key (a top-level key of the tenant's own file not
-//     starting with `_`): CheckInput.RedundantThresholds, the counterfactual
-//     config.ScopedTenants.RedundantThresholds answers with the exporter's
-//     own build and resolve — deleting the line leaves what it serves for the
-//     tenant the same all day, and the exporter's own record gives the line
-//     to no other finding. No reading of values here.
+//     starting with `_`): CheckInput.RedundantThresholds — deleting the line
+//     leaves what the exporter serves for the tenant the same from now on
+//     (the exporter's own build and resolve), and no other finding owns the
+//     line by that finding's own verdict (the shared key verdict,
+//     value_not_served). No reading of values here.
 //   - A reserved `_` key or a leaf nested under one: its YAML value equals
 //     the inherited one (scalarsEqual). These are read by readers other
 //     than /metrics' rows (the route generator, metadata, ops gauges); their

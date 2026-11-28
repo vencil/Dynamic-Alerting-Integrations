@@ -331,6 +331,7 @@ func treeValidation(root string, opts config.ScanOptions, limits *config.TreeSca
 		limit = 0
 	}
 	f.cardinalityLimit = limit
+	f.skipRedundant = true // only error findings are compared: no warning's counterfactual
 	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, f, at))
 	if err != nil {
 		return nil, nil, err

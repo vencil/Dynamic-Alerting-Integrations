@@ -7,8 +7,9 @@ package config
 // exporter's own code: the tree as written, and the tree with the line
 // deleted from the file's decoded config, built by BuildFlatConfig (subtree
 // defaults, profiles, platform entries and the root all applied as the
-// exporter applies them) and resolved at every minute of the UTC day at
-// which either side's schedules may serve a different value. A predicate
+// exporter applies them) and resolved from now on: at every minute of the UTC
+// day at which either side's schedules may serve a different value, now and
+// after every `expires:` instant either side has not passed. A predicate
 // comparing the tenant's value with the inherited one is what this replaces:
 // each such predicate missed a shape (#4288, #4330).
 //
@@ -28,7 +29,7 @@ import (
 // ServedUnchangedWithout reports, for every tenant of cands and every key of
 // its list (keys as the tenant's own file spells them), whether deleting the
 // key from that file leaves the threshold rows the exporter serves for the
-// tenant the same at every minute of the UTC day around now. A key the
+// tenant the same from now on (sameRowsAllDay). A key the
 // tenant's file does not hold, or a tenant whose file this scope cannot
 // give, is reported false (not unchanged): the caller then gives no advice.
 func (s *ScopedTenants) ServedUnchangedWithout(cands map[string][]string, now time.Time) (map[string]map[string]bool, error) {
@@ -92,12 +93,13 @@ func (s *ScopedTenants) ServedUnchangedWithout(cands map[string][]string, now ti
 				}
 				p.Tenants = shallowTenants(p.Tenants)
 			}
-			if _, has := p.Tenants[tenant][keys[i]]; !has {
+			held, ok := decodedSpelling(p.Tenants[tenant], keys[i])
+			if !ok {
 				continue
 			}
 			m := make(map[string]ScheduledValue, len(p.Tenants[tenant]))
 			for k, v := range p.Tenants[tenant] {
-				if k != keys[i] {
+				if k != held {
 					m[k] = v
 				}
 			}
@@ -137,6 +139,26 @@ func buildWithPartials(scan *TreeScan, in FlatBuildInput, edited map[string]Thre
 	return BuildFlatConfig(scan, in)
 }
 
+// decodedSpelling is the key of m (a tenant's decoded map) that key, as the
+// tenant's file spells it, is decoded to: the key itself, or the one with the
+// same canonical dimensional spelling (canonicalDimensionalKey — label order
+// and spacing are not the decode's).
+func decodedSpelling(m map[string]ScheduledValue, key string) (string, bool) {
+	if _, ok := m[key]; ok {
+		return key, true
+	}
+	want, dim := canonicalDimensionalKey(key)
+	if !dim {
+		return "", false
+	}
+	for k := range m {
+		if got, ok := canonicalDimensionalKey(k); ok && got == want {
+			return k, true
+		}
+	}
+	return "", false
+}
+
 func shallowTenants(in map[string]map[string]ScheduledValue) map[string]map[string]ScheduledValue {
 	out := make(map[string]map[string]ScheduledValue, len(in))
 	for k, v := range in {
@@ -146,17 +168,28 @@ func shallowTenants(in map[string]map[string]ScheduledValue) map[string]map[stri
 }
 
 // sameRowsAllDay reports whether tenant's rows from a and from b are the same
-// as written at now and at the start of every segment of the day either
-// side's schedules cut (addScheduleCuts).
+// from now on: at now and just after every `expires:` instant either side
+// has not passed (expiryInstants: a time-boxed value, the tenant's own or an
+// inherited one, stops being served then), each read as written and at the
+// start of every segment of the day either side's schedules cut
+// (addScheduleCuts).
 func sameRowsAllDay(a, b *ThresholdConfig, tenant string, now time.Time) bool {
 	oneA, oneB := oneTenant(a, tenant), oneTenant(b, tenant)
-	if tenantRows(oneA, now) != tenantRows(oneB, now) {
-		return false
+	instants := []time.Time{now}
+	for _, m := range []map[string]ScheduledValue{a.Tenants[tenant], b.Tenants[tenant]} {
+		for _, t := range expiryInstants(m, now) {
+			instants = append(instants, t.Add(time.Second))
+		}
 	}
-	seen := addScheduleCuts(addScheduleCuts(nil, a.Tenants[tenant]), b.Tenants[tenant])
-	for _, m := range sortedCuts(seen) {
-		if tenantRows(oneA.AtMinuteOfDay(m), now) != tenantRows(oneB.AtMinuteOfDay(m), now) {
+	cuts := sortedCuts(addScheduleCuts(addScheduleCuts(nil, a.Tenants[tenant]), b.Tenants[tenant]))
+	for _, at := range instants {
+		if tenantRows(oneA, at) != tenantRows(oneB, at) {
 			return false
+		}
+		for _, m := range cuts {
+			if tenantRows(oneA.AtMinuteOfDay(m), at) != tenantRows(oneB.AtMinuteOfDay(m), at) {
+				return false
+			}
 		}
 	}
 	return true
@@ -183,47 +216,22 @@ func tenantRows(c *ThresholdConfig, now time.Time) string {
 	return fmt.Sprint(ss)
 }
 
-// RedundantThresholds is, for every tenant of cands and every key of its
-// list (threshold keys as the tenant's own file spells them), whether the
-// line is redundant (#4330): deleting it leaves what the exporter serves for
-// the tenant the same all day (ServedUnchangedWithout), and no other finding
-// owns the line — the exporter's own record of the tenant
-// (TenantValuesNotServedAndDisabled, the one call both tables come from)
-// neither refuses its value nor serves nothing of it, nor lists it as a
-// `disable` nothing reads (notServedOwnedElsewhere).
-func (s *ScopedTenants) RedundantThresholds(cands map[string][]string, now time.Time) (map[string]map[string]bool, error) {
-	unchanged, err := s.ServedUnchangedWithout(cands, now)
-	if err != nil {
-		return nil, err
+// ScanRoot is the resolved root the scope's walk read ("" when it has no
+// scan): the tree a verdict meant to agree with this scope must judge.
+func (s *ScopedTenants) ScanRoot() string {
+	if s == nil || s.scan == nil {
+		return ""
 	}
-	for tenant, keys := range unchanged {
-		table, disabled := s.built.Config.TenantValuesNotServedAndDisabled(tenant, now)
-		noop := map[string]bool{}
-		for _, k := range disabled {
-			noop[k] = true
-		}
-		for key, same := range keys {
-			if !same {
-				continue
-			}
-			canon, _ := CanonicalKeyFor(key)
-			for _, k := range []string{key, canon} {
-				if reason, listed := table[k]; (listed && notServedOwnedElsewhere(k, reason)) || noop[k] {
-					keys[key] = false
-				}
-			}
-		}
-	}
-	return unchanged, nil
+	return s.scan.AbsRoot
 }
 
-// notServedOwnedElsewhere reports whether a tenant key the exporter records
-// as not served for reason is another finding's to report: its value is
-// refused (ValueNotServedAsWritten — value_not_served says what to write), or
-// nothing of the key is served at any minute (notServedReasonTable's
-// keyServed false: an unread key the shared key verdict reports, a value no
-// layer delivers). A key served in some part of the day, or switched off by
-// its base (base_disabled), is not: it may be redundant.
-func notServedOwnedElsewhere(key, reason string) bool {
+// NotServedOwnedElsewhere reports whether a tenant key the exporter records
+// as not served for reason is another finding's to report rather than a
+// redundancy's (#4330): its value is refused (ValueNotServedAsWritten —
+// value_not_served's own selection), or nothing of the key is served at any
+// minute (notServedReasonTable's keyServed false — a key nothing reads,
+// which the shared key verdict reports as unread). A key served in some part
+// of the day, or switched off by its base (base_disabled), is not.
+func NotServedOwnedElsewhere(key, reason string) bool {
 	return ValueNotServedAsWritten(key, reason) || !notServedKeyServed(reason)
 }

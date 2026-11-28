@@ -203,6 +203,10 @@ type flags struct {
 	output               string
 	warnAsError          bool
 	showVersion          bool
+	// skipRedundant (no CLI flag): judge no threshold key redundant — for a
+	// caller that reads only error findings (write_worsen's tree validation),
+	// which then pays for neither the counterfactual nor the key verdict.
+	skipRedundant bool
 }
 
 func parseFlags(args []string, errOut io.Writer) (*flags, error) {
@@ -613,11 +617,27 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 // redundantThresholds is, for every threshold key of each tenant's own file
 // (a top-level key of overrides not starting with `_`; overrides is
 // TenantOverrides, the double-spelled thresholds already left out), whether
-// the line is redundant (config.ScopedTenants.RedundantThresholds, #4330). A failed
-// counterfactual build is named on the process log and judges no threshold
-// key redundant: redundant_override is advice, and advice the build could
-// not confirm is not given.
-func redundantThresholds(scoped *config.ScopedTenants, overrides map[string]map[string]any, now time.Time) map[string]map[string]bool {
+// the line is redundant (#4330):
+//   - deleting it leaves what the exporter serves for the tenant the same
+//     from now on (config.ScopedTenants.ServedUnchangedWithout — the
+//     exporter's own build and resolve), and
+//   - the advice would not be wrong because another finding owns the line,
+//     each read off that finding's own verdict: a refused value
+//     (value_not_served's selection), a key nothing of is served (the
+//     exporter's NotServed record; the shared key verdict reads it as
+//     unread) — both config.NotServedOwnedElsewhere — or a `disable` that
+//     switches nothing off (the shared key verdict's own `disable: noop`).
+//     A retired key the exporter still serves is not one: its retirement and
+//     its repeating the inherited value are two causes, two findings.
+//
+// A counterfactual or key verdict that cannot be had is named on the process
+// log and judges no threshold key redundant: redundant_override is advice,
+// and advice that could not be confirmed is not given.
+func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[string]map[string]any,
+	notServed map[string]map[string]config.NotServedKey, now time.Time) map[string]map[string]bool {
+	if f.skipRedundant {
+		return nil
+	}
 	cands := map[string][]string{}
 	for tenant, m := range overrides {
 		for k := range m {
@@ -630,12 +650,65 @@ func redundantThresholds(scoped *config.ScopedTenants, overrides map[string]map[
 	if len(cands) == 0 {
 		return nil
 	}
-	out, err := scoped.RedundantThresholds(cands, now)
+	out, err := scoped.ServedUnchangedWithout(cands, now)
 	if err != nil {
 		log.Printf("WARN: redundant_override not judged for threshold keys: %v", err)
 		return nil
 	}
+	disables := false // an unchanged line written as a disable word: the key verdict says whether it switches anything off
+	for tenant, keys := range out {
+		for key, same := range keys {
+			if !same {
+				continue
+			}
+			if ns, listed := notServed[tenant][key]; listed && config.NotServedOwnedElsewhere(key, ns.Reason) {
+				keys[key] = false
+				continue
+			}
+			if writesDisable(overrides[tenant][key]) {
+				disables = true
+			}
+		}
+	}
+	if !disables {
+		return out
+	}
+	root := scoped.ScanRoot() // the tree the counterfactual built, whatever --config-dir spelled
+	opts, err := treeFacts(root)
+	var kv keyVerdictResult
+	if err == nil {
+		opts.scan = config.ScanOptions{SkipDuplicated: true}
+		kv, err = keyVerdictOf(root, opts, now)
+	}
+	if err == nil && !kv.judged {
+		err = kv.why
+	}
+	if err != nil {
+		log.Printf("WARN: redundant_override not judged for threshold keys (the key verdict: %v)", err)
+		return nil
+	}
+	for tenant, vs := range kv.tree.Keys {
+		for _, v := range vs {
+			if v.Layer != nil && *v.Layer == "tenant" && v.Disable != nil && *v.Disable == "noop" && out[tenant] != nil {
+				if _, asked := out[tenant][v.Key]; asked {
+					out[tenant][v.Key] = false
+				}
+			}
+		}
+	}
 	return out
+}
+
+// writesDisable reports whether v, a tenant value as yaml.v3 decodes it,
+// writes a disable word as itself or as a schedule's `default:` — the lines
+// whose `disable` may switch nothing off (redundantThresholds asks the key
+// verdict only then).
+func writesDisable(v any) bool {
+	if m, ok := v.(map[string]any); ok {
+		v = m["default"]
+	}
+	s, ok := v.(string)
+	return ok && config.IsDisabled(strings.ToLower(strings.TrimSpace(s)))
 }
 
 // buildCheckInput assembles a guard.CheckInput from the scoped
@@ -692,7 +765,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guar
 		}
 	}
 	refused, rejected, blockErrs := customAlertVerdicts(scoped)
-	redundant := redundantThresholds(scoped, tenantOverrides, now)
+	redundant := redundantThresholds(scoped, f, tenantOverrides, notServed, now)
 	var rowCounts map[string]int
 	exporterCap := 0
 	if f.cardinalityLimit > 0 {

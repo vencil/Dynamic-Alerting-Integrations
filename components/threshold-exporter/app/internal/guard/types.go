@@ -350,10 +350,11 @@ type CheckInput struct {
 
 	// RedundantThresholds maps tenant ID → threshold key of the tenant's own
 	// file (TenantOverrides' top-level keys not starting with `_`) →
-	// whether that line is redundant (config.ScopedTenants.RedundantThresholds,
-	// #4330): deleting it leaves what the exporter serves for the tenant the
-	// same at every minute of the day — two builds and two resolves by the
-	// exporter's code — and no other finding owns the line. redundant_override
+	// whether that line is redundant (da-guard's redundantThresholds, #4330):
+	// deleting it leaves what the exporter serves for the tenant the same from
+	// now on — two builds and two resolves by the exporter's code
+	// (config.ScopedTenants.ServedUnchangedWithout) — and no other finding
+	// owns the line, by that finding's own verdict. redundant_override
 	// reports a threshold key only when this says true; nil reports none.
 	RedundantThresholds map[string]map[string]bool `json:"-"`
 
