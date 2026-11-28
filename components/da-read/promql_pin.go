@@ -28,10 +28,14 @@ import (
 // negation) is a conflict: a pin cannot be added beside it without changing
 // which series it reads. Stdout is
 //
-//	{"documents": [[{"expr": "<pinned>"} | {"conflict": "<selector>: <why>"}, …]]}
+//	{"documents": [[{"expr": "<pinned>", "selectors": [{"legacy", "pinned"}, …]}
+//	                 | {"conflict": "<selector>: <why>"}, …]]}
 //
-// one entry per expression, in input order. An expression Prometheus' parser
-// refuses refuses the input (rc 2, the refusal document); standard input that
+// one entry per expression, in input order. "selectors" are its distinct
+// selectors as instant vector selectors (no range, offset or `@`), before and
+// after the pin, in the order they appear — what a count of the series each
+// reads is asked with (#4227's pre-check: a pin that selects nothing). An
+// expression Prometheus' parser refuses refuses the input (rc 2, the refusal document); standard input that
 // is not that object is the caller's error.
 type pinRequest struct {
 	Tenant        string   `json:"tenant"`
@@ -40,8 +44,20 @@ type pinRequest struct {
 }
 
 type pinAnswer struct {
-	Expr     *string `json:"expr,omitempty"`
-	Conflict *string `json:"conflict,omitempty"`
+	Expr      *string       `json:"expr,omitempty"`
+	Selectors []pinSelector `json:"selectors,omitempty"`
+	Conflict  *string       `json:"conflict,omitempty"`
+}
+
+type pinSelector struct {
+	Legacy string `json:"legacy"`
+	Pinned string `json:"pinned"`
+}
+
+// instantSelector is *vs* with *ms* as its matchers and nothing else: no
+// range, offset or `@`, printed by Prometheus.
+func instantSelector(vs *parser.VectorSelector, ms []*labels.Matcher) string {
+	return (&parser.VectorSelector{Name: vs.Name, LabelMatchers: ms}).String()
 }
 
 // pinTenantLabel and pinNamespaceLabel: the label the platform isolates by
@@ -82,6 +98,8 @@ func readPromQLPin(req pinRequest) ([]byte, error) {
 			return nil, fmt.Errorf("expression %d: %w", i, err)
 		}
 		conflict := ""
+		var sels []pinSelector
+		seen := map[pinSelector]bool{}
 		parser.Inspect(node, func(n parser.Node, _ []parser.Node) error {
 			vs, ok := n.(*parser.VectorSelector)
 			if !ok || conflict != "" {
@@ -95,11 +113,17 @@ func readPromQLPin(req pinRequest) ([]byte, error) {
 				}
 			}
 			before := vs.String()
+			legacy := instantSelector(vs, append([]*labels.Matcher(nil), vs.LabelMatchers...))
 			for _, w := range want {
 				if why := pinMatcher(vs, w); why != "" {
 					conflict = before + ": " + why
 					return nil
 				}
+			}
+			s := pinSelector{Legacy: legacy, Pinned: instantSelector(vs, vs.LabelMatchers)}
+			if !seen[s] {
+				seen[s] = true
+				sels = append(sels, s)
 			}
 			return nil
 		})
@@ -109,7 +133,7 @@ func readPromQLPin(req pinRequest) ([]byte, error) {
 			continue
 		}
 		s := node.String()
-		out = append(out, pinAnswer{Expr: &s})
+		out = append(out, pinAnswer{Expr: &s, Selectors: sels})
 	}
 	return json.Marshal(struct {
 		Documents [][]pinAnswer `json:"documents"`

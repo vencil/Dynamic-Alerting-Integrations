@@ -91,3 +91,20 @@ func TestPinRefusesWhatTheParserRefusesAndTheCallersBadRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestPinListsEachSelectorAsAnInstantSelectorBeforeAndAfter(t *testing.T) {
+	got := pinOne(t, "db-a", []string{"kube_pod_info"},
+		`rate(x{job="a"}[5m] offset 1m) > on(pod) group_left kube_pod_info @ 100 or rate(x{job="a"}[5m])`)
+	if got.Expr == nil || len(got.Selectors) != 2 {
+		t.Fatalf("got %+v", got)
+	}
+	want := []pinSelector{
+		{`x{job="a"}`, `x{job="a",tenant="db-a"}`},
+		{`kube_pod_info`, `kube_pod_info{namespace="db-a",tenant=""}`},
+	}
+	for i, w := range want {
+		if got.Selectors[i] != w {
+			t.Errorf("selector %d: got %+v, want %+v", i, got.Selectors[i], w)
+		}
+	}
+}
