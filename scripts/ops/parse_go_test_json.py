@@ -75,6 +75,9 @@ from pathlib import Path
 # #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
+# #3981 (owner 2026-11-28): the fragment is an artifact — file_race_report
+# loads it whole — so it is written by atomic replace. Standard library only.
+from _lib_output import ensure_dir, exit_on_output_write_error, write_repo_artifact  # noqa: E402
 
 # Precise race-detector banners. Deliberately NOT a bare "DATA RACE" substring:
 # a test that merely PRINTS those words would flip the issue title to "DATA RACE",
@@ -334,6 +337,7 @@ def build_fragment(
     return result
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--module", required=True)
@@ -353,8 +357,13 @@ def main(argv: list[str] | None = None) -> int:
         workdir=args.workdir,
         packages=args.packages,
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(frag, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    # A path that cannot be written is rc 2, one line naming --output (the
+    # decorator) — the one exception to "always exit 0" below: there is no
+    # fragment to report, and file_race_report turns the missing one into a
+    # failing module anyway.
+    ensure_dir(args.output.parent, flag="--output")
+    write_repo_artifact(args.output, json.dumps(frag, indent=2, sort_keys=True) + "\n",
+                        flag="--output")
 
     print(f"[parse_go_test_json] {args.module}: {json.dumps(frag, sort_keys=True)}")
     # Always exit 0: the fragment IS the product. The workflow fails the matrix

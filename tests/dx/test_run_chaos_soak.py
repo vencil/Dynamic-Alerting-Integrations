@@ -379,10 +379,12 @@ class TestMainCallerErrors:
             "--duration-min", "0")
         # `--duration-min 0` → loop never executes → returns 0 cleanly.
         assert rcs.main() == 0
-        # Output files were created in the finally block.
-        assert (out_dir / "summary.txt").exists()
+        # Output files were created in the finally block (#3981: the two
+        # artifacts `render_soak_diff` reads; the summary is on stderr).
         assert (out_dir / "metrics-timeseries.csv").exists()
         assert (out_dir / "run-config.json").exists()
+        assert sorted(p.name for p in out_dir.iterdir()) == [
+            "metrics-timeseries.csv", "run-config.json"]
 
 
 # ---------------------------------------------------------------------------
