@@ -476,12 +476,14 @@ data:
     \  - record: tenant:kube_pods_running:count\n    expr: \"count by(tenant, da_cluster)\
     \ (\\n  label_replace(kube_pod_status_phase{namespace=~\\\"db-.+\\\", phase=\\\
     \"Running\\\"} == 1, \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\
-    \")\\n)\\n\"\n  - record: tenant:kubelet_volume_stats:count\n    expr: 'count\
-    \ by(tenant, da_cluster) (kubelet_volume_stats_available_bytes{tenant=~\".+\"\
-    })\n\n      and on(tenant, da_cluster)\n\n      count by(tenant, da_cluster) (kubelet_volume_stats_capacity_bytes{tenant=~\"\
-    .+\"})\n\n      '\n  - alert: CustomRecipeDiskInert\n    expr: \"(\\n  max by(tenant,\
-    \ da_cluster) (tenant:kube_pods_running:count)\\n  and on(tenant)\\n  max by(tenant)\
-    \ (\\n    user_threshold{component=\\\"custom\\\", metric=\\\"kubelet_volume_stats_available_bytes\\\
+    \")\\n)\\n\"\n  - record: tenant:kubelet_volume_stats:count\n    expr: \"count\
+    \ by(tenant, da_cluster) (\\n  label_replace(kubelet_volume_stats_available_bytes{namespace=~\\\
+    \"db-.+\\\"}, \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\")\\n)\\\
+    nand on(tenant, da_cluster)\\ncount by(tenant, da_cluster) (\\n  label_replace(kubelet_volume_stats_capacity_bytes{namespace=~\\\
+    \"db-.+\\\"}, \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\")\\n)\\\
+    n\"\n  - alert: CustomRecipeDiskInert\n    expr: \"(\\n  max by(tenant, da_cluster)\
+    \ (tenant:kube_pods_running:count)\\n  and on(tenant)\\n  max by(tenant) (\\n\
+    \    user_threshold{component=\\\"custom\\\", metric=\\\"kubelet_volume_stats_available_bytes\\\
     \"}\\n    or\\n    user_threshold{component=\\\"custom\\\", metric=\\\"kubelet_volume_stats_used_bytes\\\
     \"}\\n  )\\n)\\nunless on(tenant, da_cluster)\\ntenant:kubelet_volume_stats:count\\\
     nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\
@@ -502,11 +504,11 @@ data:
     \      platform_summary: '[SRE] {{ $labels.tenant }} disk recipe inert — volume-stats\
     \ absent{{ with $labels.da_cluster }} in cluster {{ . }}{{ end }}. Check in order:\
     \ (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats\
-    \ scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind''s\
-    \ default local-path does not).'\n      platform_summary_zh: '[SRE] 租戶 {{ $labels.tenant\
-    \ }} disk recipe inert — volume-stats 缺席{{ with $labels.da_cluster }}（叢集 {{ .\
-    \ }}）{{ end }}。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job\
-    \ 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path\
+    \ scrape job (series keep their `namespace`); (3) CSI NodeGetVolumeStats support\
+    \ (kind''s default local-path does not).'\n      platform_summary_zh: '[SRE] 租戶\
+    \ {{ $labels.tenant }} disk recipe inert — volume-stats 缺席{{ with $labels.da_cluster\
+    \ }}（叢集 {{ . }}）{{ end }}。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats\
+    \ scrape job 是否存在、序列是否保留 `namespace`;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path\
     \ 不實作)。'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
     \ }}'\n      summary: Disk alert declared but no disk data is visible for {{ $labels.tenant\

@@ -2349,7 +2349,7 @@ expr 語意、`for`、labels、annotations、alertname 原樣保留，只做三�
     | 指標 | 注入 |
     |------|------|
     | 序列帶 `tenant` 的指標（含平台不認得來源的客戶指標） | `tenant="<ID>"` |
-    | kube-state-metrics 有 namespace 的物件（例如 `kube_pod_*`） | `namespace="<ID>", tenant=""` |
+    | kube-state-metrics 有 namespace 的物件（例如 `kube_pod_*`）、cAdvisor 與 kubelet 的基礎設施指標（`container_*`、`kubelet_*`） | `namespace="<ID>", tenant=""` |
     | 叢集層級的 kube-state-metrics 物件（例如 `kube_node_*`）、Prometheus／Alertmanager 自己的序列、每個抓取目標都有的序列（例如 `up`、`go_*`）、`ALERTS` | 拒絕：平台層級的規則，不逐租戶遷移 |
 
     原式子已有的 `tenant`／`namespace` matcher 不是上表那個等值、或 selector 沒有以等值點名指標名，也拒絕。

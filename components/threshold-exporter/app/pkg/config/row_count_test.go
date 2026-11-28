@@ -42,9 +42,10 @@ func loadRowCountTree(t *testing.T, files map[string]string) *ThresholdConfig {
 	t.Helper()
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, files)
-	cfg, pf, err := LoadDir(tmp, log.New(io.Discard, "", 0))
+	// #4263: the config answers for the instant the tests read it at.
+	cfg, pf, err := LoadDirAt(tmp, log.New(io.Discard, "", 0), fixedNow)
 	if err != nil || len(pf) > 0 {
-		t.Fatalf("LoadDir: err=%v parseFailed=%v", err, pf)
+		t.Fatalf("LoadDirAt: err=%v parseFailed=%v", err, pf)
 	}
 	return cfg
 }

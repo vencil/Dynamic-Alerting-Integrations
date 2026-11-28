@@ -123,7 +123,7 @@ da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2
 da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o /data/output  # 正式遷移
 ```
 
-- **原樣保留、注入租戶隔離**：expr 語意、`for`、labels、annotations、alertname 不變；每個 selector 以語法樹注入租戶 matcher（`tenant="db-a"`；kube-state-metrics 有 namespace 的物件是 `namespace="db-a", tenant=""`）。叢集層級的物件（`kube_node_*`）、每個抓取目標都有的序列（`up`）、Prometheus／Alertmanager 自己的序列沒有一種注入只選到一個租戶：那是平台層級的規則，逐條列出、結束碼 2、一個檔都不寫
+- **原樣保留、注入租戶隔離**：expr 語意、`for`、labels、annotations、alertname 不變；每個 selector 以語法樹注入租戶 matcher（`tenant="db-a"`；kube-state-metrics 有 namespace 的物件與 cAdvisor／kubelet 的基礎設施指標是 `namespace="db-a", tenant=""`）。叢集層級的物件（`kube_node_*`）、每個抓取目標都有的序列（`up`）、Prometheus／Alertmanager 自己的序列沒有一種注入只選到一個租戶：那是平台層級的規則，逐條列出、結束碼 2、一個檔都不寫
 - **標記與治理**：每條告警加 `tenant`、`component: migrated` label 與 `owner`、`expiry` annotation，另附到期前 14 天起響的 `MigratedRulesExpiring`；寫之前對自己的輸出跑 custom rule lint，有 ERROR 就不寫
 - **黃金標準**：只讀一個指標、而 `metric-dictionary.yaml` 有黃金標準規則的告警不遷移，報告點名改用平台 Rule Pack
 - **多叢集**：原式子點名身分 label 卻沒有 `da_cluster` 的 `by(...)`／`on(...)` 只在報告標出，不改寫

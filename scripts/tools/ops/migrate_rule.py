@@ -6,7 +6,7 @@
 1. 租戶隔離：每個 selector 以 Prometheus 自己的語法樹注入租戶 matcher（``da-read
    promql-pin``，同 prom-label-proxy／Prometheus Operator ``enforcedNamespaceLabel``
    的做法）。怎麼注入由 ``_lib_metric_sources.pin_form`` 決定：序列帶 tenant 的指標
-   加 ``tenant="<租戶>"``；kube-state-metrics 有 namespace 的物件加
+   加 ``tenant="<租戶>"``；kube-state-metrics 有 namespace 的物件與 cAdvisor／kubelet 的基礎設施指標加
    ``namespace="<租戶>", tenant=""``；其餘（叢集層級物件、平台自己的序列、每個
    抓取目標都有的序列、告警自己的序列）沒有一種注入只選到一個租戶，結束碼 2。
 2. 標記：labels 加 ``tenant: <租戶>``、``component: migrated``（靜態值，切換前後

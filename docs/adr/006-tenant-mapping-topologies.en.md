@@ -14,7 +14,7 @@ lang: en
 
 ✅ **Accepted** (v2.1.0).
 
-Revised 2026-06-14: infrastructure metrics such as disk, PVC and node support 1:1 attribution only (see "Tenant attribution of infrastructure metrics (Addendum)").
+Revised 2026-06-14: infrastructure metrics such as disk, PVC and node support 1:1 attribution only (see "Tenant attribution of infrastructure metrics").
 
 Revised 2026-11-21: when one tenant runs in several clusters, each Prometheus names its cluster with the external label `da_cluster`, and rules and alerts are computed per cluster (see "One tenant in several clusters").
 
@@ -23,6 +23,8 @@ Revised 2026-11-22: notification grouping is not split per cluster by default; a
 Revised 2026-11-23: tenant self-service alerts (`Custom_*`) are judged per cluster, except the `absence` recipe, which stays tenant-wide; `da-tools byo-check prometheus` and `da-tools onboard` also point out a Prometheus without `da_cluster`.
 
 Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged. Two limitations added: the generated 1:N mapping rules are not in the Prometheus deployment the platform ships, and the platform's rule packs do not read the mapped series.
+
+Revised 2026-11-28: infrastructure metrics no longer have `namespace` written into `tenant` at scrape time; the rules and self-service alerts that need a tenant derive it from `namespace`, the same way on the Prometheus the platform ships, a self-managed Prometheus and the Prometheus Operator (see "Tenant attribution of infrastructure metrics").
 
 Revised 2026-11-25: the warning and the critical of one `metric_group` must have the same cluster scope, checked in CI; what is per cluster and what is not in "One tenant in several clusters" now describes the current state, with two limitations added for `MariaDBNoPrimary` and `da-tools migrate`.
 
@@ -173,11 +175,21 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 
 Three minutes later there is one alert: `TenantExporterAbsent{tenant="db-a", pack="mariadb", da_cluster="edge-a"}`. Neither `edge-b`'s MariaDB nor Redis (declared by kind only) alerts. With the same series, if the tenant writes only `_expected_exporters: [mariadb, redis]`, nothing alerts: one exporter reporting in `edge-b` counts as present. These two cases are L1 and L2 of `tests/rulepacks/rule-pack-liveness-per-cluster_test.yaml` (the test names its clusters `east` and `west`).
 
-### Tenant attribution of infrastructure metrics (Addendum)
+### Tenant attribution of infrastructure metrics
 
 **Infrastructure metrics such as disk, PVC and node support only 1:1 tenant attribution (one namespace is one tenant).**
 
-The self-service alerts of [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) let tenants set conditions on the platform's infrastructure metrics (for example kubelet's `kubelet_volume_stats_*`). These metrics natively carry only `namespace`, not `tenant`, so `namespace` is copied into `tenant` at scrape time. The Prometheus configuration the platform ships (`k8s/03-monitoring/configmap-prometheus.yaml`) does this in the `metric_relabel_configs` of the kubelet scrape job, keeping only namespaces that start with `db-`.
+The self-service alerts of [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) let tenants set conditions on the platform's infrastructure metrics (for example kubelet's `kubelet_volume_stats_*`). These metrics come from cAdvisor, the kubelet and kube-state-metrics, and natively carry only `namespace`, not `tenant`.
+
+**No scrape writes `tenant` on them; wherever a tenant is needed it is derived from `namespace`, one namespace being one tenant.** The kubelet scrape jobs of the Prometheus configuration the platform ships (`k8s/03-monitoring/configmap-prometheus.yaml`) keep only namespaces that start with `db-` and write no `tenant`; a self-managed Prometheus and the Prometheus Operator's kubelet ServiceMonitor need not write it either. The derivation happens in three places:
+
+- The platform rule packs' recording rules copy `namespace` into `tenant` with `label_replace`.
+- The self-service alert compiler, reading such a metric, keeps a `tenant` a series already carries and takes it from `namespace` otherwise. Which metrics these are is set by the `metric_prefixes` of the packs without `presence` in `rule-packs/threshold-registry.yaml` (kubernetes): `container_`, `kube_`, `kubelet_`.
+- A tenant's own rules select such series with `namespace="<tenant>", tenant=""`; `tenant="<tenant>"` is refused by the custom-rule lint, since it selects nothing.
+
+Under central evaluation across clusters, the edges send only series that carry `tenant`, plus the cAdvisor (`container_*`) and kubelet (`kubelet_*`) series of the tenant namespaces; the custom alerts derive the tenant from `namespace` centrally ([Federation Integration Guide](../integration/federation-integration.en.md) §4). kube-state-metrics' raw series are not sent, so a custom alert reading `kube_*` does not fire in such a deployment.
+
+Example: when the kubelet serves `kubelet_volume_stats_available_bytes{namespace="db-a", persistentvolumeclaim="data"}` and the matching `_capacity_bytes`, the recording rule the watchdog alert reads yields `tenant:kubelet_volume_stats:count{tenant="db-a"}`; a series with `tenant` but no `namespace` counts for no tenant (cases B and B2 of `tests/rulepacks/rule-pack-kubernetes-custom-disk-inert_test.yaml`).
 
 ## Background
 
@@ -196,7 +208,7 @@ In enterprise environments, the mapping between database instances and tenants i
 - **Masking.** A liveness check written as "instances expected to exist, minus instances that report success" matches the two sides with `on(tenant, instance)`. When each of two clusters has an instance at the same address (overlapping internal address ranges across clusters are common), the healthy one cancels the failed one and the failed cluster does not alert.
 - **Silent merging.** `sum by(tenant)` adds the two clusters together, and `max by(tenant)` keeps only the larger one. The on-call engineer cannot tell which cluster it is, and the value no longer corresponds to any single database.
 
-**Infrastructure metrics.** N:1 and 1:N in this ADR rely on extra mapping rules, while infrastructure metrics are renamed directly at scrape time and never see that mapping:
+**Infrastructure metrics.** N:1 and 1:N in this ADR rely on extra mapping rules, while infrastructure metrics take `namespace` as the tenant directly and never see that mapping:
 
 - **N:1 would silently miss alerts.** The metric is labelled `tenant="db-a-read"` while the tenant's configuration uses the name `db-a`; the two never match and the alert never fires.
 - **1:N is impossible in principle.** A PVC cannot be split between tenants by schema or tablespace.
@@ -249,6 +261,11 @@ In enterprise environments, the mapping between database instances and tenants i
 - **Built into the exporter**: one component does it all, but the exporter's job is turning YAML configuration into metrics; mapping is data normalization and does not belong there. A mapping change would require restarting the exporter, affecting every tenant's metrics, and in an HA deployment two exporters would have to keep identical mappings.
 - **In Alertmanager**: affects only the notification path, but it is too late: Alertmanager handles only alerts that have already fired and cannot split at the metric level; tools such as Grafana query Prometheus directly and never see the mapping.
 - **An external proxy**: fully decoupled, but adds a component, latency and operational complexity.
+
+### Where the tenant of an infrastructure metric is written
+
+- **Write `namespace` into `tenant` at scrape time**: rules could read `tenant` directly. But it holds only if every kind of install does it, and the platform controls only the Prometheus configuration it ships. In a Prometheus Operator install the kubelet ServiceMonitor comes from the upstream chart (kube-prometheus-stack); Helm replaces a list wholesale when it is overridden, so a customer adding one relabel must copy the upstream default drops too, and those defaults change with the chart version, which the platform's docs cannot keep up with. On an install that skips it, rules reading these metrics select no series and never alert. kube-state-metrics' metrics are read by `namespace` anyway, and having both ways left no single answer to whether these metrics carry `tenant`.
+- **Derive it from `namespace` in the rules** (chosen): independent of the install, and the same as how kube-state-metrics' metrics are read. The cost is a derivation in every rule that reads such metrics, owned by the rule packs' recording rules and the self-service alert compiler; a tenant's own rules are checked by the lint.
 
 ### Cluster identity for several clusters
 

@@ -610,3 +610,84 @@ func TestAbsenceCoreIsDeclaredTenantWide(t *testing.T) {
 		t.Errorf("the declaration is not the form check_cluster_identity.py reads: %q", absenceTenantWide)
 	}
 }
+
+// #4178: a metric the platform scrapes itself (cAdvisor, the kubelet's volume
+// stats, kube-state-metrics: namespaceKeyedPrefixes, generated from the
+// threshold registry) names the tenant only as `namespace` on every install.
+// Every read a recipe makes of one keeps a scrape-written `tenant` and takes
+// it from `namespace` otherwise; a tenant exporter's metric is read as is
+// (TestCompiledRulesKeepTheClusterPerRecipe).
+func TestARecipeDerivesTheTenantOfANamespaceKeyedMetric(t *testing.T) {
+	derived := func(read string) string {
+		return `(label_replace(` + strings.Replace(read, "SEL", `{tenant=""}`, 1) +
+			`, "tenant", "$1", "namespace", "(.+)") or ` + strings.Replace(read, "SEL", `{tenant!=""}`, 1) + `)`
+	}
+	cases := []struct {
+		name, spec, rule string
+		want             []string
+	}{
+		{"threshold", `- {recipe: threshold, name: a, metric: kube_pod_container_status_restarts_total, op: ">", window: 5m, threshold: "1"}`,
+			"custom:metric:", []string{derived(`kube_pod_container_status_restarts_totalSEL`)}},
+		{"rate", `- {recipe: rate, name: a, metric: container_fs_reads_total, window: 5m, threshold: "1"}`,
+			"custom:metric:", []string{derived(`rate(container_fs_reads_totalSEL[5m])`)}},
+		{"ratio", `- {recipe: ratio, name: a, metric: container_fs_reads_total, denominator_metric: container_fs_writes_total, window: 5m, threshold: "0.1"}`,
+			"custom:metric:", []string{derived(`rate(container_fs_reads_totalSEL[5m])`), derived(`rate(container_fs_writes_totalSEL[5m])`)}},
+		{"forecast ratio mode", `- {recipe: forecast, name: a, metric: kubelet_volume_stats_available_bytes, horizon: 4h, capacity_metric: kubelet_volume_stats_capacity_bytes, threshold: "0.1"}`,
+			"custom:fcbase:", []string{derived(`kubelet_volume_stats_available_bytesSEL`), derived(`kubelet_volume_stats_capacity_bytesSEL`)}},
+		{"forecast with selectors", `- {recipe: forecast, name: a, metric: kubelet_volume_stats_available_bytes, horizon: 4h, capacity_metric: kubelet_volume_stats_capacity_bytes, threshold: "0.1", selectors: {persistentvolumeclaim: data}}`,
+			"custom:fcbase:", []string{`or kubelet_volume_stats_available_bytes{persistentvolumeclaim="data", tenant!=""})`,
+				`(label_replace(kubelet_volume_stats_available_bytes{persistentvolumeclaim="data", tenant=""}, "tenant", "$1", "namespace", "(.+)") or`}},
+		{"equals core", `- {recipe: threshold, name: a, metric: kube_pod_status_ready, op: "==", window: 5m, threshold: "1"}`,
+			":core", []string{derived(`kube_pod_status_readySEL`)}},
+		{"absence core", `- {recipe: absence, name: a, metric: kube_pod_info, window: 5m, threshold: "1"}`,
+			":core", []string{derived(`count_over_time(kube_pod_infoSEL[5m])`)}},
+		{"p99_latency", `- {recipe: p99_latency, name: a, metric: kubelet_http_requests_duration_seconds, window: 5m, threshold: "1"}`,
+			"custom:metric:", []string{derived(`rate(kubelet_http_requests_duration_seconds_bucketSEL[5m])`)}},
+		{"forecast raw mode", `- {recipe: forecast, name: a, metric: kubelet_volume_stats_used_bytes, op: ">", horizon: 4h, threshold: "10"}`,
+			"custom:fcbase:", []string{derived(`kubelet_volume_stats_used_bytesSEL`)}},
+		{"slo ratio window", `- {recipe: slo_burn_rate, name: a, metric: container_fs_reads_total, denominator_metric: container_fs_writes_total, objective: "99.9"}`,
+			"custom:metric:", []string{`(label_replace(rate(container_fs_reads_total{tenant=""}[`, `or rate(container_fs_reads_total{tenant!=""}[`,
+				`(label_replace(rate(container_fs_writes_total{tenant=""}[`, `or rate(container_fs_writes_total{tenant!=""}[`}},
+		{"slo bad events", `- {recipe: slo_burn_rate, name: a, metric: container_fs_reads_total, denominator_metric: container_fs_writes_total, objective: "99.9"}`,
+			"custom:bad:", []string{`(label_replace(increase(container_fs_reads_total{tenant=""}[`, `or increase(container_fs_reads_total{tenant!=""}[`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := caEntry(t, CustomAlertServed, []string{"warning", "critical"}, tc.spec)
+			p, err := CompileCustomAlertPack([]TenantCustomAlerts{{Tenant: "t", Entries: []CustomAlertEntry{e}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			judged := 0
+			for name, rule := range packRules(t, p) {
+				if rule.get("record") == nil || !strings.Contains(name, tc.rule) ||
+					strings.HasPrefix(name, "custom:threshold:") || strings.HasPrefix(name, "custom_recipe_info") {
+					continue
+				}
+				judged++
+				expr := rule.get("expr").(string)
+				for _, w := range tc.want {
+					if !strings.Contains(expr, w) {
+						t.Errorf("%s lacks %q:\n%s", name, w, expr)
+					}
+				}
+			}
+			if judged == 0 {
+				t.Fatalf("no %q record in the pack: %v", tc.rule, keys(packRules(t, p)))
+			}
+		})
+	}
+}
+
+func TestNamespaceKeyedPrefixesNameTheKubernetesFamilies(t *testing.T) {
+	for _, m := range []string{"container_fs_reads_total", "kubelet_volume_stats_available_bytes", "kube_pod_info"} {
+		if !namespaceKeyed(m) {
+			t.Errorf("%s is not namespace-keyed", m)
+		}
+	}
+	for _, m := range []string{"mysql_up", "user_threshold", "ClickHouseMetrics_TCPConnection", "node_cpu_seconds_total"} {
+		if namespaceKeyed(m) {
+			t.Errorf("%s is namespace-keyed", m)
+		}
+	}
+}

@@ -203,9 +203,13 @@ TENANT_LABEL = "tenant"
 def tenant_presence(metric: str) -> "str | None":
     """⛔ THE one answer to "do the series of this raw metric carry
     ``tenant``" (#4137), as ``da-read promql-label-flow`` takes it:
-    ``"without"`` — a family of a static or service source (prometheus,
-    alertmanager, kube-state-metrics: jobs that write no tenant, pinned by
-    tests/lint/test_check_scrape_reachability.py); ``"by-job"`` — a per-target
+    ``"without"`` — a family of a static, service or name-filtered source
+    (prometheus, alertmanager, kube-state-metrics, cAdvisor, the kubelet's
+    volume stats: jobs that write no tenant, pinned by
+    tests/lint/test_check_scrape_reachability.py). The infrastructure
+    families name the tenant only as ``namespace``, on every install (#4178):
+    a rule that needs ``tenant`` derives it from ``namespace``
+    (``_lib_consumer_read.LABEL_ALIASES``); ``"by-job"`` — a per-target
     series (``PER_TARGET_*``); ``"unknown"`` — an alert's series; ``None`` —
     taken to carry it: the tenant exporters' job writes it on every series
     (the scrape contract), and a chart's own families are the exporter's
@@ -216,7 +220,7 @@ def tenant_presence(metric: str) -> "str | None":
     if metric in PER_TARGET_EXACT or metric.startswith(PER_TARGET_PREFIXES):
         return "by-job"
     fam = resolve_family(metric)
-    if fam is not None and fam[1] in ("static", "service"):
+    if fam is not None and fam[1] in ("static", "service", "name-filtered"):
         return "without"
     return None
 
@@ -244,8 +248,9 @@ def pin_form(metric: str) -> "tuple[str | None, str | None]":
     """⛔ THE one answer to "how is a selector of the raw *metric* pinned to
     one tenant" (#4226, migrate-rule): → ``("tenant", None)`` — its series
     carry ``tenant`` (``tenant_presence`` None); ``("namespace", None)`` —
-    kube-state-metrics' series of a namespaced object, which name the tenant
-    by ``namespace`` and carry no ``tenant``; ``(None, why)`` — no pin
+    kube-state-metrics' series of a namespaced object, or an infrastructure
+    family's (cAdvisor, the kubelet's volume stats, #4178), which name the
+    tenant by ``namespace`` and carry no ``tenant``; ``(None, why)`` — no pin
     selects one tenant's series (a cluster-scoped object, Prometheus' or
     Alertmanager's own, a per-target series whose job decides, an alert's)."""
     presence = tenant_presence(metric)
@@ -257,6 +262,10 @@ def pin_form(metric: str) -> "tuple[str | None, str | None]":
     if presence == "unknown":
         return None, "an alert's own series: whether it carries tenant is each alert's business"
     fam = resolve_family(metric)
+    if fam is not None and fam[1] == "name-filtered":
+        # cAdvisor's and the kubelet's volume stats: the tenant is the
+        # namespace, on every install (#4178).
+        return "namespace", None
     if fam is not None and (fam[1], fam[2]) == _KSM_SOURCE:
         if metric.startswith(KSM_CLUSTER_SCOPED_PREFIXES):
             return None, ("kube-state-metrics' series of a cluster-scoped object: they carry "
@@ -264,6 +273,31 @@ def pin_form(metric: str) -> "tuple[str | None, str | None]":
         return "namespace", None
     return None, ("the platform's own series (its job writes no tenant and names no "
                   "tenant's namespace)")
+
+
+def federated_infra_families() -> "tuple[str, ...]":
+    """The name-filtered families (cAdvisor's `container_`, the kubelet's
+    `kubelet_`): infrastructure series a tenant's recipe may read, which carry
+    the tenant only as ``namespace`` (#4178). kube-state-metrics' `kube_` is
+    not among them: its series are many, and no central rule reads them raw."""
+    return tuple(sorted(p for p, kind, _src in FAMILY_TABLE if kind == "name-filtered"))
+
+
+def federated_infra_selector() -> str:
+    """The `match[]` selector a central Prometheus federates the
+    ``federated_infra_families`` with, beside ``{tenant!=""}``: the tenant
+    namespaces' series, whose tenant the recipe compiler derives centrally
+    (docs/integration/federation-integration.md §4, pinned by
+    tests/rulepacks/test_exporter_metric_prefixes.py)."""
+    alt = "|".join(p.rstrip("_") for p in federated_infra_families())
+    return '{__name__=~"(' + alt + ')_.+", namespace=~"db-.+"}'
+
+
+def federated_infra_keep_regex() -> str:
+    """The remote-write keep over ``[tenant, __name__, namespace]`` that sends
+    what ``{tenant!=""}`` and ``federated_infra_selector`` select together."""
+    alt = "|".join(p.rstrip("_") for p in federated_infra_families())
+    return ".+;.*;.*|;(" + alt + ")_.+;db-.+"
 
 
 def label_flow(label: str, exprs: "list[str]", records: "dict[str, list[dict]] | None" = None):

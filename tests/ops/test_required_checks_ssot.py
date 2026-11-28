@@ -151,9 +151,11 @@ def reporter_count_problem(name: str, where: list[tuple[str, str]]) -> str | Non
 
 def test_every_required_check_is_reported_by_a_job_that_always_reports() -> None:
     entries = _ssot()["required"]
-    assert len(entries) >= 20, (
-        f"{len(entries)} required entries — fewer than the 20 read from branch "
-        "protection on 2026-11-10; if checks were removed, lower this floor in the "
+    # 14 since #4224 merged docs-ci's checks into `Documentation Checks` and
+    # dropped two that could not fail (20 before, read 2026-11-10).
+    assert len(entries) >= 14, (
+        f"{len(entries)} required entries — fewer than the 14 read from branch "
+        "protection on 2026-11-28; if checks were removed, lower this floor in the "
         "same change, so an emptied file cannot pass vacuously")
     names = [e["name"] for e in entries]
     assert len(names) == len(set(names)), f"duplicate names: {names}"

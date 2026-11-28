@@ -464,3 +464,105 @@ func TestServedValues_DisableEffectsCountTheUnsetNotice(t *testing.T) {
 		}
 	}
 }
+
+// #4263: the `disable` /metrics serves is the one described — a profile's
+// `disable` an expired tenant value gave way to is effective and listed as
+// disabled, as it is with that tenant line deleted.
+func TestServedValues_DisableEffectsDescribeWhatIsServed(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  redis_memory: 50\n",
+		"_profiles.yaml": "profiles:\n  p:\n    redis_memory: disable\n",
+		"a.yaml": "tenants:\n  a:\n    _profile: p\n    redis_memory:\n      default: \"5\"\n" +
+			"      expires: \"2020-01-01T00:00:00Z\"\n",
+	}
+	code, doc, _, stderr := servedWith(t, files, "2026-07-01T03:00:00Z", "--disable-effects")
+	mustOK(t, code, stderr)
+	e, ok := doc.Tenants["a"].Keys["redis_memory"]
+	if !ok || e.Reason != keyReasonDisabled || e.Disable != disableEffective {
+		t.Errorf("redis_memory: %+v (listed %v), want reason %q and disable %q — the profile's, served", e, ok, keyReasonDisabled, disableEffective)
+	}
+}
+
+// #4263: an expired `disable` is listed, its effect none, whatever it gave
+// way to — a profile's number as much as the root's.
+func TestServedValues_AnExpiredDisableIsListedWhateverIsBeneath(t *testing.T) {
+	t.Parallel()
+	for name, profile := range map[string]string{"profile beneath": "    redis_memory: \"70\"\n", "root only": ""} {
+		files := map[string]string{
+			"_defaults.yaml": "defaults:\n  redis_memory: 50\n",
+			"a.yaml": "tenants:\n  a:\n    _profile: p\n    redis_memory:\n      default: disable\n" +
+				"      expires: \"2020-01-01T00:00:00Z\"\n",
+		}
+		files["_profiles.yaml"] = "profiles:\n  p:\n" + profile
+		if profile == "" {
+			files["_profiles.yaml"] = "profiles:\n  p: {}\n"
+		}
+		code, doc, _, stderr := servedWith(t, files, "2026-07-01T03:00:00Z", "--disable-effects")
+		mustOK(t, code, stderr)
+		if e := doc.Tenants["a"].Keys["redis_memory"]; e.Disable != disableNoop {
+			t.Errorf("%s: redis_memory disable %q, want %q", name, e.Disable, disableNoop)
+		}
+	}
+}
+
+// #4263: an expired `disable` written under a retired spelling, under a
+// profile serving the canonical one: the served spelling is the one
+// described — no second entry for the threshold — and the run succeeds.
+func TestServedValues_AnExpiredDisableUnderAnotherSpelling(t *testing.T) {
+	t.Parallel()
+	for name, profile := range map[string]string{"profile disable": "disable", "profile number": "\"70\""} {
+		code, doc, _, stderr := servedWith(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+			"_profiles.yaml": "profiles:\n  p:\n    mysql_threads_running: " + profile + "\n",
+			"a.yaml": "tenants:\n  a:\n    _profile: p\n    mysql_cpu:\n      default: disable\n" +
+				"      expires: \"2020-01-01T00:00:00Z\"\n",
+		}, "2026-07-01T03:00:00Z", "--disable-effects")
+		if code != 0 {
+			t.Errorf("%s: exit %d: %s", name, code, stderr)
+			continue
+		}
+		if _, listed := doc.Tenants["a"].Keys["mysql_cpu"]; listed {
+			t.Errorf("%s: the expired retired spelling is described beside the served one", name)
+		}
+	}
+}
+
+// #4263: an expired `disable` is listed whatever spelling either layer
+// writes: under the spelling the threshold is described by, as when every
+// layer writes the current one.
+func TestServedValues_AnExpiredDisableIsListedUnderTheDescribedSpelling(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := servedWith(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+		"_profiles.yaml": "profiles:\n  p:\n    mysql_cpu: \"70\"\n",
+		"a.yaml": "tenants:\n  a:\n    _profile: p\n    mysql_cpu:\n      default: disable\n" +
+			"      expires: \"2020-01-01T00:00:00Z\"\n",
+	}, "2026-07-01T03:00:00Z", "--disable-effects")
+	mustOK(t, code, stderr)
+	if e := doc.Tenants["a"].Keys["mysql_threads_running"]; e.Disable != disableNoop {
+		t.Errorf("mysql_threads_running disable %q, want %q (the expired disable, listed under the described spelling)", e.Disable, disableNoop)
+	}
+}
+
+// #4333 review: the root `defaults:` disables a key and the tenant's number
+// for it has expired. The merge left the number out, so the tenant is served
+// the root's `disable` — the key reads `disabled`, exactly as for a tenant
+// with no line for it, not `no_row` from the line as written.
+func TestServedValues_ALapsedValueOverARootDisableReadsDisabled(t *testing.T) {
+	t.Parallel()
+	for name, tenant := range map[string]string{
+		"lapsed": "tenants:\n  a:\n    pg_replication_lag:\n      default: \"5\"\n" +
+			"      expires: \"2020-01-01T00:00:00Z\"\n",
+		"no line": "tenants:\n  a:\n    _metadata: {owner: x}\n",
+	} {
+		code, doc, _, stderr := servedWith(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  pg_replication_lag: disable\n",
+			"a.yaml":         tenant,
+		}, "2026-07-01T03:00:00Z")
+		mustOK(t, code, stderr)
+		if e := doc.Tenants["a"].Keys["pg_replication_lag"]; e.Reason != keyReasonDisabled {
+			t.Errorf("%s: pg_replication_lag reads %+v, want reason %q", name, e, keyReasonDisabled)
+		}
+	}
+}

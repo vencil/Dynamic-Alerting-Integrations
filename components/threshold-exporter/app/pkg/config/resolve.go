@@ -479,8 +479,10 @@ func expiryHonoured(key string, defaults map[string]float64) bool {
 //
 // base and both maps are canonical (#1231). The base's invalid-window WARN
 // is its own phase's, not repeated here (resolveValue with no logf).
-func familyHeadOff(base string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time) bool {
-	return familyHeadOffSplit(base, defaults, overrides, now, now)
+//
+// `expires:` is read where c decided it (expiryReadAt, #4263).
+func (c *ThresholdConfig) familyHeadOff(base string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time) bool {
+	return familyHeadOffSplit(base, defaults, overrides, c.expiryReadAt(now), now)
 }
 
 // familyHeadOffSplit is familyHeadOff with the expiry read at expiryAt and
@@ -537,16 +539,23 @@ type FamilyView struct {
 	defaults  map[string]float64
 	overrides map[string]ScheduledValue
 	dims      map[string][]string
+	// decided is the build's instant when it decided `expires:`
+	// (expiryReadAt, #4263): `expires:` is read there, whatever expiryAt.
+	decided time.Time
 }
 
 // FamilyView is tenant's FamilyView.
 func (c *ThresholdConfig) FamilyView(tenant string) FamilyView {
 	overrides, _ := canonicalizeOverrides(c.Tenants[tenant])
-	return FamilyView{defaults: canonicalizeDefaults(c.Defaults), overrides: overrides, dims: c.Dimensions}
+	return FamilyView{defaults: canonicalizeDefaults(c.Defaults), overrides: overrides, dims: c.Dimensions,
+		decided: c.expiryReadAt(time.Time{})}
 }
 
 func (v FamilyView) headOff(key string, expiryAt, valueAt time.Time) bool {
 	canon, _ := CanonicalKeyFor(key)
+	if !v.decided.IsZero() {
+		expiryAt = v.decided
+	}
 	return familyHeadOffSplit(canon, v.defaults, v.overrides, expiryAt, valueAt)
 }
 
@@ -561,6 +570,9 @@ func (v FamilyView) SwitchedOffWithBase(key string, expiryAt, valueAt time.Time)
 	if !ok && dimensionalRowRead(canon, v.dims) {
 		base, _, _ = parseKeyWithLabels(canon)
 		ok = true
+	}
+	if !v.decided.IsZero() {
+		expiryAt = v.decided
 	}
 	return ok && familyHeadOffSplit(base, v.defaults, v.overrides, expiryAt, valueAt)
 }
@@ -623,7 +635,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			// verdict below.
 			rec.claim(metricKey)
 		}
-		if exists && headLive(metricKey, defaults, sv, now) { // familyHeadOff's rule
+		if exists && headLive(metricKey, defaults, sv, c.expiryReadAt(now)) { // familyHeadOff's rule
 			override := sv.resolveValue(now, logf)
 			if rec != nil {
 				rec.noteInvalidWindows(tenant, metricKey, sv)
@@ -953,7 +965,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		// #3046: the base switched off switches its critical tier off. Asked
 		// after the value is read, so an unreadable value is reported
 		// whatever the base does.
-		if familyHeadOff(baseKey, defaults, overrides, now) {
+		if c.familyHeadOff(baseKey, defaults, overrides, now) {
 			if rec != nil {
 				rec.note(tenant, key, NotServedBaseDisabled)
 			}
@@ -982,7 +994,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		if _, read := criticalRowRead(key, defaults); !read || !finiteThreshold(rv) {
 			continue
 		}
-		if familyHeadOff(baseKey, defaults, overrides, now) {
+		if c.familyHeadOff(baseKey, defaults, overrides, now) {
 			continue
 		}
 		component, metric := parseMetricKey(baseKey)
@@ -1037,7 +1049,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		base, _, _ := parseKeyWithLabels(key)
 		off, asked := headOff[base]
 		if !asked {
-			off = familyHeadOff(base, defaults, overrides, now)
+			off = c.familyHeadOff(base, defaults, overrides, now)
 			headOff[base] = off
 			if off && rec != nil {
 				rec.claim(base)
@@ -1046,7 +1058,13 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		return off
 	}
 	for key, v := range defaults {
-		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !dimensionalRowRead(key, c.Dimensions) {
+		if !dimensionalRowRead(key, c.Dimensions) {
+			continue
+		}
+		// The tenant's own value is served below. An expired one the merge
+		// left in place has nothing beneath to give way to (decideExpiry,
+		// #4263): it is served, never re-judged here.
+		if _, own := overrides[key]; own {
 			continue
 		}
 		if familyOff(key) {
@@ -1063,9 +1081,6 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		}
 		if rec != nil {
 			rec.claim(key) // #3378
-		}
-		if _, hasDefault := defaults[key]; hasDefault && isThresholdExpired(sv, now) {
-			continue // the default above is served
 		}
 		rows = c.appendDimensionalRow(rows, tenant, key, sv, familyOff(key), now, sink, logf, rec)
 	}
@@ -1470,6 +1485,36 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAtLogf(now time.Time, logf fun
 		logf = discardLogf
 	}
 	var result []ResolvedThresholdExpiry
+	// #4263: a config built from a tree decided its `expires:` where it
+	// merged them (decideExpiry): the values that give way, at any layer.
+	if c.expiry != nil {
+		// Read where the resolver reads `expires:` (expiryReadAt: the
+		// build's instant). One event per key all the same, the one the
+		// tenant got — decideExpiry lists it first: one series twice fails
+		// the whole Gather, so the guard does not rest on how the list was
+		// built.
+		readAt := c.expiryReadAt(now)
+		named := map[string]bool{}
+		for _, e := range c.expiry.events {
+			e.Expired = !e.Expires.After(readAt)
+			if e.Expired {
+				canon, _ := canonicalKeyFor(e.MetricKey)
+				if named[e.Tenant+"\x00"+canon] {
+					continue
+				}
+				named[e.Tenant+"\x00"+canon] = true
+			}
+			result = append(result, e)
+		}
+		// An `expires:` that does not parse never takes effect (fail-open)
+		// and names no event; it is logged, as before the decision moved.
+		for tenant, overrides := range c.Tenants {
+			eachUnparsedExpiry(overrides, func(metricKey, text string, err error) {
+				logf("WARN: invalid expires %q in threshold %q for tenant=%s: %v", text, metricKey, tenant, err)
+			})
+		}
+		return result
+	}
 	// #1231: membership goes through the same canonical view as
 	// ResolveAtWithStats — an old-spelled override whose default has already
 	// been renamed still HAS its expiry honored by resolveBaseRows, so the
@@ -1512,11 +1557,12 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAtLogf(now time.Time, logf fun
 				continue
 			}
 			result = append(result, ResolvedThresholdExpiry{
-				Tenant:    tenant,
-				MetricKey: metricKey,
-				Expires:   t,
-				Reason:    sv.Expiry.Reason,
-				Expired:   now.After(t),
+				Tenant:      tenant,
+				MetricKey:   metricKey,
+				Expires:     t,
+				ExpiresText: sv.Expiry.Expires,
+				Reason:      sv.Expiry.Reason,
+				Expired:     now.After(t),
 			})
 		}
 	}
@@ -1901,7 +1947,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 				// ResolveThresholdExpiriesAt (which gates on canonDefaults
 				// alone) still emitted its expiry event, splitting the very
 				// pair the contract test below exists to hold together.
-				if expiryHonoured(canonKey, canonDefaults) && !baseRowsSkipKey(canonKey) {
+				if c.expiryCanLapse(tenant, canonKey, canonDefaults) && !baseRowsSkipKey(canonKey) {
 					if _, err := time.Parse(time.RFC3339, sv.Expiry.Expires); err != nil {
 						v.Errors = append(v.Errors, fmt.Sprintf(
 							"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expiry.Expires, canonKey))
@@ -1935,8 +1981,10 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 						"WARN: tenant=%s: `expires:` on %q is refused — %q is declared without a platform value (optional_overrides), so there is no default to revert to: on expiry the threshold would have NO value and the alert would go silent. Remove `expires:`; delete the override itself when you want it gone.",
 						tenant, canonKey, canonKey))
 				} else {
+					// #4263: nothing beneath the value serves the key and the
+					// root gives it no number (expiryCanLapse).
 					v.Errors = append(v.Errors, fmt.Sprintf(
-						"WARN: tenant=%s: `expires:` on %q is ignored — only base standard metrics (in _defaults.yaml) support time-boxed thresholds in v1", tenant, canonKey))
+						"WARN: tenant=%s: `expires:` on %q is refused — nothing else gives %q a value (no other layer writes it and the root `defaults:` gives it no number), so on expiry the threshold would have NO value and the alert would go silent. Remove `expires:`, or give %q a value at the root.", tenant, canonKey, canonKey, canonKey))
 				}
 			}
 

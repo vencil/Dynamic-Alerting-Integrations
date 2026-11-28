@@ -134,6 +134,19 @@ def test_a_namespaced_kube_state_metrics_series_gets_namespace_and_an_empty_tena
 
 
 @pytest.mark.parametrize("metric", [
+    "container_fs_writes_total",            # cAdvisor
+    "kubelet_volume_stats_used_bytes",      # the kubelet's volume stats
+])
+def test_an_infrastructure_series_gets_namespace_and_an_empty_tenant(tmp_path, metric):
+    # #4178: the infrastructure families name the tenant only as namespace,
+    # on every install; a tenant pin would select nothing.
+    proc, out = run(tmp_path, one("A", f"{metric} > 0"))
+    assert proc.returncode == 0, proc.stderr
+    assert by_name(rules_of(out))["A"]["expr"] == (
+        f'{metric}{{namespace="db-a",tenant=""}} > 0')
+
+
+@pytest.mark.parametrize("metric", [
     "kube_node_status_condition",       # cluster-scoped object
     "kube_persistentvolume_status_phase",
     "prometheus_tsdb_head_series",      # the platform's own series

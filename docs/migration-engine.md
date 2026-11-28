@@ -41,7 +41,7 @@ flowchart LR
 | 指標 | 注入 |
 |------|------|
 | 序列帶 `tenant` 的指標（含平台不認得來源的客戶指標） | `tenant="<租戶>"` |
-| kube-state-metrics 有 namespace 的物件（例如 `kube_pod_*`）：以 `namespace` 指名租戶、不帶 `tenant` | `namespace="<租戶>", tenant=""` |
+| kube-state-metrics 有 namespace 的物件（例如 `kube_pod_*`），以及 cAdvisor 與 kubelet 的基礎設施指標（`container_*`、`kubelet_*`）：以 `namespace` 指名租戶、不帶 `tenant` | `namespace="<租戶>", tenant=""` |
 | 叢集層級的 kube-state-metrics 物件（例如 `kube_node_*`）、Prometheus／Alertmanager 自己的序列、每個抓取目標都有的序列（例如 `up`、`go_*`）、告警自己的序列（`ALERTS`） | 拒絕：沒有一種注入只選到一個租戶，這是平台層級的規則 |
 
 原式子已有的 `tenant`／`namespace` matcher 不是上表那個等值時拒絕；selector 沒有以等值點名指標名時也拒絕（不知道它讀哪些序列）。

@@ -2364,7 +2364,7 @@ The expr semantics, `for`, labels, annotations and alertname are kept as written
     | Metric | Injected |
     |--------|----------|
     | A metric whose series carry `tenant` (including customer metrics whose source the platform does not know) | `tenant="<ID>"` |
-    | kube-state-metrics series of a namespaced object (for example `kube_pod_*`) | `namespace="<ID>", tenant=""` |
+    | kube-state-metrics series of a namespaced object (for example `kube_pod_*`), cAdvisor's and the kubelet's infrastructure series (`container_*`, `kubelet_*`) | `namespace="<ID>", tenant=""` |
     | kube-state-metrics series of a cluster-scoped object (for example `kube_node_*`), Prometheus' / Alertmanager's own series, series every scrape target yields (for example `up`, `go_*`), `ALERTS` | refused: a platform-level rule, not migrated per tenant |
 
     A `tenant` / `namespace` matcher already in the expression that is not the equality above, or a selector that names no metric by equality, is refused as well.

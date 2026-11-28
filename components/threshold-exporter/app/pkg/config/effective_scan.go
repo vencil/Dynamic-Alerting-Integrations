@@ -81,7 +81,7 @@ func ResolveEffectiveFromScan(scan *TreeScan, tenantID string, now time.Time) (*
 		return nil, err
 	}
 	r := newEffectiveResolver(view)
-	built, err := loadDirBuild(view, view.AbsRoot, discardLogger, discardLogger.Printf)
+	built, err := loadDirBuild(view, view.AbsRoot, discardLogger, discardLogger.Printf, now)
 	if err != nil {
 		return nil, err
 	}

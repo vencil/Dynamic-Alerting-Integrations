@@ -41,7 +41,7 @@ The metric a selector reads decides (`_lib_metric_sources.pin_form`, the platfor
 | Metric | Injected |
 |--------|----------|
 | A metric whose series carry `tenant` (including customer metrics whose source the platform does not know) | `tenant="<tenant>"` |
-| kube-state-metrics series of a namespaced object (for example `kube_pod_*`): they name the tenant by `namespace` and carry no `tenant` | `namespace="<tenant>", tenant=""` |
+| kube-state-metrics series of a namespaced object (for example `kube_pod_*`), and cAdvisor's and the kubelet's infrastructure series (`container_*`, `kubelet_*`): they name the tenant by `namespace` and carry no `tenant` | `namespace="<tenant>", tenant=""` |
 | kube-state-metrics series of a cluster-scoped object (for example `kube_node_*`), Prometheus' / Alertmanager's own series, series every scrape target yields (for example `up`, `go_*`), an alert's own series (`ALERTS`) | refused: no injection selects one tenant; this is a platform-level rule |
 
 A `tenant` / `namespace` matcher already in the expression that is not the equality above is refused; so is a selector that names no metric by equality (which series it reads is not known).
