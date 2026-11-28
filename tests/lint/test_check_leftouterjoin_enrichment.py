@@ -74,6 +74,29 @@ def test_set_operators_and_unrelated_matches_pass(expr):
     assert lint.expr_violations(expr) == []
 
 
+# #4264: read on the tree, so the text forms the regex could not tell apart.
+@pytest.mark.parametrize("expr", [
+    "x and on(tenant) (sum(tenant_metadata_info) * y)",   # deeper inside a set operand
+    "x unless on(tenant) max by (tenant, owner) (tenant_metadata_info)",
+    'x * on(tenant) group_left(owner) {__name__="tenant_metadata_info"}',
+])
+def test_the_tree_sees_what_the_text_scan_could_not(expr):
+    assert lint.expr_violations(expr), expr
+
+
+@pytest.mark.parametrize("expr", [
+    'x > 1 # tenant_metadata_info in a comment',
+    'label_replace(x, "y", "tenant_metadata_info", "", "") > 1',
+])
+def test_a_name_outside_a_selector_is_not_a_read(expr):
+    assert lint.expr_violations(expr) == [], expr
+
+
+def test_an_expr_the_parser_refuses_is_named():
+    with pytest.raises(lint._lib_consumer_read.InputRefused, match="tenant_metadata_info"):
+        lint.expr_violations("x and on(tenant tenant_metadata_info")
+
+
 def test_a_set_operand_beside_a_join_does_not_excuse_the_join():
     expr = ("(x * on(tenant) group_left(owner) tenant_metadata_info)\n"
             "or (x unless on(tenant) tenant_metadata_info)")

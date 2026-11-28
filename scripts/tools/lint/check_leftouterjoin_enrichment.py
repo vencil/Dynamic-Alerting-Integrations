@@ -91,10 +91,8 @@ def metadata_annotation(label: str) -> str:
 METADATA_ANNOTATIONS: Dict[str, str] = {lbl: metadata_annotation(lbl) for lbl in METADATA_LABELS}
 
 # `and` / `unless` only: `or` copies the right-hand series and their labels.
-_SET_OPERAND = re.compile(
-    r"\b(?:and|unless)\s*(?:(?:on|ignoring)\s*\([^)]*\)\s*)?\(?\s*"
-    r"tenant_metadata_info\b(?:\s*\{[^}]*\})?", re.IGNORECASE)
-_TMI = re.compile(r"\btenant_metadata_info\b")
+_SET_OPS = ("and", "unless")
+_TMI = "tenant_metadata_info"
 _ALT = "|".join(METADATA_LABELS)
 # Reads of a metadata label off the alert (or any sample) outside the canonical
 # templates: `$labels.tier`, `.Labels.tier`, `index $labels "tier"`.
@@ -115,18 +113,44 @@ def _repo_root() -> Path:
     return require_project_root(_THIS_DIR)
 
 
-def expr_violations(expr: str) -> List[str]:
-    """Pure core: why *expr* joins tenant metadata (empty list = it does not)."""
-    allowed = [m.span() for m in _SET_OPERAND.finditer(expr)]
-    bad = [m for m in _TMI.finditer(expr)
-           if not any(s <= m.start() and m.end() <= e for s, e in allowed)]
+def _unparen(node: dict) -> dict:
+    while node.get("kind") == "paren":
+        node = node["expr"]
+    return node
+
+
+def _reads_tmi(node: dict) -> bool:
+    return node.get("kind") == "selector" and _TMI in _lib_consumer_read.shape_metric_names(node)
+
+
+def tree_violations(expr: str, tree: dict) -> List[str]:
+    """Why *expr*, whose Prometheus tree is *tree*, joins tenant metadata
+    (empty list = it does not). `tenant_metadata_info` may only be the whole
+    right side of an `and` / `unless` (in parentheses or not): a set operator
+    keeps the left side's labels and adds none. Anywhere else — a vector match,
+    `or`, an aggregation, deeper inside a set operand — its labels can reach
+    the result (#3483). Read on the tree (#4264), never off the text."""
+    allowed = set()
+    for node in _lib_consumer_read.shape_nodes(tree):
+        if node.get("kind") == "binary" and node["op"] in _SET_OPS:
+            rhs = _unparen(node["rhs"])
+            if _reads_tmi(rhs):
+                allowed.add(id(rhs))
+    bad = [n for n in _lib_consumer_read.shape_nodes(tree) if _reads_tmi(n) and id(n) not in allowed]
     if not bad:
         return []
+    raw = expr.encode("utf-8")
     m = bad[0]
-    context = " ".join(expr[max(0, m.start() - 60):m.end() + 20].split())
+    context = " ".join(raw[max(0, m["start"] - 60):m["end"] + 20].decode("utf-8", "replace").split())
     return [f"uses `tenant_metadata_info` outside a set operator (…{context}…) — "
             f"a metadata join; show metadata through annotations "
             f"(METADATA_ANNOTATIONS) instead"]
+
+
+def expr_violations(expr: str) -> List[str]:
+    """`tree_violations` of one expr, read here; an expr Prometheus' parser
+    refuses raises `_lib_consumer_read.InputRefused` naming it."""
+    return tree_violations(expr, _lib_consumer_read.promql_shape_each([expr], raise_refused=True)[0])
 
 
 def template_violations(field: str, value: str) -> List[str]:
@@ -145,12 +169,13 @@ def template_violations(field: str, value: str) -> List[str]:
     return out
 
 
-def rule_violations(rule: dict) -> List[str]:
-    """Pure core: every violation of one rule (an alert or a recording rule)."""
+def rule_violations(rule: dict, tree: "dict | None" = None) -> List[str]:
+    """Every violation of one rule (an alert or a recording rule); *tree* is
+    its expr's Prometheus tree, read here when not given."""
     out = []
     expr = rule.get("expr")
     if isinstance(expr, str):
-        out += expr_violations(expr)
+        out += tree_violations(expr, tree) if tree is not None else expr_violations(expr)
     for section in ("annotations", "labels"):
         for k, v in (rule.get(section) or {}).items():
             if isinstance(v, str):
@@ -190,12 +215,18 @@ def main() -> int:
                 print(f"ERROR: {rel}: Prometheus' rule loader refuses it: {rf.problem}",
                       file=sys.stderr)
                 return EXIT_CALLER_ERROR
-            for grp in rf.groups:
-                for rule in grp.get("rules") or []:
-                    name = rule.get("alert") or rule.get("record")
-                    for why in rule_violations(rule):
-                        violations += 1
-                        print(f"  ❌ {rel}:{name}: {why}")
+            rules = [r for grp in rf.groups for r in grp.get("rules") or []]
+            try:
+                trees = _lib_consumer_read.promql_shape_each(
+                    [str(r.get("expr") or "") for r in rules], raise_refused=True)
+            except _lib_consumer_read.ConsumerReadError as exc:
+                print(f"ERROR: {rel}: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+                return EXIT_CALLER_ERROR
+            for rule, tree in zip(rules, trees):
+                name = rule.get("alert") or rule.get("record")
+                for why in rule_violations(rule, tree):
+                    violations += 1
+                    print(f"  ❌ {rel}:{name}: {why}")
 
     if violations:
         print(f"\n❌ {violations} metadata violation(s). Alerts carry no metadata labels "
