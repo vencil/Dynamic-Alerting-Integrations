@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/alertmanager/alert"
 	"github.com/prometheus/alertmanager/config"
 	"github.com/prometheus/alertmanager/config/common"
 	"github.com/prometheus/alertmanager/dispatch"
@@ -26,7 +27,6 @@ import (
 	"github.com/prometheus/alertmanager/inhibit"
 	"github.com/prometheus/alertmanager/pkg/labels"
 	"github.com/prometheus/alertmanager/provider/mem"
-	"github.com/prometheus/alertmanager/types"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 )
@@ -173,7 +173,7 @@ func mutedBy(t *testing.T, rules []common.InhibitRule, src, tgt model.LabelSet) 
 	go ih.Run()
 	defer ih.Stop()
 	now := time.Now()
-	a := &types.Alert{Alert: model.Alert{Labels: src, StartsAt: now.Add(-time.Minute),
+	a := &alert.Alert{Alert: model.Alert{Labels: src, StartsAt: now.Add(-time.Minute),
 		EndsAt: now.Add(time.Hour)}, UpdatedAt: now}
 	if err := ap.Put(context.Background(), a); err != nil {
 		t.Fatal(err)
