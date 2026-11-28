@@ -4,7 +4,7 @@
 # Purpose:
 #   Single source of truth for `mkdocs build` strict-mode validation.
 #   Both the local `make lint-docs-mkdocs` target and the CI
-#   `MkDocs Build Verification` job source this script. DRY: filter
+#   `Documentation Checks` job source this script. DRY: filter
 #   logic lives here only.
 #
 # Why a separate strict check:
@@ -102,7 +102,7 @@ mkdocs build 2>&1 | tee "$LOG_FILE"
 # --- Known-acceptable warning filters ----------------------------------------
 # Each filter must match the EXACT warning verbatim from `mkdocs build`.
 # Keep this list in sync with the CI workflow `.github/workflows/docs-ci.yaml`
-# `MkDocs Build Verification` job — both source THIS script, so the list
+# `Documentation Checks` job — both source THIS script, so the list
 # lives here only. Maintainers: add a comment per filter explaining why
 # the warning class is project-known-acceptable.
 # ⛔ `-a` and `LC_ALL=C` on EVERY stage, not just the one that opens the file.
