@@ -13,9 +13,10 @@ TWO HALVES.
   referenced only in ``scripts/tools/_lib_prompt.py``. A reference counts,
   not only a call — ``f = input`` and ``builtins.input`` /
   ``from builtins import input`` / ``getattr(builtins, "input")`` too.
-* The behaviour: the three tools that ask (scaffold-tenant, init,
-  ``migrate-rule --interactive``) run with stdin ``/dev/null`` end at rc 2,
-  not the test crash code, with no traceback and the flag named.
+* The behaviour: the tools that ask (scaffold-tenant, init) run with stdin
+  ``/dev/null`` end at rc 2, not the test crash code, with no traceback and
+  the flag named. (migrate-rule asked under ``--interactive`` until #4226
+  removed the flag: it no longer guesses anything to confirm.)
 
 ⚠️ WHAT THE RATCHET CANNOT CATCH (it reads names, not values): a name built
 at run time (``getattr(builtins, "in" + "put")``), ``builtins.__dict__``,
@@ -143,11 +144,6 @@ def test_ctrl_c_is_not_turned_into_a_caller_error(monkeypatch) -> None:
 
 # ── the tools, with stdin /dev/null ──────────────────────────────────
 
-_RULES = ("groups:\n- name: g\n  rules:\n  - alert: Busy\n"
-          "    expr: rate(app_requests_total[5m]) > 5\n"
-          "    labels: {severity: warning}\n")
-
-
 def _run(argv: "list[str]", *, env: "dict[str, str] | None" = None):
     with open(os.devnull, "rb") as null:
         return subprocess.run([sys.executable, *argv], stdin=null,
@@ -176,23 +172,3 @@ def test_init_names_non_interactive(tmp_path) -> None:
     proc = _run([str(TOOLS / "ops" / "init_project.py"), "-o", str(tmp_path / "repo")])
     _assert_named_caller_error(proc, "--non-interactive")
     assert not (tmp_path / "repo").exists()
-
-
-@pytest.mark.usefixtures("da_read_env")
-def test_migrate_rule_interactive_names_dropping_the_flag(tmp_path) -> None:
-    rules = tmp_path / "rules.yml"
-    rules.write_text(_RULES, encoding="utf-8")
-    proc = _run([str(TOOLS / "ops" / "migrate_rule.py"), str(rules), "--dry-run",
-                 "--interactive"])
-    _assert_named_caller_error(proc, "--interactive")
-    assert "不帶 --interactive 重跑" in proc.stderr, proc.stderr[-1500:]
-
-
-@pytest.mark.usefixtures("da_read_env")
-def test_migrate_rule_control_without_interactive_does_not_ask(tmp_path) -> None:
-    """Pairs with the case above: the same file without --interactive is not
-    a caller error, so that case's rc 2 comes from the prompt."""
-    rules = tmp_path / "rules.yml"
-    rules.write_text(_RULES, encoding="utf-8")
-    proc = _run([str(TOOLS / "ops" / "migrate_rule.py"), str(rules), "--dry-run"])
-    assert proc.returncode == 0, (proc.stdout + proc.stderr)[-1500:]

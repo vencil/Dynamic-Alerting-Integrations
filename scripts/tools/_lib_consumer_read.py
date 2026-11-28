@@ -1044,6 +1044,56 @@ def shape_nodes(node: dict):
         stack.extend(reversed(children))
 
 
+def _pin_answer_ok(a) -> bool:
+    """One ``promql-pin`` answer as documented: a conflict alone, or an expr
+    with its ``selectors`` (each a legacy/pinned pair of strings)."""
+    if not isinstance(a, dict):
+        return False
+    if set(a) == {"conflict"}:
+        return isinstance(a["conflict"], str)
+    if set(a) not in ({"expr"}, {"expr", "selectors"}) or not isinstance(a["expr"], str):
+        return False
+    sels = a.get("selectors", [])
+    return isinstance(sels, list) and all(
+        isinstance(x, dict) and set(x) == {"legacy", "pinned"}
+        and all(isinstance(v, str) for v in x.values()) for x in sels)
+
+
+def promql_pin(tenant: str, exprs: "list[str]", namespace_form: "list[str]" = (),
+               binary: str | None = None, *, rename: "dict[str, str] | None" = None
+               ) -> "list[dict]":
+    """⛔ THE one rewrite that pins a PromQL expression to a tenant (#4226,
+    migrate-rule's migrated rules): per expression of *exprs*, ``{"expr":
+    <it, every selector pinned>, "selectors": [{"legacy", "pinned"}, …]}``
+    (its distinct selectors as instant selectors, before and after) or
+    ``{"conflict": "<selector>: <why>"}``
+    (``da-read promql-pin``, on Prometheus' parse tree and printed by
+    Prometheus). A selector of a metric in *namespace_form* — one whose
+    series carry no ``tenant`` (``_lib_metric_sources.tenant_presence``
+    "without") — gets ``namespace="<t>", tenant=""``, every other one
+    ``tenant="<t>"``; a matcher on that label that is not that equality is a
+    conflict, never overwritten. *rename* moves a metric's selectors to
+    another name (the caller's own recording rules; the pin is judged by the
+    name as written). An expression the parser refuses raises
+    ``InputRefused``."""
+    resolved = da_read_binary(binary)
+    data = json.dumps({"tenant": tenant, "namespace_form": sorted(set(namespace_form)),
+                       "rename": dict(rename or {}),
+                       "expressions": list(exprs)}).encode("utf-8")
+    out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
+               ["promql-pin", "-"], data)
+    docs = out.get("documents")
+    ok = (isinstance(docs, list) and len(docs) == 1 and isinstance(docs[0], list)
+          and len(docs[0]) == len(exprs)
+          and all(_pin_answer_ok(a) for a in docs[0]))
+    if not ok:
+        _fault(DA_READ_BINARY_NAME, ["promql-pin"], "stale")
+        raise ConsumerReadError(
+            f"{DA_READ_BINARY_NAME} printed JSON without one answer per expression "
+            "(an older da-read? rebuild it)")
+    return docs[0]
+
+
 def promql_shape_each(exprs: "list[str]", binary: str | None = None, *,
                       raise_refused: bool = False) -> "list[dict | InputRefused]":
     """``promql_shape`` that does not lose the batch to one refusal: per
