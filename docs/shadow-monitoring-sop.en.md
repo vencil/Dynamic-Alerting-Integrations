@@ -110,6 +110,8 @@ docker run --rm --network=host \
 
 ### 3.2 K8s Job (Recommended for Production)
 
+⚠️ The Job below uses the v2.9.0 image, whose validate is still the numeric comparison and cannot read the new migration mapping; until the next image is released, do not deploy this Job: run §3.1's `python3 scripts/tools/ops/validate_migration.py … --watch` from the repo on a machine that reaches Prometheus. <!-- image-caveat: v2.9.0 -->
+
 ```yaml
 apiVersion: batch/v1
 kind: Job
@@ -203,6 +205,7 @@ grep ',mismatch,' validation_output/validation-report.csv | head -20
 curl -s http://localhost:9090/api/v1/query --data-urlencode \
   'query=max_over_time(ALERTS{alertname="<alert name>", da_migrated="true", tenant="db-a", alertstate="firing"}[5m])' | python3 -m json.tool
 # the legacy side is asked on the Prometheus of the legacy rules (the --legacy-prometheus one, when given)
+export LEGACY_PROMETHEUS=<the URL given to --legacy-prometheus>   # skip it when no --legacy-prometheus was given: both sides are one server
 curl -s "${LEGACY_PROMETHEUS:-http://localhost:9090}/api/v1/query" --data-urlencode \
   'query=max_over_time(ALERTS{alertname="<alert name>", da_migrated="", alertstate="firing"}[5m])' | python3 -m json.tool
 ```
@@ -362,6 +365,8 @@ docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 diagnose db-a
 ```
 
 ### 7.2 Rollback (If Issues Occur)
+
+⚠️ The re-validation command below uses the v2.9.0 image; until the next image is released, run it from the repo as `python3 scripts/tools/ops/validate_migration.py` (the same arguments). <!-- image-caveat: v2.9.0 -->
 
 ```bash
 # 1. Restore old Recording Rules (if original YAML preserved)

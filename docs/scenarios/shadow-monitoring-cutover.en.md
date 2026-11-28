@@ -120,7 +120,7 @@ python3 scripts/tools/ops/validate_migration.py \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
   --auto-detect-convergence --stability-window 5
-  # stability-window=5: 5 consecutive clean rounds (every rule loaded, a clean pre-check, no mismatch, nothing unverifiable) → convergence declared; convergence counts rounds, the time covered is rounds × --interval
+  # stability-window=5: 5 consecutive clean rounds (every rule loaded, a clean pre-check, no mismatch, nothing unverifiable) → convergence declared; this only shows the flags: 5 rounds cover about 4 × --interval, the 7-day setting is in Phase 3
 ```
 
 Output: `validation_output/cutover-readiness.json` (fields `ready`, `timestamp`, `tenant`, `round_count`, `stability_window`, `clean_rounds`, `last_round`, `recommendation`). `cutover` accepts only a readiness of the same tenant. Use `da-tools shadow-verify convergence --readiness-json <path>` to auto-interpret.
@@ -238,12 +238,12 @@ kubectl rollout restart deployment alertmanager -n monitoring
 What cannot be verified never passes; cutting over then takes `cutover --force`.
 
 ```bash
-# 3.1 Start parallel validation (2016 consecutive clean rounds = 2016 × 300 s = 7 days write cutover-readiness.json and stop; convergence counts rounds, the time is rounds × --interval)
+# 3.1 Start parallel validation (2017 consecutive clean rounds write cutover-readiness.json and stop: after the first round each round waits 300 s, so 2017 rounds = 2016 waits = at least 7 days; convergence counts rounds. The queries of each round leave small gaps between windows: the coverage is not seamless)
 python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
-  --auto-detect-convergence --stability-window 2016 \
+  --auto-detect-convergence --stability-window 2017 \
   -o validation_output/
 
 # 3.2 Daily inspection (automated via shadow-verify)
@@ -434,12 +434,12 @@ kubectl patch configmap alertmanager-config -n monitoring \
 To accept higher risk and speed up validation:
 
 ```bash
-# Declare convergence at 288 consecutive clean rounds (288 × 300 s = 1 day)
+# Declare convergence at 289 consecutive clean rounds (288 waits of 300 s = at least 1 day)
 python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 576 \
-  --auto-detect-convergence --stability-window 288
+  --auto-detect-convergence --stability-window 289
 
 # The validation period drops from 7 days to 1 day; keep --rounds above --stability-window to leave room to converge
 # Risk: a short observation misses alerts that fire only at business peaks, off-peak or in maintenance windows
