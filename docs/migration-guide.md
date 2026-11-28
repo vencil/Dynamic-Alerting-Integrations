@@ -137,7 +137,7 @@ python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner
 - **多叢集**：原式子點名身分 label 卻沒有 `da_cluster` 的 `by(...)`／`on(...)` 只在報告標出，不改寫
 - **輸出**：`.migration/migrated/<tenant>/rules.yml`（規則檔）、`.migration/mapping/<tenant>.yaml`（每條規則的 selector 注入前後對照）、`migration-report-<tenant>.txt`
 
-⛔ 規則檔由**抓取原始指標的那台 Prometheus** 載入（單一 Prometheus，或 federation 架構下的 edge），不掛進平台 Rule Pack 的 projected volume。Alertmanager 把 `da_migrated="true"` 的告警送到只有名字的 shadow receiver，直到租戶設 `_routing_migrated: active`（[`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)）；其他平台路由與每條 inhibit rule 的 source 都排除它，migrated 告警不會被平台路由攔走、也不靜音任何告警；影子比對之後，再由人決定提升成平台規則（§8 的三件套）或 recipe。
+⛔ 規則檔由**抓取原始指標的那台 Prometheus** 載入（單一 Prometheus，或 federation 架構下的 edge），不掛進平台 Rule Pack 的 projected volume。Alertmanager 把 `da_migrated="true"` 的告警送到只有名字的 shadow receiver，直到租戶設 `_routing_migrated: active`（[`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)）；其他平台路由與每條 inhibit rule 的 source 都排除它，migrated 告警不會被平台路由攔走、也不經它們靜音別的告警（產生器的規則與 repo 自帶的 base；你自己寫在 base 的 inhibit rule 若沒排除，`--strict` 下拒絕、結束碼 1，不帶 `--strict` 時只 WARN、規則照留，仍可能靜音）；影子比對之後，再由人決定提升成平台規則（§8 的三件套）或 recipe。
 
 引擎細節（注入方式對照、recording rule 連帶遷移、拒絕條件）：[`migration-engine.md`](migration-engine.md)。CLI flag 與結束碼：[`cli-reference.md#migrate`](cli-reference.md#migrate)。
 

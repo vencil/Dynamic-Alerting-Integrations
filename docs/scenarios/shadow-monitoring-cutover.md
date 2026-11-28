@@ -222,9 +222,9 @@ kubectl rollout restart deployment alertmanager -n monitoring
 > ⚠️ **新版 migrate 的產出目前接不上 3.1 之後的自動驗證與切換**：它寫的是 `.migration/mapping/db-a.yaml`，`validate_migration.py` 讀它的支援在 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)。在那之前 3.1 只適用舊版 migrate 的 `prefix-mapping.yaml`，也就產不出 3.2 與階段 4 要的 `validation-report.csv`、`cutover-readiness.json`。新產出在 #4227 之前只能手動比對，且**告警數量一致不算收斂**：
 >
 > 1. **selector 有沒有選到資料**：對 mapping 每一組 `legacy`／`pinned`，在目標 Prometheus 各跑一次 `count(<selector>)`。legacy 有、pinned 沒有的，代表注入選不到——常見原因是它其實是另一個規則檔的 recording rule，而那邊沒寫 `tenant`。
-> 2. **告警的 label 組合**：shadow 期間反覆查以下兩式（`alertstate` 換成 `pending` 再查一次），兩邊都應為空。兩側都要先限定到同一個租戶——否則 `ignoring(tenant)` 會讓別的租戶的同名告警遮掉這個租戶的差異。migrated 側用 `tenant="db-a"`；legacy 側的 `<legacy 的租戶 matcher>` 照該告警輸出帶的 label 填 `tenant="db-a"` 或 `namespace="db-a"`，聚合後兩者都不剩的告警無法用這兩式分租戶，要逐條人工比對。`MigratedRulesExpiring` 是新增的到期告警，沒有對應的 legacy 告警：它不帶 `da_migrated`，migrated 側選不到它，legacy 側由 `<本檔告警名>` 排除；`<本檔告警名>` 填遷移檔裡的 alertname。兩側都保留序列自己的 `component`，所以 `ignoring` 只略過 `tenant` 與 `da_migrated`。
+> 2. **告警的 label 組合**：shadow 期間反覆查以下兩式（`alertstate` 換成 `pending` 再查一次），兩邊都應為空。兩側都要先限定到同一個租戶——否則 `ignoring(tenant)` 會讓別的租戶的同名告警遮掉這個租戶的差異。migrated 側用 `tenant="db-a"`；legacy 側的 `<legacy 的租戶 matcher>` 照該告警輸出帶的 label 填 `tenant="db-a"` 或 `namespace="db-a"`，聚合後兩者都不剩的告警無法用這兩式分租戶，要逐條人工比對。`MigratedRulesExpiring` 是新增的到期告警，沒有對應的 legacy 告警。它不帶 `da_migrated`，所以 migrated 側選不到它，但它帶 `tenant="db-a"`，legacy 側選得到：legacy 側因此明寫 `alertname!="MigratedRulesExpiring"`；`<本檔告警名>` 填原本 legacy 規則檔裡的 alertname。兩側都保留序列自己的 `component`，所以 `ignoring` 只略過 `tenant` 與 `da_migrated`。
 >    - 只在 migrated 響：`ALERTS{da_migrated="true", tenant="db-a", alertstate="firing"} unless ignoring(tenant, da_migrated) ALERTS{da_migrated="", <legacy 的租戶 matcher>, alertstate="firing"}`
->    - 只在 legacy 響：`ALERTS{da_migrated="", <legacy 的租戶 matcher>, alertstate="firing", alertname=~"<本檔告警名>"} unless ignoring(tenant, da_migrated) ALERTS{da_migrated="true", tenant="db-a", alertstate="firing"}`
+>    - 只在 legacy 響：`ALERTS{da_migrated="", <legacy 的租戶 matcher>, alertstate="firing", alertname=~"<本檔告警名>", alertname!="MigratedRulesExpiring"} unless ignoring(tenant, da_migrated) ALERTS{da_migrated="true", tenant="db-a", alertstate="firing"}`
 
 ```bash
 # 3.1 啟動並行驗證（只適用舊版 migrate 的 prefix-mapping.yaml，見上方說明）

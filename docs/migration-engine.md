@@ -66,7 +66,7 @@ flowchart LR
 - `.migration/mapping/<租戶>.yaml` — 每條規則的 group、alert 或 record，與 selector 注入前（`legacy`）後（`pinned`）的 instant selector；record 另有 `migrated_record`（改名後的名字），到期伴隨告警帶 `added: true`。⚠️ `validate-migration` 目前還不讀這份檔（它讀的是舊的 `prefix-mapping.yaml`），接上它是 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227) 的範圍；在那之前影子比對要另行比較 legacy 與 `da_migrated="true"` 的告警。
 - `migration-report-<租戶>.txt` — 遷移報告（每個租戶一份）。沒有要遷移的規則時只印報告、不寫檔；`-o` 裡還留著該租戶先前的規則檔或對照時印 `[WARN]` 點名它們。
 
-**切換**：`da_migrated="true"` 的告警在 Alertmanager 先送到只有名字的 shadow receiver，租戶設 `_routing_migrated: active` 才與它的其他告警走同一條路（[`generate-routes`](cli-reference.md#generate-routes)）。其他平台路由（Watchdog、custom 隔離、synthetic probe、sentinel sink）與每條 inhibit rule 的 source 都排除 `da_migrated`：migrated 告警不會被它們攔走，也不靜音任何告警；代價是切換後帶 `component=custom` 的 migrated 告警不走 custom 隔離，而 migrated critical 不 dedup 平台的 warning（反方向保留）（[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）。影子比對之後，提升成平台規則或 recipe 由人決定。
+**切換**：`da_migrated="true"` 的告警在 Alertmanager 先送到只有名字的 shadow receiver，租戶設 `_routing_migrated: active` 才與它的其他告警走同一條路（[`generate-routes`](cli-reference.md#generate-routes)）。其他平台路由（Watchdog、custom 隔離、synthetic probe、sentinel sink）與每條 inhibit rule 的 source 都排除 `da_migrated`：migrated 告警不會被它們攔走，也不經它們靜音別的告警（產生器的規則與 repo 自帶的 base；你自己寫在 base 的 inhibit rule 若沒排除，`--strict` 下拒絕、結束碼 1，不帶 `--strict` 時只 WARN、規則照留，仍可能靜音）；代價是切換後帶 `component=custom` 的 migrated 告警不走 custom 隔離，而 migrated critical 不 dedup 平台的 warning（反方向保留）（[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）。影子比對之後，提升成平台規則或 recipe 由人決定。
 
 完整 flag 與結束碼：[`cli-reference.md#migrate`](cli-reference.md#migrate)。
 
