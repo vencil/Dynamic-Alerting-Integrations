@@ -626,7 +626,10 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 //     (value_not_served's selection), a key nothing of is served (the
 //     exporter's NotServed record; the shared key verdict reads it as
 //     unread) — both config.NotServedOwnedElsewhere — or a `disable` that
-//     switches nothing off (the shared key verdict's own `disable: noop`).
+//     switches nothing off (the shared key verdict's own `disable: noop`,
+//     asked whenever a line is left unchanged: which `disable` switches
+//     nothing off at some minute is the key verdict's to say, not a guess at
+//     the value here).
 //     A retired key the exporter still serves is not one: its retirement and
 //     its repeating the inherited value are two causes, two findings.
 //
@@ -655,7 +658,7 @@ func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[s
 		log.Printf("WARN: redundant_override not judged for threshold keys: %v", err)
 		return nil
 	}
-	disables := false // an unchanged line written as a disable word: the key verdict says whether it switches anything off
+	asks := false // an unchanged line the key verdict may own (a `disable` that switches nothing off)
 	for tenant, keys := range out {
 		for key, same := range keys {
 			if !same {
@@ -665,12 +668,10 @@ func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[s
 				keys[key] = false
 				continue
 			}
-			if writesDisable(overrides[tenant][key]) {
-				disables = true
-			}
+			asks = true
 		}
 	}
-	if !disables {
+	if !asks {
 		return out
 	}
 	root := scoped.ScanRoot() // the tree the counterfactual built, whatever --config-dir spelled
@@ -687,28 +688,22 @@ func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[s
 		log.Printf("WARN: redundant_override not judged for threshold keys (the key verdict: %v)", err)
 		return nil
 	}
+	// The key verdict spells a key as the tenant's file does; the candidates
+	// are the decode's (canonical dimensional) spelling: compare canonically.
 	for tenant, vs := range kv.tree.Keys {
+		noop := map[string]bool{}
 		for _, v := range vs {
-			if v.Layer != nil && *v.Layer == "tenant" && v.Disable != nil && *v.Disable == "noop" && out[tenant] != nil {
-				if _, asked := out[tenant][v.Key]; asked {
-					out[tenant][v.Key] = false
-				}
+			if v.Layer != nil && *v.Layer == "tenant" && v.Disable != nil && *v.Disable == "noop" {
+				noop[config.CanonicalDimensionalKey(v.Key)] = true
+			}
+		}
+		for key := range out[tenant] {
+			if noop[config.CanonicalDimensionalKey(key)] {
+				out[tenant][key] = false
 			}
 		}
 	}
 	return out
-}
-
-// writesDisable reports whether v, a tenant value as yaml.v3 decodes it,
-// writes a disable word as itself or as a schedule's `default:` — the lines
-// whose `disable` may switch nothing off (redundantThresholds asks the key
-// verdict only then).
-func writesDisable(v any) bool {
-	if m, ok := v.(map[string]any); ok {
-		v = m["default"]
-	}
-	s, ok := v.(string)
-	return ok && config.IsDisabled(strings.ToLower(strings.TrimSpace(s)))
 }
 
 // buildCheckInput assembles a guard.CheckInput from the scoped

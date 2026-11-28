@@ -235,3 +235,12 @@ func (s *ScopedTenants) ScanRoot() string {
 func NotServedOwnedElsewhere(key, reason string) bool {
 	return ValueNotServedAsWritten(key, reason) || !notServedKeyServed(reason)
 }
+
+// CanonicalDimensionalKey is key in the canonical dimensional spelling the
+// decode gives it (label order and spacing are not kept), or key itself when
+// it is no dimensional key: two spellings of one tenant key compare equal
+// through it (#4330).
+func CanonicalDimensionalKey(key string) string {
+	canon, _ := canonicalDimensionalKey(key)
+	return canon
+}

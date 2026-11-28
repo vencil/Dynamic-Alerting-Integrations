@@ -90,6 +90,17 @@ func TestGuard_RedundantOverrideIsTheCounterfactual(t *testing.T) {
 			map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 100\n",
 				"tx.yaml": "tenants:\n  tx:\n    mysql_threads_running:\n      default: disable\n      overrides:\n        - {window: \"01:00-02:00\", value: disable}\n"},
 			"mysql_threads_running", false},
+		// The key verdict spells the key as written; the decode re-spells it.
+		{"dimensional disable spelled out of canonical order",
+			map[string]string{"_defaults.yaml": "dimensions:\n  pg_connections: [env, db]\ndefaults:\n  pg_connections: 80\n",
+				"tx.yaml": "tenants:\n  tx:\n    pg_connections: disable\n    'pg_connections{env=\"p\",db=\"x\"}': disable\n"},
+			`pg_connections{env="p",db="x"}`, false},
+		// A `disable` only inside a window: the base is off, so it switches
+		// nothing off then — the key verdict's to say.
+		{"disable only inside a window, base switched off",
+			map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 80\n  pg_connections_critical: 90\n",
+				"tx.yaml": "tenants:\n  tx:\n    pg_connections: disable\n    pg_connections_critical:\n      default: \"90\"\n      overrides:\n        - {window: \"10:00-11:00\", value: disable}\n"},
+			"pg_connections_critical", false},
 		{"critical disable with no critical tier",
 			map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 100\n",
 				"tx.yaml": "tenants:\n  tx:\n    container_memory_critical: disable\n"},
