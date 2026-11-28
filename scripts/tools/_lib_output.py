@@ -42,7 +42,9 @@ class OutputWriteError(OSError):
     """An output entry could not write (or create the directory for) *path*.
 
     #1641. Raised by the two output entries (:func:`write_operator_output`,
-    :func:`write_repo_artifact`) and :func:`ensure_dir` in place of the bare
+    :func:`write_repo_artifact`), the runtime entries (:func:`make_runtime_dir`,
+    :func:`open_runtime_file`, :func:`write_runtime_file`; #3981) and
+    :func:`ensure_dir` in place of the bare
     ``OSError`` family, so that the ONE class of failure — "the output path is unusable" — has one name and
     one message shape across every tool, instead of a traceback at rc=1
     (which in this repo reads as EXIT_VIOLATION, "your config has a
@@ -133,6 +135,11 @@ OUTPUT_ENTRY_POINTS: dict[str, tuple[str, ...]] = {
                  "_lib_atomic_write.atomic_write_text"),
     # ``mkdir -p`` of an output directory, for either class.
     "directory": ("_lib_output.ensure_dir", "_lib_output.ensure_dir_or_die"),
+    # A private directory a service makes for its own running, and the files
+    # in it (#3981): 0700 / 0600, never through a symlink. Who may call them
+    # is derived (tests/shared/test_runtime_entry_callers.py).
+    "runtime": ("_lib_output.make_runtime_dir", "_lib_output.open_runtime_file",
+                "_lib_output.write_runtime_file"),
     # Not writers: they name the flag for a write made by other code — a raw
     # sink inside ``output_write``, the artifact's pre-read check.
     "names_flag_only": ("_lib_output.output_write", "_lib_output.check_repo_artifact",
@@ -663,6 +670,179 @@ def ensure_dir_or_die(
         ensure_dir(path, flag=flag, mode=mode)
     except OutputWriteError as exc:
         _die_on_write_error(exc, exit_code)
+
+
+# ---------------------------------------------------------------------------
+# #3981: the third class, RUNTIME — a directory a long-running service makes
+# for its own running (a work directory, the per-job directories in it) and
+# the files it puts there. Nothing in it is a result anyone reads after the
+# run, so neither an operator output nor an artifact: private to this euid,
+# the way ssh-agent and gpg-agent keep their socket directories.
+#
+# * a directory: never a symlink; one already there must be this euid's and
+#   give nothing to group or others (``mode & 0o077 == 0``); a new one, and
+#   every missing parent made for it, is 0700 whatever the umask. ⚠️ Only the
+#   directories this entry makes or accepts are judged: an existing parent
+#   that another uid can write to (no sticky bit) can still swap one of them
+#   after the check — the caller chooses where its private tree lives.
+# * a file: never written through a symlink or over a directory; what is
+#   there is unlinked and the file made anew, ``O_EXCL|O_NOFOLLOW``, 0600.
+#
+# The two functions below do the writes; the public entries turn their
+# OSError into :class:`OutputWriteError`. The write audit holds a runtime
+# write to them (``tests/ops/test_gsvc_runtime_writes.py``).
+# ---------------------------------------------------------------------------
+
+_O_RUNTIME = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+              | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0))
+_O_RUNTIME_DIR = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+                  | getattr(os, "O_CLOEXEC", 0))
+
+
+def _private_dir_problem(path: str, st: os.stat_result) -> Optional[OSError]:
+    """Why the directory entry *st* (an ``lstat`` of *path*) cannot be used
+    as a private directory, or None when it can."""
+    if stat.S_ISLNK(st.st_mode):
+        return NotADirectoryError(errno.ENOTDIR, "a symbolic link, not a directory", path)
+    if not stat.S_ISDIR(st.st_mode):
+        return FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), path)
+    euid = os.geteuid()
+    if st.st_uid != euid:
+        return PermissionError(errno.EPERM, f"owned by uid {st.st_uid}, not by this "
+                               f"process (euid {euid})", path)
+    mode = stat.S_IMODE(st.st_mode)
+    if mode & 0o077:
+        return PermissionError(errno.EPERM, f"mode {mode:04o} gives group or others "
+                               "access; a private directory is 0700", path)
+    return None
+
+
+def _make_private_dir(path: str, exist_ok: bool, parents: bool) -> None:
+    """The runtime directory write: see :func:`make_runtime_dir`. Raises the
+    plain OSError."""
+    try:
+        st: Optional[os.stat_result] = os.lstat(path)
+    except FileNotFoundError:
+        st = None
+    if st is None:
+        parent = os.path.dirname(os.path.abspath(path))
+        if parents and not os.path.lexists(parent):
+            # A missing parent is made by this same rule (blind review,
+            # #3981): a `jobs/` remade under a running service is 0700 too,
+            # not the umask's default.
+            _make_private_dir(parent, True, True)
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            if not exist_ok:
+                raise
+            st = os.lstat(path)  # made meanwhile: judged as one that was there
+        else:
+            # The name is opened without following a link and set through
+            # the descriptor: what the mkdir made, whatever the umask took.
+            try:
+                fd = os.open(path, _O_RUNTIME_DIR)
+            except OSError:
+                # A umask that takes the owner's read bit (0477) leaves a
+                # directory that cannot be opened to set its mode. It is not
+                # left behind half made — a later start would accept it — but
+                # removed; `rmdir` follows no link and removes nothing but an
+                # empty directory.
+                try:
+                    os.rmdir(path)
+                except OSError:
+                    pass
+                raise
+            try:
+                os.fchmod(fd, 0o700)
+            finally:
+                os.close(fd)
+            return
+    elif not exist_ok:
+        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), path)
+    problem = _private_dir_problem(path, st)
+    if problem is not None:
+        raise problem
+
+
+def _create_private_file(path: str) -> int:
+    """The runtime file write: see :func:`open_runtime_file`. Raises the
+    plain OSError."""
+    try:
+        st: Optional[os.stat_result] = os.lstat(path)
+    except FileNotFoundError:
+        st = None
+    if st is not None:
+        if stat.S_ISDIR(st.st_mode):
+            raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), path)
+        os.unlink(path)  # a file or a symlink: the name, never what it points at
+    return os.open(path, _O_RUNTIME, 0o600)
+
+
+def make_runtime_dir(path: Any, *, flag: Optional[str] = None, exist_ok: bool = True,
+                     parents: bool = False) -> None:
+    """Make (or accept) the private directory *path* of a runtime class
+    write (#3981).
+
+    * not there ⇒ ``mkdir`` 0700, then set to exactly 0700 through a
+      descriptor opened ``O_NOFOLLOW`` (one that cannot be opened — a umask
+      without the owner's read bit — is removed again and refused).
+      *parents*: missing parents are made first, by the same rule.
+    * there ⇒ accepted only when it is a directory — not a symlink, to one
+      or anywhere — owned by this euid, with ``mode & 0o077 == 0``. Its mode
+      is not changed. *exist_ok* False: there at all is ``File exists``, as
+      ``os.mkdir``.
+    * anything else ⇒ :class:`OutputWriteError` (``create directory``),
+      whose :attr:`~OutputWriteError.cause` is the reason (a symlink and a
+      file in its place: ``ENOTDIR`` / ``EEXIST``; someone else's or an open
+      directory: ``EPERM``)."""
+    p = os.fspath(path)
+    # `lstat("link/")` follows the link (blind review, #3981): the name is
+    # judged without its trailing separators, and a name whose last part is
+    # `.` or `..` names no entry of its own to judge.
+    p = p.rstrip(os.sep) or p
+    if os.path.basename(p) in (".", ".."):
+        exc = NotADirectoryError(errno.EINVAL, "the last part of the path is . or ..; "
+                                 "name the directory itself", p)
+        raise OutputWriteError(p, exc, flag=flag, action="create directory") from exc
+    try:
+        _make_private_dir(p, exist_ok, parents)
+    except OSError as exc:
+        raise OutputWriteError(p, exc, flag=flag, action="create directory") from exc
+
+
+def open_runtime_file(path: Any, *, flag: Optional[str] = None) -> int:
+    """Create the private file *path* of a runtime class write and return a
+    descriptor open for writing (#3981): the caller owns and closes it.
+
+    What is at *path* is unlinked first (a symlink is removed, never
+    followed); a directory there is refused (``EISDIR``). The file is made
+    ``O_CREAT|O_EXCL|O_NOFOLLOW``, 0600 (``O_CLOEXEC``, and ``O_BINARY``
+    where there is one). A failure is :class:`OutputWriteError`."""
+    p = os.fspath(path)
+    try:
+        return _create_private_file(p)
+    except OSError as exc:
+        raise OutputWriteError(p, exc, flag=flag) from exc
+
+
+def write_runtime_file(path: Any, content: bytes, *, flag: Optional[str] = None) -> None:
+    """Write *content* (bytes, as given) to the private file *path*, made by
+    :func:`open_runtime_file`. A failure to write or close it is
+    :class:`OutputWriteError`; nothing is done to the file by its name
+    after that (it is in the caller's private directory)."""
+    p = os.fspath(path)
+    fd = open_runtime_file(p, flag=flag)
+    try:
+        try:
+            fh = os.fdopen(fd, "wb")
+        except BaseException:
+            os.close(fd)
+            raise
+        with fh:
+            fh.write(content)
+    except OSError as exc:
+        raise OutputWriteError(p, exc, flag=flag) from exc
 
 
 def _output_write_names_target(exc: OSError, path: Any) -> bool:

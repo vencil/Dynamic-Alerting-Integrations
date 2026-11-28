@@ -2,8 +2,9 @@
 
 WHAT THIS GATE IS FOR
 ---------------------
-A tool's file writes are meant to go through the two entries of
-``_lib_output.OUTPUT_ENTRY_POINTS`` — an operator output or a repo artifact
+A tool's file writes are meant to go through the entries of
+``_lib_output.OUTPUT_ENTRY_POINTS`` — an operator output, a repo artifact,
+or (#3981) a runtime directory a service makes for its own running
 (``docs/internal/lint-policy.md``). The run-time write gate
 (``test_output_path_write_failure``) holds the tools that take an output
 flag to that, per flag. It never sees a tool with no such flag, or one that
@@ -28,7 +29,7 @@ moves code does not touch the list. Both lists are EXACT in both
 directions: a sink that is not listed is red, and so is an entry whose sink
 is gone.
 
-* ``DEBT`` — a write the two-class contract covers and that does not go
+* ``DEBT`` — a write the three-class contract covers and that does not go
   through an entry yet: a tracked repo file (``artifact``), a path a flag
   named (``operator``), a CI-provided file such as ``$GITHUB_OUTPUT``
   (``ci_env_file``: append, so operator), a working directory a flag named
@@ -211,32 +212,14 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/dx/suggest_related.py": {
         "main .write_text [artifact]": 1,
     },
-    "scripts/tools/ops/_gsvc_child.py": {
-        "_parent_dir os.mkdir [work_dir]": 1,
-        "_write_file os.fdopen [work_dir]": 1,
-        "apply_writes os.makedirs [work_dir]": 1,
-        "materialise os.makedirs [work_dir]": 1,
-        "materialise os.mkdir [work_dir]": 1,
-        "read_tree open(w) [work_dir]": 1,
-        "read_tree os.chmod [work_dir]": 1,
-    },
-    "scripts/tools/ops/generator_service.py": {
-        "Service._new_job_dir os.mkdir [work_dir]": 1,
-        "Service._new_self_check_dir os.mkdir [work_dir]": 1,
-        "Service._policy_now os.makedirs [work_dir]": 1,
-        "_prepare_work_dir os.makedirs [operator]": 1,
-        "_prepare_work_dir os.mkdir [work_dir]": 1,
-        "snapshot_policy open(w) [work_dir]": 1,
-        "snapshot_policy os.chmod [work_dir]": 1,
-    },
 }
 
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 25
+_DEBT_CEILING = 11
 
-#: Writes the two-class contract does not cover. Exact, not shrink-only.
+#: Writes the three-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
     "scripts/tools/_lib_atomic_write.py": {
         "_try_atomic os.chmod [entry]": 1,
@@ -259,6 +242,9 @@ REGISTERED: dict[str, dict[str, int]] = {
         "_operator_text io.open(w) [entry]": 1,
         "ensure_dir .mkdir [entry]": 1,
         "write_repo_artifact atomic_write_text() [entry]": 1,
+        # #3981: the runtime entries' private directory and file.
+        "_make_private_dir os.mkdir [entry]": 1,
+        "write_runtime_file os.fdopen [entry]": 1,
     },
     # #3756. The state file and the per-segment list beside it are the
     # measurement's own working files (in CI under $RUNNER_TEMP); the canaries

@@ -1301,7 +1301,14 @@ def test_limits_that_contradict_each_other_cost_the_work_dir_nothing(tmp_path, w
 _WORK_DIR_SHAPES = {
     # shape: the errno text the refusal must carry
     "a_file": "File exists",
-    "a_dangling_link": "File exists",
+    # #3981: a --work-dir is a private directory (the runtime entry): a
+    # symlink is refused whatever it points at, and so is a directory that
+    # is someone else's or gives group or others access.
+    "a_dangling_link": "a symbolic link, not a directory",
+    "a_link_to_a_private_directory": "a symbolic link, not a directory",
+    "open_to_others": "mode 0755 gives group or others access; a private directory is 0700",
+    "open_to_the_group": "mode 0710 gives group or others access; a private directory is 0700",
+    "another_uids": "owned by uid 65534, not by this process",
     "under_a_file": "Not a directory",
     "through_a_link_loop": "Too many levels of symbolic links",
     "a_name_too_long": "File name too long",
@@ -1333,6 +1340,23 @@ def test_a_work_dir_that_cannot_be_one_is_named_and_nothing_there_is_removed(
         kept = work
     elif shape == "a_dangling_link":
         symlink_or_skip(tmp_path / "nowhere", work)
+    elif shape == "a_link_to_a_private_directory":
+        outside.chmod(0o700)
+        (outside / "jobs" / "job-1").mkdir(parents=True)
+        kept = outside / "jobs" / "job-1" / "left"
+        kept.write_text("keep me", encoding="utf-8")
+        symlink_or_skip(outside, work)
+    elif shape in ("open_to_others", "open_to_the_group", "another_uids"):
+        # what a crashed run left in jobs/ stays: the refusal comes first
+        (work / "jobs" / "job-1").mkdir(parents=True)
+        kept = work / "jobs" / "job-1" / "left"
+        kept.write_text("keep me", encoding="utf-8")
+        work.chmod({"open_to_others": 0o755, "open_to_the_group": 0o710}.get(shape, 0o700))
+        if shape == "another_uids":
+            if os.geteuid() != 0:
+                pytest.skip("making a directory another uid owns needs root (run as "
+                            "uid 65534 by test_a_work_dir_of_another_uid_is_refused_as_non_root)")
+            os.chown(work, 65534, 65534)
     elif shape == "under_a_file":
         work = plain / "sub"
     elif shape == "through_a_link_loop":
@@ -1341,11 +1365,13 @@ def test_a_work_dir_that_cannot_be_one_is_named_and_nothing_there_is_removed(
     elif shape == "a_name_too_long":
         work = tmp_path / ("n" * 300)
     elif shape == "jobs_is_a_file":
-        work.mkdir()
+        work.mkdir(mode=0o700)
+        work.chmod(0o700)
         kept = work / "jobs"
         kept.write_text("keep me", encoding="utf-8")
     else:
-        work.mkdir()
+        work.mkdir(mode=0o700)
+        work.chmod(0o700)
         symlink_or_skip(outside, work / "jobs")
     if work != tmp_path / "s" / "work":
         args = ("--work-dir", str(work))  # the last one given is the one taken
@@ -1393,24 +1419,86 @@ def test_a_work_dir_path_cannot_forge_a_log_line(tmp_path, world):
 
 def test_a_work_dir_in_use_keeps_everything_but_its_jobs(tmp_path, world):
     """…and the other half of what the manifest says of --work-dir: a
-    service that STARTS empties `jobs` (what a crashed run left) and
-    touches nothing else there — a --work-dir that is a symlink stays one."""
-    real = tmp_path / "real"
+    service that STARTS in a private directory already there (#3981: this
+    euid's, 0700) empties `jobs` (what a crashed run left) and touches
+    nothing else there, the directory's own mode included."""
+    real = tmp_path / "s" / "work"
     (real / "jobs" / "job-9").mkdir(parents=True)
     (real / "jobs" / "job-9" / "left").write_text("x", encoding="utf-8")
     (real / "mine.txt").write_text("keep me", encoding="utf-8")
     (real / "other").mkdir()
     (real / "other" / "deep").write_text("keep me", encoding="utf-8")
-    (tmp_path / "s").mkdir()
-    symlink_or_skip(real, tmp_path / "s" / "work")
+    real.chmod(0o700)
     with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"]) as svc:
         assert svc.call("GET", "/v1/status")[0] == 200
-        assert (tmp_path / "s" / "work").is_symlink()
         assert not (real / "jobs" / "job-9").exists()
         assert stat.S_IMODE(os.stat(real / "jobs").st_mode) == 0o700
+        assert stat.S_IMODE(os.stat(real).st_mode) == 0o700
         assert (real / "mine.txt").read_text(encoding="utf-8") == "keep me"
         assert (real / "other" / "deep").read_text(encoding="utf-8") == "keep me"
     assert sorted(p.name for p in real.iterdir()) == ["jobs", "mine.txt", "other"]
+
+
+def test_a_new_work_dir_is_0700_whatever_the_umask(tmp_path, world):
+    """#3981: the runtime entry makes a --work-dir that is not there, and
+    its `jobs`, exactly 0700 — a umask that takes the owner's write bit
+    (0277) does not leave them 0500; nor the parents it makes on the way
+    (blind review: one rule for every directory the entry makes)."""
+    work = tmp_path / "s" / "made" / "work"
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   prelude="os.umask(0o277)\n", args=("--work-dir", str(work))) as svc:
+        assert svc.call("GET", "/v1/status")[0] == 200
+        assert stat.S_IMODE(os.lstat(work).st_mode) == 0o700
+        assert stat.S_IMODE(os.lstat(work / "jobs").st_mode) == 0o700
+        assert stat.S_IMODE(os.lstat(work.parent).st_mode) == 0o700
+
+
+def test_a_work_dir_of_another_uid_is_refused_as_non_root(tmp_path, world):
+    """#3981: the owner half of the private-directory rule, measured as a
+    uid that is not root (the root run above makes the directory with
+    chown; this one is the service as an ordinary user meeting a directory
+    root made 0700). Refused naming --work-dir and the owner, its `jobs`
+    left as it was."""
+    setpriv = shutil.which("setpriv")
+    if os.geteuid() != 0 or setpriv is None:
+        pytest.skip("needs root and setpriv to run the service as uid 65534")
+    base = Path(h.short_dir())  # /tmp: reachable by uid 65534
+    try:
+        base.chmod(0o755)
+        work = base / "work"
+        (work / "jobs" / "job-1").mkdir(parents=True)
+        (work / "jobs" / "job-1" / "left").write_text("keep me", encoding="utf-8")
+        work.chmod(0o700)  # root's, private to root
+        sock_dir = base / "sock"
+        sock_dir.mkdir()
+        os.chown(sock_dir, 65534, 65534)
+        repo = base / "repo"
+        shutil.copytree(world["repo"], repo, symlinks=True)
+        subprocess.run(["chown", "-R", "65534:65534", str(repo)], check=True, timeout=60)
+        launcher = base / "launcher.py"
+        launcher.write_text(
+            "import sys\n"
+            f"sys.path[:0] = [{str(h.OPS)!r}, {str(h.TOOLS)!r}]\n"
+            "import generator_service as gs\n"
+            "sys.exit(gs.main(sys.argv[1:]))\n", encoding="utf-8")
+        launcher.chmod(0o644)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(HOME=str(base), GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null",
+                   PATH="/usr/bin:/bin")
+        proc = subprocess.run(
+            [setpriv, "--reuid=65534", "--regid=65534", "--clear-groups",
+             sys.executable, "-s", str(launcher), "--socket", str(sock_dir / "g.sock"),
+             "--repo", str(repo), "--config-subdir", "conf.d", "--work-dir", str(work),
+             "--git", h.GIT, "--warm-ref="],
+            env=env, capture_output=True, text=True, encoding="utf-8", timeout=120)
+        assert proc.returncode == 2, proc.stderr
+        assert (f"ERROR: --work-dir {work}: cannot be used as the work directory: "
+                "[Errno 1] owned by uid 0, not by this process (euid 65534)") in proc.stderr, \
+            proc.stderr
+        assert (work / "jobs" / "job-1" / "left").read_text(encoding="utf-8") == "keep me"
+        assert not (sock_dir / "g.sock").exists()
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def test_status_reports_versions(world):
