@@ -669,8 +669,8 @@
         "send_resolved": {
           "$ref": "#/definitions/yamlBool",
           "title": "Send Resolved",
-          "description": "Whether to send resolved notifications. Default: true.",
-          "default": true
+          "description": "Whether to send resolved notifications. Default: false (Alertmanager's default for email_configs; the route generator sets none).",
+          "default": false
         }
       },
       "additionalProperties": false
@@ -730,8 +730,8 @@
         "send_resolved": {
           "$ref": "#/definitions/yamlBool",
           "title": "Send Resolved",
-          "description": "Whether to send resolved notifications. Default: true.",
-          "default": true
+          "description": "Whether to send resolved notifications. Default: false (Alertmanager's default for slack_configs; the route generator sets none).",
+          "default": false
         }
       },
       "additionalProperties": false
