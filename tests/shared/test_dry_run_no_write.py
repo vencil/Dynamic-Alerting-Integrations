@@ -177,8 +177,8 @@ TIMEOUT_S = 90
 # ═══════════════════════════════════════════════════════════════════════════
 # Scope discovery — argparse-declared --dry-run flags only
 # ═══════════════════════════════════════════════════════════════════════════
-# Both quote styles occur in the tree (init_project and
-# generate_tenant_mapping_rules use single quotes); \s* spans the newline in
+# Both quote styles occur in the tree (init_project uses single
+# quotes); \s* spans the newline in
 # the multi-line add_argument( \n "--dry-run" ) formatting.
 DRY_RUN_FLAG_RE = re.compile(r"""add_argument\(\s*['"]--dry-run['"]""")
 DRY_RUN_MENTION_RE = re.compile(r"--dry-run")
@@ -517,10 +517,9 @@ def stub_url():
 # Recipes — exactly one dry-run invocation per in-scope tool.
 #
 # Twelve argv shapes are lifted from test_json_stdout_contract.py's dry-run
-# recipes (fixture paths swapped for tmp copies); six tools had no recipe
+# recipes (fixture paths swapped for tmp copies); five tools had no recipe
 # there and get a minimal invocation here (baseline_discovery, da_assembler,
-# generate_alertmanager_routes, generate_tenant_mapping_rules, init_project,
-# migrate_rule).
+# generate_alertmanager_routes, init_project, migrate_rule).
 # ═══════════════════════════════════════════════════════════════════════════
 @dataclass(frozen=True)
 class Recipe:
@@ -573,10 +572,6 @@ RECIPES: list[Recipe] = [
     R("generate_alertmanager_routes",
       lambda t, s: ["--config-dir", _copy_into(t, SEED_CONF_D, "conf.d"),
                     "--output-alertmanager", "--dry-run"]),
-
-    R("generate_tenant_mapping_rules",
-      lambda t, s: ["--config-dir", _copy_into(t, SEED_CONF_D, "conf.d"),
-                    "--dry-run"]),
 
     R("init_project",
       lambda t, s: ["--non-interactive", "--tenants", "tenant-one,tenant-two",
@@ -766,7 +761,8 @@ def test_recipe_table_covers_every_dry_run_tool():
 # dx 再少一支：inject_related_docs 在 #1984 退役。
 # dx 再少一支：analyze_bench_history 的 --trend-watch（唯一用 --dry-run 的路徑）
 # 隨舊的 ns/op 趨勢監測退役。
-EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 17, "dx": 13}
+# ops 少一支：generate_tenant_mapping_rules 在 #4291 隨 1:N 映射一起移除。
+EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 16, "dx": 13}
 
 
 def test_dry_run_tool_count_per_dir_is_pinned():

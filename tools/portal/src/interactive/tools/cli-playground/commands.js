@@ -252,38 +252,6 @@ Tenant: db-a
       { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
     ]
   },
-  'discover-mappings': {
-    label: 'discover-mappings',
-    description: t('自動發現 1:N 實例-租戶映射 (ADR-006)', 'Auto-discover 1:N instance-tenant mappings (ADR-006)'),
-    category: t('Prometheus API 工具', 'Prometheus API Tools'),
-    preview: `$ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics
-
-Scraping http://mariadb-exporter:9104/metrics ...
-
-Detected DB type: mariadb
-Partition labels found:
-  schema       12 values  (score: 0.85)  ★ recommended
-  tablespace    4 values  (score: 0.62)
-
-Mapping draft (YAML):
-  instance: mariadb-exporter:9104
-  db_type: mariadb
-  partition_label: schema
-  partitions:
-    - app_db
-    - user_db
-    - analytics_db
-    ...`,
-    args: [],
-    flags: [
-      { name: '--endpoint', label: t('Exporter /metrics URL', 'Exporter /metrics URL'), required: false, placeholder: 'http://exporter:9104/metrics' },
-      { name: '--prometheus', label: t('Prometheus API URL', 'Prometheus API URL'), required: false, placeholder: 'http://localhost:9090' },
-      { name: '--instance', label: t('Instance 標籤', 'Instance Label'), required: false, placeholder: 'exporter:9104' },
-      { name: '--job', label: t('Job 標籤', 'Job Label'), required: false, placeholder: 'mariadb' },
-      { name: '-o', label: t('輸出檔案', 'Output File'), required: false, placeholder: 'mapping-draft.yaml' },
-      { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
-    ]
-  },
   'drift-detect': {
     label: 'drift-detect',
     description: t('跨叢集配置漂移偵測：目錄級 SHA-256 比對', 'Cross-cluster config drift detection: directory-level SHA-256 comparison'),

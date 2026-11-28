@@ -342,20 +342,6 @@ def _legacy_rules(tmp: Path) -> str:
     return str(p)
 
 
-def _mapping_conf_d(tmp: Path) -> str:
-    d = tmp / "conf.d"
-    d.mkdir()
-    (d / "_instance_mapping.yaml").write_text(
-        "instance_tenant_mapping:\n"
-        "  'stub:9104':\n"
-        "    - tenant: alpha\n"
-        "      filter: 'schema=\"app\"'\n"
-        "    - tenant: beta\n"
-        "      filter: 'schema=\"billing\"'\n",
-        encoding="utf-8")
-    return str(d)
-
-
 def _custom_alerts_conf_d(tmp: Path) -> str:
     """A conf.d tree with one `_custom_alerts` recipe — enough to compile."""
     d = tmp / "custom-alerts-conf.d"
@@ -909,11 +895,6 @@ ROWS: list[Row] = [
                       "--output", str(out)],
       reach="local Prometheus stub + the --json gate's fake kubectl (#1525)",
       out_name="health.json", env=lambda c: _fake_kubectl_env(c.tmp)),
-    R("ops/discover_instance_mappings.py", "-o/--output", "file", "operator",
-      lambda c, out: ["--prometheus", c.stub + "/rich", "--instance", "stub:9104",
-                      "--output", str(out)],
-      reach="local Prometheus stub (/rich personality carries schema=)",
-      out_name="mapping.yaml"),
     # Three rows, one derived sink each. `config_history` has no output flag:
     # every path it writes hangs off `<--config-dir>/../.da-history`, so the
     # flag it must name is the input one. The FOURTH sink — `_save_history`'s
@@ -1015,11 +996,6 @@ ROWS: list[Row] = [
       reach="same seed conf.d; --validate renders nothing to a file, so the "
             "findings document is the only write",
       out_name="findings.json"),
-    R("ops/generate_tenant_mapping_rules.py", "-o/--output", "file", "operator",
-      lambda c, out: ["--config-dir", _mapping_conf_d(c.tmp), "--metrics", "mysql_up",
-                      "-o", str(out)],
-      reach="tmp conf.d with a two-tenant _instance_mapping.yaml",
-      out_name="mapping-rules.yaml"),
     R("ops/assemble_config_dir.py", "--output", "dir", "operator",
       lambda c, out: ["--sources", _shard_source_dir(c.tmp), "--output", str(out)],
       reach="one tmp conf.d shard with a single tenant file",
@@ -2257,7 +2233,6 @@ SPAWNS: dict[Key, tuple[str, ...]] = {
     ("ops/generate_alertmanager_routes.py", "--secret-mounts-out"): ("da-crdecode", "da-guard", "da-read"),
     ("ops/generate_alertmanager_routes.py", "-o/--output"): ("da-crdecode", "da-guard", "da-read"),
     ("ops/generate_rule_pack_split.py", "--output-dir"): ("da-read",),
-    ("ops/generate_tenant_mapping_rules.py", "-o/--output"): ("da-guard", "da-read"),
     ("ops/init_project.py", "-o/--output-dir"): ("da-guard",),
     ("ops/migrate_credentials.py", "--manifests-out"): ("da-guard",),
     ("ops/migrate_rule.py", "-o/--output-dir"): ("da-crdecode", "da-guard", "da-read"),
@@ -2829,12 +2804,10 @@ def test_soak_metrics_stub_is_a_working_target():
     assert parsed["go_goroutines"] == 42.0, "labelled samples must be skipped"
 
     # And the pre-existing personalities are untouched: the plain exporter
-    # body still carries no Go runtime metrics (discover_instance_mappings
-    # reads these paths).
-    for path in ("/metrics", "/rich/metrics"):
+    # body still carries no Go runtime metrics.
+    for path in ("/metrics",):
         _, plain, _ = _jsc._stub_payload(path)
         assert not run_chaos_soak.parse_metrics(plain.decode("utf-8"))
-    assert b"schema=" in _jsc._stub_payload("/rich/metrics")[1]
 
 
 _UNRESOLVED = "<cannot tell which flag: {}>"

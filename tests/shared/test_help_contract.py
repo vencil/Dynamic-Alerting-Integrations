@@ -35,7 +35,7 @@ HELP_CONTRACTS = {
         "flags": [
             "--tenant", "--db", "-o", "--output-dir", "--catalog",
             "--non-interactive", "--namespaces", "--routing-profile",
-            "--topology", "--mapping-instance", "--mapping-filter",
+            "--topology",
             "--silent-mode", "--severity-dedup", "--routing-receiver",
             "--routing-receiver-type", "--routing-smarthost",
             "--routing-group-by", "--routing-group-wait",
@@ -44,7 +44,7 @@ HELP_CONTRACTS = {
         ],
         "required": [],
         "choices": {
-            "--topology": "{1:1,N:1,1:N}",
+            "--topology": "{1:1,N:1}",
             "--silent-mode": "{warning,critical,all,disable}",
             "--severity-dedup": "{enable,disable}",
             "--routing-receiver-type":

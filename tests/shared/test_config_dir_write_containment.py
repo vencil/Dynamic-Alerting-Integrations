@@ -9,7 +9,8 @@ were fixed (#1648, #1739). This file is what keeps the WHOLE family fixed:
   naming ``--config-dir`` and every ``add_config_dir_arg(...)`` call under
   ``scripts/tools``. The older sweep in ``test_output_label_escaping.py`` keys
   on the substring ``'"--config-dir"'`` in three subdirectories and so never saw
-  ``generate_tenant_mapping_rules`` (single quotes only).
+  a tool spelling it in single quotes only (the since-removed tenant-mapping
+  generator, #4291).
 * Every tool runs from a PRIVATE COPY of the tracked tree, with a throwaway
   config dir and a throwaway cwd. "Did the repo change" is then a question about
   a tree nobody else writes, so it holds under ``pytest -n auto`` — the
@@ -58,9 +59,8 @@ TOOLS_REL = Path("scripts") / "tools"
 FIXTURE_REL = Path("components") / "threshold-exporter" / "config" / "conf.d"
 RECIPES_REL = Path("rule-packs") / "recipes" / "examples" / "conf.d"
 # Platform-level files the sample tree keeps under examples/, lifted to the
-# top: tools read them only there (mapping rules, routing profiles, policy).
-LIFTED = ("_instance_mapping.yaml", "_routing_profiles.yaml",
-          "_domain_policy.yaml")
+# top: tools read them only there (routing profiles, policy).
+LIFTED = ("_routing_profiles.yaml", "_domain_policy.yaml")
 # ConfigMap-shaped input for migrate_to_operator's --source-dir: a rules
 # ConfigMap as the declaration lists them (#3471).
 
@@ -112,7 +112,6 @@ SHAPES: dict[str, list[list[str]]] = {
     # where the bare shape's flagless render stood.
     "generate_alertmanager_routes.py": [["--output-alertmanager"],
                                         ["--output-alertmanager", "-o", "{named}/r.yaml"]],
-    "generate_tenant_mapping_rules.py": [["-o", "{named}/r.yaml"]],
     "generate_tenant_metadata.py": [["--output", "{named}/m.json"]],
     "analyze_rule_pack_gaps.py": [["-o", "{named}/g.json"]],
 }
@@ -143,7 +142,6 @@ EXPECTED_WRITES: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
 MUST_WRITE_NAMED = {
     ("compile_custom_alerts.py", ("--out", "{named}/pack.yaml")),
     ("generate_alertmanager_routes.py", ("--output-alertmanager", "-o", "{named}/r.yaml")),
-    ("generate_tenant_mapping_rules.py", ("-o", "{named}/r.yaml")),
     ("backtest_threshold.py", ("--baseline", "{cfg}", "--skip-if-unavailable",
                                "--markdown-output", "{named}/b.md")),
 }
@@ -341,12 +339,6 @@ def test_the_population_finder_sees_every_spelling(tmp_path):
                                    encoding="utf-8")
     assert [Path(p).name for p in config_dir_tools(tmp_path)] == [
         "dq.py", "helper.py", "sq.py"]
-
-
-def test_the_population_includes_the_single_quoted_tool():
-    """The one the older double-quote substring sweep never saw."""
-    names = {Path(r).name for r in POPULATION}
-    assert "generate_tenant_mapping_rules.py" in names
 
 
 def test_the_detector_sees_a_byte_identical_rewrite(tmp_path):

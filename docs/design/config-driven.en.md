@@ -314,7 +314,7 @@ Both sides must produce an exact match, but **their sources can differ**. This e
 |------|------------|---------------------------|----------|
 | **1:1** (standard) | One Namespace = One Tenant | `source_labels: [__meta_kubernetes_namespace]` → `target_label: tenant` | Most deployments |
 | **N:1** | Multiple Namespaces → One Tenant | Multiple namespace metrics relabeled to the same tenant value | Read/write split (`db-a-read` + `db-a-write` → `db-a`) |
-| **1:N** | One Namespace → Multiple Tenants | Use Service label/annotation instead of namespace as tenant source | Shared-namespace multi-tenant architecture |
+| **Shared Namespace** | One Namespace → Multiple Tenants, each with its own exporter | Use Service label/annotation instead of namespace as tenant source | Shared-namespace multi-tenant architecture |
 
 **N:1 relabel example** (multiple namespaces → one tenant):
 
@@ -330,7 +330,7 @@ relabel_configs:
     replacement: "$1"
 ```
 
-**1:N relabel example** (one namespace → multiple tenants):
+**Shared Namespace relabel example** (one namespace → multiple tenants):
 
 ```yaml
 relabel_configs:
@@ -342,7 +342,11 @@ relabel_configs:
     target_label: tenant
 ```
 
+With a shared namespace, infrastructure metrics such as disk, PVC and container metrics are still attributed to a tenant by `namespace` ([ADR-006](../adr/006-tenant-mapping-topologies.en.md), "Tenant attribution of infrastructure metrics"): they land on the namespace's name, not on each tenant.
+
 **Automation**: `scaffold_tenant.py --namespaces ns1,ns2` auto-generates N:1 relabel_configs snippet and writes a `_namespaces` metadata field in the tenant YAML for tool reference (does not affect metric logic).
+
+**One database instance serving several tenants** (1:N in [ADR-006](../adr/006-tenant-mapping-topologies.en.md), for example several schemas on one Oracle) **is not supported**: run one exporter per schema (it becomes 1:1); when per-schema accounts are not available, write `metric_relabel_configs` at scrape time yourself, as in the example in ADR-006.
 
 **Design principle**: The platform core (threshold-exporter + Rule Packs) is completely namespace-agnostic. Mapping flexibility is entirely provided by Prometheus scrape config — no platform component changes needed. See [BYO Prometheus Integration Guide](../integration/byo-prometheus-integration.en.md).
 

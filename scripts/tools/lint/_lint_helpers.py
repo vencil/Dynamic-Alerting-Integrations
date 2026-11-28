@@ -114,7 +114,6 @@ BUILD_EXEMPT = frozenset({
     "_grar_routes.py",
     "_grar_render.py",
     "metric-dictionary.yaml",
-    "generate_tenant_mapping_rules.py",
     # v2.8.0 Phase B Track A A5: ship-but-not-public CLI design tradeoff.
     # describe_tenant.py is a v2.7.0 internal tool that ships in the docker
     # image as a transitive dependency for tenant_verify.py (which IS

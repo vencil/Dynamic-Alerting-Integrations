@@ -140,8 +140,6 @@ TOOL_FILES=(
     ops/federation_check.py
     ops/grafana_import.py
     ops/shadow_verify.py
-    ops/discover_instance_mappings.py
-    ops/generate_tenant_mapping_rules.py
     ops/init_project.py
     ops/config_history.py
     ops/gitops_check.py

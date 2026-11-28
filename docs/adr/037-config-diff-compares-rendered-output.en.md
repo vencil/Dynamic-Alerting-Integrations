@@ -125,7 +125,6 @@ Carriers not covered yet, and when they will be:
 | Carrier | Why deferred | When |
 |---|---|---|
 | Platform-level `_custom_alerts` (recipes at the top of a `_` file) | No reader: the exporter does not serve it, and the custom-alert compiler, compiling the exporter's reading, does not compile it either (see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) §3) | When something reads it |
-| `instance_tenant_mapping` | Read by the tenant mapping generator, not by either renderer | When that generator has a stable output format |
 | `max_metrics_per_tenant` | served-values does not output the limit itself | When someone needs it |
 
 **Carriers a CI check owns.** The route generator's `--validate --strict` blocks `domain_policies` violations; `validate-config` checks `_policies` and fails when a rule of `severity: error` is violated or a rule cannot be read as written. Written where the check reads them (`domain_policies` in `_domain_policy.yaml`, `_policies` in the root defaults file), they are listed as a note only and do not affect the exit code. `_policies` written anywhere else is listed as `Not read where it is written`, exit code 1, so the report never implies that a rule nothing reads is enforced. `domain_policies` written in any file other than `_domain_policy.yaml` makes the route generator refuse the whole tree, so on the PR side the routing plane is "not computed", exit code 2, with the reason naming the file. To see which violations a change adds, read the generator's `--findings-json`.

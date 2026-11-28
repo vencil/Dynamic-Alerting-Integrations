@@ -768,45 +768,6 @@ def _success_data(prom_url: str, path: str, timeout: int) -> Any:
     return data.get("data")
 
 
-def prometheus_series(prom_url: str, match: str, *, timeout: int = 10) -> list[dict[str, str]]:
-    """Prometheus's ``/api/v1/series?match[]=<match>``; return the label sets or raise.
-
-    Raises:
-        QueryError: no connection, an HTTP error, ``status`` other than
-            ``success``, or ``data`` that is not a list of string-valued
-            label sets (#3133).
-    """
-    path = "/api/v1/series?" + urllib.parse.urlencode({"match[]": match})
-    rows = _success_data(prom_url, path, timeout)
-    if not isinstance(rows, list):
-        raise _malformed("Prometheus", "'data' is missing or not a list")
-    for i, row in enumerate(rows):
-        if not isinstance(row, dict):
-            raise _malformed("Prometheus", f"series[{i}] is not an object")
-        bad = next((k for k, v in row.items() if not isinstance(v, str)), None)
-        if bad is not None:
-            raise _malformed("Prometheus", f"series[{i}].{bad} is not a string")
-    return rows
-
-
-def prometheus_label_values(prom_url: str, label: str, *,
-                            timeout: int = 10) -> list[str]:
-    """Prometheus's ``/api/v1/label/<label>/values``; return the values or raise.
-
-    Raises:
-        QueryError: as :func:`prometheus_series`, ``data`` not a list of
-            strings (#3133).
-    """
-    values = _success_data(prom_url, f"/api/v1/label/{urllib.parse.quote(label)}/values",
-                           timeout)
-    if not isinstance(values, list):
-        raise _malformed("Prometheus", "'data' is missing or not a list")
-    bad = next((i for i, v in enumerate(values) if not isinstance(v, str)), None)
-    if bad is not None:
-        raise _malformed("Prometheus", f"data[{bad}] is not a string")
-    return values
-
-
 def rules_groups(body: Any) -> list[dict[str, Any]]:
     """``data.groups`` of a ``/api/v1/rules`` answer, or ``QueryError``.
 

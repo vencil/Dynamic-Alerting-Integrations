@@ -37,7 +37,7 @@ lang: zh
 | ADR-003 | [Sentinel Alert 模式](./003-sentinel-alert-pattern.md) | ✅ Accepted | v1.0.0 |
 | ADR-004 | [Federation 架構——中央 Exporter 優先](./004-federation-central-exporter-first.md) | ✅ Accepted | v2.3.0 |
 | ADR-005 | [投影卷掛載 Rule Pack](./005-projected-volume-for-rule-packs.md) | ✅ Accepted | v1.0.0 |
-| ADR-006 | [租戶映射拓撲 (1:1, N:1, 1:N)](./006-tenant-mapping-topologies.md) | ✅ Accepted | v2.1.0 |
+| ADR-006 | [租戶映射拓撲 (1:1, N:1)](./006-tenant-mapping-topologies.md) | ✅ Accepted | v2.1.0 |
 | ADR-007 | [跨域路由設定檔與域策略](./007-cross-domain-routing-profiles.md) | ✅ Accepted | v2.1.0 |
 | ADR-008 | [Operator-Native 整合路徑](./008-operator-native-integration-path.md) | ✅ Accepted | v2.3.0 |
 | ADR-009 | [Tenant Manager CRUD API 架構](./009-tenant-manager-crud-api.md) | ✅ Accepted | v2.4.0 |

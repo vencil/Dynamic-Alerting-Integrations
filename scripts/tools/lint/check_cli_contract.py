@@ -967,9 +967,9 @@ def judge_parse(args: list[str], command: str, model: ParserModel,
     ``_lib_io.add_prometheus_arg``, ``action.env_fallback``, #3528) is
     supplied only to answer "is it missing": ``$PROMETHEUS_URL`` stands in
     for it, so a line that fails for that reason alone passes on a retry with
-    it and is disclosed. It is NOT added up front: on
-    ``discover-mappings --endpoint`` adding it makes argparse refuse the line
-    as mutually exclusive (issue 1513).
+    it and is disclosed. It is NOT added up front: where ``--prometheus``
+    shares a mutually exclusive group with another source flag (``--endpoint``,
+    issue 1513), adding it makes argparse refuse the line.
     """
     parser = model.parser
     if parser is None:

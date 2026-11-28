@@ -158,9 +158,10 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{tenant!=""}' \
     replacement: "$1"
   ```
 
-- **1:N（一個 Namespace → 多個 Tenant）**：共享 namespace 場景，使用方案 B 的 Service label/annotation 區分 tenant。
+- **共享 Namespace（一個 Namespace → 多個 Tenant，各有自己的 exporter）**：使用方案 B 的 Service label/annotation 區分 tenant。
+- **一個資料庫實例 → 多個 Tenant（1:N）**：不支援。每個 schema 各跑一個 exporter，或在抓取時自己寫 `metric_relabel_configs`，見 [ADR-006](../adr/006-tenant-mapping-topologies.md)。
 
-**關鍵約束**：無論映射方式如何，`tenant` 標籤值必須與 `threshold-exporter` ConfigMap 中的 tenant key 精確匹配。詳見[設計文件 §2.3](../design/config-driven.md#23-tenant-namespace-映射模式-tenant-namespace-mapping)。
+**關鍵約束**：無論映射方式如何，`tenant` 標籤值必須與 `threshold-exporter` ConfigMap 中的 tenant key 精確匹配。詳見[設計文件 §2.3](../design/config-driven.md#23-tenant-namespace-映射模式-tenant-namespace-mapping)與 [ADR-006](../adr/006-tenant-mapping-topologies.md)。
 
 ---
 

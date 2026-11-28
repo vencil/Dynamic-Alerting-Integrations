@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-07
-updated_at: 2026-11-22
+updated_at: 2026-11-28
 ---
 # ADR-004: Federation 架構——中央 Exporter 優先
 
@@ -139,7 +139,7 @@ da-tools rule-pack-split --rule-packs-dir my-packs/ --output-dir split-output/
 
 ## 相關
 
-- [ADR-006: 租戶映射拓撲](./006-tenant-mapping-topologies.md) — 以中央 Exporter 搭配資料面的 Recording Rules 實現 1:N 映射
+- [ADR-006: 租戶映射拓撲](./006-tenant-mapping-topologies.md) — 租戶在抓取時寫進序列；一個實例多個租戶不支援
 - [ADR-005: 投影卷掛載 Rule Pack](./005-projected-volume-for-rule-packs.md) — 多叢集部署中 Rule Pack 的掛載方式
 - [Federation 整合指南](../integration/federation-integration.md) — 詳細的整合步驟
 - [場景：多叢集聯邦架構](../scenarios/multi-cluster-federation.md) — 多叢集的部署案例

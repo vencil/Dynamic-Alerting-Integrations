@@ -158,7 +158,8 @@ Option A assumes 1:1 (one namespace = one tenant). The platform also supports ot
     replacement: "$1"
   ```
 
-- **1:N (one Namespace → multiple Tenants)**: For shared namespace scenarios, use Option B with Service labels/annotations to distinguish tenants.
+- **Shared Namespace (one Namespace → multiple Tenants, each with its own exporter)**: use Option B with Service labels/annotations to distinguish tenants.
+- **One database instance → multiple Tenants (1:N)**: not supported. Run one exporter per schema, or write `metric_relabel_configs` at scrape time yourself; see [ADR-006](../adr/006-tenant-mapping-topologies.en.md).
 
 **Key Constraint**: Regardless of mapping strategy, the `tenant` label value must exactly match the tenant key in the `threshold-exporter` ConfigMap. See [Design Document §2.3](../design/config-driven.en.md#23-tenant-namespace-mapping) and [ADR-006](../adr/006-tenant-mapping-topologies.en.md) for details.
 

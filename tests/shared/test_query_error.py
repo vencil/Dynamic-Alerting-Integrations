@@ -401,42 +401,6 @@ def test_alertmanager_status_returns_the_object(monkeypatch):
     assert lp.alertmanager_status("http://am") == body
 
 
-@pytest.mark.parametrize("call,answer,defect", [
-    ("series", (None, "refused"), "refused"),
-    ("series", ({"status": "error", "error": "bad_data"}, None), "bad_data"),
-    ("series", ([], None), "body is not a JSON object"),
-    ("series", ({"status": "success"}, None), "'data' is missing or not a list"),
-    ("series", ({"status": "success", "data": ["x"]}, None), "series[0] is not an object"),
-    ("series", ({"status": "success", "data": [{"job": 1}]}, None), "series[0].job is not a string"),
-    ("values", ({"status": "success", "data": {"x": 1}}, None), "'data' is missing or not a list"),
-    ("values", ({"status": "success", "data": ["a", 2]}, None), "data[1] is not a string"),
-], ids=["s-refused", "s-error", "s-list", "s-no-data", "s-item", "s-label-int",
-        "v-object", "v-int"])
-def test_prometheus_series_and_label_values_raise(monkeypatch, call, answer, defect):
-    monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: answer)
-    with pytest.raises(lp.QueryError) as exc:
-        if call == "series":
-            lp.prometheus_series("http://p", '{job="j"}')
-        else:
-            lp.prometheus_label_values("http://p", "job")
-    assert defect in str(exc.value), exc.value
-    assert exc.value.reason == "prometheus_query_error"
-
-
-def test_prometheus_series_and_label_values_return_the_data(monkeypatch):
-    seen = []
-
-    def get(url, timeout=10):
-        seen.append((url, timeout))
-        data = [{"job": "j"}] if "/series" in url else ["a", "b"]
-        return {"status": "success", "data": data}, None
-    monkeypatch.setattr(lp, "http_get_json", get)
-    assert lp.prometheus_series("http://p", '{a="x y"}', timeout=3) == [{"job": "j"}]
-    assert lp.prometheus_label_values("http://p", "job") == ["a", "b"]
-    assert seen == [("http://p/api/v1/series?match%5B%5D=%7Ba%3D%22x+y%22%7D", 3),
-                    ("http://p/api/v1/label/job/values", 10)]
-
-
 def test_rules_groups_reads_rules_null_as_an_empty_group():
     """#3331: a Go server that builds the slice as nil (Thanos has no
     omitempty either) writes an empty group as `rules: null` — an answer,

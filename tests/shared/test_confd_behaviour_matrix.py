@@ -178,14 +178,6 @@ def _helm_values(cell: pathlib.Path) -> None:
     (cell / "ns.yaml").write_text("", encoding="utf-8")
 
 
-def _instance_mapping(cell: pathlib.Path) -> None:
-    """Without `_instance_mapping.yaml` the generator returns before it
-    reads any tenant; with it, `--validate` checks the ids against the tree."""
-    (cell / "conf.d" / "_instance_mapping.yaml").write_text(
-        "instance_tenant_mapping:\n  inst-1:\n    - tenant: a\n      filter: 'schema=\"a\"'\n",
-        encoding="utf-8")
-
-
 def _alert_rules(cell: pathlib.Path) -> None:
     """One plain threshold alert, outside the tree: the input the two
     rule-reading writers turn into conf.d files (onboard_platform) and a
@@ -256,9 +248,6 @@ TOOLS: dict[str, Tool] = {
     "check_retire_drift": Tool((_PY, _T + "lint/check_retire_drift.py", "--config-dir", "{conf}",
                                 "--helm-dir", "{cell}/helm", "--namespaces-file", "{cell}/ns.yaml",
                                 "--ci"), prep=_helm_values),
-    "generate_tenant_mapping_rules": Tool((_PY, _T + "ops/generate_tenant_mapping_rules.py",
-                                           "--config-dir", "{conf}", "--validate", "--dry-run"),
-                                          prep=_instance_mapping),
     "check_routing_profiles": Tool((_PY, _T + "lint/check_routing_profiles.py", "--config-dir", "{conf}")),
     # One tree on both sides: nothing changed, so a clean tree is exit 0.
     "config_diff": Tool((_PY, _T + "ops/config_diff.py", "--old-dir", "{conf}", "--new-dir", "{conf}")),

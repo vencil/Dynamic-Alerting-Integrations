@@ -217,7 +217,7 @@ graph LR
 
 Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由三態配置 + Directory Scanner + 階層繼承 + 向量匹配規則組成。涵蓋主題分四組（完整詳解見 [config-driven.md](design/config-driven.md)）：
 
-- **配置與繼承**：三態邏輯（自訂值 / 省略採預設 / 停用；⚠️ 僅適用有平台預設的 key——`optional_overrides:` 宣告的 key 平台不主張值，省略即無值）、`conf.d/` Directory Scanner + SHA-256 熱重載 + Incremental Reload、`_defaults.yaml` L0→L3 繼承、租戶↔namespace 映射（1:1 / N:1 / 1:N）。
+- **配置與繼承**：三態邏輯（自訂值 / 省略採預設 / 停用；⚠️ 僅適用有平台預設的 key——`optional_overrides:` 宣告的 key 平台不主張值，省略即無值）、`conf.d/` Directory Scanner + SHA-256 熱重載 + Incremental Reload、`_defaults.yaml` L0→L3 繼承、租戶↔namespace 映射（1:1 / N:1）。
 - **告警語意**：多層嚴重度（`_critical` 後綴、`"value:severity"` 語法）、Regex 維度閾值（`=~`）、排程式閾值（UTC 時間窗、跨午夜）、三態運營模式（Normal / Silent / Maintenance + Sentinel Alert）。
 - **路由**：6 種 receiver（Webhook / Email / Slack / Teams / RocketChat / PagerDuty）+ Timing Guardrails、Severity Dedup（Alertmanager inhibit）、per-rule 路由覆寫、平台強制路由（NOC 必收）、Routing Profiles 與域策略（ADR-007）。
 - **效能與自助**：Pre-computed Recording Rule、O(M) 複雜度、Cardinality Guard、Tenant API（commit-on-write + RBAC 熱更新 + Portal 降級安全）。
@@ -353,7 +353,7 @@ spec:
 | ADR-003 | [Sentinel Alert 模式](adr/003-sentinel-alert-pattern.md) | ✅ Accepted | v1.0.0 |
 | ADR-004 | [Federation 架構——中央 Exporter 優先](adr/004-federation-central-exporter-first.md) | ✅ Accepted | v2.3.0 |
 | ADR-005 | [投影卷掛載 Rule Pack](adr/005-projected-volume-for-rule-packs.md) | ✅ Accepted | v1.0.0 |
-| ADR-006 | [租戶映射拓撲 (1:1, N:1, 1:N)](adr/006-tenant-mapping-topologies.md) | ✅ Accepted | v2.1.0 |
+| ADR-006 | [租戶映射拓撲 (1:1, N:1)](adr/006-tenant-mapping-topologies.md) | ✅ Accepted | v2.1.0 |
 | ADR-007 | [跨域路由設定檔與域策略](adr/007-cross-domain-routing-profiles.md) | ✅ Accepted | v2.1.0 |
 | ADR-008 | [Operator-Native 整合路徑](adr/008-operator-native-integration-path.md) | ✅ Accepted | v2.3.0 |
 | ADR-009 | [Tenant Manager CRUD API 架構](adr/009-tenant-manager-crud-api.md) | ✅ Accepted | v2.4.0 |

@@ -961,7 +961,7 @@ class TestV7UndocumentedOption:
 
 
 def _probe_parser() -> argparse.ArgumentParser:
-    """Shaped like discover-mappings: a required, injectable --prometheus
+    """Shaped like the since-removed discover-mappings (#4291): a required, injectable --prometheus
     that is mutually exclusive with --endpoint."""
     p = argparse.ArgumentParser(prog="probe")
     src = p.add_mutually_exclusive_group(required=True)
@@ -1070,7 +1070,7 @@ class TestV5ParseArgs:
 
     def test_an_injected_flag_counts_only_when_it_is_what_is_missing(self, tmp_path):
         """entrypoint 只在設了 $PROMETHEUS_URL 時補 --prometheus：缺它的行揭露、不判；
-        有 --endpoint 的行不能先補上它——那會被判成互斥（量過 discover-mappings）。"""
+        有 --endpoint 的行不能先補上它——那會被判成互斥（量過已移除的 discover-mappings）。"""
         kw = dict(parsers={"probe": mod._model(_probe_parser())},
                   command_map={"probe": "probe.py"}, reference_docs=(_reference(tmp_path),),
                   injected={"probe"}, exit_codes={}, repo_root=tmp_path, portal=[])

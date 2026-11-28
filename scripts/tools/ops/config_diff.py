@@ -123,7 +123,6 @@ RENDERED_CARRIERS = {
 # Read by no renderer, deferred with a trigger (ADR-037 decision 3's table).
 DEFERRED_CARRIERS = {
     "_custom_alerts": "a platform recipe is read by the custom-alert compiler, not by either render",
-    "instance_tenant_mapping": "read by the tenant-mapping generator, not by either render",
     "max_metrics_per_tenant": "served-values does not serve the cap itself",
 }
 

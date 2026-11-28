@@ -67,8 +67,7 @@ def _one_language(out: str, script: str, lang: str = "en") -> None:
 #: the ``--json`` reason when the tool answers with an envelope, else None —
 #: a tool whose document keeps its own shape names the path in a row).
 #: {D} is a directory and {F} a file, both under the locked parent; {CONF}
-#: a usable conf.d, {MAP} one with `_instance_mapping.yaml`, {RP} a usable
-#: rule-packs directory, {BOX} the box.
+#: a usable conf.d, {RP} a usable rule-packs directory, {BOX} the box.
 OPS_SITES = [
     ("gitops-check", "gitops_check.py", ["local", "--dir", "{D}", "--json"], "--dir",
      "dir_not_accessible"),
@@ -128,11 +127,6 @@ OPS_SITES = [
     ("config-diff --new-dir", "config_diff.py",
      ["--old-dir", "{CONF}", "--new-dir", "{D}", "--format", "json"], "--new-dir",
      "dir_not_accessible"),
-    ("generate-tenant-mapping --config-dir", "generate_tenant_mapping_rules.py",
-     ["--config-dir", "{D}", "--dry-run"], "--config-dir", None),
-    ("generate-tenant-mapping --metric-dictionary", "generate_tenant_mapping_rules.py",
-     ["--config-dir", "{MAP}", "--metric-dictionary", "{F}", "--dry-run"],
-     "--metric-dictionary", None),
     ("silencer-drift-check --rule-source", "silencer_drift_check.py",
      ["--silences-file", "{BOX}/silences.json", "--rule-source", "{D}", "--json"],
      "--rule-source", "path_not_accessible"),
@@ -357,10 +351,8 @@ def box():
         nx.mkdir()
         # Not named conf.d (#3751): that is a declared default (tenant-verify
         # --conf-d), which the absent-default rows need to be NOT there.
-        for src, dst in ((REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d", "confd-flat"),
-                         (REPO / "components" / "threshold-exporter" / "config" / "conf.d"
-                          / "examples", "mapped")):
-            shutil.copytree(src, root / dst)
+        shutil.copytree(REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d",
+                        root / "confd-flat")
         (root / "silences.json").write_text("[]\n", encoding="utf-8")
         (root / "rp").mkdir()
         shutil.copy2(REPO / "rule-packs" / "rule-pack-mariadb.yaml", root / "rp")
@@ -370,7 +362,7 @@ def box():
         (root / "tests" / "rulepacks").mkdir(parents=True)
         shutil.copy2(REPO / "tests" / "rulepacks" / "vm_harness.py",
                      root / "tests" / "rulepacks" / "vm_harness.py")
-        for top in ("locked", "confd-flat", "mapped", "silences.json", "wf", "tests", "rp"):
+        for top in ("locked", "confd-flat", "silences.json", "wf", "tests", "rp"):
             for p in [root / top, *(root / top).rglob("*")]:
                 p.chmod(0o755 if p.is_dir() else 0o644)
         # 000, not 0700: the owner is root, but a non-root CI runs the table
@@ -382,7 +374,7 @@ def box():
         assert probe.returncode != 0, ("the uid can enter the locked parent: every row "
                                        "below would be vacuous")
         yield root, run, {"{D}": str(locked / "x"), "{F}": str(locked / "f.yaml"),
-                          "{CONF}": str(root / "confd-flat"), "{MAP}": str(root / "mapped"),
+                          "{CONF}": str(root / "confd-flat"),
                           "{WF}": str(root / "wf"), "{BOX}": str(root), "{NX}": str(nx),
                           "{RP}": str(root / "rp")}
 
@@ -1580,8 +1572,6 @@ def _document_subst(tmp: pathlib.Path) -> dict:
     (tmp / "box").mkdir(exist_ok=True)
     (tmp / "box" / "silences.json").write_text("[]\n", encoding="utf-8")
     return {"{CONF}": str(REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d"),
-            "{MAP}": str(REPO / "components" / "threshold-exporter" / "config" / "conf.d"
-                         / "examples"),
             "{RP}": str(REPO / "rule-packs"),
             "{WF}": str(REPO / "tests" / "dx" / "fixtures" / "waveform"),
             "{BOX}": str(tmp / "box")}
@@ -1702,9 +1692,6 @@ def test_each_declared_document_is_as_judged(declared_documents):
 # * analyze-gaps --tenant-config: a declared text document (#3797) whose
 #   content da-guard reads (parse-tree, the exporter's reading); a top level
 #   that is not a mapping was read as a tenant with no keys, rc 0.
-# * generate-tenant-mapping --metric-dictionary: the tool is not a da-tools
-#   command, so G1's walk never sees its parser; a list or a scalar there was
-#   "no metrics to map".
 
 @pytest.mark.usefixtures("da_guard_env")
 @pytest.mark.parametrize("content, got", [(b"- a\n", "a list"), (b"5\n", "a number"),
@@ -1719,21 +1706,3 @@ def test_analyze_gaps_refuses_a_tenant_config_that_is_no_mapping(tmp_path, conte
                                    f"a mapping (got {got})"), proc.stderr
 
 
-@pytest.mark.usefixtures("da_guard_env")
-@pytest.mark.parametrize("content, detail", [
-    (b"a: \xff\n", "not valid UTF-8 (byte 3)"),
-    (b"a: [\n", "not valid YAML: "),
-    (b"- a\n", "the top level is not a mapping (got a list)"),
-    (b"5\n", "the top level is not a mapping (got a number)"),
-    (b"", "the top level is not a mapping (got an empty document)"),
-])
-def test_generate_tenant_mapping_names_a_dictionary_it_cannot_read(tmp_path, content, detail):
-    given = tmp_path / "dict.yaml"
-    given.write_bytes(content)
-    conf = REPO / "components" / "threshold-exporter" / "config" / "conf.d" / "examples"
-    proc = _run_ops("generate_tenant_mapping_rules.py",
-                    ["--config-dir", str(conf), "--metric-dictionary", str(given), "--dry-run"])
-    out = proc.stdout + proc.stderr
-    assert proc.returncode == 2, out
-    assert "Traceback" not in out and "no metrics to map" not in out, out
-    assert f"ERROR: --metric-dictionary {given}: {detail}" in proc.stderr, proc.stderr

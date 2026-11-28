@@ -742,7 +742,6 @@ KNOWN_INSENSITIVE: set[str] = {
     "compile_custom_alerts.py",
     "config_history.py",
     "da_assembler.py",
-    "generate_tenant_mapping_rules.py",
     "migrate_builtin_defaults.py",
     "migrate_credentials.py",
     "tenant_verify.py",

@@ -1,5 +1,5 @@
 ---
-title: "ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N)"
+title: "ADR-006: 租戶映射拓撲 (1:1, N:1)"
 tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.9.0
@@ -11,7 +11,7 @@ domain: exporter
 created_at: 2026-03-16
 updated_at: 2026-11-28
 ---
-# ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N)
+# ADR-006: 租戶映射拓撲 (1:1, N:1)
 
 > **Language / 語言：** **中文 (Current)** | [English](./006-tenant-mapping-topologies.en.md)
 
@@ -33,76 +33,60 @@ updated_at: 2026-11-28
 
 2026-11-25 修訂：同一個 `metric_group` 的 warning 與 critical 必須有相同的叢集範圍，由 CI 檢查；「多叢集同租戶」哪些逐叢集、哪些不逐叢集改寫為現況，補上 `MariaDBNoPrimary` 與 `da-tools migrate` 兩項限制。
 
+2026-11-28 修訂：一個實例對多個租戶（1:N）改為不支援，以 recording rule 產生映射序列的做法與它的工具一併移除；共用實例改為每個 schema 各跑一個 exporter，或在抓取時自己寫 `metric_relabel_configs`（見「共用實例」）。
+
 ## 決策
 
-**租戶與實例的對應關係在資料平面處理：抓取設定與 Prometheus 的 recording rule（預先計算並存成新序列的查詢）。threshold-exporter 不處理映射。** 三種拓撲各用一種做法：
+**租戶與實例的對應關係在抓取時處理：抓取設定把序列標上 `tenant`。threshold-exporter 不處理映射。** 支援兩種拓撲：
 
 1. **1:1（預設）**：一個 namespace 是一個租戶。抓取時把 `namespace` 寫成 `tenant`，不需要額外設定。
 2. **N:1**：多個 namespace 屬於同一個租戶。抓取設定用 `relabel_configs` 的 regex 把這幾個 namespace 都標成同一個 `tenant`；`scaffold_tenant.py --namespaces ns1,ns2` 產生這段設定。
-3. **1:N**：一個資料庫實例裡有好幾個邏輯租戶（例如 Oracle 的多個 schema）。在設定目錄根層放 `_instance_mapping.yaml`，由 `generate_tenant_mapping_rules.py` 產生 recording rule，把實例層級的序列按 filter 切開、各加上 `tenant`。
+
+同一個 namespace 裡有好幾個租戶、各有自己的 exporter 時，抓取設定從 Service 的 label 或 annotation 寫 `tenant`（[設計文件 §2.3](../design/config-driven.md#23-tenant-namespace-映射模式-tenant-namespace-mapping)）；每個 exporter 仍只屬於一個租戶，等同 1:1。
 
 N:1 的一個常見情形是同一個租戶跑在好幾個叢集。這時每台 Prometheus 另外標出自己在哪個叢集，規則逐（租戶、叢集）計算，見下方「多叢集同租戶」。
 
-### 範例：1:N 映射
+**一個實例裡有好幾個租戶（1:N，例如一台 Oracle 的多個 schema）不支援。** 平台的規則包讀的是抓到的原始序列上的 `tenant`，所以租戶必須在抓取時就寫進原始序列；另外產生一條帶 `tenant` 的平行序列，不會改變告警落在哪個租戶（見「考慮過的替代方案」）。共用實例照下面的順序處理：
 
-設定目錄根層的 `_instance_mapping.yaml`（repo 內的範例檔）：
+1. **每個 schema 各跑一個 exporter。** 每個 exporter 用該 schema 自己的資料庫帳號連線，部署在該租戶的 namespace。拓撲就退化成 1:1，不需要任何映射。
+2. **拿不到各 schema 的帳號時，在抓取時自己寫 `metric_relabel_configs`**（Prometheus 在每條抓到的序列存進資料庫前套用的 relabel 規則）：依序列上區分租戶的 label（`tablespace`、`schema` 這類）改寫 `tenant`。平台不產生也不檢查這段設定。
 
-```yaml {.quote src="components/threshold-exporter/config/conf.d/examples/_instance_mapping.yaml"}
-instance_tenant_mapping:
-  # Oracle: single instance, multiple schemas → multiple tenants
-  oracle-prod-01:
-    - tenant: db-a
-      filter: 'schema=~"app_a_.*"'
-    - tenant: db-b
-      filter: 'schema=~"app_b_.*"'
+### 範例：共用實例的 `metric_relabel_configs`
 
-  # DB2: single instance, multiple tablespaces → multiple tenants
-  db2-shared-01:
-    - tenant: db-c
-      filter: 'tablespace="ts_client_c"'
-    - tenant: db-d
-      filter: 'tablespace="ts_client_d"'
-```
-
-`generate_tenant_mapping_rules.py --config-dir <目錄> --metrics oracle_sessions` 的輸出（結束碼 0）：
+加在抓共用實例的那個 scrape job 下。`metric_relabel_configs` 在 `relabel_configs` 之後套用，所以會蓋過從 namespace 寫進去的 `tenant`：
 
 ```yaml
-groups:
-- name: tenant_mapping_db2-shared-01
-  interval: 30s
-  rules:
-  - record: tenant_mapped:oracle_sessions:current
-    expr: oracle_sessions{instance="db2-shared-01", tablespace="ts_client_c"}
-    labels:
-      tenant: db-c
-  - record: tenant_mapped:oracle_sessions:current
-    expr: oracle_sessions{instance="db2-shared-01", tablespace="ts_client_d"}
-    labels:
-      tenant: db-d
-- name: tenant_mapping_oracle-prod-01
-  interval: 30s
-  rules:
-  - record: tenant_mapped:oracle_sessions:current
-    expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_a_.*"}
-    labels:
-      tenant: db-a
-  - record: tenant_mapped:oracle_sessions:current
-    expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_b_.*"}
-    labels:
-      tenant: db-b
+metric_relabel_configs:
+  # 一台共用的 Oracle：APP_A_* 這些 tablespace 屬於 db-a，APP_B_* 屬於 db-b
+  - source_labels: [tablespace]
+    regex: "APP_A_.*"
+    target_label: tenant
+    replacement: db-a
+  - source_labels: [tablespace]
+    regex: "APP_B_.*"
+    target_label: tenant
+    replacement: db-b
 ```
 
-每個實例一個規則群組，每個（條目、指標）一條規則。`filter` 是選擇器大括號裡的那串 label 比對（例如 `schema=~"app_a_.*", tablespace="ts_a"`），由 Prometheus 的 parser 讀，值裡的逗號與引號照 PromQL 字串規則；讀不了、或寫了 `__name__` 的 filter，工具點名該條目並以結束碼 2 結束、不產生規則（[#4264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4264)）。省略 `--metrics` 時，用 `metric-dictionary.yaml` 裡的每一個指標。`--format configmap` 把同樣的規則包成名為 `rules-tenant-mapping` 的 ConfigMap（key 是 `tenant-mapping-rules.yaml`）。
-
-加上 `--validate` 時，檢查每個條目的租戶是否在設定目錄裡有租戶檔。上面的目錄若只有 `db-a`、`db-b` 的租戶檔，輸出下面三行並以結束碼 1 結束、不產生規則：
+抓到的序列（指標與 label 是平台附的 Oracle exporter 設定 `rule-packs/exporters/oracle.yaml` 定義的）：
 
 ```text
-ERROR: instance=db2-shared-01: tenant 'db-c' not found in config-dir
-ERROR: instance=db2-shared-01: tenant 'db-d' not found in config-dir
-ERROR: validation failed — fix errors above before generating rules
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="APP_A_DATA", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="APP_B_DATA", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="SYSTEM", type="PERMANENT"}
+query_interval{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", query="oracle_liveness"}
 ```
 
-相關工具：`da-tools discover-mappings`（`discover_instance_mappings.py`）讀 exporter 的 `/metrics` 或查 Prometheus，列出實例裡 schema、tablespace 這類 label 的值，產生一份待填租戶名的 `_instance_mapping.yaml` 草稿；`scaffold_tenant.py --topology=1:N --mapping-instance <實例> --mapping-filter <filter>` 在它的草稿設定目錄裡多產生一份只含這個租戶的 `_instance_mapping.yaml`，要自己併進正式的那份。
+存進 Prometheus 的序列：
+
+```text
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="APP_A_DATA", tenant="db-a", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="APP_B_DATA", tenant="db-b", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="SYSTEM", tenant="db-shared", type="PERMANENT"}
+query_interval{instance="oracle-prod-01:9161", namespace="db-shared", query="oracle_liveness", tenant="db-shared"}
+```
+
+沒配中的 tablespace（`SYSTEM`）與沒有 `tablespace` 的序列（存活判定讀的 `query_interval{query="oracle_liveness"}`）留在原本的 `tenant`：實例層級的指標分不給任何一個 schema 租戶。
 
 ### 多叢集同租戶：叢集身分與告警粒度
 
@@ -188,7 +172,7 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 
 **抓取時不寫 `tenant`；需要租戶的地方從 `namespace` 推出來，一個 namespace 就是一個租戶。** 平台附的 Prometheus 設定（`k8s/03-monitoring/configmap-prometheus.yaml`）的 kubelet 抓取 job 只保留 `db-` 開頭的 namespace，不寫 `tenant`；自建的 Prometheus 與 Prometheus Operator 的 kubelet ServiceMonitor 也不必寫。推導發生在三處：
 
-- 平台規則包的 recording rule 以 `label_replace` 把 `namespace` 複製成 `tenant`。
+- 平台規則包的 recording rule（Prometheus 預先計算並存成新序列的查詢）以 `label_replace` 把 `namespace` 複製成 `tenant`。
 - 自助告警的編譯器讀這類指標時，序列已帶 `tenant` 就沿用，沒有才從 `namespace` 補上。哪些指標屬於這類，由 `rule-packs/threshold-registry.yaml` 裡沒有 `presence` 的 pack（kubernetes）的 `metric_prefixes` 決定：`container_`、`kube_`、`kubelet_`。
 - 租戶自己寫的規則以 `namespace="<租戶>", tenant=""` 選這類序列；寫成 `tenant="<租戶>"` 會被自訂規則 lint 擋下，因為那樣選不到任何序列。
 
@@ -206,31 +190,27 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 | **N:1** | 多個 namespace／實例聚合為一個租戶 | 多叢集同租戶、DR 對、讀寫分離 |
 | **1:N** | 單一實例內含多個邏輯租戶 | Oracle 多 schema、DB2 多 tablespace、共享 RDS |
 
-**1:N。** 共享實例的指標只帶 `instance`，不帶租戶。exporter 不知道實例內部怎麼按 schema 或 tablespace 劃分給租戶，告警規則也就無法對同一個實例上的不同租戶套用不同的閾值。需要一個通用的方法把實例層級的指標拆成租戶層級，而不改 threshold-exporter。
+**1:N。** 共享實例的指標只帶 `instance`，不帶租戶；租戶藏在 `schema`、`tablespace` 這類 label 裡，或根本不在指標上。exporter 不知道實例內部怎麼劃分給租戶。要讓規則包對同一個實例上的不同租戶套用不同的閾值，`tenant` 必須寫在規則包讀的那條序列上。
 
 **多叢集同租戶。** 規則裡有兩類寫法在同租戶跨叢集時會出錯：
 
 - **互相遮蔽。** 存活判定寫成「預期存在的實例，扣掉有成功回報的實例」，兩邊以 `on(tenant, instance)` 配對。兩個叢集各有一台位址相同的實例時（各叢集內部網段重複很常見），健康的那台會把故障的那台消掉，故障的叢集不告警。
 - **悄悄合併。** `sum by(tenant)` 會把兩個叢集加在一起，`max by(tenant)` 只留下較大的那個。值班人員看不出是哪個叢集，數值也不再對應任何一個資料庫。
 
-**基礎設施指標。** 本 ADR 的 N:1 與 1:N 靠額外的映射規則，而基礎設施指標直接以 `namespace` 當租戶，拿不到那層映射：
+**基礎設施指標。** 本 ADR 的 N:1 靠抓取設定把幾個 namespace 標成同一個 `tenant`，而基礎設施指標直接以 `namespace` 當租戶，拿不到那層映射：
 
 - **N:1 會靜默漏告警。** 指標被標成 `tenant="db-a-read"`，但租戶的設定用的是 `db-a` 這個名字，兩者對不上，告警永遠不觸發。
 - **1:N 本質上做不到。** 一顆 PVC 無法按 schema／tablespace 拆給不同租戶。
 
 ## 後果與已知限制
 
-### 1:N 映射
+### 共用實例
 
-- **threshold-exporter 不感知拓撲。** 它不讀 `_instance_mapping.yaml`；三種拓撲最後都收斂成序列上的 `tenant` label。
-- **原始序列與映射後的序列並存。** recording rule 產生新序列，原始的實例序列照留，兩種視角都查得到。代價是被映射的那部分序列數加倍：每條規則把它選到的原始序列各複製一份、多加 `tenant`。`--dry-run` 印出的估計是「條目數 × 指標數」，假設每條規則只選到一條序列。
-- **映射後的序列晚至多一個評估間隔。** 產生的規則群組 `interval` 是 30s。
-- **平台的規則包不讀映射後的序列。** 產生的序列名稱是 `tenant_mapped:<原指標>:current`，`rule-packs/` 裡沒有任何規則讀這個名字；要對它們告警，得自己寫規則。
-- **產生的規則不在平台附的 Prometheus 部署裡。** `k8s/03-monitoring/deployment-prometheus.yaml` 的規則 projected volume 沒有 `rules-tenant-mapping` 這個來源，Prometheus 只載入 `/etc/prometheus/rules/*.yml`。要用就把這個 ConfigMap 加進那個 projected volume，並投影成 `.yml` 檔名；加進去之後，改動由 config-reloader sidecar 觸發 Prometheus 重新載入，不必重啟（[ADR-005](./005-projected-volume-for-rule-packs.md)）。
-- **租戶存在與否的檢查要自己接進管線。** `--validate` 檢查映射裡的租戶在設定目錄裡有租戶檔，但 repo 的 CI 不跑這支工具。
-- **沒有 schema 驗證。** `_instance_mapping.yaml` 沒有 JSON Schema；缺 `tenant` 或 `filter` 為空的條目以 WARN 略過，不讓工具失敗；`filter` 本身讀不了則以結束碼 2 結束（見上）。
-- **filter 要懂底層資料庫的結構。** 寫 filter 的人得知道 schema／tablespace 怎麼對應到 exporter 的 label。
-- **沒有端到端驗證。** repo 內只有產生器的單元測試（`tests/ops/test_generate_tenant_mapping_rules.py`），沒有把產生的規則載進 Prometheus 的測試，也沒有在實際多 schema 的 Oracle 環境跑過。
+- **每個 schema 一個 exporter，連線數與資源隨 schema 數增加。** 每個 exporter 各開自己的資料庫連線，也各要一組帳號。
+- **`metric_relabel_configs` 只分得開帶租戶 label 的序列。** 實例層級的指標（存活判定、整個實例的連線數）留在 namespace 那個租戶，讀它們的告警不會分到 schema 租戶。
+- **只有 namespace 那個租戶宣告這個 exporter。** exporter 存活判定讀的序列（Oracle 是 `query_interval{query="oracle_liveness"}`）沒有 tablespace label，留在 namespace 租戶。schema 租戶若在 `_expected_exporters` 宣告 `oracle`，`TenantExporterAbsent` 找不到它的存活序列，會一直觸發。
+- **這段設定由使用者自己維護。** 平台不產生也不檢查；regex 沒配中時序列留在原本的 `tenant`，不會報錯。寫的人得知道 schema 怎麼對應到 exporter 的 label。
+- **設定目錄裡的 `_instance_mapping.yaml` 沒有任何東西讀。** threshold-exporter 本來就不讀它，產生與探索它的工具也已移除。留著不會報錯，也不生效，可以刪掉。
 
 ### 多叢集同租戶的已知限制
 
@@ -257,15 +237,17 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 ### 基礎設施指標
 
 - **N:1 客戶在遷移當天就會收到訊號。** [ADR-024](024-version-aware-threshold-via-dimensional-label.md) 的看門告警 `CustomRecipeDiskInert`：租戶設了磁碟告警、它的 Pod 也在跑，但歸屬後的磁碟指標一直沒出現，它就會響。N:1 客戶因此收到「這條告警沒生效」的明確訊號，而不是無聲漏報。
-- **N:1 與 1:N 不支援。** 等真有 N:1 客戶（例如讀寫分離的資料庫）需要基礎設施告警，再把映射補上。
+- **N:1 不支援。** 等真有 N:1 客戶（例如讀寫分離的資料庫）需要基礎設施告警，再把映射補上。
 
 ## 考慮過的替代方案
 
-### 1:N 映射放在哪一層
+### 共用實例的租戶在哪一層切開
 
+- **用 recording rule 產生帶 `tenant` 的平行序列**：不必動 exporter 與抓取設定。但規則包讀的是原始序列上的 `tenant`，平行序列另有名字，告警仍落在 namespace 那個租戶；要接上，每個規則包都得改讀平行序列，而被切開的那部分序列數還會加倍。
 - **在 exporter 內建映射**：單一元件處理，但 exporter 的職責是把 YAML 設定轉成指標，映射屬於資料正規化，放進去就越界；映射一改就要重啟 exporter，影響所有租戶的指標；HA 部署下兩個 exporter 還得維持一致的映射。
 - **在 Alertmanager 映射**：只影響通知路徑，但太晚：Alertmanager 只處理已觸發的告警，無法在指標層級拆分；Grafana 這類工具直接查 Prometheus，看不到映射。
 - **外部 proxy**：完全解耦，但多一個元件、多一段延遲、運維更複雜。
+- **在抓取時寫 `tenant`**（採用）：規則包不必改，序列數也不加倍。代價見「後果與已知限制」的「共用實例」。
 
 ### 基礎設施指標的租戶在哪裡寫
 
@@ -290,3 +272,4 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 - [BYO Alertmanager 整合指南](../integration/byo-alertmanager-integration.md)
 - [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097) — 多叢集同租戶的討論與實作紀錄
 - [Prometheus Recording Rules](https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/)
+- [Prometheus `metric_relabel_configs`](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#metric_relabel_configs)

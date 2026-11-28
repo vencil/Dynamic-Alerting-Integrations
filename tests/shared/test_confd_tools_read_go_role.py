@@ -892,7 +892,7 @@ def test_the_scope_is_one_answer_with_both_halves(tmp_path, da_guard_binary) -> 
 
 
 @pytest.mark.parametrize("reader_name", [
-    "tree_tenants", "tenant_declarations", "generate_tenant_mapping_rules",
+    "tree_tenants", "tenant_declarations",
     "check_retire_drift", "validate_config.check_tenant_uniqueness",
     "validate_config.check_tenant_file_name"])
 def test_every_tenant_set_reader_names_what_hides_a_tenant(reader_name, tmp_path,
@@ -908,10 +908,6 @@ def test_every_tenant_set_reader_names_what_hides_a_tenant(reader_name, tmp_path
     elif reader_name == "tenant_declarations":
         declared, unreadable = _lib_confd.tenant_declarations(root)
         assert set(declared) == {"a"} and unreadable == ["team"]
-    elif reader_name == "generate_tenant_mapping_rules":
-        import generate_tenant_mapping_rules as g
-        with pytest.raises(YamlFileError, match="team"):
-            g.collect_tenant_ids_from_config_dir(str(root))
     elif reader_name == "check_retire_drift":
         import check_retire_drift as c
         with pytest.raises(YamlFileError, match="team"):

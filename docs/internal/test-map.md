@@ -265,7 +265,6 @@ func TestOAuth2ProxyAnswers401(t *testing.T) {
 | `ops/test_validate_migration.py` | validate_migration.py 遷移驗證 | 覆蓋率 22→99% |
 | `lint/test_check_routing_profiles.py` | check_routing_profiles.py 路由設定檔 lint | v2.1.0 ADR-007 |
 | `ops/test_explain_route.py` | explain_route.py 路由偵錯 | v2.1.0 ADR-007 |
-| `ops/test_generate_tenant_mapping_rules.py` | generate_tenant_mapping_rules.py 租戶映射 | v2.1.0 ADR-006 |
 | `ops/test_e2e_routing_profile.py` | 路由設定檔 E2E 管線 | v2.1.0 ADR-007 integration |
 | `ops/test_parse_platform_config.py` | _parse_platform_config 解析器單元測試 | v2.1.0 refactor 驗證 |
 | `lint/test_check_structure.py` | check_structure.py 目錄結構驗證 | v2.1.0 |
@@ -273,7 +272,6 @@ func TestOAuth2ProxyAnswers401(t *testing.T) {
 | `lint/test_check_bilingual_annotations.py` | check_bilingual_annotations.py 雙語標註驗證 | v2.1.0 |
 | `lint/test_check_includes_sync.py` | check_includes_sync.py 中英 include 同步 | v2.1.0 |
 | `lint/test_check_doc_links.py` | check_doc_links.py 文件交叉引用一致性 | v2.1.0 |
-| `ops/test_discover_instance_mappings.py` | discover_instance_mappings.py 1:N 映射自動發現 | v2.1.0 ADR-006 |
 | `ops/test_explain_route_trace.py` | explain_route.py --trace 路由追蹤模擬 | v2.1.0 ADR-007 |
 | `ops/test_byo_check.py` | byo_check.py BYO 整合前檢驗證 | v2.1.0 |
 | `ops/test_federation_check.py` | federation_check.py 聯邦式多叢集驗證 | v2.1.0 |

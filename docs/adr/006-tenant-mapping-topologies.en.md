@@ -1,12 +1,12 @@
 ---
-title: "ADR-006: Tenant Mapping Topologies (1:1, N:1, 1:N)"
+title: "ADR-006: Tenant Mapping Topologies (1:1, N:1)"
 tags: [adr, architecture]
 audience: [platform-engineers]
 version: v2.9.0
 lang: en
 ---
 
-# ADR-006: Tenant Mapping Topologies (1:1, N:1, 1:N)
+# ADR-006: Tenant Mapping Topologies (1:1, N:1)
 
 > **Language / 語言：** **English (Current)** | [中文](006-tenant-mapping-topologies.md)
 
@@ -28,76 +28,60 @@ Revised 2026-11-28: infrastructure metrics no longer have `namespace` written in
 
 Revised 2026-11-25: the warning and the critical of one `metric_group` must have the same cluster scope, checked in CI; what is per cluster and what is not in "One tenant in several clusters" now describes the current state, with two limitations added for `MariaDBNoPrimary` and `da-tools migrate`.
 
+Revised 2026-11-28: one instance serving several tenants (1:N) is no longer supported; producing mapped series with recording rules is removed together with its tools. A shared instance now runs one exporter per schema, or the user writes `metric_relabel_configs` at scrape time (see "Shared instances").
+
 ## Decision
 
-**The mapping between tenants and instances is handled in the data plane: scrape configuration and Prometheus recording rules (queries computed ahead of time and stored as new series). threshold-exporter does not handle mapping.** Each of the three topologies has one mechanism:
+**The mapping between tenants and instances is handled at scrape time: the scrape configuration labels series with `tenant`. threshold-exporter does not handle mapping.** Two topologies are supported:
 
 1. **1:1 (default)**: one namespace is one tenant. The scrape writes `namespace` into `tenant`; no extra configuration.
 2. **N:1**: several namespaces belong to one tenant. A `relabel_configs` regex in the scrape configuration labels all of them with the same `tenant`; `scaffold_tenant.py --namespaces ns1,ns2` produces that snippet.
-3. **1:N**: one database instance holds several logical tenants (for example several Oracle schemas). An `_instance_mapping.yaml` at the root of the config directory drives `generate_tenant_mapping_rules.py`, which produces recording rules that split the instance-level series by filter and add `tenant` to each part.
+
+When one namespace holds several tenants, each with its own exporter, the scrape configuration writes `tenant` from a Service label or annotation ([design document §2.3](../design/config-driven.en.md#23-tenant-namespace-mapping)); each exporter still belongs to one tenant, which is 1:1.
 
 A common case of N:1 is one tenant running in several clusters. Each Prometheus then also says which cluster it is in, and rules are computed per (tenant, cluster); see "One tenant in several clusters" below.
 
-### Example: a 1:N mapping
+**Several tenants on one instance (1:N, for example several schemas on one Oracle) are not supported.** The platform's rule packs read `tenant` on the scraped series themselves, so the tenant has to be written into those series at scrape time; producing a separate parallel series that carries `tenant` does not change which tenant an alert lands on (see "Alternatives considered"). A shared instance is handled in this order:
 
-`_instance_mapping.yaml` at the root of the config directory (the example file in the repository):
+1. **Run one exporter per schema.** Each exporter connects with that schema's own database account and is deployed in that tenant's namespace. The topology becomes 1:1 and needs no mapping.
+2. **When per-schema accounts are not available, write `metric_relabel_configs` at scrape time yourself** (relabel rules Prometheus applies to every scraped series before storing it): rewrite `tenant` from the label that tells tenants apart on the series (`tablespace`, `schema` and the like). The platform neither produces nor checks this snippet.
 
-```yaml {.quote src="components/threshold-exporter/config/conf.d/examples/_instance_mapping.yaml"}
-instance_tenant_mapping:
-  # Oracle: single instance, multiple schemas → multiple tenants
-  oracle-prod-01:
-    - tenant: db-a
-      filter: 'schema=~"app_a_.*"'
-    - tenant: db-b
-      filter: 'schema=~"app_b_.*"'
+### Example: `metric_relabel_configs` for a shared instance
 
-  # DB2: single instance, multiple tablespaces → multiple tenants
-  db2-shared-01:
-    - tenant: db-c
-      filter: 'tablespace="ts_client_c"'
-    - tenant: db-d
-      filter: 'tablespace="ts_client_d"'
-```
-
-Output of `generate_tenant_mapping_rules.py --config-dir <dir> --metrics oracle_sessions` (exit code 0):
+Add it under the scrape job of the shared instance. `metric_relabel_configs` is applied after `relabel_configs`, so it overrides the `tenant` written from the namespace:
 
 ```yaml
-groups:
-- name: tenant_mapping_db2-shared-01
-  interval: 30s
-  rules:
-  - record: tenant_mapped:oracle_sessions:current
-    expr: oracle_sessions{instance="db2-shared-01", tablespace="ts_client_c"}
-    labels:
-      tenant: db-c
-  - record: tenant_mapped:oracle_sessions:current
-    expr: oracle_sessions{instance="db2-shared-01", tablespace="ts_client_d"}
-    labels:
-      tenant: db-d
-- name: tenant_mapping_oracle-prod-01
-  interval: 30s
-  rules:
-  - record: tenant_mapped:oracle_sessions:current
-    expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_a_.*"}
-    labels:
-      tenant: db-a
-  - record: tenant_mapped:oracle_sessions:current
-    expr: oracle_sessions{instance="oracle-prod-01", schema=~"app_b_.*"}
-    labels:
-      tenant: db-b
+metric_relabel_configs:
+  # One shared Oracle: tablespaces APP_A_* belong to db-a, APP_B_* to db-b
+  - source_labels: [tablespace]
+    regex: "APP_A_.*"
+    target_label: tenant
+    replacement: db-a
+  - source_labels: [tablespace]
+    regex: "APP_B_.*"
+    target_label: tenant
+    replacement: db-b
 ```
 
-One rule group per instance, one rule per (entry, metric). `filter` is the list of label matchers inside a selector's braces (for example `schema=~"app_a_.*", tablespace="ts_a"`), read by Prometheus' parser, so a comma or a quote inside a value follows PromQL's string rules; a filter the parser cannot read, or one that names `__name__`, makes the tool name the entry and exit with code 2 without producing rules ([#4264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4264)). Without `--metrics`, every metric of `metric-dictionary.yaml` is used. `--format configmap` wraps the same rules in a ConfigMap named `rules-tenant-mapping` (key `tenant-mapping-rules.yaml`).
-
-With `--validate`, the tool checks that every entry's tenant has a tenant file in the config directory. If the directory above holds tenant files for `db-a` and `db-b` only, it prints these three lines, exits with code 1 and produces no rules:
+Scraped series (the metric and its labels are those the platform's Oracle exporter configuration `rule-packs/exporters/oracle.yaml` defines):
 
 ```text
-ERROR: instance=db2-shared-01: tenant 'db-c' not found in config-dir
-ERROR: instance=db2-shared-01: tenant 'db-d' not found in config-dir
-ERROR: validation failed — fix errors above before generating rules
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="APP_A_DATA", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="APP_B_DATA", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", tablespace="SYSTEM", type="PERMANENT"}
+query_interval{instance="oracle-prod-01:9161", namespace="db-shared", tenant="db-shared", query="oracle_liveness"}
 ```
 
-Related tools: `da-tools discover-mappings` (`discover_instance_mappings.py`) reads an exporter's `/metrics` or queries Prometheus, lists the values of labels such as schema and tablespace in an instance, and writes an `_instance_mapping.yaml` draft whose tenant names you fill in; `scaffold_tenant.py --topology=1:N --mapping-instance <instance> --mapping-filter <filter>` adds to its draft config directory an `_instance_mapping.yaml` holding only this tenant, which you merge into the real one yourself.
+Series stored in Prometheus:
+
+```text
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="APP_A_DATA", tenant="db-a", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="APP_B_DATA", tenant="db-b", type="PERMANENT"}
+oracledb_tablespace_used_percent{instance="oracle-prod-01:9161", namespace="db-shared", tablespace="SYSTEM", tenant="db-shared", type="PERMANENT"}
+query_interval{instance="oracle-prod-01:9161", namespace="db-shared", query="oracle_liveness", tenant="db-shared"}
+```
+
+A tablespace no rule matches (`SYSTEM`) and a series without `tablespace` (the `query_interval{query="oracle_liveness"}` the liveness check reads) keep their original `tenant`: an instance-level metric cannot be given to any one schema tenant.
 
 ### One tenant in several clusters: cluster identity and alert granularity
 
@@ -183,7 +167,7 @@ The self-service alerts of [ADR-024](024-version-aware-threshold-via-dimensional
 
 **No scrape writes `tenant` on them; wherever a tenant is needed it is derived from `namespace`, one namespace being one tenant.** The kubelet scrape jobs of the Prometheus configuration the platform ships (`k8s/03-monitoring/configmap-prometheus.yaml`) keep only namespaces that start with `db-` and write no `tenant`; a self-managed Prometheus and the Prometheus Operator's kubelet ServiceMonitor need not write it either. The derivation happens in three places:
 
-- The platform rule packs' recording rules copy `namespace` into `tenant` with `label_replace`.
+- The platform rule packs' recording rules (queries Prometheus computes ahead of time and stores as new series) copy `namespace` into `tenant` with `label_replace`.
 - The self-service alert compiler, reading such a metric, keeps a `tenant` a series already carries and takes it from `namespace` otherwise. Which metrics these are is set by the `metric_prefixes` of the packs without `presence` in `rule-packs/threshold-registry.yaml` (kubernetes): `container_`, `kube_`, `kubelet_`.
 - A tenant's own rules select such series with `namespace="<tenant>", tenant=""`; `tenant="<tenant>"` is refused by the custom-rule lint, since it selects nothing.
 
@@ -201,31 +185,27 @@ In enterprise environments, the mapping between database instances and tenants i
 | **N:1** | Several namespaces/instances aggregate to one tenant | One tenant in several clusters, DR pairs, read-write splitting |
 | **1:N** | One instance holds several logical tenants | Oracle multi-schema, DB2 multi-tablespace, shared RDS |
 
-**1:N.** A shared instance's metrics carry only `instance`, not a tenant. The exporter does not know how the instance is divided among tenants by schema or tablespace, so alert rules cannot apply different thresholds to different tenants on the same instance. A general way is needed to split instance-level metrics into tenant-level ones without changing threshold-exporter.
+**1:N.** A shared instance's metrics carry only `instance`, not a tenant; the tenant hides in labels such as `schema` or `tablespace`, or is not on the metric at all. The exporter does not know how the instance is divided among tenants. For the rule packs to apply different thresholds to different tenants on the same instance, `tenant` has to be on the series the rule packs read.
 
 **One tenant in several clusters.** Two kinds of rule expression go wrong when one tenant spans clusters:
 
 - **Masking.** A liveness check written as "instances expected to exist, minus instances that report success" matches the two sides with `on(tenant, instance)`. When each of two clusters has an instance at the same address (overlapping internal address ranges across clusters are common), the healthy one cancels the failed one and the failed cluster does not alert.
 - **Silent merging.** `sum by(tenant)` adds the two clusters together, and `max by(tenant)` keeps only the larger one. The on-call engineer cannot tell which cluster it is, and the value no longer corresponds to any single database.
 
-**Infrastructure metrics.** N:1 and 1:N in this ADR rely on extra mapping rules, while infrastructure metrics take `namespace` as the tenant directly and never see that mapping:
+**Infrastructure metrics.** N:1 in this ADR relies on the scrape configuration labelling several namespaces with one `tenant`, while infrastructure metrics take `namespace` as the tenant directly and never see that mapping:
 
 - **N:1 would silently miss alerts.** The metric is labelled `tenant="db-a-read"` while the tenant's configuration uses the name `db-a`; the two never match and the alert never fires.
 - **1:N is impossible in principle.** A PVC cannot be split between tenants by schema or tablespace.
 
 ## Consequences and known limitations
 
-### 1:N mapping
+### Shared instances
 
-- **threshold-exporter is unaware of topology.** It does not read `_instance_mapping.yaml`; all three topologies converge on the `tenant` label of the series.
-- **Original and mapped series coexist.** A recording rule produces new series and keeps the original instance series, so both views can be queried. The cost is that the mapped part doubles in series count: each rule copies every original series it selects and adds `tenant`. The estimate `--dry-run` prints is "entries × metrics", assuming each rule selects exactly one series.
-- **Mapped series lag by up to one evaluation interval.** The generated rule groups have `interval: 30s`.
-- **The platform's rule packs do not read the mapped series.** The generated series are named `tenant_mapped:<original metric>:current`, and no rule in `rule-packs/` reads that name; to alert on them, you write the rules yourself.
-- **The generated rules are not in the Prometheus deployment the platform ships.** The rules projected volume in `k8s/03-monitoring/deployment-prometheus.yaml` has no `rules-tenant-mapping` source, and Prometheus loads only `/etc/prometheus/rules/*.yml`. To use them, add the ConfigMap to that projected volume and project it to a `.yml` file name; once added, changes are reloaded by the config-reloader sidecar without restarting Prometheus ([ADR-005](./005-projected-volume-for-rule-packs.en.md)).
-- **The tenant-existence check has to be wired into your pipeline.** `--validate` checks that every tenant in the mapping has a tenant file in the config directory, but the repository's CI does not run this tool.
-- **No schema validation.** `_instance_mapping.yaml` has no JSON Schema; an entry missing `tenant` or with an empty `filter` is skipped with a WARN and does not fail the tool; a `filter` that cannot be read exits with code 2 (see above).
-- **Filters require knowing the database's structure.** Whoever writes a filter has to know how schemas/tablespaces map onto the exporter's labels.
-- **No end-to-end validation.** The repository has only unit tests for the generator (`tests/ops/test_generate_tenant_mapping_rules.py`); no test loads the generated rules into Prometheus, and it has not been run against a real multi-schema Oracle environment.
+- **One exporter per schema: connections and resources grow with the number of schemas.** Each exporter opens its own database connections and needs its own account.
+- **`metric_relabel_configs` can split only series that carry a tenant label.** Instance-level metrics (the liveness check, the connection count of the whole instance) stay with the namespace's tenant, and alerts reading them do not reach the schema tenants.
+- **Only the namespace's tenant declares the exporter.** The series the exporter liveness check reads (for Oracle, `query_interval{query="oracle_liveness"}`) has no tablespace label and stays with the namespace's tenant. A schema tenant that declares `oracle` in `_expected_exporters` has no liveness series of its own, so `TenantExporterAbsent` keeps firing for it.
+- **The user maintains the snippet.** The platform neither produces nor checks it; a regex that matches nothing leaves the series on its original `tenant` without an error. The author has to know how schemas map to the exporter's labels.
+- **Nothing reads an `_instance_mapping.yaml` in the config directory.** threshold-exporter never read it, and the tools that produced and discovered it are removed. Leaving it causes no error and has no effect; it can be deleted.
 
 ### Known limitations of one tenant in several clusters
 
@@ -252,15 +232,17 @@ In enterprise environments, the mapping between database instances and tenants i
 ### Infrastructure metrics
 
 - **An N:1 customer gets a signal on migration day.** The watchdog alert `CustomRecipeDiskInert` of [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) fires when a tenant has configured a disk alert and its pods are running, but the attributed disk metrics never appear. An N:1 customer therefore receives an explicit "this alert is not in effect" signal instead of a silent miss.
-- **N:1 and 1:N are not supported.** When an N:1 customer (for example a read-write split database) actually needs infrastructure alerts, the mapping will be added.
+- **N:1 is not supported.** When an N:1 customer (for example a read-write split database) actually needs infrastructure alerts, the mapping will be added.
 
 ## Alternatives considered
 
-### Which layer does 1:N mapping
+### Which layer splits a shared instance by tenant
 
+- **Recording rules producing parallel series that carry `tenant`**: neither the exporter nor the scrape configuration changes. But the rule packs read `tenant` on the original series; the parallel series has another name, so alerts still land on the namespace's tenant. Wiring it in would mean every rule pack reading the parallel series, and the split part of the series would also be doubled.
 - **Built into the exporter**: one component does it all, but the exporter's job is turning YAML configuration into metrics; mapping is data normalization and does not belong there. A mapping change would require restarting the exporter, affecting every tenant's metrics, and in an HA deployment two exporters would have to keep identical mappings.
 - **In Alertmanager**: affects only the notification path, but it is too late: Alertmanager handles only alerts that have already fired and cannot split at the metric level; tools such as Grafana query Prometheus directly and never see the mapping.
 - **An external proxy**: fully decoupled, but adds a component, latency and operational complexity.
+- **Writing `tenant` at scrape time** (chosen): the rule packs need no change and the series count does not double. The cost is under "Shared instances" in "Consequences and known limitations".
 
 ### Where the tenant of an infrastructure metric is written
 
@@ -285,3 +267,4 @@ In enterprise environments, the mapping between database instances and tenants i
 - [BYO Alertmanager integration guide](../integration/byo-alertmanager-integration.en.md)
 - [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097) — discussion and implementation record of one tenant in several clusters
 - [Prometheus Recording Rules](https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/)
+- [Prometheus `metric_relabel_configs`](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#metric_relabel_configs)

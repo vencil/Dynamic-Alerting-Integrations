@@ -315,7 +315,7 @@ da-tools tenant-verify --all --json
 |---------|------|------------------------|---------|
 | **1:1**（標準） | 一個 Namespace = 一個 Tenant | `source_labels: [__meta_kubernetes_namespace]` → `target_label: tenant` | 大多數部署 |
 | **N:1** | 多個 Namespace 視為同一 Tenant | 多個 namespace 的指標 relabel 到同一個 tenant 值 | 讀寫分離（`db-a-read` + `db-a-write` → `db-a`） |
-| **1:N** | 一個 Namespace 內多個 Tenant | 以 Service label/annotation 而非 namespace 作為 tenant 來源 | 共享 namespace 的多租戶架構 |
+| **共享 Namespace** | 一個 Namespace 內多個 Tenant，各有自己的 exporter | 以 Service label/annotation 而非 namespace 作為 tenant 來源 | 共享 namespace 的多租戶架構 |
 
 **N:1 relabel 範例**（多 namespace → 一個 tenant）：
 
@@ -331,7 +331,7 @@ relabel_configs:
     replacement: "$1"
 ```
 
-**1:N relabel 範例**（一個 namespace → 多個 tenant）：
+**共享 Namespace relabel 範例**（一個 namespace → 多個 tenant）：
 
 ```yaml
 relabel_configs:
@@ -343,11 +343,13 @@ relabel_configs:
     target_label: tenant
 ```
 
+共享 Namespace 時，磁碟、PVC、容器這類基礎設施指標仍以 `namespace` 歸給租戶（[ADR-006](../adr/006-tenant-mapping-topologies.md)「基礎設施指標的租戶歸屬」），歸到的是 namespace 名，不是各租戶。
+
 **自動化工具**：`scaffold_tenant.py --namespaces ns1,ns2` 可自動產出 N:1 relabel_configs snippet，並在 tenant YAML 中寫入 `_namespaces` 元資料欄位供工具參考（不影響 metric 邏輯）。
 
-**自動化工具（ADR-006）**：`discover_instance_mappings.py` 可自動偵測 Prometheus 中的實例拓撲，`generate_tenant_mapping_rules.py` 從 `_instance_mapping.yaml` 產生 1:N 映射所需的 Recording Rules。詳見 [ADR-006](../adr/006-tenant-mapping-topologies.md)。
+**一個資料庫實例服務多個租戶**（[ADR-006](../adr/006-tenant-mapping-topologies.md) 的 1:N，例如一台 Oracle 的多個 schema）**不支援**：每個 schema 各跑一個 exporter（退化成 1:1），拿不到各 schema 帳號時在抓取時自己寫 `metric_relabel_configs`，寫法見 ADR-006 的範例。
 
-**設計原則**：平台核心（threshold-exporter + Rule Packs）完全不感知 namespace 結構。映射彈性完全由 Prometheus scrape config 和 Recording Rules 提供，無需修改平台任何元件。詳見 [BYO Prometheus 整合指南](../integration/byo-prometheus-integration.md)。
+**設計原則**：平台核心（threshold-exporter + Rule Packs）完全不感知 namespace 結構。映射彈性完全由 Prometheus scrape config 提供，無需修改平台任何元件。詳見 [BYO Prometheus 整合指南](../integration/byo-prometheus-integration.md)。
 
 ### 2.4 多層嚴重度 (Multi-tier Severity)
 

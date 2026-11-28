@@ -132,7 +132,7 @@ The estimate at decision time was that the edge exporter architecture needed an 
 
 ## Related
 
-- [ADR-006: Tenant Mapping Topologies](./006-tenant-mapping-topologies.en.md) — 1:N mapping via data-plane recording rules on top of the central exporter
+- [ADR-006: Tenant Mapping Topologies](./006-tenant-mapping-topologies.en.md) — the tenant is written into series at scrape time; several tenants on one instance are not supported
 - [ADR-005: Projected Volume for Rule Packs](./005-projected-volume-for-rule-packs.en.md) — how Rule Packs are mounted in a multi-cluster deployment
 - [Federation Integration Guide](../integration/federation-integration.en.md) — detailed integration steps
 - [Scenario: Multi-Cluster Federation](../scenarios/multi-cluster-federation.en.md) — a multi-cluster deployment walkthrough
