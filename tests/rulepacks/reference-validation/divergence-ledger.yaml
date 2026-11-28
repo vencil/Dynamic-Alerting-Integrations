@@ -123,10 +123,20 @@ absent_from_candidate:
       tracking: "#1177"
     - alert: TenantHAReplicasDegraded
       reason: KSM replica gauge 的 vanish 偵測（#875/#888），波形庫無 replica-degradation signature。
+    - alert: NodeReadinessFlapping
+      reason: >-
+        節點就緒狀態反覆變動（#1177；15 分鐘內 Ready=true gauge 變動超過 2 次、持續
+        15 分鐘）。波形庫的 node-notready signature 是單次 step（1 → 0 維持 20 分鐘），
+        只有一次變動；沒有反覆 NotReady 的 signature（anti-circularity：不回頭照規則
+        補寫），規則放進 candidate 也永遠 inert。出貨規則由
+        rule-pack-kubernetes-node-flapping_test.yaml 對真規則測。
+      tracking: "#1177"
 
 # ---------------------------------------------------------------------
-# 單條 alert 的欄位級分歧（field: for / severity / predicate_structure）
-# exit-lock：shipped_evidence 子字串必須仍存在於出貨 pack 原文
+# 單條 alert 的欄位級分歧（field: for / keep_firing_for / severity / predicate_structure）
+# exit-lock：for / keep_firing_for / severity 逐條告警比對 candidate 與出貨規則——宣告了
+# 分歧就必須真的不同，不同就必須宣告；keep_firing_for 另須寫 shipped_value，與出貨值
+# 不符即 FAIL。predicate_structure 的 shipped_evidence 子字串必須仍存在於出貨 pack 原文
 # ---------------------------------------------------------------------
 alert_divergence:
   kubernetes:
@@ -146,14 +156,29 @@ alert_divergence:
         節點歸屬是租戶 plumbing（需要 kube_pod_info fixture，波形庫未注入）；
         對單節點 library signature 而言 fire/no-fire 等價。
       shipped_evidence: "tenant:node_owner:info"
+    - alert: NodeNotReady
+      field: keep_firing_for
+      shipped_value: 10m
+      divergence: 出貨的 keep_firing_for 未重現——candidate 在節點恢復的下一輪就解除
+      reason: >-
+        keep_firing_for 只延長已觸發的告警，不改變 signature 是否被接到、也不改變
+        首次觸發時間（for 3m 不變）；波形庫的 node-notready 是單次 step，沒有需要它
+        橋接的間隙。觸發重審：波形庫新增反覆 NotReady 的 signature，或開始量測告警
+        解除時間時（#1177）。
     - alert: ContainerCrashLoop
       field: predicate_structure
-      divergence: 重啟那一臂的計數倒退守衛、state filter gate 與 keep_firing_for 未重現
+      divergence: 重啟那一臂的計數倒退守衛與 state filter gate 未重現
       reason: >-
-        波形庫沒有計數重置與 user_state_filter series；keep_firing_for 只延長已觸發的
-        告警，不改變 signature 是否被接到。觸發重審：波形庫新增計數重置的 signature，
-        或開始量測告警解除時間時（#1177）。
-      shipped_evidence: "keep_firing_for: 10m"
+        波形庫沒有計數重置與 user_state_filter series。觸發重審：波形庫新增計數重置
+        的 signature 時（#1177）。
+      shipped_evidence: 'user_state_filter{filter="container_crashloop"}'
+    - alert: ContainerCrashLoop
+      field: keep_firing_for
+      shipped_value: 10m
+      divergence: 出貨的 keep_firing_for 未重現——candidate 在兩臂都不成立的下一輪就解除
+      reason: >-
+        keep_firing_for 只延長已觸發的告警，不改變 signature 是否被接到。觸發重審：
+        開始量測告警解除時間時（#1177）。
 
 # ---------------------------------------------------------------------
 # Record/alert 層 selector 內聯到 base metric（fire/no-fire 等價）
