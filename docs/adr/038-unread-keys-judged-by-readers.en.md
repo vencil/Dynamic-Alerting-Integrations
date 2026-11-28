@@ -64,7 +64,7 @@ A root `_defaults.yaml` and one tenant file:
 ```yaml
 # _defaults.yaml
 defaults:
-  mysql_connections: 80
+  mysql_connection_usage_percent: 80
   mysql_slave_lag: 30
   redis_memory: 70
 ```
@@ -73,7 +73,7 @@ defaults:
 # db-a.yaml
 tenants:
   db-a:
-    mysql_conections: "70"        # misspelled
+    mysql_conection_usage_percent: "70"  # misspelled
     mysql_slave_lagg: disable     # misspelled; meant to turn off mysql_slave_lag
     _routng: disable              # misspelled; meant to disable routing
     redis_memory: disable         # turn this alert off
@@ -85,8 +85,8 @@ The result when this was drafted (2026-10-16, actually run on main):
 
 | Tool | Result |
 |---|---|
-| What the exporter actually serves (served-values) | `mysql_connections: 80`, `mysql_slave_lag: 30`, `redis_memory_critical: 90`; not served: `mysql_conections`, `mysql_slave_lagg`, `_routng`, `redis_memory`, `_namespaces` |
-| Generator `--validate --strict` | rc 0, three warning lines: `unknown reserved key '_routng' (typo?)`, `unknown key 'mysql_conections' not in defaults`, `unknown key 'mysql_slave_lagg' not in defaults` |
+| What the exporter actually serves (served-values) | `mysql_connection_usage_percent: 80`, `mysql_slave_lag: 30`, `redis_memory_critical: 90`; not served: `mysql_conection_usage_percent`, `mysql_slave_lagg`, `_routng`, `redis_memory`, `_namespaces` |
+| Generator `--validate --strict` | rc 0, three warning lines: `unknown reserved key '_routng' (typo?)`, `unknown key 'mysql_conection_usage_percent' not in defaults`, `unknown key 'mysql_slave_lagg' not in defaults` |
 | validate-config | rc 1: the schema rejects `_routng`; the two misspelled threshold keys are only listed as warnings |
 | da-guard | rc 0, no findings |
 
@@ -447,13 +447,13 @@ For the example in the Background section above, the verdict output (the people-
 
 ```
 db-a
-  key                     source        read_by     verdict  disable
-  mysql_conections        db-a.yaml     —           unread   —        ← error: no reader reads it
-  mysql_slave_lagg        db-a.yaml     —           unread   noop     ← warning: turns off nothing; mysql_slave_lag still served as 30
-  _routng                 db-a.yaml     —           unread   —        ← error
-  redis_memory            db-a.yaml     exporter    read     effective
-  redis_memory_critical   db-a.yaml     exporter    read     —        ← warning: turned off with redis_memory (disable_cascade), not served
-  _namespaces             db-a.yaml     annotation  read     —
+  key                            source        read_by     verdict  disable
+  mysql_conection_usage_percent  db-a.yaml     —           unread   —        ← error: no reader reads it
+  mysql_slave_lagg               db-a.yaml     —           unread   noop     ← warning: turns off nothing; mysql_slave_lag still served as 30
+  _routng                        db-a.yaml     —           unread   —        ← error
+  redis_memory                   db-a.yaml     exporter    read     effective
+  redis_memory_critical          db-a.yaml     exporter    read     —        ← warning: turned off with redis_memory (disable_cascade), not served
+  _namespaces                    db-a.yaml     annotation  read     —
 ```
 
 The input and today's measured output are in "Background"; this table is the verdict this ADR specifies, with each column produced per decisions 1, 4, 8 and 9.

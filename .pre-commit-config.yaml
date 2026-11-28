@@ -1759,6 +1759,25 @@ repos:
         # KNOWN_UNWIRED list feeds the membership universe.)
         files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|components/threshold-exporter/app/pkg/config/(retired_threshold_keys|builtin_defaults)_gen\.go|changelog\.d/.*\.md|CHANGELOG\.md)$
 
+      - id: retired-keys-not-taught
+        name: "a retired threshold key (registry retired_keys) is not named in docs, samples, scripts or the portal (#1200)"
+        entry: python3 -X utf8 scripts/tools/lint/check_retired_keys_not_taught.py --ci
+        language: python
+        additional_dependencies: ['pyyaml', 'jsonschema']
+        pass_filenames: false
+        # The only list of keys is `retired_keys:` in the threshold registry
+        # (each key and its derived `_critical`). Every tracked file is read
+        # except the registry, the changelogs, tests and Go source under
+        # components/; text the registry's generators render (`--regen` blocks,
+        # the RULE_PACKS module, a registry string projected verbatim into a
+        # .json) is recognised by rendering it again. A line that explains a
+        # retirement carries `retired-key-mention: <key>` (that line and the
+        # next); a marker that covers nothing is itself a finding.
+        # Runs on every commit: which files may teach a key cannot be written
+        # as a path regex (any tracked text file can), and retiring a key in
+        # the registry turns files this commit did not touch red.
+        always_run: true
+
       - id: threshold-unit-sanity-check
         name: "threshold unit sanity — declared units match the registry + values lie in their dimension (#992 promise / #1217 follow-up)"
         # #2906: its conf.d trees are read through `da-guard parse-tree` (with_da_guard.sh).

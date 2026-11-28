@@ -36,7 +36,7 @@ OPA Input JSON format:
       "tenant-a": {
         "mysql_connection_usage_percent": [
           { "from": "00:00", "to": "24:00", "value": 70, "severity": "warning" } ],
-        "mysql_connections": [
+        "mysql_threads_running": [
           { "from": "00:00", "to": "01:00", "value": 70, "severity": "warning" },
           { "from": "01:00", "to": "03:00", "value": null, "reason": "disabled" },
           { "from": "03:00", "to": "24:00", "value": 70, "severity": "warning" } ]

@@ -2,8 +2,8 @@
 
 ``config_diff`` and ``patch_config --diff`` both show, next to a changed key,
 the alerts the change reaches. They used to derive that from the key's
-spelling (``mysql_connections`` → ``*MysqlConnections*``), which names no real
-alert: the rule pack calls it ``MariaDBHighConnections``, and the CI
+spelling (a CamelCase pattern of ``mysql_connection_usage_percent``), which
+names no real alert: the rule pack calls it ``MariaDBHighConnections``, and the CI
 blast-radius comment carried the invented pattern to reviewers.
 
 The lookup reads what the packs actually say. An alert reaches a key when its
