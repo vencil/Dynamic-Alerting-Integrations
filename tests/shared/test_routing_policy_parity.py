@@ -120,6 +120,9 @@ PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location
                   "routing_key_ignored",
                   # #2989: a `_routing_enforced.match` that is not a list.
                   "routing_enforced_match_invalid",
+                  # #4368: a matcher of the enforced block in force on
+                  # da_migrated (a warning that never blocks).
+                  "routing_enforced_match_migrated",
                   # #2904: a `routing_profiles:` block that is not a mapping.
                   "routing_profiles_unusable",
                   # #2906: a defaults carrier the directory's selection passed
@@ -513,6 +516,9 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         # #2989: an enforced `match` that is not a list, off the finding's fields.
         + [["routing_enforced_match_invalid", w.file, w.field] for w in got.schema_warnings
            if getattr(w, "kind", None) == "routing_enforced_match_invalid"]
+        # #4368: an enforced matcher on da_migrated, off the finding's fields.
+        + [["routing_enforced_match_migrated", w.file, w.field] for w in got.schema_warnings
+           if getattr(w, "kind", None) == "routing_enforced_match_migrated"]
         # #2906: an unselected defaults carrier, off the finding's fields.
         + [["unselected_defaults_carrier", w.file, w.field or ""] for w in got.schema_warnings
            if getattr(w, "kind", None) == "unselected_defaults_carrier"]

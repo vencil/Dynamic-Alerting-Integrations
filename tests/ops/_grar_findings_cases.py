@@ -166,6 +166,17 @@ FIXTURES: dict[str, dict[str, str]] = {
             "  group_wait: 30m1h\n"),
         "alpha.yaml": _tenant("alpha"),
     },
+    # #4368: the enforced block in force (a root platform file) matching on
+    # the label only migrated alerts carry — a warning that names its file.
+    "enforced_migrated": {
+        "_defaults.yaml": _DEFAULTS,
+        "_enforced.yaml": (
+            "_routing_enforced:\n"
+            "  enabled: true\n"
+            "  receiver: {type: webhook, url: 'https://noc.example.com/x'}\n"
+            "  match: ['da_migrated=\"true\"']\n"),
+        "alpha.yaml": _tenant("alpha"),
+    },
     # Advisory lines: a mistyped key, an unknown profile, a clamped value.
     "advisory": {
         "_defaults.yaml": _DEFAULTS.replace(

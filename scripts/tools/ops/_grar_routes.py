@@ -57,6 +57,7 @@ from _grar_merge import (  # noqa: E402
     unclassified,
 )
 from _grar_validate import (  # noqa: E402
+    _split_matcher_element,
     group_by_problem_text,
     group_by_problems,
     receiver_name_collisions,
@@ -1125,6 +1126,54 @@ MIGRATED_SHADOW_RECEIVER = "migrated-alerts-shadow"
 #: migrated label instead of relying on a value that cannot be both.
 MIGRATED_LABEL = "da_migrated"
 MIGRATED_VALUE = "true"
+
+# #4368: an element of `_routing_enforced.match` that ``_split_matcher_element``
+# cannot read (a quoted label name, Alertmanager's UTF-8 matcher syntax) is
+# still asked whether it names MIGRATED_LABEL, as a name before an operator.
+# `--validate` refuses such an element (da-read's loader: "bad matcher
+# format"); render mode writes it as is, for an Alertmanager that may read it.
+_MIGRATED_NAME_RE = re.compile(
+    r'(?:^|[{,])\s*(?:' + re.escape(MIGRATED_LABEL) + r'|"' + re.escape(MIGRATED_LABEL)
+    + r'")\s*(=~|!~|!=|=)')
+
+
+def enforced_match_migrated_label(enforced_routing: object) -> list[tuple[int, str]]:
+    """``(index, operator)`` per element of ``_routing_enforced.match`` that
+    holds a matcher on ``MIGRATED_LABEL`` (#4368), in order; ``[]`` for none.
+
+    Whatever the value or operator: only migrate-rule's alerts carry the
+    label (``da_migrated="true"``), and the migrated-alerts shadow route
+    takes a shadow tenant's before the enforced route is reached, so a
+    matcher on it leaves the NOC route only a cut-over tenant's migrated
+    alerts (``=`` / ``=~``) or none of them (``!=`` / ``!~``, ``=""``) —
+    where after cutover they are meant to route as the tenant's other
+    alerts. Judged as written: an element is one Alertmanager matcher line
+    (several matchers comma-separated, ``{}`` around them, a value quoted or
+    bare — ``_split_matcher_element``), a quoted label name included. A
+    ``match`` that ``enforced_match_invalid`` refuses is not judged here.
+    """
+    if not isinstance(enforced_routing, dict) or enforced_match_invalid(enforced_routing):
+        return []
+    out: list[tuple[int, str]] = []
+    for idx, element in enumerate(enforced_routing.get("match") or []):
+        atoms = _split_matcher_element(element)
+        if atoms is not None:
+            ops = [op for name, op, _value in atoms if name == MIGRATED_LABEL]
+        else:
+            ops = _MIGRATED_NAME_RE.findall(element)
+        if ops:
+            out.append((idx, ops[0]))
+    return out
+
+
+def enforced_match_migrated_label_text(where: str, idx: int, op: str) -> str:
+    """The WARN text (no prefix) for one ``enforced_match_migrated_label`` row."""
+    return (f"_routing_enforced{where}: match[{idx}] is a matcher on "
+            f"{MIGRATED_LABEL} ({op}), the label only migrate-rule's alerts carry "
+            f"({MIGRATED_LABEL}=\"{MIGRATED_VALUE}\") — the migrated-alerts shadow route "
+            f"takes them before this route, so it leaves the NOC route only a cut-over "
+            f"tenant's migrated alerts, or none of them, where after cutover they "
+            f"route as the tenant's other alerts (#4368); drop it from match")
 
 
 def _build_migrated_alert_routes(active_tenants: "Iterable[str]" = ()

@@ -843,6 +843,8 @@ _routing_enforced:
 
 ⚠️ `enabled` must be a YAML boolean (`true` / `false`). A string such as `yes`, `n` or `'true'` (the generator reads yaml.v3 through `da-guard parse-tree`, so an unquoted `yes` / `no` is a string too) does **not** enable NOC routing: the generator refuses the whole tree in every mode, exit 1 ([#2164](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2164), [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)). The shape of the rest of `_routing_enforced` is checked by `platform-defaults.schema.json`, which reuses the tenant schema's definition.
 
+Do not write `da_migrated` in `match`: only migrate-rule's alerts carry that label; in the shadow period the shadow route takes them before this route, and after cutover they route as the tenant's other alerts do, this NOC route included. Written there, it leaves the NOC route only a cut-over tenant's migrated alerts, or none of them; the generator renders it as written with a WARN (`routing_enforced_match_migrated`, never blocking, [#4368](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4368)).
+
 **Per-tenant Enforced Channel :** If the receiver field includes `{{tenant}}`, the system automatically creates independent enforced routes for each tenant, allowing Platform to establish per-tenant notification channels that tenants cannot refuse or override:
 
 ```yaml

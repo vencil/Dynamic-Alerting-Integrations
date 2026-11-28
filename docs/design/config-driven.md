@@ -803,6 +803,8 @@ _routing_enforced:
 
 ⚠️ `enabled` 必須是 YAML 布林（`true`／`false`）。寫成 `yes`、`n`、`'true'` 這類字串（產生器經 `da-guard parse-tree` 以 yaml.v3 讀，未加引號的 `yes`／`no` 也是字串），產生器**不會**啟用 NOC 路由，並在所有模式拒收整棵樹、回 1（[#2164](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2164)、[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）。`_routing_enforced` 其餘欄位的形狀由 `platform-defaults.schema.json` 沿用租戶 schema 的定義檢查。
 
+`match` 不要寫 `da_migrated`：這個 label 只有 migrate-rule 的告警帶；影子期的 migrated 告警在這條路由之前就被影子路由收走，切換後與租戶的其他告警走同一條路，包括這條 NOC 路由。寫了會讓 NOC 路由只收、或完全不收已切換租戶的 migrated 告警；產生器照寫的產出，並印 WARN（`routing_enforced_match_migrated`，不擋，[#4368](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4368)）。
+
 **Per-tenant Enforced Channel：** 若 receiver 欄位包含 `{{tenant}}`，系統自動為每個 tenant 建立獨立的 enforced route，讓 Platform 可 by-tenant 建立各自的通知通道，tenant 無法拒絕也無法覆寫：
 
 ```yaml
