@@ -9,12 +9,14 @@ same one. Which audits run is ``.github/zizmor.yml``.
 What this file holds, by reading the files (no zizmor, no network):
 
 * the pin is the hook's ``rev:`` and nothing else installs zizmor — no
-  ``zizmor==`` in a requirements or constraints file, no ``pip install
-  zizmor``, no ``zizmor-action`` in a workflow (a second copy is the drift
-  ``toolchain-versions.md`` exists to prevent);
+  requirement line for it, no installer or runner naming it (pip, pipx, uv,
+  cargo, brew, …), no container image, no ``zizmor-action`` (a second copy is
+  the drift ``toolchain-versions.md`` exists to prevent). Spelled out, so an
+  installer it does not name is not seen;
 * ``ci.yml``'s Lint job runs ``pre-commit run zizmor --all-files``;
-* the hook's arguments: offline (no token, no network, the same answer
-  everywhere), the regular persona, and the config file;
+* the hook, exactly: offline (no token, no network, the same answer
+  everywhere), the regular persona, inline ignores off, the config file, the
+  one exclusion — no argument more (one could turn the gate off);
 * the config turns off audits only, and never one of the three the owner
   turned on (``excessive-permissions``, ``overprovisioned-secrets``,
   ``secrets-inherit``);
@@ -44,9 +46,20 @@ _HOOK_REPO = "https://github.com/zizmorcore/zizmor-pre-commit"
 #: The audits the owner turned on (2026-11-28). The config may not turn them off.
 _ON = frozenset({"excessive-permissions", "overprovisioned-secrets", "secrets-inherit"})
 
-# A second way of getting zizmor: a pinned package, a pip install, the action.
-_OTHER_INSTALL = re.compile(r"zizmor\s*[=~<>!]=|pip3?\s+install[^\n]*\bzizmor\b|zizmor-action",
-                            re.IGNORECASE)
+# A second way of getting zizmor (blind review widened it): an installer or
+# runner naming it on the same line, its container image, its action, or a
+# requirement line for it in a requirements / constraints file.
+_OTHER_INSTALL = re.compile(
+    r"(?:\bpip3?|\bpipx|\buvx?|\buv\s+tool|\bcargo|\bbrew|\bnix|\bapt(?:-get)?|\bconda)\b[^\n]*\bzizmor\b"
+    r"|ghcr\.io/zizmorcore/|zizmorcore/zizmor-action|\bzizmor-action\b",
+    re.IGNORECASE)
+_REQUIREMENT_LINE = re.compile(r"^\s*zizmor\b", re.IGNORECASE | re.MULTILINE)
+#: The hook, exactly: the arguments and the one exclusion. An extra argument
+#: (`--no-exit-codes`, `--min-severity=high`) or a wider `exclude:` would turn
+#: the gate off while every required argument is still there (blind review).
+_ARGS = ["--no-progress", "--offline", "--persona=regular", "--no-ignores",
+         "--config", ".github/zizmor.yml"]
+_EXCLUDE = r"^components/threshold-exporter/app/third_party/yaml\.v3/"
 
 
 def _hook_entry() -> dict:
@@ -74,6 +87,9 @@ def test_nothing_else_installs_zizmor():
             continue
         for m in _OTHER_INSTALL.finditer(text):
             found.append(f"{rel}: {m.group(0)!r}")
+        if re.search(r"(requirements|constraints)[^/]*\.(txt|in)$", rel):
+            for m in _REQUIREMENT_LINE.finditer(text):
+                found.append(f"{rel}: requirement line {m.group(0).strip()!r}")
     assert not found, ("zizmor is installed somewhere other than the pre-commit hook "
                        "(its `rev` is the one pin):\n  " + "\n  ".join(found))
 
@@ -86,14 +102,14 @@ def test_ci_runs_the_hook_by_name():
         "by name, so a hook it does not name is gated by nothing in CI")
 
 
-def test_the_hook_runs_offline_regular_with_the_config():
+def test_the_hook_is_exactly_the_reviewed_one():
+    """Offline (the same answer everywhere), the regular persona, inline
+    ignores off, the config — and nothing more: no other argument, no other
+    key that changes which files it sees or whether it fails."""
     (hook,) = [h for h in _hook_entry()["hooks"] if h["id"] == "zizmor"]
-    args = [str(a) for a in hook.get("args", [])]
-    assert "--offline" in args and "--persona=regular" in args, args
-    assert "--no-progress" in args, ("`args:` replaces the upstream hook's own "
-                                     "`--no-progress`; restate it")
-    i = args.index("--config")
-    assert args[i + 1] == ".github/zizmor.yml", args
+    assert set(hook) == {"id", "args", "exclude"}, sorted(hook)
+    assert [str(a) for a in hook["args"]] == _ARGS, hook["args"]
+    assert hook["exclude"] == _EXCLUDE, hook["exclude"]
 
 
 def test_the_config_only_turns_audits_off_and_never_the_three():

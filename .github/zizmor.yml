@@ -6,7 +6,7 @@
 #
 # Off: every other audit zizmor 1.32.0 has (read off the pinned binary: each
 # finding's documentation link names its audit). They stay off by decision,
-# not by oversight — `unpinned-uses` alone reports 252 findings and is its own
+# not by oversight — `unpinned-uses`, the largest of them, is its own
 # question (#4327).
 #
 # ⚠️ zizmor accepts a rule name it does not know without a word. A wrong or
