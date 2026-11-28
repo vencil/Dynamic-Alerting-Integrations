@@ -95,12 +95,13 @@ func TestGuard_RedundantOverrideIsTheCounterfactual(t *testing.T) {
 			map[string]string{"_defaults.yaml": "dimensions:\n  pg_connections: [env, db]\ndefaults:\n  pg_connections: 80\n",
 				"tx.yaml": "tenants:\n  tx:\n    pg_connections: disable\n    'pg_connections{env=\"p\",db=\"x\"}': disable\n"},
 			`pg_connections{env="p",db="x"}`, false},
-		// A `disable` only inside a window: the base is off, so it switches
-		// nothing off then — the key verdict's to say.
+		// A `disable` only inside a window under a base the tenant switches
+		// off: deleting the line changes nothing, and the key verdict reads
+		// it (no finding of its own), so the redundancy is this finding's.
 		{"disable only inside a window, base switched off",
 			map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 80\n  pg_connections_critical: 90\n",
 				"tx.yaml": "tenants:\n  tx:\n    pg_connections: disable\n    pg_connections_critical:\n      default: \"90\"\n      overrides:\n        - {window: \"10:00-11:00\", value: disable}\n"},
-			"pg_connections_critical", false},
+			"pg_connections_critical", true},
 		{"critical disable with no critical tier",
 			map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 100\n",
 				"tx.yaml": "tenants:\n  tx:\n    container_memory_critical: disable\n"},

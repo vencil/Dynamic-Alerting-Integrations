@@ -626,8 +626,8 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 //     (value_not_served's selection), a key nothing of is served (the
 //     exporter's NotServed record; the shared key verdict reads it as
 //     unread) — both config.NotServedOwnedElsewhere — or a `disable` that
-//     switches nothing off (the shared key verdict's own `disable: noop`,
-//     asked whenever a line is left unchanged: which `disable` switches
+//     switches nothing off (a line the shared key verdict reports — not
+//     `read` — with `disable: noop`, asked whenever a line is left unchanged: which `disable` switches
 //     nothing off at some minute is the key verdict's to say, not a guess at
 //     the value here).
 //     A retired key the exporter still serves is not one: its retirement and
@@ -693,7 +693,12 @@ func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[s
 	for tenant, vs := range kv.tree.Keys {
 		noop := map[string]bool{}
 		for _, v := range vs {
-			if v.Layer != nil && *v.Layer == "tenant" && v.Disable != nil && *v.Disable == "noop" {
+			// Owned only when the key verdict reports the line (not `read`)
+			// and what it reports is a `disable` that switches nothing off:
+			// a `noop` disable it reads (a window inside a base the tenant
+			// switches off) has no finding, so the redundancy stands; an
+			// unread retired key with a value is a second cause, not this.
+			if v.Layer != nil && *v.Layer == "tenant" && v.Verdict != "read" && v.Disable != nil && *v.Disable == "noop" {
 				noop[config.CanonicalDimensionalKey(v.Key)] = true
 			}
 		}
