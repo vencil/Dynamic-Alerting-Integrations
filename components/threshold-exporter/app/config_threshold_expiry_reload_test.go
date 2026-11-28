@@ -226,3 +226,33 @@ func TestThresholdExpiry_ValidUntilGaugeFollowsTheCommit(t *testing.T) {
 		})
 	}
 }
+
+// #4263: the expiry's merge is not starved by the watch tick. With a
+// debounce window no shorter than the tick, re-triggering the debounced
+// reload on every tick would push its timer out for good; the tick leaves a
+// pending one alone, so the merge commits within one window.
+func TestThresholdExpiry_TheTickDoesNotStarveTheMerge(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "_defaults.yaml"), []byte("defaults:\n  redis_connected_clients: 70\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "t.yaml"), []byte("tenants:\n  tx:\n    redis_connected_clients:\n"+
+		"      default: \"5\"\n      expires: \"2026-01-01T01:00:00Z\"\n"), 0o600)
+	m := NewConfigManagerWithDebounce(dir, 60*time.Second)
+	t.Cleanup(m.Close)
+	fc := clockwork.NewFakeClockAt(time.Date(2026, 1, 1, 0, 59, 0, 0, time.UTC))
+	m.SetClock(fc)
+	m.SetLogger(log.New(io.Discard, "", 0))
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for i := 0; i < 20; i++ { // 10 minutes of 30s ticks
+		fc.Advance(30 * time.Second)
+		m.tickOnce()
+		time.Sleep(5 * time.Millisecond)
+		expired := fc.Now().After(time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC))
+		if expired && m.GetConfig().ValidAt(fc.Now()) {
+			return
+		}
+	}
+	t.Errorf("10 minutes past the expires: the merge never committed (debounce fired %d times)", m.DebounceFiredCount())
+}

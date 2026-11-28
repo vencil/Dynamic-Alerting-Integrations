@@ -100,14 +100,17 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 				perTenant[tenant] = append(perTenant[tenant], k)
 			}
 		}
-		// A written one is listed unless its threshold is described under
-		// another spelling: then that spelling is the threshold's line, and
-		// the written one has no keys entry of its own to land on.
+		// A written one is listed under the spelling its threshold is
+		// described by — its own, or the other one the instant serves: that
+		// is the threshold's keys entry, the one its effect lands on.
 		for k, sv := range cfg.WrittenTenant(tenant) {
-			if !switchedOff(sv) || registeredReserved(k) || listed[k] {
+			if !switchedOff(sv) || registeredReserved(k) {
 				continue
 			}
-			if _, same := described[k]; !same && describesThreshold(described, k) {
+			if at, ok := describedSpelling(described, k); ok {
+				k = at
+			}
+			if listed[k] {
 				continue
 			}
 			listed[k] = true
@@ -410,14 +413,17 @@ func familyServed(series map[string][]metricsSeries, key string) []string {
 	return out
 }
 
-// describesThreshold reports whether described holds key's threshold under
-// any #1231 spelling.
-func describesThreshold(described map[string]config.ScheduledValue, key string) bool {
+// describedSpelling is the spelling under which described holds key's
+// threshold — key itself first — and whether it holds it at all.
+func describedSpelling(described map[string]config.ScheduledValue, key string) (string, bool) {
+	if _, ok := described[key]; ok {
+		return key, true
+	}
 	_, spellings := config.SpellingsOf(key)
 	for _, s := range spellings {
 		if _, ok := described[s]; ok {
-			return true
+			return s, true
 		}
 	}
-	return false
+	return "", false
 }

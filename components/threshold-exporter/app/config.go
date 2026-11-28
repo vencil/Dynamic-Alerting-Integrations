@@ -2105,7 +2105,10 @@ func (m *ConfigManager) tickOnce() {
 		}
 		// #4263: nothing moved on disk, but the committed config may have
 		// reached its next `expires:` (armExpiryReload's safety net).
-		if m.expiredCommit() {
+		// A reload already pending is left alone: re-triggering it on every
+		// tick would push its timer out for good when the debounce window
+		// is no shorter than the tick.
+		if m.expiredCommit() && !m.debouncePending() {
 			m.triggerDebouncedReload(reasonThresholdExpiry)
 			return
 		}

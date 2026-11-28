@@ -292,6 +292,14 @@ func (m *ConfigManager) now() time.Time {
 	return m.clock.Now()
 }
 
+// debouncePending reports whether a debounced reload is scheduled and has
+// not fired yet.
+func (m *ConfigManager) debouncePending() bool {
+	m.debounce.mu.Lock()
+	defer m.debounce.mu.Unlock()
+	return m.debounce.timer != nil
+}
+
 // expiredCommit reports whether the committed config no longer answers for
 // the manager's clock (ValidAt): past its next `expires:` — the watch tick's
 // safety net under armExpiryReload — or before the last one it saw pass (the

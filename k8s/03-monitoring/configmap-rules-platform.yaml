@@ -219,9 +219,11 @@ data:
     \ the answer from before that\n\n        instant — the expired value included.\
     \ Nothing else is applied\n\n        while a reload keeps failing: check ConfigScanFailing\
     \ and the\n\n        exporter log (\"ERROR: debounced reload failed\",\n\n   \
-    \     \"WARN: cannot check config\"). The alert resolves on the first\n\n    \
-    \    successful reload, which moves the gauge to the next `expires:`\n\n     \
-    \   (or 0).\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md\n\
+    \     \"WARN: cannot check config\"). With neither, compare the\n\n        exporter''s\
+    \ clock with Prometheus'' (the gauge is the exporter''s\n\n        instant, time()\
+    \ is Prometheus''). The alert resolves on the first\n\n        successful reload,\
+    \ which moves the gauge to the next `expires:`\n\n        (or 0).\n\n        '\n\
+    \      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md\n\
     \      summary: Threshold-exporter has not merged conf.d again since a threshold\
     \ `expires:` passed — expired thresholds still served\n  - alert: ConfigFilesUnreadable\n\
     \    expr: max without (instance, pod) (da_config_unreadable_files) > 0\n    for:\

@@ -527,3 +527,20 @@ func TestServedValues_AnExpiredDisableUnderAnotherSpelling(t *testing.T) {
 		}
 	}
 }
+
+// #4263: an expired `disable` is listed whatever spelling either layer
+// writes: under the spelling the threshold is described by, as when every
+// layer writes the current one.
+func TestServedValues_AnExpiredDisableIsListedUnderTheDescribedSpelling(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := servedWith(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+		"_profiles.yaml": "profiles:\n  p:\n    mysql_cpu: \"70\"\n",
+		"a.yaml": "tenants:\n  a:\n    _profile: p\n    mysql_cpu:\n      default: disable\n" +
+			"      expires: \"2020-01-01T00:00:00Z\"\n",
+	}, "2026-07-01T03:00:00Z", "--disable-effects")
+	mustOK(t, code, stderr)
+	if e := doc.Tenants["a"].Keys["mysql_threads_running"]; e.Disable != disableNoop {
+		t.Errorf("mysql_threads_running disable %q, want %q (the expired disable, listed under the described spelling)", e.Disable, disableNoop)
+	}
+}

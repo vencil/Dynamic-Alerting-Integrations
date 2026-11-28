@@ -52,7 +52,9 @@ tests:
                 instant — the expired value included. Nothing else is applied
                 while a reload keeps failing: check ConfigScanFailing and the
                 exporter log ("ERROR: debounced reload failed",
-                "WARN: cannot check config"). The alert resolves on the first
+                "WARN: cannot check config"). With neither, compare the
+                exporter's clock with Prometheus' (the gauge is the exporter's
+                instant, time() is Prometheus'). The alert resolves on the first
                 successful reload, which moves the gauge to the next `expires:`
                 (or 0).
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
