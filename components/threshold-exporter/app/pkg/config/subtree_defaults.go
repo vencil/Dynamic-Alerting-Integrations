@@ -518,9 +518,9 @@ func tenantAuthoredThreshold(overrides map[string]ScheduledValue, inherited map[
 // AND THAT IS TOO STRICT — measured, two separate shapes were dropped that a
 // tenant writing the identical key in its OWN file gets emitted:
 //
-//	inherited `mysql_connections{env="prod"}: 70`  → no series; the same key
+//	inherited `mysql_connection_usage_percent{env="prod"}: 70`  → no series; the same key
 //	    authored by a tenant emitted `env=prod … = 70`
-//	inherited `mysql_connections_critical: 95`     → no series; authored emitted
+//	inherited `mysql_connection_usage_percent_critical: 95`     → no series; authored emitted
 //	    `severity=critical … = 95`
 //
 // The reason is that those do not go through the declared surface at all:
@@ -1197,7 +1197,7 @@ func isThresholdShaped(sv ScheduledValue) bool {
 	//
 	// ⛔ THAT IS CONSISTENT, NOT CORRECT, and an earlier version of this
 	// comment said "correctly rejected". `/effective` renders the schedule
-	// verbatim — `{"mysql_connections":{"overrides":[{"value":"90",…}]}}` —
+	// verbatim — `{"mysql_connection_usage_percent":{"overrides":[{"value":"90",…}]}}` —
 	// while the series carries 50, and nothing reports the gap. It is the same
 	// silent plane divergence this whole ticket is about, one shape over. It is
 	// NOT introduced here (the tenant-authored control behaves identically, so

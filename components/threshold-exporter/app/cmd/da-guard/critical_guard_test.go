@@ -41,7 +41,7 @@ func rootCriticalFields(t *testing.T, dir string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, &flags{}, fixedNow))
+	report, err := guard.CheckDefaultsImpact(checkInputOf(t, scoped, &flags{}, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,8 +59,8 @@ func rootCriticalFields(t *testing.T, dir string) map[string]bool {
 
 func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 	t.Parallel()
-	const root = "defaults:\n  mysql_connections: 80\n  mysql_threads_running: 80\n"
-	const conn = "mysql_connections_critical"
+	const root = "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_threads_running: 80\n"
+	const conn = "mysql_connection_usage_percent_critical"
 	const threads = "mysql_threads_running_critical"
 	legacy := legacyCritical(t)
 	cases := []struct {
@@ -83,7 +83,7 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 		// fallback, and these were not redundant.)
 		{name: "root-only-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + conn + ": 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
+			tfile: "tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: conn + ": 60", redundant: true},
 		{name: "root-only-new-spelling-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + threads + ": 60\n"},
 			tfile: "tx.yaml", keep: "    mysql_threads_running: 70\n", line: threads + ": 60", redundant: true},
@@ -91,23 +91,23 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 			files: map[string]string{"_defaults.yaml": root + "  " + legacy + ": 60\n"},
 			tfile: "tx.yaml", keep: "    mysql_threads_running: 70\n", line: legacy + ": 60", redundant: true},
 		{name: "root-only-critical-key-under-a-subtree-without-it-is-redundant",
-			files: map[string]string{"_defaults.yaml": root + "  " + conn + ": 60\n", "sub/_defaults.yaml": "defaults:\n  mysql_connections: 75\n"},
-			tfile: "sub/tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
+			files: map[string]string{"_defaults.yaml": root + "  " + conn + ": 60\n", "sub/_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 75\n"},
+			tfile: "sub/tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: conn + ": 60", redundant: true},
 		{name: "root-critical-key-a-subtree-nulls-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + conn + ": 60\n", "sub/_defaults.yaml": "defaults:\n  " + conn + ": null\n"},
-			tfile: "sub/tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
+			tfile: "sub/tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: conn + ": 60", redundant: true},
 		// The root level is found by PATH, against the scan's resolved root.
 		{name: "root-only-critical-key-through-a-symlinked-config-dir-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + conn + ": 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true, symlink: true},
+			tfile: "tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: conn + ": 60", redundant: true, symlink: true},
 		{name: "root-only-critical-key-in-a-yml-root-carrier-is-redundant",
 			files: map[string]string{"_defaults.yml": root + "  " + conn + ": 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
+			tfile: "tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: conn + ": 60", redundant: true},
 		// Control (the ticket's): the same shape with no root `_critical` —
 		// not redundant before the fix either, and no root warning.
 		{name: "no-root-critical-key-is-not-redundant",
 			files: map[string]string{"_defaults.yaml": root},
-			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60"},
+			tfile: "tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: conn + ": 60"},
 		{name: "no-root-new-spelling-critical-key-is-not-redundant",
 			files: map[string]string{"_defaults.yaml": root},
 			tfile: "tx.yaml", keep: "    mysql_threads_running: 70\n", line: threads + ": 60"},
@@ -115,13 +115,13 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 		// redundant — the check is narrowed, not switched off.
 		{name: "subtree-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root, "sub/_defaults.yaml": "defaults:\n  " + conn + ": 60\n"},
-			tfile: "sub/tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
+			tfile: "sub/tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: conn + ": 60", redundant: true},
 		{name: "root-and-subtree-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  " + conn + ": 60\n", "sub/_defaults.yaml": "defaults:\n  " + conn + ": 60\n"},
-			tfile: "sub/tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
+			tfile: "sub/tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: conn + ": 60", redundant: true},
 		{name: "platform-entry-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "tenants:\n  tx:\n    " + conn + ": 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: conn + ": 60", redundant: true},
+			tfile: "tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: conn + ": 60", redundant: true},
 		{name: "profile-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root, "_profiles.yaml": "profiles:\n  std:\n    " + conn + ": 60\n"},
 			tfile: "tx.yaml", keep: "    _profile: std\n", line: conn + ": 60", redundant: true},
@@ -137,14 +137,14 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 		// is root_defaults_reserved_key instead.
 		{name: "root-state-prefixed-critical-key-is-not-inherited",
 			files: map[string]string{"_defaults.yaml": root + "  _state_maintenance_critical: 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: "_state_maintenance_critical: 60", inert: true},
+			tfile: "tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: "_state_maintenance_critical: 60", inert: true},
 		{name: "root-silent-prefixed-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  _silent_mode_critical: 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: "_silent_mode_critical: 60", redundant: true},
+			tfile: "tx.yaml", keep: "    mysql_connection_usage_percent: 70\n", line: "_silent_mode_critical: 60", redundant: true},
 		// Control: a plain root key is still redundant.
 		{name: "root-plain-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root},
-			tfile: "tx.yaml", keep: "    mysql_threads_running: 70\n", line: "mysql_connections: 80", redundant: true},
+			tfile: "tx.yaml", keep: "    mysql_threads_running: 70\n", line: "mysql_connection_usage_percent: 80", redundant: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -208,7 +208,7 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 // redundant and the root's key nothing.
 func TestServedValues_RootAndTenantCriticalServesTheTenants(t *testing.T) {
 	t.Parallel()
-	for _, key := range []string{"mysql_connections_critical", "mysql_threads_running_critical"} {
+	for _, key := range []string{"mysql_connection_usage_percent_critical", "mysql_threads_running_critical"} {
 		t.Run(key, func(t *testing.T) {
 			t.Parallel()
 			base := strings.TrimSuffix(key, "_critical")

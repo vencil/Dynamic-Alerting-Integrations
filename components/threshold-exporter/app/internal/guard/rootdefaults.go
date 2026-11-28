@@ -133,7 +133,7 @@ func rootFix(keys []string) string {
 // Doing that — or leaving `defaults:` with no value — puts it in the subtree's
 // defaults, which subtree_default_reserved_key then reports: the advice traded
 // one finding for the other. Measured: `a/_defaults.yaml` with
-// `defaults: {mysql_connections: 70}` and a top-level `_silent_mode: warning`.
+// `defaults: {mysql_connection_usage_percent: 70}` and a top-level `_silent_mode: warning`.
 // Such keys (config.SubtreeDefaultsRefusedKey, the predicate that finding
 // reports on) get that finding's own fix (subtreeRefusedKeyFix), key by key;
 // the other keys keep the generic fix.

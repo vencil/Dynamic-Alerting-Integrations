@@ -19,8 +19,9 @@ func configHashField(identity string) *string {
 }
 
 // betweenWalks, when set, runs between two walks of --config-dir in one run
-// (after the default check's ScopeEffective; after key-verdict's facts walk
-// and after its first scan): a test changes the tree there to have the
+// (after the default check's ScopeEffective and before redundant_override's
+// key verdict walks the tree again; after key-verdict's facts walk and after
+// its first scan): a test changes the tree there to have the
 // run's later walks read another one. nil outside tests; set only by
 // non-parallel tests (#3965).
 var betweenWalks func(configDir string)
@@ -36,10 +37,16 @@ func sameWalks(first, later string, errOut io.Writer) bool {
 	if first == "" || first == later {
 		return true
 	}
-	if later == "" {
-		later = "none (the walk failed)"
-	}
 	fmt.Fprintf(errOut, "%s: --config-dir changed during this run (its walks read %s, then %s); nothing was judged — run it again\n",
-		programName, first, later)
+		programName, first, walkName(later))
 	return false
+}
+
+// walkName is a walk's identity as the change message names it: a walk that
+// names none failed.
+func walkName(identity string) string {
+	if identity == "" {
+		return "none (the walk failed)"
+	}
+	return identity
 }

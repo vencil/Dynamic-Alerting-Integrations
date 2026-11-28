@@ -55,7 +55,7 @@ func TestDaGuard_FixtureFindingsHaveRegisteredKinds(t *testing.T) {
 			t.Logf("%s: not judged: %v", name, err)
 			continue
 		}
-		input := buildCheckInput(scoped, &flags{
+		input := checkInputOf(t, scoped, &flags{
 			configDir:            dir,
 			requiredFields:       "mysql_connections",
 			cardinalityLimit:     1,

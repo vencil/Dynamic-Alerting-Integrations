@@ -301,22 +301,34 @@ func TestConfigHash_ATreeChangedBetweenWalksIsNotJudged(t *testing.T) {
 			}
 		}
 	}
+	repeatsInherited := map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 70\n",
+		"a.yaml": "tenants:\n  ta:\n    pg_connections: \"70\"\n"}
 	for _, tc := range []struct {
 		name   string
 		cmd    string
 		nth    int
 		change func(*testing.T, string)
 		extra  []string
+		files  map[string]string // nil: the tree below
 	}{
-		{"default check: between its first and last walk", "", 1, addFile, nil},
-		{"default check: the root gone before its last walk", "", 1, removeRoot, []string{"--cardinality-limit", "0"}},
-		{"key-verdict: between the facts and the served reading", keyVerdictCmd, 1, addFile, nil},
-		{"key-verdict: every file unreadable after the facts", keyVerdictCmd, 1, dangleAll, nil},
-		{"key-verdict: between the served reading and the effective one", keyVerdictCmd, 2, addFile, nil},
+		{"default check: between its first and last walk", "", 1, addFile, nil, nil},
+		{"default check: the root gone before its last walk", "", 1, removeRoot, []string{"--cardinality-limit", "0"}, nil},
+		{"key-verdict: between the facts and the served reading", keyVerdictCmd, 1, addFile, nil, nil},
+		{"key-verdict: every file unreadable after the facts", keyVerdictCmd, 1, dangleAll, nil, nil},
+		{"key-verdict: between the served reading and the effective one", keyVerdictCmd, 2, addFile, nil, nil},
+		// #4330: a line deleting which serves the same has redundant_override
+		// ask the key verdict, which walks the tree after the run's last
+		// bracketing walk.
+		{"default check: before redundant_override's key verdict", "", 2, addFile, nil, repeatsInherited},
+		{"default check: inside redundant_override's key verdict", "", 3, addFile, nil, repeatsInherited},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := configHashTree(t, map[string]string{"_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
-				"a.yaml": "tenants:\n  ta:\n    mysql_connections: \"80\"\n"})
+			files := tc.files
+			if files == nil {
+				files = map[string]string{"_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+					"a.yaml": "tenants:\n  ta:\n    mysql_connections: \"80\"\n"}
+			}
+			dir := configHashTree(t, files)
 			calls := 0
 			betweenWalks = func(string) {
 				calls++
