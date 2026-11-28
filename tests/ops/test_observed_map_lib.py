@@ -139,6 +139,12 @@ class TestDirectionParsing:
         assert L._directions(self._tree("tenant:alert_threshold:k < a"), "k") == {">"}
         assert L._directions(self._tree("max(tenant:alert_threshold:k) > a"), "k") == {"<"}
 
+    def test_a_comparison_with_a_number_is_not_the_threshold_comparison(self):
+        # #4264 review: the outer `> 0` compares a count / the threshold itself.
+        for expr in ("count(a > tenant:alert_threshold:k) > 0", "(a > tenant:alert_threshold:k) > 0",
+                     "a > tenant:alert_threshold:k and tenant:alert_threshold:k > 0"):
+            assert L._directions(self._tree(expr), "k") == {">"}, expr
+
     def test_a_threshold_in_a_string_or_comment_is_not_read(self):
         t = self._tree('label_replace(a, "x", "tenant:alert_threshold:k", "", "") > 1 # tenant:alert_threshold:j')
         assert L._threshold_keys(t) == set()

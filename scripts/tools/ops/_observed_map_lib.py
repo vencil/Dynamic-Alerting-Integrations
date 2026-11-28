@@ -101,15 +101,21 @@ def _reads_key(node: dict, key: str) -> bool:
 def _directions(tree: dict, key: str) -> "set[str]":
     """The direction of every comparison *key*'s threshold stands in, as the
     observed side relates to it: ``x > thr`` and ``thr < x`` are both ``>``;
-    ``>=`` / ``<=`` fold to ``>`` / ``<``."""
+    ``>=`` / ``<=`` fold to ``>`` / ``<``. A comparison of one side with a
+    number is not one: the ``> 0`` of ``count(x > thr) > 0`` and of
+    ``thr > 0`` compares a count or the threshold itself, not the observed
+    series."""
     out: set[str] = set()
     for node in _lib_consumer_read.shape_nodes(tree):
         if node.get("kind") != "binary" or node["op"] not in _COMPARISONS:
             continue
         op = _COMPARISONS[node["op"]]
-        if _reads_key(node["rhs"], key) and not _reads_key(node["lhs"], key):
+        lhs, rhs = node["lhs"], node["rhs"]
+        if _unparen(lhs).get("kind") == "number" or _unparen(rhs).get("kind") == "number":
+            continue
+        if _reads_key(rhs, key) and not _reads_key(lhs, key):
             out.add(op)
-        elif _reads_key(node["lhs"], key) and not _reads_key(node["rhs"], key):
+        elif _reads_key(lhs, key) and not _reads_key(rhs, key):
             out.add(_FLIPPED[op])
     return out
 

@@ -125,17 +125,16 @@ def _reads_tmi(node: dict) -> bool:
 
 def tree_violations(expr: str, tree: dict) -> List[str]:
     """Why *expr*, whose Prometheus tree is *tree*, joins tenant metadata
-    (empty list = it does not). `tenant_metadata_info` may only be the whole
-    right side of an `and` / `unless` (in parentheses or not): a set operator
-    keeps the left side's labels and adds none. Anywhere else — a vector match,
-    `or`, an aggregation, deeper inside a set operand — its labels can reach
-    the result (#3483). Read on the tree (#4264), never off the text."""
+    (empty list = it does not). `tenant_metadata_info` may be read anywhere on
+    the right side of an `and` / `unless`: a set operator keeps the left
+    side's series and labels and adds none of the right side's, whatever the
+    right side computes. Anywhere else — a vector match, `or`, an
+    aggregation — its labels can reach the result (#3483). Read on the tree
+    (#4264), never off the text."""
     allowed = set()
     for node in _lib_consumer_read.shape_nodes(tree):
         if node.get("kind") == "binary" and node["op"] in _SET_OPS:
-            rhs = _unparen(node["rhs"])
-            if _reads_tmi(rhs):
-                allowed.add(id(rhs))
+            allowed |= {id(n) for n in _lib_consumer_read.shape_nodes(node["rhs"]) if _reads_tmi(n)}
     bad = [n for n in _lib_consumer_read.shape_nodes(tree) if _reads_tmi(n) and id(n) not in allowed]
     if not bad:
         return []

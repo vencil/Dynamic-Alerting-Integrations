@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -249,7 +250,9 @@ def generate_mapping_draft(
     for val in sorted(label_values):
         entries.append({
             "tenant": f"<FILL_TENANT_FOR_{val}>",
-            "filter": f'{label_name}="{val}"',
+            # #4264: the value as a PromQL string (quotes and backslashes
+            # escaped), so generate_tenant_mapping_rules reads it back as is.
+            "filter": f'{label_name}={json.dumps(str(val), ensure_ascii=False)}',
         })
 
     return {

@@ -76,12 +76,20 @@ def test_set_operators_and_unrelated_matches_pass(expr):
 
 # #4264: read on the tree, so the text forms the regex could not tell apart.
 @pytest.mark.parametrize("expr", [
-    "x and on(tenant) (sum(tenant_metadata_info) * y)",   # deeper inside a set operand
-    "x unless on(tenant) max by (tenant, owner) (tenant_metadata_info)",
     'x * on(tenant) group_left(owner) {__name__="tenant_metadata_info"}',
 ])
 def test_the_tree_sees_what_the_text_scan_could_not(expr):
     assert lint.expr_violations(expr), expr
+
+
+@pytest.mark.parametrize("expr", [
+    # the right side of and / unless adds no label, whatever it computes
+    'x and on(tenant) (tenant_metadata_info{tier="gold"} == 1)',
+    "x unless on(tenant) max by (tenant, owner) (tenant_metadata_info)",
+    "x and on(tenant) (sum by (tenant) (tenant_metadata_info) * y)",
+])
+def test_anything_on_the_right_of_a_set_operator_passes(expr):
+    assert lint.expr_violations(expr) == [], expr
 
 
 @pytest.mark.parametrize("expr", [

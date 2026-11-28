@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -109,11 +110,14 @@ def _h(key: str) -> str:
 class MappingEntry:
     """One instance → tenant mapping entry."""
 
-    __slots__ = ('tenant', 'filter_expr')
+    __slots__ = ('tenant', 'filter_expr', 'matchers')
 
     def __init__(self, tenant: str, filter_expr: str) -> None:
         self.tenant = tenant
         self.filter_expr = filter_expr
+        #: parse_filter_to_matchers' answer, once main has read every filter
+        #: in one batch (#4264); None until then.
+        self.matchers: list[str] | None = None
 
     def __repr__(self) -> str:
         return f"MappingEntry(tenant={self.tenant!r}, filter={self.filter_expr!r})"
@@ -269,6 +273,50 @@ def _promql_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+_LEGACY_LABEL_NAME = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
+
+
+def _promql_label_name(name: str) -> str:
+    """*name* as a matcher writes it: bare when it is a legacy label name,
+    quoted otherwise (a UTF-8 name such as `my.label`)."""
+    return name if _LEGACY_LABEL_NAME.fullmatch(name) else _promql_string(name)
+
+
+_SENTINEL = "__mapping_filter__"
+
+
+def _matchers_of(filter_expr: str, tree) -> list[str]:
+    if isinstance(tree, _lib_consumer_read.InputRefused):
+        raise FilterRefused(f"filter {filter_expr!r} is not a list of PromQL label matchers: "
+                            f"{_lib_consumer_read.error_text(tree)}")
+    if tree.get("kind") != "selector" or tree.get("range"):
+        raise FilterRefused(f"filter {filter_expr!r} is not a list of PromQL label matchers")
+    out: list[str] = []
+    for m in tree["matchers"]:
+        if m["name"] == "__name__":
+            if m["type"] == "=" and m["value"] == _SENTINEL:
+                continue
+            raise FilterRefused(f"filter {filter_expr!r} names the metric (__name__); "
+                                "the metric comes from the dictionary")
+        out.append(f'{_promql_label_name(m["name"])}{m["type"]}{_promql_string(m["value"])}')
+    return out
+
+
+def parse_filters(filters: list[str]) -> "list[list[str] | FilterRefused]":
+    """parse_filter_to_matchers of every filter, read in one da-read run:
+    per filter its matchers, or the FilterRefused that says why not."""
+    out: "list[list[str] | FilterRefused | None]" = [[] if not f.strip() else None for f in filters]
+    todo = [i for i, v in enumerate(out) if v is None]
+    trees = _lib_consumer_read.promql_shape_each(
+        [_SENTINEL + "{" + filters[i] + "}" for i in todo])
+    for i, tree in zip(todo, trees):
+        try:
+            out[i] = _matchers_of(filters[i], tree)
+        except FilterRefused as exc:
+            out[i] = exc
+    return out  # type: ignore[return-value]
+
+
 def parse_filter_to_matchers(filter_expr: str) -> list[str]:
     """The PromQL label matchers of a mapping entry's `filter`, read by
     Prometheus' parser as the label block of a selector and written back in
@@ -281,25 +329,14 @@ def parse_filter_to_matchers(filter_expr: str) -> list[str]:
     the value (the text split cut `schema=~"a,b"` in two). A filter the parser
     refuses, or one that names the metric (`__name__`), raises FilterRefused.
     """
-    if not filter_expr.strip():
-        return []
-    try:
-        tree = _lib_consumer_read.promql_shape_each(
-            ["__mapping_filter__{" + filter_expr + "}"], raise_refused=True)[0]
-    except _lib_consumer_read.InputRefused as exc:
-        raise FilterRefused(f"filter {filter_expr!r} is not a list of PromQL label matchers: "
-                            f"{_lib_consumer_read.error_text(exc)}") from None
-    if tree.get("kind") != "selector" or tree.get("range"):
-        raise FilterRefused(f"filter {filter_expr!r} is not a list of PromQL label matchers")
-    out: list[str] = []
-    for m in tree["matchers"]:
-        if m["name"] == "__name__":
-            if m["type"] == "=" and m["value"] == "__mapping_filter__":
-                continue
-            raise FilterRefused(f"filter {filter_expr!r} names the metric (__name__); "
-                                "the metric comes from the dictionary")
-        out.append(f'{m["name"]}{m["type"]}{_promql_string(m["value"])}')
-    return out
+    [got] = parse_filters([filter_expr])
+    if isinstance(got, FilterRefused):
+        raise got
+    return got
+
+
+def _entry_matchers(entry: "MappingEntry") -> list[str]:
+    return entry.matchers if entry.matchers is not None else parse_filter_to_matchers(entry.filter_expr)
 
 
 def generate_recording_rules(
@@ -315,7 +352,7 @@ def generate_recording_rules(
     for mapping in mappings:
         rules: list[dict] = []
         for entry in mapping.entries:
-            filter_matchers = parse_filter_to_matchers(entry.filter_expr)
+            filter_matchers = _entry_matchers(entry)
             # Build label selector: instance + filter matchers
             all_matchers = [f'instance={_promql_string(mapping.instance)}'] + filter_matchers
             selector = ', '.join(all_matchers)
@@ -400,7 +437,7 @@ def validate_mappings(
 
             # Validate filter syntax
             try:
-                matchers = parse_filter_to_matchers(entry.filter_expr)
+                matchers = _entry_matchers(entry)
             except FilterRefused as exc:
                 messages.append(f"ERROR: instance={mapping.instance}, tenant={entry.tenant}: {exc}")
                 continue
@@ -479,17 +516,18 @@ def main() -> None:
         sys.exit(EXIT_OK)
     # #4264 / #3445: a filter Prometheus' parser cannot read is an unreadable
     # input — named, exit 2, nothing generated.
-    for mapping in mappings:
-        for entry in mapping.entries:
-            try:
-                parse_filter_to_matchers(entry.filter_expr)
-            except FilterRefused as exc:
-                print(f"ERROR: {mapping_path}: instance={mapping.instance}, "
-                      f"tenant={entry.tenant}: {exc}", file=sys.stderr)
-                sys.exit(EXIT_CALLER_ERROR)
-            except _lib_consumer_read.ConsumerReadError as exc:
-                print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
-                sys.exit(EXIT_CALLER_ERROR)
+    pairs = [(m, e) for m in mappings for e in m.entries]
+    try:
+        parsed = parse_filters([e.filter_expr for _m, e in pairs])
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    for (mapping, entry), got in zip(pairs, parsed):
+        if isinstance(got, FilterRefused):
+            print(f"ERROR: {mapping_path}: instance={mapping.instance}, "
+                  f"tenant={entry.tenant}: {got}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+        entry.matchers = got
 
     # Resolve metrics list
     if args.metrics:
