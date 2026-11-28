@@ -472,10 +472,16 @@ rabbitmq_queue_messages_delivered_total:
 # JVM (v1.12.0)
 # ────────────────────────────────────────
 jvm_gc_pause_seconds_sum:
-  maps_to: jvm_gc_pause
+  maps_to: jvm_gc_time_percent
   golden_rule: JVMHighGCPause
   rule_pack: jvm
-  note: "GC pause duration — rate(jvm_gc_pause_seconds_sum[5m])"
+  note: "GC pause time as Micrometer names it — 100 * rate(jvm_gc_pause_seconds_sum[5m]) summed per JVM, busiest JVM (% of time)"
+
+jvm_gc_collection_seconds_sum:
+  maps_to: jvm_gc_time_percent
+  golden_rule: JVMHighGCPause
+  rule_pack: jvm
+  note: "GC time as client_java / jmx_exporter name it — 100 * rate(jvm_gc_collection_seconds_sum{gc!~'.*Cycles'}[5m]) summed per JVM, busiest JVM (% of time)"
 
 jvm_memory_used_bytes:
   maps_to: jvm_memory

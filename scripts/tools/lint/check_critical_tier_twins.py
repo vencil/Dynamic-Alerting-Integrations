@@ -45,8 +45,8 @@ CHECKS (rule packs = the tenant packs, `_lib_consumer_read.tenant_rule_pack_file
        - C's name is W's name + "Critical"; same file, same group.
   4. an alert that reads K's critical tier with no twin W is an error
      whether or not K is declared (an undeclared K is reported first).
-  An alert reading several thresholds' warning tiers (MariaDBSystemBottleneck,
-  JVMPerformanceDegraded) is no K's critical reader; as a warning-tier
+  An alert reading several thresholds' warning tiers (MariaDBSystemBottleneck)
+  is no K's critical reader; as a warning-tier
   candidate it only has to not be the one twin.
 
 FAIL-CLOSED: a threshold reference this gate cannot judge — a selector whose

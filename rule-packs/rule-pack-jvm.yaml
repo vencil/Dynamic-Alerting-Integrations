@@ -1,18 +1,28 @@
 # ============================================================
-# Rule Pack: JVM (via jmx_exporter / micrometer)
-# v1.12.0: Heap memory, GC pause, thread pool 監控
+# Rule Pack: JVM (via Micrometer / client_java / jmx_exporter)
+# v1.12.0: Heap memory, GC 時間佔比, thread pool 監控
 #
-# 需要的 exporter:
-#   - https://github.com/prometheus/jmx_exporter
-#   - 或 Micrometer Prometheus (Spring Boot Actuator)
+# 需要的 exporter（擇一；GC 與 heap 兩條規則兩種命名都讀）:
+#   - Micrometer Prometheus (Spring Boot Actuator)
+#   - 或 https://github.com/prometheus/client_java 的 JVM 指標
+#   - 或 https://github.com/prometheus/jmx_exporter
+#
+# GC 時間佔比（jvm_gc_time_percent，#4116）讀的是「最忙的那個 JVM」花在 GC 暫停的
+# 時間百分比，不是租戶各 JVM 的加總。
+# ⚠️ Micrometer 版本下限：Micrometer 把 concurrent 的 GC cycle 記到
+#   jvm_gc_concurrent_phase_time_seconds，不記進 jvm_gc_pause_seconds；它不認得的
+#   cycle 會整段被記成 pause，讀數因此偏高（concurrent 階段應用仍在跑）。
+#   Shenandoah 需 >= 1.7.0、ZGC 需 >= 1.8.0、generational ZGC（JDK 21
+#   -XX:+ZGenerational 的 "ZGC Major/Minor Cycles"）需 >= 1.12.4 或 >= 1.13.0
+#   （1.11.x 沒有）。依據：Micrometer JvmMemory.isConcurrentPhase 在各 tag 的內容。
 #
 # >>> GENERATED:threshold-registry:pack-jvm — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter 閾值（全部內建在讀取端，conf.d 不必列；[chart-default]=平台出貨即啟用，省略就用平台值；未標者沒有平台值，「未啟用」一行寫原因，租戶、子目錄或 profile 給值才發射）:
-#   jvm_gc_pause: 0.5
-#       s/s — GC pause warning: seconds of GC pause accrued per second (rate over 5m of
-#       jvm_gc_pause_seconds_sum, summed over the tenant's JVMs); for one JVM 0.5 = half of every
-#       second spent paused, and ten JVMs at 5% each read 0.5 too. Not seconds per 5 minutes (#4032)
-#       未啟用（依部署而定）：可容忍的 GC 暫停時間是應用程式的延遲預算
+#   jvm_gc_time_percent: 10
+#       % of time — GC time warning: % of wall-clock time the busiest JVM of the tenant (per
+#       cluster) spends in GC pauses, averaged over 5m (#4116). Per JVM, never summed over JVMs: ten
+#       JVMs at 7.5% each read 7.5
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
 #   jvm_memory: 80
 #       % — Heap memory warning: the whole heap as % of its max, fullest JVM (#3928: pools summed
 #       before dividing)
@@ -25,8 +35,9 @@
 # severity=critical 的列，根目錄寫的是每個租戶的 critical 預設值（#4173）；
 # base 整族關掉（`<base>: "disable"`）時不送。
 # ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
-#   jvm_gc_pause_critical: 1.0
-#       s/s — GC pause critical: seconds of GC pause accrued per second (see jvm_gc_pause)
+#   jvm_gc_time_percent_critical: 25
+#       % of time — GC time critical: % of wall-clock time the busiest JVM spends in GC pauses (see
+#       jvm_gc_time_percent)
 #   jvm_memory_critical: 95   # % — Heap memory critical
 #   jvm_threads_critical: 800   # count — Thread count critical
 # <<< GENERATED:threshold-registry:pack-jvm
@@ -34,7 +45,7 @@
 # Tenant config 範例 (conf.d/db-a.yaml):
 #   tenants:
 #     db-a:
-#       jvm_gc_pause: "0.3"
+#       jvm_gc_time_percent: "10"
 #       jvm_memory: "85"
 #       jvm_threads: "400"
 #       jvm_memory_critical: "95"
@@ -45,16 +56,46 @@ groups:
   - name: jvm-normalization
     interval: 15s
     rules:
-      # GC pause accrual RATE — seconds of GC pause accrued PER SECOND, averaged
-      # over a 5m window and summed over the tenant's JVMs. ⚠️ NOT "seconds per 5m":
-      # rate() divides by the window, so the unit is s/s (1.0 = one JVM paused
-      # full-time). The registry and this pack's header said seconds/5m until
-      # #4032 — the same number scaled by 300; a threshold sized from that reading
-      # is 300x too high and the alert never fires.
-      - record: tenant:jvm_gc_pause:rate5m
+      # GC time — % of wall-clock time spent in GC pauses, busiest JVM per
+      # (tenant, da_cluster), averaged over a 5m window (#4116).
+      #   - Per JVM first, then `max`: the old record summed the tenant's
+      #     JVMs, so ten healthy JVMs at 5 % read the same as one JVM paused
+      #     half of the time. A pause is serial inside one JVM, so one JVM's
+      #     value tops out near 100.
+      #   - `sum without(action, cause, gc)`: Micrometer exports one series
+      #     per (action, cause) — and per collector (`gc`) from 1.11 —,
+      #     client_java / jmx_exporter one per collector (`gc`). Dropping
+      #     exactly those leaves whatever identifies the scrape target, so a
+      #     JVM told apart only by `pod` (or by a label this pack has never
+      #     heard of) stays its own JVM; `sum by(<identity labels>)` would
+      #     add two such JVMs up and fire on healthy ones. The price: an
+      #     exporter that adds another per-series label splits a JVM into
+      #     parts and this reads the largest part — too low, where naming the
+      #     identity labels would read too high.
+      #   - Each exporter is collapsed to one value per JVM BEFORE `or`, so a
+      #     JVM exposing both name sets has one label set on both sides and
+      #     `or` keeps the left (Micrometer) sample: counted once.
+      #   - `gc!~".*Cycles"` (client_java / jmx_exporter only): the
+      #     "ZGC Cycles", "ZGC Major Cycles", "ZGC Minor Cycles" and
+      #     "Shenandoah Cycles" collector beans time whole concurrent cycles,
+      #     during which the application runs; their "… Pauses" beans carry
+      #     the pauses. "G1 Concurrent GC" is the bean for G1's Remark and
+      #     Cleanup pauses — it stays in.
+      #   - Micrometer makes the same split itself and puts concurrent cycles
+      #     in jvm_gc_concurrent_phase_time_seconds — for the cycles it knows:
+      #     Shenandoah from 1.7.0, ZGC from 1.8.0, generational ZGC from
+      #     1.12.4 / 1.13.0 (not in 1.11.x). An older Micrometer reports those
+      #     whole cycles as pauses and this reads high. (Read from
+      #     JvmMemory.isConcurrentPhase at those tags, not run.)
+      #   - rate() of a counter of seconds is seconds per second — a share of
+      #     time; `100 *` makes it the percent the registry declares
+      #     (tests/lint/test_threshold_unit_matches_rule_function.py).
+      - record: tenant:jvm_gc_time:percent
         expr: |
-          sum by(tenant, da_cluster) (
-            rate(jvm_gc_pause_seconds_sum[5m])
+          100 * max by(tenant, da_cluster) (
+            sum without(action, cause, gc) (rate(jvm_gc_pause_seconds_sum[5m]))
+            or
+            sum without(action, cause, gc) (rate(jvm_gc_collection_seconds_sum{gc!~".*Cycles"}[5m]))
           )
 
       # Heap memory usage — the whole heap as % of its max, fullest JVM per
@@ -118,12 +159,12 @@ groups:
   - name: jvm-threshold-normalization
     interval: 15s
     rules:
-      # GC pause — warning
-      - record: tenant:alert_threshold:jvm_gc_pause
-        expr: max by(tenant) (user_threshold{component="jvm", metric="gc_pause", severity="warning"})
-      # GC pause — critical
-      - record: tenant:alert_threshold:jvm_gc_pause_critical
-        expr: max by(tenant) (user_threshold{component="jvm", metric="gc_pause", severity="critical"})
+      # GC time — warning
+      - record: tenant:alert_threshold:jvm_gc_time_percent
+        expr: max by(tenant) (user_threshold{component="jvm", metric="gc_time_percent", severity="warning"})
+      # GC time — critical
+      - record: tenant:alert_threshold:jvm_gc_time_percent_critical
+        expr: max by(tenant) (user_threshold{component="jvm", metric="gc_time_percent", severity="critical"})
 
       # Memory — warning
       - record: tenant:alert_threshold:jvm_memory
@@ -142,13 +183,14 @@ groups:
   # --- Part 3: Alert Rules ---
   - name: jvm-alerts
     rules:
-      # ---- GC Pause ----
+      # ---- GC time (alertnames kept from the s/s era: external Alertmanager
+      # matchers name them) ----
       - alert: JVMHighGCPause
         expr: |
           (
-            tenant:jvm_gc_pause:rate5m
+            tenant:jvm_gc_time:percent
             > on(tenant) group_left
-            tenant:alert_threshold:jvm_gc_pause
+            tenant:alert_threshold:jvm_gc_time_percent
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -156,15 +198,15 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: "jvm_gc_pause"
+          metric_group: "jvm_gc_time_percent"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "JVMHighGCPause on {{ $labels.tenant }}"
-          summary_zh: "{{ $labels.tenant }} 上 JVM GC pause 過高"
-          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: GC pause elevated — JVM tuning review"
-          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：GC pause 升高 — JVM 調優審查"
-          description: "GC pause {{ $value | printf \"%.3f\" }} s/s (seconds paused per second, all JVMs of the tenant) exceeds threshold"
-          description_zh: "GC pause {{ $value | printf \"%.3f\" }} 秒/秒（每秒暫停的秒數，租戶所有 JVM 加總）超出閾值"
+          summary_zh: "{{ $labels.tenant }} 上 JVM GC 時間佔比過高"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: GC time elevated on the busiest JVM — JVM tuning review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：最忙的 JVM GC 時間佔比升高 — JVM 調優審查"
+          description: "GC time {{ $value | printf \"%.1f\" }}% of time (GC pauses on the busiest JVM of the tenant in this cluster, 5m average) exceeds threshold"
+          description_zh: "GC 時間佔比 {{ $value | printf \"%.1f\" }}%（租戶在此叢集最忙的 JVM 花在 GC 暫停的時間，5 分鐘平均）超出閾值"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
@@ -172,9 +214,9 @@ groups:
       - alert: JVMHighGCPauseCritical
         expr: |
           (
-            tenant:jvm_gc_pause:rate5m
+            tenant:jvm_gc_time:percent
             > on(tenant) group_left
-            tenant:alert_threshold:jvm_gc_pause_critical
+            tenant:alert_threshold:jvm_gc_time_percent_critical
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -182,15 +224,15 @@ groups:
         labels:
           severity: critical
           maintenance: mute
-          metric_group: "jvm_gc_pause"
+          metric_group: "jvm_gc_time_percent"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "JVMHighGCPauseCritical on {{ $labels.tenant }}"
-          summary_zh: "{{ $labels.tenant }} 上 JVM GC pause 嚴重過高"
-          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: critical GC pause — application performance impacted"
-          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：嚴重 GC pause — 應用程式效能受影響"
-          description: "GC pause {{ $value | printf \"%.3f\" }} s/s (seconds paused per second, all JVMs of the tenant) exceeds critical threshold"
-          description_zh: "GC pause {{ $value | printf \"%.3f\" }} 秒/秒（每秒暫停的秒數，租戶所有 JVM 加總）超出嚴重閾值"
+          summary_zh: "{{ $labels.tenant }} 上 JVM GC 時間佔比嚴重過高"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: critical GC time on the busiest JVM — application performance impacted"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：最忙的 JVM GC 時間佔比嚴重 — 應用程式效能受影響"
+          description: "GC time {{ $value | printf \"%.1f\" }}% of time (GC pauses on the busiest JVM of the tenant in this cluster, 5m average) exceeds critical threshold"
+          description_zh: "GC 時間佔比 {{ $value | printf \"%.1f\" }}%（租戶在此叢集最忙的 JVM 花在 GC 暫停的時間，5 分鐘平均）超出嚴重閾值"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
@@ -297,32 +339,6 @@ groups:
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：嚴重 thread 耗盡 — 服務降級可能性高"
           description: "Active threads {{ $value }} exceeds critical threshold"
           description_zh: "活動 thread 數 {{ $value }} 超出嚴重閾值"
-          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
-          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
-          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
-
-      # ---- Composite: Performance Degraded ----
-      - alert: JVMPerformanceDegraded
-        expr: |
-          (
-            tenant:jvm_gc_pause:rate5m > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause
-            and on(tenant, da_cluster)
-            tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory
-          )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
-        for: 5m
-        labels:
-          severity: critical
-          maintenance: mute
-          tenant: "{{ $labels.tenant }}"
-        annotations:
-          summary: "JVMPerformanceDegraded on {{ $labels.tenant }}"
-          summary_zh: "{{ $labels.tenant }} 上 JVM 效能降級"
-          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: multi-signal JVM degradation — escalate"
-          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：多訊號 JVM 降級 — 需升級處理"
-          description: "Both GC pause and memory exceed thresholds — JVM performance degraded"
-          description_zh: "GC pause 和記憶體皆超出閾值 — JVM 效能降級"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

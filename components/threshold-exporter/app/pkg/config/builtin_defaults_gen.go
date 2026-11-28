@@ -26,4 +26,4 @@ var builtinDefaultEntries = []builtinDefaultEntry{
 // builtinDefaultsDigest names the built-in layer: the first 12 hex digits
 // of the SHA-256 of this table's `key=value` lines and a `key=off` line per
 // key of unsetThresholdKeys (#4163), sorted by key.
-const builtinDefaultsDigest = "968ca3d1c003"
+const builtinDefaultsDigest = "981b5923a866"

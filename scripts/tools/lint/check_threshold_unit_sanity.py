@@ -109,6 +109,7 @@ UNIT_DIMENSION: dict[str, str] = {
     "% of PROCESSES": "percent",
     "% of PGA_AGGREGATE_LIMIT": "percent",
     "% of DB time": "percent",
+    "% of time": "percent",  # jvm_gc_time_percent (#4116) — share of wall-clock time in GC pauses
     "ratio": "ratio",
     "0=green,1=yellow,2=red": "enum",
     "bytes": "bytes",

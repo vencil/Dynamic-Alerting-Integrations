@@ -1,0 +1,263 @@
+# promtool unit test — JVM GC time: busiest JVM, percent of time, both exporters (#4116).
+# Run: promtool test rules tests/rulepacks/rule-pack-jvm-gc-time_test.yaml
+#
+# tenant:jvm_gc_time:percent is, per (tenant, da_cluster), the largest per-JVM
+# share of wall-clock time spent in GC pauses, in percent. A counter that grows
+# by N seconds per 15s tick reads N / 15 * 100.
+#   t-ten     ten JVMs at +1.125 s per tick = 7.5 % each ⇒ 7.5, quiet at 10.
+#             Summed over the JVMs (the record before #4116) it reads 75.
+#   t-one     one JVM, Micrometer >= 1.11 (action, cause, gc): +4.5 and +3 per
+#             tick on two collectors = 50 % ⇒ warning (10) and critical (25),
+#             same metric_group on both (the pair Alertmanager deduplicates).
+#   t-pre111  Micrometer < 1.11 (no gc label): +1.5 and +1.5 = 20 % ⇒ warning.
+#   t-zgc     client_java, generational ZGC: the two "… Cycles" beans accrue a
+#             full second per second (concurrent work), the two "… Pauses"
+#             beans +0.3 each = 4 % ⇒ quiet. With the Cycles counted: 204.
+#   t-g1      client_java, G1: Young +1.5 (10 %), "G1 Concurrent GC" +0.75
+#             (5 % — Remark / Cleanup pauses, counted) ⇒ 15 > 10 fires; without
+#             the Concurrent bean it is exactly 10 and `>` stays quiet.
+#   t-both    one JVM exposing BOTH name sets, 6 % on each ⇒ 6 (counted once,
+#             from Micrometer), quiet. Counted twice it reads 12.
+#   t-pod     two JVMs with the same `instance`, told apart only by `pod`, 7 %
+#             each ⇒ 7, quiet. A collapse by named identity labels that leaves
+#             `pod` out adds them up to 14.
+#   t-maint   50 % in maintenance ⇒ muted.
+#   t-unset   50 % and no threshold ⇒ quiet.
+#   t-west    (second block) da_cluster=east at 2 %, da_cluster=west at 50 %
+#             ⇒ one alert, carrying da_cluster=west.
+# Assertions sit at 10m. With series starting at t=0 Prometheus' rate() ramps
+# with window coverage (#946) and VictoriaMetrics reads the full rate from the
+# first ticks, so the two engines cross a threshold at different times; by 10m
+# the window is fully covered, both `for:` (5m / 3m) have run out on both, and
+# $value is the same. At 3m / 2m neither engine has fired.
+rule_files:
+  - ../../rule-packs/rule-pack-jvm.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-ten", instance="app-0:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.125x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-ten", instance="app-1:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.125x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-ten", instance="app-2:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.125x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-ten", instance="app-3:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.125x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-ten", instance="app-4:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.125x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-ten", instance="app-5:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.125x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-ten", instance="app-6:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.125x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-ten", instance="app-7:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.125x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-ten", instance="app-8:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.125x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-ten", instance="app-9:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.125x48'
+      - series: 'user_threshold{tenant="t-ten", component="jvm", metric="gc_time_percent", severity="warning"}'
+        values: '10x48'
+
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-one", instance="app-0:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+4.5x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-one", instance="app-0:8080", action="end of major GC", cause="G1 Compaction Pause", gc="G1 Old Generation"}'
+        values: '0+3x48'
+      - series: 'user_threshold{tenant="t-one", component="jvm", metric="gc_time_percent", severity="warning"}'
+        values: '10x48'
+      - series: 'user_threshold{tenant="t-one", component="jvm", metric="gc_time_percent", severity="critical"}'
+        values: '25x48'
+
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-pre111", instance="app-0:8080", action="end of minor GC", cause="Allocation Failure"}'
+        values: '0+1.5x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-pre111", instance="app-0:8080", action="end of major GC", cause="Ergonomics"}'
+        values: '0+1.5x48'
+      - series: 'user_threshold{tenant="t-pre111", component="jvm", metric="gc_time_percent", severity="warning"}'
+        values: '10x48'
+
+      - series: 'jvm_gc_collection_seconds_sum{tenant="t-zgc", instance="app-0:9404", gc="ZGC Major Cycles"}'
+        values: '0+15x48'
+      - series: 'jvm_gc_collection_seconds_sum{tenant="t-zgc", instance="app-0:9404", gc="ZGC Minor Cycles"}'
+        values: '0+15x48'
+      - series: 'jvm_gc_collection_seconds_sum{tenant="t-zgc", instance="app-0:9404", gc="ZGC Major Pauses"}'
+        values: '0+0.3x48'
+      - series: 'jvm_gc_collection_seconds_sum{tenant="t-zgc", instance="app-0:9404", gc="ZGC Minor Pauses"}'
+        values: '0+0.3x48'
+      - series: 'user_threshold{tenant="t-zgc", component="jvm", metric="gc_time_percent", severity="warning"}'
+        values: '10x48'
+
+      - series: 'jvm_gc_collection_seconds_sum{tenant="t-g1", instance="app-0:9404", gc="G1 Young Generation"}'
+        values: '0+1.5x48'
+      - series: 'jvm_gc_collection_seconds_sum{tenant="t-g1", instance="app-0:9404", gc="G1 Concurrent GC"}'
+        values: '0+0.75x48'
+      - series: 'jvm_gc_collection_seconds_sum{tenant="t-g1", instance="app-0:9404", gc="G1 Old Generation"}'
+        values: '0x48'
+      - series: 'user_threshold{tenant="t-g1", component="jvm", metric="gc_time_percent", severity="warning"}'
+        values: '10x48'
+
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-both", instance="app-0:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+0.9x48'
+      - series: 'jvm_gc_collection_seconds_sum{tenant="t-both", instance="app-0:8080", gc="G1 Young Generation"}'
+        values: '0+0.9x48'
+      - series: 'user_threshold{tenant="t-both", component="jvm", metric="gc_time_percent", severity="warning"}'
+        values: '10x48'
+
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-pod", instance="app:8080", pod="app-0", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.05x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-pod", instance="app:8080", pod="app-1", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+1.05x48'
+      - series: 'user_threshold{tenant="t-pod", component="jvm", metric="gc_time_percent", severity="warning"}'
+        values: '10x48'
+
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-maint", instance="app-0:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+7.5x48'
+      - series: 'user_threshold{tenant="t-maint", component="jvm", metric="gc_time_percent", severity="warning"}'
+        values: '10x48'
+      - series: 'user_threshold{tenant="t-maint", component="jvm", metric="gc_time_percent", severity="critical"}'
+        values: '25x48'
+      - series: 'user_state_filter{tenant="t-maint", filter="maintenance"}'
+        values: '1x48'
+
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-unset", instance="app-0:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+7.5x48'
+
+    promql_expr_test:
+      # round(): 100 * (N / 15) is not exact in floating point for every N.
+      # max by(): MetricsQL's round() keeps the metric name, PromQL's drops it.
+      - expr: max by(tenant, da_cluster) (round(tenant:jvm_gc_time:percent, 0.001))
+        eval_time: 10m
+        exp_samples:
+          - labels: '{tenant="t-ten"}'
+            value: 7.5
+          - labels: '{tenant="t-one"}'
+            value: 50
+          - labels: '{tenant="t-pre111"}'
+            value: 20
+          - labels: '{tenant="t-zgc"}'
+            value: 4
+          - labels: '{tenant="t-g1"}'
+            value: 15
+          - labels: '{tenant="t-both"}'
+            value: 6
+          - labels: '{tenant="t-pod"}'
+            value: 7
+          - labels: '{tenant="t-maint"}'
+            value: 50
+          - labels: '{tenant="t-unset"}'
+            value: 50
+
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: JVMHighGCPause
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: JVMHighGCPause
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_gc_time_percent
+              tenant: t-one
+            exp_annotations:
+              summary: "JVMHighGCPause on t-one"
+              summary_zh: "t-one 上 JVM GC 時間佔比過高"
+              platform_summary: "[] t-one: GC time elevated on the busiest JVM — JVM tuning review"
+              platform_summary_zh: "[] t-one：最忙的 JVM GC 時間佔比升高 — JVM 調優審查"
+              description: "GC time 50.0% of time (GC pauses on the busiest JVM of the tenant in this cluster, 5m average) exceeds threshold"
+              description_zh: "GC 時間佔比 50.0%（租戶在此叢集最忙的 JVM 花在 GC 暫停的時間，5 分鐘平均）超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_gc_time_percent
+              tenant: t-pre111
+            exp_annotations:
+              summary: "JVMHighGCPause on t-pre111"
+              summary_zh: "t-pre111 上 JVM GC 時間佔比過高"
+              platform_summary: "[] t-pre111: GC time elevated on the busiest JVM — JVM tuning review"
+              platform_summary_zh: "[] t-pre111：最忙的 JVM GC 時間佔比升高 — JVM 調優審查"
+              description: "GC time 20.0% of time (GC pauses on the busiest JVM of the tenant in this cluster, 5m average) exceeds threshold"
+              description_zh: "GC 時間佔比 20.0%（租戶在此叢集最忙的 JVM 花在 GC 暫停的時間，5 分鐘平均）超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_gc_time_percent
+              tenant: t-g1
+            exp_annotations:
+              summary: "JVMHighGCPause on t-g1"
+              summary_zh: "t-g1 上 JVM GC 時間佔比過高"
+              platform_summary: "[] t-g1: GC time elevated on the busiest JVM — JVM tuning review"
+              platform_summary_zh: "[] t-g1：最忙的 JVM GC 時間佔比升高 — JVM 調優審查"
+              description: "GC time 15.0% of time (GC pauses on the busiest JVM of the tenant in this cluster, 5m average) exceeds threshold"
+              description_zh: "GC 時間佔比 15.0%（租戶在此叢集最忙的 JVM 花在 GC 暫停的時間，5 分鐘平均）超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 2m
+        alertname: JVMHighGCPauseCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: JVMHighGCPauseCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: mute
+              metric_group: jvm_gc_time_percent
+              tenant: t-one
+            exp_annotations:
+              summary: "JVMHighGCPauseCritical on t-one"
+              summary_zh: "t-one 上 JVM GC 時間佔比嚴重過高"
+              platform_summary: "[] t-one: critical GC time on the busiest JVM — application performance impacted"
+              platform_summary_zh: "[] t-one：最忙的 JVM GC 時間佔比嚴重 — 應用程式效能受影響"
+              description: "GC time 50.0% of time (GC pauses on the busiest JVM of the tenant in this cluster, 5m average) exceeds critical threshold"
+              description_zh: "GC 時間佔比 50.0%（租戶在此叢集最忙的 JVM 花在 GC 暫停的時間，5 分鐘平均）超出嚴重閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # Two clusters of one tenant, in a block of its own: a block that writes
+  # da_cluster out is not replayed by test_cluster_metamorphic.py, and the
+  # block above has to stay replayable.
+  - interval: 15s
+    input_series:
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-west", da_cluster="east", instance="app-0:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+0.3x48'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-west", da_cluster="west", instance="app-0:8080", action="end of minor GC", cause="G1 Evacuation Pause", gc="G1 Young Generation"}'
+        values: '0+7.5x48'
+      - series: 'user_threshold{tenant="t-west", component="jvm", metric="gc_time_percent", severity="warning"}'
+        values: '10x48'
+    promql_expr_test:
+      - expr: max by(tenant, da_cluster) (round(tenant:jvm_gc_time:percent, 0.001))
+        eval_time: 10m
+        exp_samples:
+          - labels: '{tenant="t-west", da_cluster="east"}'
+            value: 2
+          - labels: '{tenant="t-west", da_cluster="west"}'
+            value: 50
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: JVMHighGCPause
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_gc_time_percent
+              tenant: t-west
+              da_cluster: west
+            exp_annotations:
+              summary: "JVMHighGCPause on t-west"
+              summary_zh: "t-west 上 JVM GC 時間佔比過高"
+              platform_summary: "[] t-west: GC time elevated on the busiest JVM — JVM tuning review"
+              platform_summary_zh: "[] t-west：最忙的 JVM GC 時間佔比升高 — JVM 調優審查"
+              description: "GC time 50.0% of time (GC pauses on the busiest JVM of the tenant in this cluster, 5m average) exceeds threshold"
+              description_zh: "GC 時間佔比 50.0%（租戶在此叢集最忙的 JVM 花在 GC 暫停的時間，5 分鐘平均）超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""

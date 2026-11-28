@@ -266,7 +266,7 @@ EXPORTER_SHORT = {
     "clickhouse": "built-in /metrics",
     "kafka": "kafka_exporter",
     "rabbitmq": "rabbitmq_exporter",
-    "jvm": "jmx_exporter",
+    "jvm": "Micrometer / client_java / jmx_exporter",
     "nginx": "nginx-prometheus-exporter",
     "kubernetes": "cAdvisor + kube-state-metrics",
     "liveness": "threshold-exporter",
