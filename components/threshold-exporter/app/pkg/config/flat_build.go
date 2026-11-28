@@ -27,6 +27,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -50,6 +51,10 @@ type FlatBuildInput struct {
 	// sets it, to keep those WARNs on the process log while discarding the
 	// rest of the build's lines, as it did before.
 	ProfileLogf func(format string, args ...any)
+	// At is the instant the build answers for: a threshold value whose
+	// `expires:` has passed at At is merged as if not written (expiry.go,
+	// #4263). Zero = time.Now().
+	At time.Time
 }
 
 // FlatBuild is BuildFlatConfig's result: the merged config the collector
@@ -291,17 +296,12 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	// tenant no tenant file declares is dropped and named.
 	exists := tenantExistenceFor(fileConfigs, scan)
 	reportPlatformOrphans(fileConfigs, exists, logger)
-	merged := mergePartialConfigs(fileConfigs, exists)
 	// #3832: the built-in layer, under the root carrier's values — withheld
 	// when the root carrier exists but cannot be read (builtin_defaults.go).
 	rootDropped := rootCarrier != "" && slices.Contains(parseFailed, rootCarrier)
 	// (rootDropped is RootBuiltinWithheld's DropsConfFile half, already
 	// known here without decoding the carrier again.)
 	withheld := rootDropped || scan.RootDefaultsUnreadable()
-	var seeded []string
-	if !withheld {
-		seeded = seedBuiltinDefaults(merged.Defaults)
-	}
 	// #2513: the profile WARNs go to the caller's logger like every other
 	// line of this build, not to the process-global log. The exporter passes
 	// log.Default() (same output as ApplyProfiles' log.Printf); LoadDir with a
@@ -310,9 +310,42 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	if profileLogf == nil {
 		profileLogf = logger.Printf
 	}
-	merged.applyProfiles(profileLogf)
-
-	n, unreachable, rejected := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
+	// The merge of one set of inputs: the partials, the built-in layer under
+	// them, the profiles and the subtree chain. Run on the tree as it stands
+	// at the build's instant — and, when the tree holds a time-boxed value,
+	// twice more for decideExpiry (#4263): the merge is the one definition of
+	// what a value gives way to.
+	type mergeRun struct {
+		cfg         ThresholdConfig
+		seeded      []string
+		filled      int
+		unreachable map[string]map[string]ScheduledValue
+		rejected    chainRejections
+	}
+	mergeWith := func(configs map[string]ThresholdConfig, parsed map[string]map[string]any, logf func(string, ...any)) mergeRun {
+		r := mergeRun{cfg: mergePartialConfigs(configs, exists)}
+		if !withheld {
+			r.seeded = seedBuiltinDefaults(r.cfg.Defaults)
+		}
+		r.cfg.applyProfiles(logf)
+		r.filled, r.unreachable, r.rejected = applySubtreeDefaults(&r.cfg, in.Root, in.TenantDefaults, parsed)
+		return r
+	}
+	at := in.At
+	if at.IsZero() {
+		at = time.Now()
+	}
+	timed := expiryScan{at: at}
+	run := mergeWith(filterPartials(fileConfigs, timed.keep), filterLevels(in.ParsedDefaults, timed.keep), profileLogf)
+	if timed.any {
+		full := mergeWith(fileConfigs, in.ParsedDefaults, discardLogf)
+		untimed := mergeWith(filterPartials(fileConfigs, keepUntimed), filterLevels(in.ParsedDefaults, keepUntimed), discardLogf)
+		decideExpiry(at, &full.cfg, &run.cfg, &untimed.cfg, timed.last, timed.next)
+	} else {
+		run.cfg.expiry = &expiryState{} // nothing time-boxed: the same answer at every instant
+	}
+	merged, seeded := run.cfg, run.seeded
+	n, unreachable, rejected := run.filled, run.unreachable, run.rejected
 	undeliverable, disabledUndeclared := undeliverableThresholds(unreachable)
 	return FlatBuild{
 		Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n,

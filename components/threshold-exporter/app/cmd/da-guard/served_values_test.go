@@ -644,7 +644,7 @@ func TestServedValues_MatchesResolveAt(t *testing.T) {
 			code, doc, dir, stderr := served(t, consistencyTree, at)
 			mustOK(t, code, stderr)
 			now, _ := time.Parse(time.RFC3339, at)
-			cfg, _, err := config.LoadDir(dir, nil)
+			cfg, _, err := config.LoadDirAt(dir, nil, now) // #4263: built for the instant it is read at
 			if err != nil {
 				t.Fatal(err)
 			}

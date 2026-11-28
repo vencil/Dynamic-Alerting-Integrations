@@ -21,6 +21,7 @@ type ConfigMetrics struct {
 	DebounceBatch      prometheus.Histogram     // v2.8.0 B-3: count of triggers coalesced per fired window (debounce effectiveness)
 	LastScanComplete   prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful conf.d tree scan completion (e2e harness anchor T1; production stuck-detection)
 	LastReloadComplete prometheus.Gauge         // v2.8.0 B-1.P2-a: wall-clock unix seconds at most-recent successful diffAndReload completion (e2e harness anchor T2; production stuck-detection)
+	ValidUntil         prometheus.Gauge         // #4263: unix seconds of the committed config's next threshold `expires:` (0: none)
 	FreeOSMemory       prometheus.Counter       // #459: count of explicit runtime/debug.FreeOSMemory() calls after reload (opt-in -free-os-mem-after-reload; 0 when lever disabled)
 	// State-coded gauge: tenants that inherit a key existing ONLY in a
 	// subtree `_defaults.yaml`, which /effective reports and the collector
@@ -172,6 +173,10 @@ func NewConfigMetrics() *ConfigMetrics {
 			Name: "da_config_last_reload_complete_unixtime_seconds",
 			Help: "Wall-clock unix seconds at the most recent successful diffAndReload completion (post atomic-swap). Set by the reload pipeline; read by the e2e harness as anchor T2 (B-1 Phase 2). Production use: alert on time() - <gauge> > N for stuck-reloader detection. 0 means reloader has not yet completed a successful reload.",
 		}),
+		ValidUntil: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "da_config_valid_until_unixtime_seconds",
+			Help: "Wall-clock unix seconds of the next threshold `expires:` the committed config was merged before (#4263): from that instant the tree answers differently and the exporter merges it again. 0 means no time-boxed threshold lies ahead. Set at every commit, every config mode. Production use: alert on time() - <gauge> > N (with the gauge > 0) — the merge at the expiry did not commit, so the exporter still serves the previous answer.",
+		}),
 		FreeOSMemory: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "da_config_free_os_memory_total",
 			Help: "Count of explicit runtime/debug.FreeOSMemory() calls issued after a reload cycle (#459). Stays 0 unless the -free-os-mem-after-reload lever is enabled. Each increment is one forced GC + return-to-OS; correlate with go_memstats_heap_released_bytes to confirm the lever is reclaiming idle heap under sustained reload pressure.",
@@ -243,6 +248,7 @@ func (s *ConfigMetrics) Collectors() []prometheus.Collector {
 		s.DebounceBatch,
 		s.LastScanComplete,
 		s.LastReloadComplete,
+		s.ValidUntil,
 		s.FreeOSMemory,
 		s.SubtreeUndeliverableTenants,
 		s.MaxTenantsPerFile,

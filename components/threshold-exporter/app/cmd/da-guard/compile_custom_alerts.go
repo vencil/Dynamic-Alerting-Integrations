@@ -118,7 +118,7 @@ func runCompileCustomAlerts(args []string, stdout, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, compileCustomAlertsCmd, err)
 		return exitCallerErr
 	}
-	cfg, rep, written, allUnreadable, ok := loadJSONTree(configDir, compileCustomAlertsCmd, errOut)
+	cfg, rep, written, allUnreadable, ok := loadJSONTree(configDir, compileCustomAlertsCmd, errOut, time.Time{})
 	if !ok {
 		return exitCallerErr
 	}
