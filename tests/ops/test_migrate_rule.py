@@ -151,6 +151,7 @@ def test_an_infrastructure_series_gets_namespace_and_an_empty_tenant(tmp_path, m
     "kube_persistentvolume_status_phase",
     "prometheus_tsdb_head_series",      # the platform's own series
     "up",                               # every scrape target's
+    "kube_state_metrics_list_total",    # kube-state-metrics' own (review of #4341)
     "ALERTS",                           # an alert's
 ])
 def test_a_series_no_pin_selects_one_tenant_of_is_refused(tmp_path, metric):
@@ -211,7 +212,39 @@ REFUSED = {
     "keeps-component-on": (one("A", "x * on(component) group_left y > 1"), "on/group_*"),
     "writes-component": (one("A", 'label_replace(x, "component", "$1", "job", "(.*)") > 1'),
                          'label_replace(…, "component", …)'),
+    # review of #4341: the migrated record carries tenant, sum(y) does not
+    "record-matches-differently": (yaml.safe_dump({"groups": [{"name": "g", "rules": [
+        {"record": "job:x:sum", "expr": "sum(app_x)"},
+        {"alert": "A", "expr": "job:x:sum / sum(app_y) > 1"}]}]}),
+        "job:x:sum / sum(app_y): the migrated record carries tenant"),
+    "record-name-taken": (yaml.safe_dump({"groups": [{"name": "g", "rules": [
+        {"record": "job:x:sum", "expr": "sum by (tenant) (app_x)"},
+        {"record": "migrated:db_a:job:x:sum", "expr": "sum by (tenant) (app_y)"},
+        {"alert": "A", "expr": "job:x:sum > 1"}]}]}),
+        "its migrated name migrated:db_a:job:x:sum is a record this file defines too"),
 }
+
+
+@pytest.mark.parametrize("expr", [
+    "job:x:sum / job:y:sum > 1",            # both sides migrated records: both carry it
+    "job:x:sum / on() sum(app_y) > 1",      # on() without tenant does not look at it
+    "job:x:sum > 1 unless on(job) sum(app_y) > 0",
+])
+def test_a_match_the_added_tenant_does_not_change_is_migrated(tmp_path, expr):
+    proc, _ = run(tmp_path, yaml.safe_dump({"groups": [{"name": "g", "rules": [
+        {"record": "job:x:sum", "expr": "sum(app_x)"},
+        {"record": "job:y:sum", "expr": "sum(app_y)"},
+        {"alert": "A", "expr": expr}]}]}), "--no-dictionary")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_golden_hit_beside_a_selector_naming_no_metric_is_not_golden(tmp_path):
+    # review of #4341: `{job="x"}` is not what the golden rule covers
+    proc, out = run(tmp_path, one(
+        "A", 'mysql_global_status_threads_connected > 100 or {job="mysql"} > 100'))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert 'selector {job="mysql"}: it names no metric' in proc.stderr
+    assert nothing_written(out)
 
 
 @pytest.mark.parametrize("case", sorted(REFUSED))
@@ -575,6 +608,23 @@ def test_another_namespaces_kube_state_metrics_series_does_not_fire_it(tmp_path)
         [{"eval_time": "2m", "alertname": "Restarts", "exp_alerts": [
             {"exp_labels": {**_MARKS, "namespace": "db-a", "pod": "p2"},
              "exp_annotations": _ANN}]}])
+
+
+def test_a_ratio_of_two_migrated_records_alerts_as_the_legacy_one(tmp_path):
+    # review of #4341: both records carry the tenant, so they still pair
+    legacy = tmp_path / "legacy.yml"
+    legacy.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [
+        {"record": "job:x:sum", "expr": "sum(app_x)"},
+        {"record": "job:y:sum", "expr": "sum(app_y)"},
+        {"alert": "Ratio", "expr": "job:x:sum / job:y:sum > 1"}]}]}), encoding="utf-8")
+    proc, out = run(tmp_path, legacy, "--no-dictionary")
+    assert proc.returncode == 0, proc.stderr
+    _promtool(tmp_path, [legacy, out / mr.rules_rel(TENANT)], [
+        {"series": 'app_x{tenant="db-a"}', "values": "20x3"},
+        {"series": 'app_y{tenant="db-a"}', "values": "10x3"}],
+        [{"eval_time": "2m", "alertname": "Ratio", "exp_alerts": [
+            {"exp_labels": {}},
+            {"exp_labels": _MARKS, "exp_annotations": _ANN}]}])
 
 
 def test_the_legacy_rules_loaded_beside_the_migrated_ones_alert_as_before(tmp_path):

@@ -500,7 +500,7 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
      new_query: tenant:custom_mysql_global_status_threads_connected:max
    ```
    每一項產生一組比對：新查詢 `new_query` 是 migrate 產生的 recording rule；舊查詢 `old_query` 是原規則的左半邊以同一種方式逐（租戶、叢集）聚合，rate 類規則保留 `rate()`（例如 `sum by(tenant, da_cluster) (rate(mysql_global_status_slow_queries[5m]))` 對 `tenant:custom_mysql_global_status_slow_queries:sum`）。兩邊量綱相同，recording rule 有載入並正常評估時數值會一致。兩邊以（租戶、`da_cluster`）配對：收了多個叢集資料的 Prometheus 對同一個租戶回好幾列，各叢集各比一次，報告的 `Tenant` 欄寫成 `<租戶> (da_cluster=<叢集>)`；只在一邊出現的叢集列為 `mismatch` 並點名叢集（叢集名裡的 `\`、`(`、`)` 與換行在該欄以 `\` 跳脫）（例如一邊還是舊版 migrate 產的 `by(tenant)` 規則）。序列沒有 `da_cluster` 時，比對與報告與先前相同。v2.9.0 映像的 migrate 產生 `by(tenant)`，validate 只以租戶配對（同一個租戶有兩列時後一列蓋掉前一列） <!-- image-caveat: v2.9.0 -->原始 series 沒有 `tenant` label 時，舊查詢會多出一個沒有租戶的組，報告裡列為新側缺值。字典判定改用黃金標準的項（有 `golden_rule`）migrate 不產出 recording rule，沒有這兩欄，validate 跳過並在 stderr 列出。
-   舊版 migrate 產的檔沒有 `old_query`／`new_query`，validate 會在 stderr 警告並退回「原始指標 對 `tenant:<key>:max`」：rate 類與 `:sum` 的組在這種檔上比不出來，請用新版 migrate 重產。⚠️ v2.9.0 映像的 migrate 與 validate 都還是舊行為。 <!-- image-caveat: v2.9.0 -->
+   舊版 migrate 產的檔沒有 `old_query`／`new_query`，validate 會在 stderr 警告並退回「原始指標 對 `tenant:<key>:max`」：rate 類與 `:sum` 的組在這種檔上比不出來：手動補上這兩欄，或以產生它的那一版 migrate 重產（#4226 起的 migrate 不再產生這份檔，新的對照檔由 #4227 接上 validate）。⚠️ v2.9.0 映像的 migrate 與 validate 都還是舊行為。 <!-- image-caveat: v2.9.0 -->
    不能用的項目會讓整次執行以結束碼 2 停下，stderr 一行點名每個項目的 key 與原因，不比對任何一組（[#4210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4210)；先前是靜默略過，剩下的組照常比對）。不能用的形狀：值不是 mapping（例如留空成 null）、key 不是字串、`old_query`／`new_query` 有寫但不是非空字串、退回舊格式比對時 `original_metric` 不是非空字串、`old_query` 與 `new_query` 只寫了一個、兩者都沒有且也沒有 `original_metric` 或 `golden_rule`。migrate 正常產出的檔不會碰到；`original_metric` 只在退回舊格式比對時才檢查。
 
 2. **Query 模式**：`--old <query> --new <query>`
@@ -2350,13 +2350,13 @@ expr 語意、`for`、labels、annotations、alertname 原樣保留，只做三�
     |------|------|
     | 序列帶 `tenant` 的指標（含平台不認得來源的客戶指標） | `tenant="<ID>"` |
     | kube-state-metrics 有 namespace 的物件（例如 `kube_pod_*`）、cAdvisor 與 kubelet 的基礎設施指標（`container_*`、`kubelet_*`） | `namespace="<ID>", tenant=""` |
-    | 叢集層級的 kube-state-metrics 物件（例如 `kube_node_*`）、Prometheus／Alertmanager 自己的序列、每個抓取目標都有的序列（例如 `up`、`go_*`）、`ALERTS` | 拒絕：平台層級的規則，不逐租戶遷移 |
+    | 叢集層級的 kube-state-metrics 物件（例如 `kube_node_*`）、kube-state-metrics 自己的序列（`kube_state_metrics_*`）、Prometheus／Alertmanager 自己的序列、每個抓取目標都有的序列（例如 `up`、`go_*`）、`ALERTS` | 拒絕：平台層級的規則，不逐租戶遷移 |
 
     原式子已有的 `tenant`／`namespace` matcher 不是上表那個等值、或 selector 沒有以等值點名指標名，也拒絕。
 2. **標記**：labels 加 `tenant: <ID>`、`component: migrated`（靜態值，切換前後不變；recording rule 只加 `tenant`）；annotations 加 `owner`、`expiry`（放 label 的話，續期改 expiry 會讓 `for:` 重新計時）。原規則已寫了不同值的 `tenant`／`component` label、把 `owner`／`expiry` 寫成 label，或 annotation 與旗標不同，拒絕。運算式明寫保留 `component` 的告警（`component` matcher、`by(component)`、`on(component)`／`group_left(component)`，或寫入它的 `label_replace`／`label_join`／`count_values`）也拒絕：`component: migrated` 會蓋掉它；序列從抓取帶來的 `component` 從運算式看不出來，報告提醒（多條只差 `component` 的序列會變成同一組 label，Prometheus 不評估該告警）。
 3. **到期伴隨告警**：group `migrated-expiry` 裡的 `MigratedRulesExpiring`，`vector(time()) > <expiry 前 14 天的 Unix 秒數>`，不讀任何指標。來源檔已有同名的 alert 或 group，拒絕。
 
-被遷移的告警讀到的同檔 recording rule（遞移地）一起遷移，並改名為 `migrated:<租戶>:<原名>`（租戶的 `-` 寫成 `_`，例如 `migrated:db_a:job:redis_queue_length:max`），讀它的 migrated 規則一併改寫：migrated 規則檔與 legacy 規則載入同一台 Prometheus，同名的話 legacy 告警會讀到 migrated record 的序列。讀到檔裡沒定義的 record，拒絕；沒被讀到的 record 不遷移，只在報告列出。只讀一個指標、而該指標在 `metric-dictionary.yaml` 有黃金標準規則的告警，不產生 migrated 規則，只在報告的「改用黃金標準」點名。原式子點名 `tenant`／`instance`／`pod`／`namespace`／`node` 卻沒有 `da_cluster` 的 `by(...)`／`on(...)`（或點名 `da_cluster` 的 `without(...)`／`ignoring(...)`），只在報告標出「在持有多個叢集資料的 Prometheus 上」會配對或合併不同叢集的序列，請人確認，不改寫。
+被遷移的告警讀到的同檔 recording rule（遞移地）一起遷移，並改名為 `migrated:<租戶>:<原名>`（租戶的 `-` 寫成 `_`，例如 `migrated:db_a:job:redis_queue_length:max`），讀它的 migrated 規則一併改寫：migrated 規則檔與 legacy 規則載入同一台 Prometheus，同名的話 legacy 告警會讀到 migrated record 的序列。讀到檔裡沒定義的 record，拒絕；改名後的名字已是檔裡另一條 record 的，拒絕；migrated record 帶 `tenant`，所以向量對向量的運算（沒有 `on(…)` 排除 tenant）一邊讀它、另一邊不帶 tenant（例如 `job:x:sum / sum(y)`）時兩邊配不上，拒絕並點名那個運算（兩邊都是 migrated record、或 `on()` 不含 tenant 則照常遷移）；沒被讀到的 record 不遷移，只在報告列出。只讀一個指標（每個 selector 都讀它）、而該指標在 `metric-dictionary.yaml` 有黃金標準規則的告警，不產生 migrated 規則，只在報告的「改用黃金標準」點名。原式子點名 `tenant`／`instance`／`pod`／`namespace`／`node` 卻沒有 `da_cluster` 的 `by(...)`／`on(...)`（或點名 `da_cluster` 的 `without(...)`／`ignoring(...)`），只在報告標出「在持有多個叢集資料的 Prometheus 上」會配對或合併不同叢集的序列，請人確認，不改寫。
 
 任何一條被拒，逐條列出原因、結束碼 `2`、一個檔都不寫。寫之前先對自己的輸出跑 `lint_custom_rules`（租戶隔離、owner／expiry 治理；`--policy` 可換政策），有 ERROR 同樣結束碼 `2`、不寫；WARN 列在報告。
 

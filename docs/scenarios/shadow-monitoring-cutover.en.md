@@ -229,6 +229,9 @@ kubectl rollout restart deployment alertmanager -n monitoring
 
 ```bash
 # 3.1 Start parallel validation
+# ⚠️ The new migrate writes .migration/mapping/db-a.yaml; validate_migration reads it from #4227 on.
+#    Until then this step applies only to a prefix-mapping.yaml from the old migrate. For the new
+#    output, compare count by (alertname) (ALERTS{component="migrated"}) with the legacy alerts' ALERTS
 python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \

@@ -105,10 +105,8 @@ vmalert \
 ### 5.1 工具鏈
 
 ```
-customer PromRule YAML
-    ↓ da-parser import
-ParsedRule JSON（含 dialect / vm_only / prom_portable 標註，分診用）
-    ↓ da-tools migrate（逐租戶）
+customer PromRule YAML ──→ da-parser import → ParsedRule JSON（dialect / vm_only / prom_portable 標註，只供分診）
+    ↓ da-tools migrate（逐租戶，讀的是原始規則檔，不是 ParsedRule JSON）
 migrated 規則檔（抓取原始指標那一側載入）→ 客戶自己的 PR
     ↓ da-guard
 Dangling Defaults Guard 檢查（路由交 generate-routes）

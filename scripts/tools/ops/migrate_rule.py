@@ -477,6 +477,75 @@ def _keeps_migrated_label(tree):
     return list(dict.fromkeys(found))
 
 
+#: A raw metric name no table knows, so label_flow takes its series to carry
+#: tenant (``_matching_changes``).
+_TENANT_CARRIER = "migrate_rule_tenant_carrier"
+
+
+def _operand_reads(node, needed):
+    """Whether the operand *node* reads one of the *needed* records."""
+    return any(_selector_metric(n) in needed for n in _lib_consumer_read.shape_nodes(node)
+               if n["kind"] == "selector")
+
+
+def _matching_changes(chosen, groups, needed, tenant, *, flow=None):
+    """Why a binary operation of a migrated rule would match differently (one line
+    each). A migrated record carries ``tenant`` (its ``labels:``), which its
+    legacy one may not: ``job:x:sum / sum(y)`` matched two results without
+    tenant, and the migrated record's carries it while ``sum(y)`` does not —
+    no pair, no alert. Each vector/vector operation with an operand reading a
+    migrated record is judged twice by ``_lib_metric_sources.label_flow``
+    (*flow*, tests inject): with the records as written and with ``tenant``
+    added to the migrated ones. The match changes when the two operands agree
+    on carrying tenant in one and not the other (every tenant value is this
+    tenant's); an operand neither can tell (``unknown``) is refused too.
+    ``on(…)`` without tenant, and ``ignoring(…)`` with it, do not look at it."""
+    flow = flow or _lib_metric_sources.label_flow
+    found = []   # (where, operation text, lhs text, rhs text)
+    for group, rule, tree in chosen:
+        expr = str(rule["expr"]).encode("utf-8")
+        text = lambda n: expr[n["start"]:n["end"]].decode("utf-8", "replace")  # noqa: E731
+        for node in _lib_consumer_read.shape_nodes(tree):
+            m = node["kind"] == "binary" and node["matching"]
+            if not m or (m["on"] and TENANT_LABEL not in m["labels"]) or \
+                    (not m["on"] and TENANT_LABEL in m["labels"]):
+                continue
+            if _operand_reads(node["lhs"], needed) or _operand_reads(node["rhs"], needed):
+                found.append((f"{group.get('name', '<unnamed>')}/{_rule_name(rule)}",
+                              text(node), text(node["lhs"]), text(node["rhs"])))
+    if not found:
+        return []
+    legacy, migrated = {}, {}
+    for group in groups:
+        for rule in group.get("rules") or []:
+            if rule.get("record"):
+                labels = {**(group.get("labels") or {}), **(rule.get("labels") or {})}
+                d = {"expr": str(rule.get("expr", "")), "labels": labels}
+                legacy.setdefault(rule["record"], []).append(d)
+                # a migrated record carries tenant on every series (its
+                # labels:); label_flow reads a static label as "unknown" (it
+                # asks whether the value is a series'), so the record is told
+                # as a raw metric every series of which carries it
+                migrated.setdefault(rule["record"], []).append(
+                    {"expr": _TENANT_CARRIER, "labels": {}} if rule["record"] in needed else d)
+    operands = [e for _, _, lhs, rhs in found for e in (lhs, rhs)]
+    before = [r["result"] for r in flow(TENANT_LABEL, operands, legacy)]
+    after = [r["result"] for r in flow(TENANT_LABEL, operands, migrated)]
+    out = []
+    for i, (where, op, _, _) in enumerate(found):
+        b, a = before[2 * i:2 * i + 2], after[2 * i:2 * i + 2]
+        if "unknown" in b + a:
+            out.append(f"{where}: {op}: whether its two sides carry {TENANT_LABEL} cannot be "
+                       "told, so whether the migrated record's added tenant changes how they "
+                       "match cannot either")
+        elif (b[0] == b[1]) != (a[0] == a[1]):
+            out.append(f"{where}: {op}: the migrated record carries {TENANT_LABEL}, so the two "
+                       f"sides would match {'no longer' if b[0] == b[1] else 'where they did not'} "
+                       f"(one carries {TENANT_LABEL}, the other not); keep {TENANT_LABEL} on both "
+                       f"sides (`by ({TENANT_LABEL})`) or match them on(…) without it")
+    return out
+
+
 def plan_migration(groups, tenant, owner, expiry, dictionary=None, *, pin=None):
     """判讀 *groups*（Prometheus rule loader 讀出的 rule groups）的遷移。
 
@@ -493,12 +562,16 @@ def plan_migration(groups, tenant, owner, expiry, dictionary=None, *, pin=None):
 
     # 字典命中：只讀一個原始指標、它在字典裡有黃金標準規則
     golden_ids = set()
-    for group, rule in entries:
+    for (group, rule), tree in zip(entries, trees):
         if not rule.get("alert"):
             continue
         metrics = [m for m in reads[id(rule)] if m not in own_records]
         hit = lookup_dictionary(metrics[0], dictionary) if len(metrics) == 1 else None
-        if isinstance(hit, dict) and hit.get("golden_rule") and len(reads[id(rule)]) == 1:
+        # every selector reads that metric: one that names none (`{job="x"}`)
+        # is not covered by the golden rule, and goes through the selector
+        # checks like any other
+        only = all(_selector_metric(n) == metrics[0] for n in _selectors(tree)) if metrics else False
+        if isinstance(hit, dict) and hit.get("golden_rule") and len(reads[id(rule)]) == 1 and only:
             golden_ids.add(id(rule))
             plan.golden.append((rule["alert"], metrics[0], hit))
 
@@ -564,6 +637,11 @@ def plan_migration(groups, tenant, owner, expiry, dictionary=None, *, pin=None):
                         f"{json.dumps(value)} (--{key})")
 
     plan.renamed = {name: migrated_record_name(tenant, name) for name in sorted(needed)}
+    for name, new_name in plan.renamed.items():
+        if new_name in own_records:
+            plan.refusals.append(f"record {name}: its migrated name {new_name} is a record this "
+                                 "file defines too; the two would write the same series")
+    plan.refusals.extend(_matching_changes(chosen, groups, needed, tenant))
     answers = pin(tenant, [str(r["expr"]) for _, r, _ in chosen], sorted(namespace_form),
                   rename=plan.renamed)
     for (group, rule, _), answer in zip(chosen, answers):

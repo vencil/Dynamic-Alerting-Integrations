@@ -42,7 +42,7 @@ flowchart LR
 |------|------|
 | 序列帶 `tenant` 的指標（含平台不認得來源的客戶指標） | `tenant="<租戶>"` |
 | kube-state-metrics 有 namespace 的物件（例如 `kube_pod_*`），以及 cAdvisor 與 kubelet 的基礎設施指標（`container_*`、`kubelet_*`）：以 `namespace` 指名租戶、不帶 `tenant` | `namespace="<租戶>", tenant=""` |
-| 叢集層級的 kube-state-metrics 物件（例如 `kube_node_*`）、Prometheus／Alertmanager 自己的序列、每個抓取目標都有的序列（例如 `up`、`go_*`）、告警自己的序列（`ALERTS`） | 拒絕：沒有一種注入只選到一個租戶，這是平台層級的規則 |
+| 叢集層級的 kube-state-metrics 物件（例如 `kube_node_*`）、kube-state-metrics 自己的序列（`kube_state_metrics_*`）、Prometheus／Alertmanager 自己的序列、每個抓取目標都有的序列（例如 `up`、`go_*`）、告警自己的序列（`ALERTS`） | 拒絕：沒有一種注入只選到一個租戶，這是平台層級的規則 |
 
 原式子已有的 `tenant`／`namespace` matcher 不是上表那個等值時拒絕；selector 沒有以等值點名指標名時也拒絕（不知道它讀哪些序列）。
 
@@ -54,7 +54,7 @@ flowchart LR
 
 ## 拒絕與自我 lint
 
-任何一條規則被拒——選不出一個租戶的 selector、衝突的 matcher、讀到檔外的 record、原規則已寫了不同值的 `tenant`／`component` label、把 `owner`／`expiry` 寫成 label、與旗標不同的 `owner`／`expiry` annotation、含 `{{` 的 `--owner`（annotation 是模板）、運算式明寫保留 `component` 的告警（matcher、`by`／`on`／`group_left`，或 `label_replace`／`label_join`／`count_values` 寫入它：`component: migrated` 會蓋掉它）、與到期伴隨告警同名的 alert 或 group——就逐條列出原因、結束碼 2、一個檔都不寫。沒有降級路徑：退回原式等於出貨一條沒有租戶限定的規則。
+任何一條規則被拒——選不出一個租戶的 selector、衝突的 matcher、讀到檔外的 record、改名後撞名的 record、因 migrated record 帶 `tenant` 而配對方式會改變的向量運算、原規則已寫了不同值的 `tenant`／`component` label、把 `owner`／`expiry` 寫成 label、與旗標不同的 `owner`／`expiry` annotation、含 `{{` 的 `--owner`（annotation 是模板）、運算式明寫保留 `component` 的告警（matcher、`by`／`on`／`group_left`，或 `label_replace`／`label_join`／`count_values` 寫入它：`component: migrated` 會蓋掉它）、與到期伴隨告警同名的 alert 或 group——就逐條列出原因、結束碼 2、一個檔都不寫。沒有降級路徑：退回原式等於出貨一條沒有租戶限定的規則。
 
 寫之前，工具對自己的輸出跑 `lint_custom_rules`（租戶隔離、owner／expiry 治理；`--policy` 可換政策），有 ERROR 一樣結束碼 2、不寫；WARN 列在報告。序列從抓取帶來的 `component` 從運算式看不出來，報告提醒：多條只差 `component` 的序列會變成同一組 label，Prometheus 不評估該告警。
 
@@ -63,7 +63,7 @@ flowchart LR
 `-o` 底下（YAML 都在點開頭的 `.migration/`，conf.d 的讀取端整棵略過）：
 
 - `.migration/migrated/<租戶>/rules.yml` — migrated 規則檔。⛔ 由客戶**抓取原始指標的那台 Prometheus** 載入：單一 Prometheus，或 federation 架構下的 edge（只帶 namespace 的 kube-state-metrics 序列不會被拉到中央，載入中央的話這些規則永遠不響）。它不掛進參考 stack 的 projected volume，與 [ADR-005](adr/005-projected-volume-for-rule-packs.md) 的 custom alerts 相同。
-- `.migration/mapping/<租戶>.yaml` — 每條規則的 group、alert 或 record，與 selector 注入前（`legacy`）後（`pinned`）的 instant selector；record 另有 `migrated_record`（改名後的名字），到期伴隨告警帶 `added: true`；`validate-migration` 讀這份檔做影子比對（[#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)）。
+- `.migration/mapping/<租戶>.yaml` — 每條規則的 group、alert 或 record，與 selector 注入前（`legacy`）後（`pinned`）的 instant selector；record 另有 `migrated_record`（改名後的名字），到期伴隨告警帶 `added: true`。⚠️ `validate-migration` 目前還不讀這份檔（它讀的是舊的 `prefix-mapping.yaml`），接上它是 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227) 的範圍；在那之前影子比對要另行比較 legacy 與 `component="migrated"` 的告警。
 - `migration-report-<租戶>.txt` — 遷移報告（每個租戶一份）。沒有要遷移的規則時只印報告、不寫檔；`-o` 裡還留著該租戶先前的規則檔或對照時印 `[WARN]` 點名它們。
 
 **切換**：`component="migrated"` 的告警在 Alertmanager 先送到只有名字的 shadow receiver，租戶設 `_routing_migrated: active` 才與它的其他告警走同一條路（[`generate-routes`](cli-reference.md#generate-routes)）。影子比對之後，提升成平台規則或 recipe 由人決定。

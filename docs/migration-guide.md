@@ -127,7 +127,7 @@ da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2
 - **標記與治理**：每條告警加 `tenant`、`component: migrated` label 與 `owner`、`expiry` annotation，另附到期前 14 天起響的 `MigratedRulesExpiring`；寫之前對自己的輸出跑 custom rule lint，有 ERROR 就不寫
 - **黃金標準**：只讀一個指標、而 `metric-dictionary.yaml` 有黃金標準規則的告警不遷移，報告點名改用平台 Rule Pack
 - **多叢集**：原式子點名身分 label 卻沒有 `da_cluster` 的 `by(...)`／`on(...)` 只在報告標出，不改寫
-- **輸出**：`.migration/migrated/<tenant>/rules.yml`（規則檔）、`.migration/mapping/<tenant>.yaml`（每條規則的 selector 注入前後對照）、`migration-report-<tenant>.txt`。v2.9.0 映像仍是舊的轉換引擎（`custom_` key 與三件套） <!-- image-caveat: v2.9.0 -->
+- **輸出**：`.migration/migrated/<tenant>/rules.yml`（規則檔）、`.migration/mapping/<tenant>.yaml`（每條規則的 selector 注入前後對照）、`migration-report-<tenant>.txt`。下一版 da-tools 映像發布前，新引擎要從 repo 執行（`python3 scripts/tools/ops/migrate_rule.py …`，旗標相同）；v2.9.0 映像仍是舊的轉換引擎（`custom_` key 與三件套） <!-- image-caveat: v2.9.0 -->
 
 ⛔ 規則檔由**抓取原始指標的那台 Prometheus** 載入（單一 Prometheus，或 federation 架構下的 edge），不掛進平台 Rule Pack 的 projected volume。Alertmanager 把 `component="migrated"` 的告警送到只有名字的 shadow receiver，直到租戶設 `_routing_migrated: active`（[`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)）；影子比對之後，再由人決定提升成平台規則（§8 的三件套）或 recipe。
 
@@ -310,7 +310,7 @@ Exporter 每 30 秒 reload 一次，K8s ConfigMap propagation 約 1-2 分鐘。�
 
 **Q: 遷移過渡期可以新舊並存嗎？**
 
-可以。新架構的 alert 使用不同 alertname，不會衝突。建議先部署新 alert 觀察，確認行為一致後再移除舊 rules。
+可以。`migrate` 保留 alertname，新舊告警同名，以 label 區分：migrated 告警帶 `component: migrated`，在租戶設 `_routing_migrated: active` 之前送到只有名字的 shadow receiver，不會重複通知；它讀的 recording rule 改名為 `migrated:<租戶>:<原名>`，不與舊規則互讀。建議先部署 migrated 規則觀察，確認行為一致後再移除舊 rules。
 
 **Q: 維度 key 可以設定在 defaults 裡嗎？**
 
@@ -354,7 +354,9 @@ da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2
 da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o /data/migration_output/
 # 影子比對讀 .migration/mapping/db-a.yaml；validate 對它的支援在後續的 #4227
 
-# Phase C: 收斂後一鍵切換
+# Phase C: 收斂後切換
+# ⚠️ cutover 不會設 _routing_migrated：先在 conf.d 的租戶檔設 `_routing_migrated: active`，
+#    重新 generate-routes 並套用 Alertmanager 設定，migrated 告警才會通知租戶的值班
 da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a --dry-run
 da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 da-tools batch-diagnose && da-tools blind-spot --config-dir /data/conf.d

@@ -240,6 +240,10 @@ KSM_CLUSTER_SCOPED_PREFIXES = (
     "kube_volumeattachment_",
 )
 
+#: kube-state-metrics' own series (`kube_state_metrics_list_total`, …): about
+#: the exporter, labelled by resource and result, not by any namespace.
+KSM_SELF_PREFIX = "kube_state_metrics_"
+
 #: The source kube-state-metrics' families resolve to (FAMILY_TABLE).
 _KSM_SOURCE = ("service", ("monitoring", "kube-state-metrics"))
 
@@ -267,6 +271,9 @@ def pin_form(metric: str) -> "tuple[str | None, str | None]":
         # namespace, on every install (#4178).
         return "namespace", None
     if fam is not None and (fam[1], fam[2]) == _KSM_SOURCE:
+        if metric.startswith(KSM_SELF_PREFIX):
+            return None, ("kube-state-metrics' own series (its telemetry): they carry no "
+                          "namespace and no tenant")
         if metric.startswith(KSM_CLUSTER_SCOPED_PREFIXES):
             return None, ("kube-state-metrics' series of a cluster-scoped object: they carry "
                           "no namespace and no tenant")

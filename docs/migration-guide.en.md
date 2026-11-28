@@ -127,7 +127,7 @@ da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2
 - **Marking and governance**: every alert gets the `tenant` and `component: migrated` labels and the `owner` and `expiry` annotations, plus `MigratedRulesExpiring`, which fires from 14 days before the expiry; before writing, the tool runs the custom rule lint on its own output and writes nothing on an ERROR
 - **Golden standard**: an alert that reads a single metric for which `metric-dictionary.yaml` has a golden rule is not migrated; the report points it at the platform Rule Pack
 - **Multi-cluster**: a `by(...)` / `on(...)` in the original expression that names an identity label without `da_cluster` is only flagged in the report, never rewritten
-- **Output**: `.migration/migrated/<tenant>/rules.yml` (the rule file), `.migration/mapping/<tenant>.yaml` (each rule's selectors before and after injection), `migration-report-<tenant>.txt`. The v2.9.0 image still ships the old conversion engine (`custom_` keys and the three-piece set) <!-- image-caveat: v2.9.0 -->
+- **Output**: `.migration/migrated/<tenant>/rules.yml` (the rule file), `.migration/mapping/<tenant>.yaml` (each rule's selectors before and after injection), `migration-report-<tenant>.txt`. Until the next da-tools image is released, run the new engine from the repo (`python3 scripts/tools/ops/migrate_rule.py …`, same flags); the v2.9.0 image still ships the old conversion engine (`custom_` keys and the three-piece set) <!-- image-caveat: v2.9.0 -->
 
 ⛔ The rule file is loaded by **the Prometheus that scrapes the raw metrics** (a single Prometheus, or the edge in a federation setup), not mounted in the platform Rule Packs' projected volume. Alertmanager sends `component="migrated"` alerts to a name-only shadow receiver until the tenant sets `_routing_migrated: active` ([`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)); after the shadow comparison a human decides whether to promote them to platform rules (the three-piece set of §8) or recipes.
 
@@ -310,7 +310,7 @@ Supported DB types (with a Rule Pack): only add the default in `_defaults.yaml` 
 
 **Q: Can the old and new alerts coexist during the migration window?**
 
-Yes. New-architecture alerts use different alertname values and don't collide. Recommended: deploy the new alerts first, observe, confirm behavioral equivalence, then remove the old rules.
+Yes. `migrate` keeps the alertname, so old and new alerts share it and are told apart by label: migrated alerts carry `component: migrated` and go to a name-only shadow receiver until the tenant sets `_routing_migrated: active`, so nothing is notified twice; the recording rules they read are renamed `migrated:<tenant>:<original name>` and never read the old rules' series. Recommended: deploy the migrated rules first, observe, confirm behavioral equivalence, then remove the old rules.
 
 **Q: Can dimension keys be set under defaults?**
 
@@ -354,7 +354,9 @@ da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2
 da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o /data/migration_output/
 # The shadow comparison reads .migration/mapping/db-a.yaml; validate support for it comes in the follow-up #4227
 
-# Phase C: one-command cutover after convergence
+# Phase C: cutover after convergence
+# ⚠️ cutover does not set _routing_migrated: set `_routing_migrated: active` in the tenant's conf.d file,
+#    re-run generate-routes and apply the Alertmanager config, or migrated alerts notify no one
 da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a --dry-run
 da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 da-tools batch-diagnose && da-tools blind-spot --config-dir /data/conf.d

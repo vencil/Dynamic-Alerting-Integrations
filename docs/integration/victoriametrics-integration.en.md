@@ -106,9 +106,8 @@ Migrating a customer's **existing PromRule corpus** into our `conf.d/` structure
 
 ```
 customer PromRule YAML
-    ↓ da-parser import
-ParsedRule JSON (with dialect / vm_only / prom_portable annotations, for triage)
-    ↓ da-tools migrate (per tenant)
+    ──→ da-parser import → ParsedRule JSON (dialect / vm_only / prom_portable annotations, triage only)
+    ↓ da-tools migrate (per tenant; it reads the original rule file, not the ParsedRule JSON)
 migrated rule file (loaded on the side that scrapes the raw metrics) → the customer's own PR
     ↓ da-guard
 Dangling Defaults Guard check (routing: generate-routes)

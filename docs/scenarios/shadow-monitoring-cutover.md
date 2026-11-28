@@ -219,6 +219,9 @@ kubectl rollout restart deployment alertmanager -n monitoring
 
 ```bash
 # 3.1 啟動並行驗證
+# ⚠️ 新版 migrate 產出的是 .migration/mapping/db-a.yaml，validate_migration 讀它的支援在 #4227；
+#    在那之前這一步只適用舊版 migrate 產生的 prefix-mapping.yaml。新產出可先在 Prometheus 比較
+#    count by (alertname) (ALERTS{component="migrated"}) 與 legacy 告警的 ALERTS 是否一致
 python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
