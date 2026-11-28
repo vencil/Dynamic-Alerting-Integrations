@@ -50,7 +50,7 @@ What is checked, in every git-tracked text file:
        it, and a renamed one is the stale reference. A quote opened at the
        end of a line and closed on the next (its comment prefix removed) is
        one quote;
-     - an item number right after it (``ADR-027 §9 item 8``, ``§2 第 3 項``)
+     - an item number right after it (``ADR-027 §9 item 8``, or its Chinese form)
        must be one of the numbered list items at the start of a line in the
        section (its subsections included).
 
