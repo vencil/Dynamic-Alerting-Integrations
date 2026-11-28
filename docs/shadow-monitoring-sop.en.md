@@ -366,7 +366,7 @@ docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 diagnose db-a
 
 ### 7.2 Rollback (If Issues Occur)
 
-⚠️ The re-validation command below uses the v2.9.0 image; until the next image is released, run it from the repo as `python3 scripts/tools/ops/validate_migration.py` (the same arguments). <!-- image-caveat: v2.9.0 -->
+⚠️ The re-validation command below uses the v2.9.0 image; until the next image is released, run it from the repo as §3.1 does, `python3 scripts/tools/ops/validate_migration.py`, with `--mapping` given the host path `migration_output/.migration/mapping/db-a.yaml` (`/data/...` is the path inside the container), the other arguments the same. <!-- image-caveat: v2.9.0 -->
 
 ```bash
 # 1. Restore old Recording Rules (if original YAML preserved)

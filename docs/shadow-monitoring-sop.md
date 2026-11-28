@@ -365,7 +365,7 @@ docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 diagnose db-a
 
 ### 7.2 回退（如有問題）
 
-⚠️ 下面重新驗證的指令用 v2.9.0 映像；下一版映像發布前，改從 repo 執行 `python3 scripts/tools/ops/validate_migration.py`（參數相同）。 <!-- image-caveat: v2.9.0 -->
+⚠️ 下面重新驗證的指令用 v2.9.0 映像；下一版映像發布前，改照 §3.1 從 repo 執行 `python3 scripts/tools/ops/validate_migration.py`，`--mapping` 改用主機路徑 `migration_output/.migration/mapping/db-a.yaml`（`/data/...` 是容器內的路徑），其餘參數相同。 <!-- image-caveat: v2.9.0 -->
 
 ```bash
 # 1. 恢復舊 Recording Rule（如已保留原始 yaml）
