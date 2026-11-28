@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
-	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 func TestGuard_RedundantOverrideAcrossAliasSpellings(t *testing.T) {
@@ -115,9 +114,7 @@ func TestGuard_RedundantOverrideAcrossAliasSpellings(t *testing.T) {
 			if unchanged := reflect.DeepEqual(withV, withoutV); unchanged != tc.redundant {
 				t.Fatalf("premise: /metrics mysql_threads_running %v with the override, %v without — want redundant=%v", withV, withoutV, tc.redundant)
 			}
-			// #4253: the finding is the threshold's, under its canonical key.
-			canon, _ := config.CanonicalKeyFor(tc.field)
-			if got := redundantFields(t, dir)[canon]; got != tc.redundant {
+			if got := redundantFields(t, dir)[tc.field]; got != tc.redundant {
 				t.Errorf("redundant_override on %s = %v, want %v (/metrics %v with the override, %v without)", tc.field, got, tc.redundant, withV, withoutV)
 			}
 		})

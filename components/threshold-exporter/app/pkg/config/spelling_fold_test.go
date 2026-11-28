@@ -172,8 +172,12 @@ func TestSpellingFold_EffectiveReadsTheRootAsTheRootDecodeDoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := ec.EffectiveConfig["mysql_threads_running"]; fmt.Sprint(got) != "7" {
-		t.Errorf("/effective mysql_threads_running = %v, want the root's other line, 7 (as /metrics)", got)
+	// /effective names the line as the root wrote it (#2031).
+	if got := ec.EffectiveConfig[retiredSpelling]; fmt.Sprint(got) != "7" {
+		t.Errorf("/effective %s = %v, want the root's other line, 7 (as /metrics)", retiredSpelling, got)
+	}
+	if got, held := ec.EffectiveConfig["mysql_threads_running"]; held {
+		t.Errorf("/effective also shows mysql_threads_running = %v, a line the root does not take", got)
 	}
 }
 
@@ -230,5 +234,23 @@ func TestSpellingFold_ANullOtherSpellingIsNoDuplicate(t *testing.T) {
 	}
 	if _, judged := ec.JudgeableTenantOverrides()["mysql_threads_running"]; !judged {
 		t.Errorf("judgeable overrides %v lack mysql_threads_running", ec.JudgeableTenantOverrides())
+	}
+}
+
+// #4253: the decode holds a retired spelling's line under the canonical key,
+// but what names the line — here an expiry event — spells it as written.
+func TestSpellingFold_AnExpiryEventNamesTheLineAsWritten(t *testing.T) {
+	t.Parallel()
+	cfg := loadTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+		"t.yaml": "tenants:\n  tx:\n    " + retiredSpelling + ":\n      default: \"44\"\n" +
+			"      expires: \"2099-01-01T00:00:00Z\"\n",
+	})
+	var got []string
+	for _, e := range cfg.ResolveThresholdExpiriesAtLogf(fixedNow, nil) {
+		got = append(got, e.Tenant+"/"+e.MetricKey)
+	}
+	if strings.Join(got, ",") != "tx/"+retiredSpelling {
+		t.Errorf("expiry events %v, want tx/%s (the line as written)", got, retiredSpelling)
 	}
 }

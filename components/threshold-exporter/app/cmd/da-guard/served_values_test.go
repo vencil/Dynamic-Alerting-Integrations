@@ -951,11 +951,10 @@ func TestServedValues_RootNonFiniteDefaultIsNamed(t *testing.T) {
 	if got := b.Keys["mysql_connections_critical"]; got.Reason != keyReasonValueNonFinite || got.Refused != "non_finite" {
 		t.Errorf("tenant-b keys[mysql_connections_critical] = %+v, want value_non_finite", got)
 	}
-	// Written under its retired spelling, the key is the tenant's: the
-	// decode folds it into the canonical key (#4253), and its entry is the
-	// tenant's value's, not a root_default_refused one.
-	if got := b.Keys["mysql_threads_running"]; got.Reason == keyReasonRootDefaultRefused {
-		t.Errorf("tenant-b keys[mysql_threads_running] = %+v: the tenant writes it (as mysql_cpu)", got)
+	// Written under its retired spelling, the key is the tenant's: its entry
+	// is that spelling's, not a root_default_refused one.
+	if got, ok := b.Keys["mysql_threads_running"]; ok {
+		t.Errorf("tenant-b keys[mysql_threads_running] = %+v: the tenant writes it as mysql_cpu", got)
 	}
 	if got, ok := a.Keys["mysql_connections"]; ok {
 		t.Errorf("tenant-a keys[mysql_connections] = %+v: a finite root default it inherits is no key of its own", got)

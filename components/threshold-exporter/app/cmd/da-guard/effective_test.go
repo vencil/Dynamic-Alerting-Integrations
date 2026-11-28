@@ -243,9 +243,8 @@ func TestEffective_MatchesResolveEffective(t *testing.T) {
 	if err := json.Unmarshal(doc.Tenants["tenant-e"], &e); err != nil {
 		t.Fatal(err)
 	}
-	// #4253: written as mysql_cpu, folded into the canonical key at the decode.
-	if got := d.KeySources["mysql_threads_running"]; got.Layer != config.KeyLayerPlatform || got.File != "_platform.yaml" {
-		t.Errorf("tenant-d mysql_threads_running (written mysql_cpu) source = %+v, want platform _platform.yaml", got)
+	if got := d.KeySources["mysql_cpu"]; got.Layer != config.KeyLayerPlatform || got.File != "_platform.yaml" {
+		t.Errorf("tenant-d mysql_cpu source = %+v, want platform _platform.yaml", got)
 	}
 	if got := d.KeySources["mysql_connections"]; got.Layer != config.KeyLayerDefaults || got.File != "_defaults.yaml" {
 		t.Errorf("tenant-d mysql_connections (null in the tenant file) source = %+v, want defaults _defaults.yaml", got)

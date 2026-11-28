@@ -83,11 +83,15 @@ func (c *ThresholdConfig) ValidAt(t time.Time) bool {
 // is still written (#4263). Where both name one threshold the served one is
 // described; both spellings stay when both are served. Tenants[tenant]
 // itself when the build decided nothing away. One tenant at a time: O(its
-// keys).
+// keys). Keyed as the tenant wrote its lines (TenantAsWritten, #4253).
 func (c *ThresholdConfig) DescribedTenant(tenant string) map[string]ScheduledValue {
 	if c == nil {
 		return nil
 	}
+	return TenantAsWritten(c.describedTenant(tenant))
+}
+
+func (c *ThresholdConfig) describedTenant(tenant string) map[string]ScheduledValue {
 	served := c.Tenants[tenant]
 	if c.expiry == nil || c.expiry.written == nil {
 		return served
@@ -132,15 +136,16 @@ func (c *ThresholdConfig) GaveWay(tenant, key string) bool {
 
 // WrittenTenant is tenant's merged map of the whole tree as written, before
 // `expires:` was decided: every time-boxed value in place, expired or not
-// (#4263). Tenants[tenant] when the build decided nothing away.
+// (#4263). Tenants[tenant] when the build decided nothing away. Keyed as the
+// tenant wrote its lines (TenantAsWritten, #4253).
 func (c *ThresholdConfig) WrittenTenant(tenant string) map[string]ScheduledValue {
 	if c == nil {
 		return nil
 	}
 	if c.expiry == nil || c.expiry.written == nil {
-		return c.Tenants[tenant]
+		return TenantAsWritten(c.Tenants[tenant])
 	}
-	return c.expiry.written[tenant]
+	return TenantAsWritten(c.expiry.written[tenant])
 }
 
 // ValidUntil is the first `expires:` of the tree after the instant the
@@ -414,6 +419,8 @@ func heldAcrossSpellings(m map[string]ScheduledValue, key string) (string, bool)
 //
 // The events are the expired values that gave way — the one each tenant got
 // in the whole tree — and the time-boxed values now serves that can give way.
+// An event names the line as the tenant wrote it (#4253: the decode holds a
+// #1231 retired spelling under the canonical key).
 // ⚠️ Of several expired values stacked over one key, only the one the tenant
 // got names its expiry: the ones under it never served.
 func decideExpiry(at time.Time, full, now, untimed *ThresholdConfig, last, next time.Time) {
@@ -436,7 +443,7 @@ func decideExpiry(at time.Time, full, now, untimed *ThresholdConfig, last, next 
 			}
 			st.honoured[tenant][canon] = true // it gave way (a write check reads the value as written)
 			st.events = append(st.events, ResolvedThresholdExpiry{
-				Tenant: tenant, MetricKey: key, Expires: t, ExpiresText: sv.Expiry.Expires, Reason: sv.Expiry.Reason, Expired: true,
+				Tenant: tenant, MetricKey: sv.writtenAs(key), Expires: t, ExpiresText: sv.Expiry.Expires, Reason: sv.Expiry.Reason, Expired: true,
 			})
 		})
 	}
@@ -449,7 +456,7 @@ func decideExpiry(at time.Time, full, now, untimed *ThresholdConfig, last, next 
 			st.honoured[tenant][canon] = honoured
 			if honoured && t.After(at) {
 				st.events = append(st.events, ResolvedThresholdExpiry{
-					Tenant: tenant, MetricKey: key, Expires: t, ExpiresText: sv.Expiry.Expires, Reason: sv.Expiry.Reason,
+					Tenant: tenant, MetricKey: sv.writtenAs(key), Expires: t, ExpiresText: sv.Expiry.Expires, Reason: sv.Expiry.Reason,
 				})
 			}
 		})

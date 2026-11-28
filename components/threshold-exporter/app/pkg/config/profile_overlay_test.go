@@ -55,8 +55,8 @@ func TestProfileExpansion_EdgeRulesMatchApplyProfiles(t *testing.T) {
 				"tx.yaml":        "tenants:\n  tx:\n    _profile: std\n    " + legacy + ": 45\n",
 			},
 			wantServed:  map[string]float64{"mysql_threads_running/warning": 45},
-			wantPresent: map[string]any{"mysql_threads_running": 45}, // #4253: folded at the decode
-			wantAbsent:  nil,
+			wantPresent: map[string]any{legacy: 45},
+			wantAbsent:  nil, // mysql_threads_running stays the chain's (walker is a raw view)
 		},
 		{
 			name: "legacy-spelling-in-profile-lands-canonical",

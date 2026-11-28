@@ -246,26 +246,30 @@ func levelTakes(key string, raw any) bool {
 // the typed decode's.
 func rootTakesRaw(key string, raw any) bool { return raw != nil && !rootRefusesRaw(key, raw) }
 
-// normalizeKeysTaking is normalizeKeys, then the #1231 fold (foldSpellings,
-// #4253) with takes, the layer's reading: the map holds canonical keys only,
-// and the line folded away beside another spelling's is recorded as a dup —
-// a second spelling of a threshold the map also writes, not served — as the
+// normalizeKeysTaking is normalizeKeys, then the #1231 twin rule with takes,
+// the layer's reading (foldSpellings, #4253): of two spellings of one
+// threshold in the map, the line the layer does not take is no line, and the
+// canonical one wins when it takes both or neither. The walker's maps are
+// what the layers wrote (/effective names a line as written), so the line
+// kept keeps its spelling — only the one that loses goes, recorded as a dup
+// (a second spelling of a threshold the map also writes, not served) as the
 // layer wrote it. The dimensional re-spelling comes first, so two spellings
-// of one threshold whose labels are written differently are one threshold to
-// the fold.
+// whose labels are written differently are one threshold to the rule.
 func normalizeKeysTaking[V any](m map[string]V, takes func(string, V) bool) (map[string]V, *keySpellings) {
 	normalized, s := normalizeKeys(m)
-	out, folds := foldSpellings(normalized, takes)
+	_, folds := foldSpellings(normalized, takes)
+	var out map[string]V
 	for canon, f := range folds {
-		if s != nil && f.written != "" {
-			if w, ok := s.written[f.written]; ok {
-				delete(s.written, f.written)
-				s.written[canon] = w
+		if f.folded == "" {
+			continue // a lone retired spelling is a line as written
+		}
+		if out == nil {
+			out = make(map[string]V, len(normalized))
+			for k, v := range normalized {
+				out[k] = v
 			}
 		}
-		if f.folded == "" {
-			continue
-		}
+		delete(out, f.folded)
 		loser := s.writtenOf(f.folded)
 		if s != nil {
 			delete(s.written, f.folded)
@@ -275,13 +279,20 @@ func normalizeKeysTaking[V any](m map[string]V, takes func(string, V) bool) (map
 		if nullThreshold(f.folded, any(normalized[f.folded])) {
 			continue
 		}
+		served := canon
+		if f.written != "" {
+			served = f.written
+		}
 		if s == nil {
 			s = &keySpellings{}
 		}
-		s.addDup(canon, loser)
+		s.addDup(served, loser)
 	}
 	if s != nil && len(s.written) == 0 {
 		s.written = nil
+	}
+	if out == nil {
+		return normalized, s
 	}
 	return out, s
 }
@@ -305,20 +316,36 @@ func TwinSpelledThresholds(section map[string]ScheduledValue) map[string][2]stri
 	return out
 }
 
-// FoldedLine is the other spelling's line the decode folded away beside sv
-// (#4253) — the same map wrote one threshold twice, and sv is the line kept —
-// with the spelling it was written in; ok false when sv folded none away.
-// The folded line is not served (a value not served, da-guard).
-func FoldedLine(sv ScheduledValue) (spelling string, line ScheduledValue, ok bool) {
-	if sv.fold == nil || sv.fold.other == nil {
-		return "", ScheduledValue{}, false
+// TenantAsWritten is one tenant's decoded map (canonical keys, #4253) keyed
+// as the layers wrote its lines: each line under its own spelling, and the
+// line the decode folded away beside another spelling's back beside it — the
+// map the decode read, for the readers that name a tenant's lines (da-guard's
+// keys, unserved values, disable effects, schedules). m itself when no line
+// was folded.
+func TenantAsWritten(m map[string]ScheduledValue) map[string]ScheduledValue {
+	folded := false
+	for _, sv := range m {
+		if sv.fold != nil {
+			folded = true
+			break
+		}
 	}
-	return sv.fold.folded, *sv.fold.other, true
+	if !folded {
+		return m
+	}
+	out := make(map[string]ScheduledValue, len(m)+1)
+	for k, sv := range m {
+		if sv.fold == nil {
+			out[k] = sv
+			continue
+		}
+		out[sv.writtenAs(k)] = sv
+		if sv.fold.other != nil {
+			out[sv.fold.folded] = *sv.fold.other
+		}
+	}
+	return out
 }
-
-// WrittenSpelling is the spelling sv's line was written in, key being the
-// canonical key the decode holds it under (#4253).
-func WrittenSpelling(sv ScheduledValue, key string) string { return sv.writtenAs(key) }
 
 // writesRetired reports whether sv's line, or the line the decode folded
 // away beside it, is written in a retired spelling (#4253) — one retired key
@@ -332,6 +359,17 @@ func writesRetired(sv ScheduledValue) bool {
 	}
 	_, isAlias := canonicalKeyFor(sv.fold.folded)
 	return isAlias
+}
+
+// WrittenSpellingOf is the spelling the tenant wrote its line of threshold
+// canon in, overrides being its decoded map (keyed canonically, #4253): the
+// retired one where that is the line the tenant layer kept. canon itself
+// when the tenant writes no line of it.
+func WrittenSpellingOf(overrides map[string]ScheduledValue, canon string) string {
+	if sv, ok := overrides[canon]; ok {
+		return sv.writtenAs(canon)
+	}
+	return canon
 }
 
 // writtenAs is the spelling sv's line was written in, key being the

@@ -1629,7 +1629,7 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
-              "mysql_threads_running": "90"
+              "mysql_cpu": "90"
             },
             "platform_overlay": null,
             "profile_overlay": null
@@ -1704,7 +1704,7 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
-              "mysql_threads_running": "90"
+              "mysql_cpu": "90"
             },
             "platform_overlay": null,
             "profile_overlay": null
@@ -1729,7 +1729,7 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
-              "mysql_threads_running": 70
+              "mysql_cpu": 70
             },
             "platform_overlay": [
               {
@@ -1762,7 +1762,7 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
-              "mysql_threads_running": "35"
+              "mysql_cpu": "35"
             },
             "platform_overlay": null,
             "profile_overlay": null
@@ -1788,7 +1788,7 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
-              "mysql_threads_running": 40
+              "mysql_cpu": 40
             },
             "platform_overlay": null,
             "profile_overlay": null
@@ -1815,7 +1815,7 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
-              "mysql_threads_running": 50
+              "mysql_cpu": 50
             },
             "platform_overlay": null,
             "profile_overlay": null

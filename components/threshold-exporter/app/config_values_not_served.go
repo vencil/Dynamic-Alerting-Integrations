@@ -99,20 +99,11 @@ func collectValuesNotServed(cfg *ThresholdConfig, verdicts, rejected map[string]
 	return out
 }
 
-// writtenSpelling is the spelling of canonical key canon the tenant's map
-// holds — the resolver records the canonical spelling (#1231), the
-// effective config keys the written one. canon when the map holds it (the
-// canonical spelling wins when both are written, as in the resolver).
+// writtenSpelling is the spelling the tenant wrote canonical key canon's
+// line in — the decode and the resolver key the canonical spelling (#1231,
+// #4253), the effective config the written one.
 func writtenSpelling(overrides map[string]ScheduledValue, canon string) string {
-	if _, ok := overrides[canon]; ok {
-		return canon
-	}
-	if legacy, ok := config.LegacySpellingFor(canon); ok {
-		if _, ok := overrides[legacy]; ok {
-			return legacy
-		}
-	}
-	return canon
+	return config.WrittenSpellingOf(overrides, canon)
 }
 
 // countValuesNotServed is the gauge's value per reason — (tenant, key) pairs

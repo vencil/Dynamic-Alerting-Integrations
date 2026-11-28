@@ -2271,6 +2271,11 @@ func (c *ThresholdConfig) applyProfiles(logf func(format string, args ...any)) {
 			}
 		})
 		for key, profileValue := range fill {
+			// #4253: laid canonically — the profile's spelling of the line,
+			// and the twin its decode folded beside it, are the profile's
+			// text, not lines the tenant wrote (as canonicalView drops the
+			// twin above).
+			profileValue.fold = nil
 			overrides[key] = profileValue
 		}
 	}

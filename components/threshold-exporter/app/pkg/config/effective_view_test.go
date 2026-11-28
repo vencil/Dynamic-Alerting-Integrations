@@ -52,7 +52,7 @@ func TestEffectiveView_MatchesMetricsPerThreshold(t *testing.T) {
 				"sub/_defaults.yaml": "defaults:\n  mysql_cpu: 40\n",
 				"sub/tx.yaml":        "tenants:\n  tx:\n    _silent_mode: disable\n",
 			},
-			effective: `{"mysql_threads_running":40}`, key: "mysql_threads_running",
+			effective: `{"mysql_cpu":40}`, key: "mysql_cpu",
 			layer: KeyLayerDefaults, file: "sub/_defaults.yaml", level: 1,
 			row: twin("40"),
 		},
@@ -73,7 +73,7 @@ func TestEffectiveView_MatchesMetricsPerThreshold(t *testing.T) {
 				"_defaults.yaml": "defaults:\n  mysql_threads_running: 80\n",
 				"tx.yaml":        "tenants:\n  tx:\n    mysql_cpu: \"60\"\n",
 			},
-			effective: `{"mysql_threads_running":"60"}`, key: "mysql_threads_running",
+			effective: `{"mysql_cpu":"60"}`, key: "mysql_cpu",
 			layer: KeyLayerTenant, file: "tx.yaml", level: -1,
 			row: twin("60"),
 		},
@@ -129,7 +129,7 @@ func TestEffectiveView_MatchesMetricsPerThreshold(t *testing.T) {
 				"sub/_defaults.yaml": "defaults:\n  mysql_cpu: 40\n  mysql_threads_running: null\n",
 				"sub/tx.yaml":        "tenants:\n  tx:\n    _silent_mode: disable\n",
 			},
-			effective: `{"mysql_threads_running":40}`, key: "mysql_threads_running",
+			effective: `{"mysql_cpu":40}`, key: "mysql_cpu",
 			layer: KeyLayerDefaults, file: "sub/_defaults.yaml", level: 1,
 			row: twin("40"),
 		},
@@ -234,16 +234,14 @@ func TestEffectiveView_MatchesMetricsPerThreshold(t *testing.T) {
 // TestEffectiveView_MergedHashStaysTheMerges pins the split effectiveView
 // documents: merged_hash is the hash of the deepMerge result — the
 // exporter's merged_hash, describe_tenant.py's — not of the reported view.
-// A reserved key written with a schedule is shown as its `default` (#3269)
-// while the merge keeps the schedule, so a merged_hash that had followed the
-// view fails here. (Before #4253 a #1231 retired spelling told them apart;
-// the decode now folds it into the canonical key on both.)
+// The F1 tree's view ({mysql_cpu: 40}) hashes differently from its merge
+// ({mysql_cpu: 40, mysql_threads_running: 30}), so a merged_hash that had
+// followed the view fails here.
 func TestEffectiveView_MergedHashStaysTheMerges(t *testing.T) {
 	t.Parallel()
 	root := "defaults:\n  mysql_threads_running: 30\n"
-	sub := "defaults:\n  mysql_threads_running: 40\n"
-	tenant := "tenants:\n  tx:\n    _silent_mode:\n      default: disable\n      overrides:\n" +
-		"        - window: \"01:00-02:00\"\n          value: warning\n"
+	sub := "defaults:\n  mysql_cpu: 40\n"
+	tenant := "tenants:\n  tx:\n    _silent_mode: disable\n"
 	dir := t.TempDir()
 	writeMergeTree(t, dir, map[string]string{
 		"_defaults.yaml": root, "sub/_defaults.yaml": sub, "sub/tx.yaml": tenant,
@@ -329,7 +327,7 @@ func TestEffectiveView_SimulateIsTheEffectiveAnswer(t *testing.T) {
 			name:   "alias-subtree-legacy-tenant-legacy-critical",
 			chain:  []string{"defaults:\n  mysql_threads_running: 30\n", "defaults:\n  mysql_cpu: 40\n"},
 			tenant: "tenants:\n  tx:\n    mysql_cpu_critical: \"90\"\n",
-			want:   `{"mysql_threads_running":40,"mysql_threads_running_critical":"90"}`,
+			want:   `{"mysql_cpu":40,"mysql_cpu_critical":"90"}`,
 		},
 		{
 			name:   "schedule-tenant-default-over-subtree-schedule",

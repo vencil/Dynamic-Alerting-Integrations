@@ -384,11 +384,11 @@ func TestServedValues_SwitchedOffWith(t *testing.T) {
 	for _, c := range []struct{ tenant, key, base string }{
 		{"a", "redis_memory_critical", "redis_memory"}, // inherited from the subtree
 		{"a", `redis_memory{db="x"}`, "redis_memory"},
-		{"s", "redis_memory_critical", "redis_memory"},                   // switched off 01:00-02:00 only
-		{"p", "pg_conn_critical", "pg_conn"},                             // the profile's disable
-		{"r", "mysql_threads_running_critical", "mysql_threads_running"}, // #4253: folded at the decode
-		{"n", "redis_memory_critical", ""},                               // no disable: none
-		{"o", "redis_memory_critical", ""},                               // off by its own value whenever the base is
+		{"s", "redis_memory_critical", "redis_memory"}, // switched off 01:00-02:00 only
+		{"p", "pg_conn_critical", "pg_conn"},           // the profile's disable
+		{"r", retiredCPU + "_critical", retiredCPU},    // named as the tenant spells them
+		{"n", "redis_memory_critical", ""},             // no disable: none
+		{"o", "redis_memory_critical", ""},             // off by its own value whenever the base is
 	} {
 		if got := doc.Tenants[c.tenant].Keys[c.key].SwitchedOffWith; got != c.base {
 			t.Errorf("%s: keys[%q].switched_off_with = %q, want %q", c.tenant, c.key, got, c.base)

@@ -1163,7 +1163,9 @@ func servedSchedulesOnly(cfg *config.ThresholdConfig, at time.Time,
 		}
 		day := *tv.Schedules
 		tv.Unserved = map[string]any{}
-		unservedOf(tv.Unserved, cfg, cfg.Tenants[tenant], rootRefused, refusedTexts,
+		// #4253: the tenant's lines as written — a line the decode folded
+		// away beside another spelling's included.
+		unservedOf(tv.Unserved, cfg, config.TenantAsWritten(cfg.Tenants[tenant]), rootRefused, refusedTexts,
 			func(canon string) bool { return servesARow(day[canon]) })
 		for k := range tv.Unserved {
 			if strings.HasPrefix(k, "_") {
@@ -1351,7 +1353,10 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 			tv.Values[k] = v
 		}
 
-		addUnserved(tv, cfg, overrides, rootRefused, refusedTexts)
+		// #4253: the tenant's lines as written — a line the decode folded
+		// away beside another spelling's included.
+		written := config.TenantAsWritten(overrides)
+		addUnserved(tv, cfg, written, rootRefused, refusedTexts)
 		// #1976: the build's own verdict (LoadReport.Undeliverable:
 		// FlatBuild.Undeliverable, undeliverableThresholds' filter — the set
 		// the exporter's ERROR and gauge read, #3379), never re-judged here. Invariant, so no membership check: such
@@ -1374,7 +1379,7 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 		// included, which the merge at --at left out of what is served.
 		tv.Keys = servedKeys(tv, cfg.DescribedTenant(tenant), undeliverable[tenant], at, recordedReasons(cfg, tenant, at),
 			func(k string) bool { return view.SwitchedOffWithBase(k, at, at) })
-		addRootRefused(tv, overrides, rootRefused)
+		addRootRefused(tv, written, rootRefused)
 		addRootDisabled(tv, cfg, tenant, at)
 		out[tenant] = tv
 	}
@@ -1412,20 +1417,10 @@ func unservedOf(dst map[string]any, cfg *config.ThresholdConfig, overrides map[s
 		// served, so the alias's own value is not.
 		_, canonWritten := overrides[canon]
 		shadowed := isAlias && canonWritten
-		// #4253: the decode folded the other spelling's line away beside
-		// this one; it is not served. Each line is listed under its own
-		// spelling when the folded one is the canonical key itself.
-		own := k
-		if spelling, line, ok := config.FoldedLine(sv); ok {
-			dst[spelling] = rawScheduledValue(line)
-			if spelling == k {
-				own = config.WrittenSpelling(sv, k)
-			}
-		}
 		if served(canon) && !shadowed {
 			continue
 		}
-		dst[own] = rawScheduledValue(sv)
+		dst[k] = rawScheduledValue(sv)
 	}
 	// #2031: a root dimensional default the tenant does not write is the
 	// tenant's labelled series; one with no row is unserved. #3045: so is

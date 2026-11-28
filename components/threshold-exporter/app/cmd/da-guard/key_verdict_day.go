@@ -157,7 +157,7 @@ func pieceReading(part *config.ThresholdConfig, tenant string, at time.Time,
 	kept map[string][]config.ResolvedThreshold, dropped map[string][]string,
 	undeliverable map[string]config.ScheduledValue, rootRefused, refusedTexts map[string]string,
 ) servedTenantValues {
-	overrides := part.Tenants[tenant]
+	overrides := config.TenantAsWritten(part.Tenants[tenant]) // the lines as written (#4253)
 	tv := servedTenantValues{Values: map[string]any{}, Severities: map[string]string{},
 		Dropped: map[string][]string{}, Unserved: map[string]any{}}
 	for k, rows := range kept {

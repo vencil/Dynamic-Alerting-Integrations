@@ -183,8 +183,7 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 					tc.redundant || tc.inert)
 			}
 
-			// #4253: findings are the threshold's, under its canonical key.
-			field, _ := config.CanonicalKeyFor(strings.SplitN(tc.line, ": ", 2)[0])
+			field := strings.SplitN(tc.line, ": ", 2)[0]
 			if got := redundantFields(t, dir)[field]; got != tc.redundant {
 				t.Errorf("redundant_override on %s = %v, want %v (/metrics %v with the override, %v without)", field, got, tc.redundant, withS, withoutS)
 			}

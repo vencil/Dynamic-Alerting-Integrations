@@ -186,10 +186,17 @@ func buildWithPartials(scan *TreeScan, in FlatBuildInput, edited map[string]Thre
 // decodedSpelling is the key of m (a tenant's decoded map) that key, as the
 // tenant's file spells it, is decoded to: the key itself, or the one with the
 // same canonical dimensional spelling (canonicalDimensionalKey — label order
-// and spacing are not the decode's).
+// and spacing are not the decode's) — or, for a #1231 retired spelling, the
+// canonical key the decode holds its line under (#4253).
 func decodedSpelling(m map[string]ScheduledValue, key string) (string, bool) {
 	if _, ok := m[key]; ok {
 		return key, true
+	}
+	if canon, retired := canonicalKeyFor(key); retired {
+		if k, ok := decodedSpelling(m, canon); ok && m[k].writtenAs(k) != k {
+			return k, true
+		}
+		return "", false
 	}
 	want, dim := canonicalDimensionalKey(key)
 	if !dim {
