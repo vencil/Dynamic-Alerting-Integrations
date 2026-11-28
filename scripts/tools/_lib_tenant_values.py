@@ -516,11 +516,12 @@ class TenantValues(NamedTuple):
 #: holds both sets to them.
 KEY_CHECK_KINDS = frozenset({
     "version_label_regex", "version_label_empty", "version_label_default", "version_label_charset",
-    "renamed_shadowed", "renamed_critical_dimensional", "renamed",
+    "renamed_shadowed", "renamed_critical_dimensional", "renamed", "renamed_over_refused",
 })
 #: The kinds about a retired spelling (Go's `KeyCheckKind.IsRenamed`): an
 #: advisory; the others are about a `version` label the exporter refuses.
-KEY_CHECK_RENAMED_KINDS = frozenset({"renamed_shadowed", "renamed_critical_dimensional", "renamed"})
+KEY_CHECK_RENAMED_KINDS = frozenset({"renamed_shadowed", "renamed_critical_dimensional", "renamed",
+                                     "renamed_over_refused"})
 
 
 class KeyCheck(NamedTuple):
