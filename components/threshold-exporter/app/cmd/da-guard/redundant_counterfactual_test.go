@@ -91,6 +91,21 @@ func TestGuard_RedundantOverrideIsTheCounterfactual(t *testing.T) {
 				"a/_defaults.yaml": "defaults:\n  pg_connections:\n    default: \"50\"\n    expires: \"2099-01-01T00:00:00Z\"\n",
 				"a/tx.yaml":        "tenants:\n  tx:\n    pg_connections: \"50\"\n"},
 			"pg_connections", false},
+		// The tenant's own value expires (#4263): past it the merge serves the
+		// layer beneath — here the same subtree value, so the line changes
+		// nothing at any instant.
+		{"own expiring value equal to the layer beneath",
+			map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 100\n",
+				"a/_defaults.yaml": "defaults:\n  pg_connections: \"50\"\n",
+				"a/tx.yaml":        "tenants:\n  tx:\n    pg_connections:\n      default: \"50\"\n      expires: \"2099-01-01T00:00:00Z\"\n"},
+			"pg_connections", true},
+		// …and one over an inherited value that expires first: from 2098 to
+		// 2099 deleting the line serves the root's 100, not 50.
+		{"own expiring value over an inherited one that also expires",
+			map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: 100\n",
+				"a/_defaults.yaml": "defaults:\n  pg_connections:\n    default: \"50\"\n    expires: \"2098-01-01T00:00:00Z\"\n",
+				"a/tx.yaml":        "tenants:\n  tx:\n    pg_connections:\n      default: \"50\"\n      expires: \"2099-01-01T00:00:00Z\"\n"},
+			"pg_connections", false},
 		// The shared key verdict owns a `disable` that switches nothing off
 		// (disable_noop): no default to switch off.
 		{"disable with nothing to switch off",

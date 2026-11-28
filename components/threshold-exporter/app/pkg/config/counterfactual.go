@@ -9,7 +9,9 @@ package config
 // defaults, profiles, platform entries and the root all applied as the
 // exporter applies them) and resolved from now on: at every minute of the UTC
 // day at which either side's schedules may serve a different value, now and
-// after every `expires:` instant either side has not passed. A predicate
+// at every later instant either build says it must be built again at (its
+// ValidUntil: the next `expires:` of the tree, which the merge decides —
+// #4263), each side built again for that instant. A predicate
 // comparing the tenant's value with the inherited one is what this replaces:
 // each such predicate missed a shape (#4288, #4330).
 //
@@ -38,7 +40,20 @@ func (s *ScopedTenants) ServedUnchangedWithout(cands map[string][]string, now ti
 	}
 	quiet := log.New(io.Discard, "", 0)
 	in := loadDirBuildInput(s.scan, s.scan.AbsRoot, quiet, discardLogf)
-	base := &s.built.Config
+	bases := map[time.Time]*ThresholdConfig{} // instant → the tree as written, built for it
+	baseAt := func(at time.Time) (*ThresholdConfig, error) {
+		if b, ok := bases[at]; ok {
+			return b, nil
+		}
+		inAt := in
+		inAt.At = at
+		b, err := buildWithPartials(s.scan, inAt, nil)
+		if err != nil {
+			return nil, err
+		}
+		bases[at] = &b.Config
+		return &b.Config, nil
+	}
 
 	files := map[string]string{} // tenant → its own file (RelKey)
 	for _, ec := range s.Tenants {
@@ -110,15 +125,44 @@ func (s *ScopedTenants) ServedUnchangedWithout(cands map[string][]string, now ti
 		if len(asked) == 0 {
 			continue
 		}
-		cf, err := buildWithPartials(s.scan, in, edited)
-		if err != nil {
-			return nil, fmt.Errorf("counterfactual build: %w", err)
-		}
 		for tenant, key := range asked {
-			out[tenant][key] = sameRowsAllDay(base, &cf.Config, tenant, now)
+			out[tenant][key] = true
+		}
+		// One pair of builds per instant: now, then each instant either
+		// build is valid until — the tree changes there whichever line
+		// expires, so every tenant of the round is compared again.
+		for at, more := now, true; more; {
+			base, err := baseAt(at)
+			if err != nil {
+				return nil, fmt.Errorf("counterfactual build: %w", err)
+			}
+			inAt := in
+			inAt.At = at
+			cf, err := buildWithPartials(s.scan, inAt, edited)
+			if err != nil {
+				return nil, fmt.Errorf("counterfactual build: %w", err)
+			}
+			for tenant, key := range asked {
+				if out[tenant][key] && !sameRowsAllDay(base, &cf.Config, tenant, at) {
+					out[tenant][key] = false
+				}
+			}
+			at, more = nextBuildInstant(at, base, &cf.Config)
 		}
 	}
 	return out, nil
+}
+
+// nextBuildInstant is the first instant after at that a or b must be built
+// again at (ValidUntil), and whether there is one.
+func nextBuildInstant(at time.Time, a, b *ThresholdConfig) (time.Time, bool) {
+	var next time.Time
+	for _, c := range []*ThresholdConfig{a, b} {
+		if t, ok := c.ValidUntil(); ok && t.After(at) && (next.IsZero() || t.Before(next)) {
+			next = t
+		}
+	}
+	return next, !next.IsZero()
 }
 
 // buildWithPartials is BuildFlatConfig over scan with the files of edited
@@ -167,29 +211,19 @@ func shallowTenants(in map[string]map[string]ScheduledValue) map[string]map[stri
 	return out
 }
 
-// sameRowsAllDay reports whether tenant's rows from a and from b are the same
-// from now on: at now and just after every `expires:` instant either side
-// has not passed (expiryInstants: a time-boxed value, the tenant's own or an
-// inherited one, stops being served then), each read as written and at the
-// start of every segment of the day either side's schedules cut
+// sameRowsAllDay reports whether tenant's rows from a and from b — two
+// builds for the instant at — are the same at at, each read as written and
+// at the start of every segment of the day either side's schedules cut
 // (addScheduleCuts).
-func sameRowsAllDay(a, b *ThresholdConfig, tenant string, now time.Time) bool {
+func sameRowsAllDay(a, b *ThresholdConfig, tenant string, at time.Time) bool {
 	oneA, oneB := oneTenant(a, tenant), oneTenant(b, tenant)
-	instants := []time.Time{now}
-	for _, m := range []map[string]ScheduledValue{a.Tenants[tenant], b.Tenants[tenant]} {
-		for _, t := range expiryInstants(m, now) {
-			instants = append(instants, t.Add(time.Second))
-		}
+	if servedRowsOf(oneA, at) != servedRowsOf(oneB, at) {
+		return false
 	}
 	cuts := sortedCuts(addScheduleCuts(addScheduleCuts(nil, a.Tenants[tenant]), b.Tenants[tenant]))
-	for _, at := range instants {
-		if tenantRows(oneA, at) != tenantRows(oneB, at) {
+	for _, m := range cuts {
+		if servedRowsOf(oneA.AtMinuteOfDay(m), at) != servedRowsOf(oneB.AtMinuteOfDay(m), at) {
 			return false
-		}
-		for _, m := range cuts {
-			if tenantRows(oneA.AtMinuteOfDay(m), at) != tenantRows(oneB.AtMinuteOfDay(m), at) {
-				return false
-			}
 		}
 	}
 	return true
@@ -206,7 +240,7 @@ func oneTenant(c *ThresholdConfig, tenant string) *ThresholdConfig {
 
 // tenantRows is c's rows (c holds one tenant), each printed whole (labels,
 // value, severity, legacy twin), sorted and joined.
-func tenantRows(c *ThresholdConfig, now time.Time) string {
+func servedRowsOf(c *ThresholdConfig, now time.Time) string {
 	rows, _ := c.resolveAtWithStats(now, nil, nil, nil)
 	ss := make([]string, len(rows))
 	for i, r := range rows {
