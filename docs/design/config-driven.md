@@ -890,7 +890,7 @@ _routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enf
 ```yaml
 # Part 2 Recording Rule（背景穩定執行，產出低基數指標）
 - record: tenant:cpu_usage:rate5m
-  expr: sum by (tenant) (rate(container_cpu_usage_seconds_total{container!=""}[5m]))
+  expr: sum by (tenant) (label_replace(rate(container_cpu_usage_seconds_total{container!=""}[5m]), "tenant", "$1", "namespace", "(.+)"))
 
 # Part 3 Alert Rule（只比較兩組已預算好的數字向量）
 - alert: TenantCPUHigh

@@ -1266,7 +1266,8 @@ def _may_write_tenant(raw_job: dict) -> list[str]:
 
 
 def test_families_told_without_tenant_are_scraped_by_jobs_that_cannot_write_it():
-    """`tenant_presence` answers "without" for the static and service families;
+    """`tenant_presence` answers "without" for the static, service and
+    name-filtered families (cAdvisor and the kubelet's volume stats, #4178);
     every job that admits one (the gate's own admission) must have no way to
     write tenant, or label flow would call a kept tenant dropped — and, the
     other way, a job learning to write it must move the family off "without"."""
@@ -1281,11 +1282,13 @@ def test_families_told_without_tenant_are_scraped_by_jobs_that_cannot_write_it()
     for key, kind, spec in rows:
         sample = key + "x" if key.endswith("_") else key
         told_without = ms.tenant_presence(sample) == "without"
-        assert told_without == (kind in ("static", "service")), (key, kind)
+        assert told_without == (kind in ("static", "service", "name-filtered")), (key, kind)
         if not told_without:
             continue
         if kind == "static":
             admitting = [j for j in jobs if j["job"] == spec and j["static"]]
+        elif kind == "name-filtered":
+            admitting = [j for j in jobs if j["job"] == spec]
         else:
             ns, name = spec
             svc = next(s for s in services if s["namespace"] == ns and s["name"] == name)
@@ -1294,7 +1297,7 @@ def test_families_told_without_tenant_are_scraped_by_jobs_that_cannot_write_it()
         for j in admitting:
             assert _may_write_tenant(raw[j["job"]]) == [], (key, j["job"])
             checked += 1
-    assert checked >= 3  # prometheus, alertmanager, kube-state-metrics
+    assert checked >= 5  # prometheus, alertmanager, kube-state-metrics, the two kubelet jobs
 
 
 def test_the_one_job_told_to_carry_tenant_writes_it_on_every_target():
@@ -1321,5 +1324,5 @@ def test_a_per_target_or_alert_series_is_never_taken_to_carry_tenant():
         assert ms.tenant_presence(name) == "by-job", name
     for name in ("ALERTS", "ALERTS_FOR_STATE"):
         assert ms.tenant_presence(name) == "unknown", name
-    for name in ("mysql_up", "container_cpu_usage_seconds_total", "user_threshold", "my_own_app_total"):
+    for name in ("mysql_up", "user_threshold", "my_own_app_total"):
         assert ms.tenant_presence(name) is None, name

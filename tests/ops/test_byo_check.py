@@ -1748,3 +1748,38 @@ class TestClusterIdentityOverHttp:
         assert exc.value.http_status == 404
         assert err.http_status == 404 and isinstance(err, str)
         assert _lib_prometheus.QueryError("refused").http_status is None
+
+
+class TestStep6InfraTenantLabel:
+    """#4178: cAdvisor's and the kubelet's series name the tenant only as
+    `namespace`; a scrape that still writes `tenant` on them is flagged."""
+
+    def test_a_leftover_relabel_is_named_by_job(self):
+        c = bc._judge_step6_infra_tenant_label(
+            [{"metric": {"job": "kubelet"}, "value": [1, "3"]}], None)
+        assert c["status"] == "warn"
+        assert "kubelet" in c["detail"] and "remove the namespace→tenant relabel" in c["detail"]
+
+    def test_none_written_passes(self):
+        assert bc._judge_step6_infra_tenant_label([], None)["status"] == "pass"
+
+    def test_a_query_error_is_a_caller_error(self):
+        c = bc._judge_step6_infra_tenant_label(None, "boom")
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+
+    def test_the_query_reads_both_families_for_a_tenant_label(self):
+        q = bc.STALE_INFRA_TENANT_QUERY
+        assert 'container_cpu_usage_seconds_total{tenant!=""}' in q
+        assert 'kubelet_volume_stats_capacity_bytes{tenant!=""}' in q
+
+
+def test_steps_4_and_5_read_the_tenant_as_the_recipe_compiler_does():
+    """#4178 review: a series without `tenant` takes it from `namespace`, one
+    with a `tenant` keeps it (N:1 BYO: tenant=db-a, namespace=db-a-read) — the
+    compiler's tenantRead; deriving it from `namespace` alone would call such a
+    tenant's arriving stats missing while its recipe fires."""
+    import inspect
+    src = inspect.getsource(bc)
+    for metric in ("kubelet_volume_stats_available_bytes", "container_fs_reads_total"):
+        assert f'{metric}{{namespace=~"db-.+", tenant=""}}' in src, metric
+        assert f'{metric}{{tenant!=""}}' in src, metric

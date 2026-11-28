@@ -49,6 +49,7 @@ issue #505 的 PR 一併處理：
 | `user_threshold` / `user_state_filter` / `user_silent_mode` / `user_severity_dedup` / `da_config_event` / `tenant_metadata_info` | platform threshold-exporter | ✅ 有 | exporter 原生 emit `tenant` label（`collector.go`） |
 | `tenant:*`（recording-rule 輸出，如 `tenant:mysql_threads_running:avg1m`、`tenant:container_cpu_percent:by_container`） | rule pack recording rules | ✅ 有 | recording rule `sum by(tenant)(...)` / `label_replace` 產出 |
 | `container_*`（cAdvisor） | kubelet cAdvisor，Prometheus job `kubelet-cadvisor` | ❌ **無** | job 只有 namespace filter（`regex: db-.+`），**無 `target_label: tenant` relabel**。租戶維度目前靠 recording rule 後補 `label_replace(namespace)` |
+| `kubelet_volume_stats_*`（kubelet） | kubelet，Prometheus job `kubelet-volume-stats` | ❌ **無** | 與 cAdvisor 相同：只保留 `db-.+` namespace，不寫 `tenant`（[#4178](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4178)）；租戶維度由規則 `label_replace(namespace)` 推導 |
 | `kube_*`（kube-state-metrics） | kube-state-metrics，job `monitoring-components` | ❌ **無** | 自 `monitoring` namespace 抓取，平台內部用途，未打租戶 label |
 | `node_*`（node-exporter） | — | ❌ **未抓取** | 現行 Prometheus 設定無 node-exporter job |
 
@@ -77,7 +78,7 @@ issue #505 的 PR 一併處理：
 
 各缺 label 項目的後續處理（本 audit 不在 #505 內修）：
 
-1. **cAdvisor `container_*` scrape-time relabel**（建議，非 #505 scope）：在 `kubelet-cadvisor` job 加 `metric_relabel_configs` 從 namespace 推導 `tenant`，比照 `tenant-exporters` job。在此之前，raw `container_*` 排除於 whitelist，容器類查詢走 `tenant:container_*:` recording rule。
+1. **cAdvisor `container_*` 不做 scrape-time relabel**（[#4178](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4178) 決定）：基礎設施指標（cAdvisor、kubelet、kube-state-metrics）在任何安裝方式下都只以 `namespace` 標示租戶，需要 `tenant` 的地方由規則從 `namespace` 推導。raw `container_*` 因此不列入 whitelist，容器類查詢走 `tenant:container_*:` recording rule。
 2. **kube-state-metrics / node-exporter**：目前非 federation 範圍。若未來租戶要求 k8s 物件層指標，需先設計其租戶 label 注入。
 3. **IV-2e admission validator（#510）**：validator 對「過去 24h 該 metric 至少一筆帶 `tenant` label 的 sample」做檢查 —— 把本盤點表的 ineligible 清單變成 mechanical gate，而非靠人工記得。validator 檢查的 label 名為 `tenant`（對齊本 audit 的決議，非 ADR 原稿的 `tenant_id`）。
 4. **整合文件**：`docs/integration/byo-prometheus-integration.md` 已教客戶注入 `tenant`（正確），但未明寫「漏注入 = federation 查詢靜默空白」的 silent-failure 警告 —— 建議 IV-2h（#513）文件補一段 callout。

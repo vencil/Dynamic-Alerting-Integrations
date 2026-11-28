@@ -177,3 +177,40 @@ def test_the_tenant_exporter_prefixes_are_the_kinds_namespaces():
 def test_pack_of_metric(metric, ignore_case, kinds_only, want):
     assert _registry_lib.pack_of_metric(metric, ignore_case=ignore_case,
                                         kinds_only=kinds_only) == want
+
+
+def test_a_platform_scraped_packs_series_carry_no_tenant():
+    """#4178: the packs without presence are scraped by the platform's own jobs
+    (cAdvisor, the kubelet's volume stats, kube-state-metrics), which write no
+    `tenant` on any install; their series name the tenant only as `namespace`.
+    The recipe compiler derives `tenant` for exactly these prefixes
+    (namespace_keyed_prefixes_gen.go), so the two answers must be one."""
+    prefixes = _registry_lib.platform_scraped_prefixes(_packs())
+    assert prefixes, "no platform-scraped pack declares metric_prefixes"
+    told = {p: ms.tenant_presence(p + "x") for p in prefixes}
+    assert all(v == "without" for v in told.values()), told
+
+
+def test_the_recipe_compilers_namespace_keyed_table_is_generated():
+    doc = strict_safe_load((ROOT / "rule-packs" / "threshold-registry.yaml").read_text(encoding="utf-8"))
+    path = Path(_registry_lib.NAMESPACE_KEYED_GO_PATH)
+    assert path.read_text(encoding="utf-8") == _registry_lib.render_namespace_keyed_go(doc)
+    for prefix in _registry_lib.platform_scraped_prefixes(doc["packs"]):
+        assert f'"{prefix}",' in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("doc", ["federation-integration.md", "federation-integration.en.md"])
+def test_the_federation_guide_sends_the_infrastructure_series_recipes_read(doc):
+    """#4178: cAdvisor's and the kubelet's series carry the tenant only as
+    `namespace`, so `{tenant!=""}` alone leaves them at the edge and a centrally
+    evaluated disk / IOPS recipe never fires. Every central federation job of
+    the guide pulls them with the one selector, and the remote-write keep sends
+    them; both are built from the scrape gate's name-filtered families."""
+    text = (ROOT / "docs" / "integration" / doc).read_text(encoding="utf-8")
+    pulls = text.count("- '{tenant!=\"\"}'")
+    assert pulls >= 2
+    central = text.split("## 8.")[0]  # §8 (edge evaluation) federates recordings only
+    sel = f"- '{ms.federated_infra_selector()}'"
+    assert central.count(sel) == central.count("- '{tenant!=\"\"}'"), (central.count(sel), pulls)
+    assert f'regex: "{ms.federated_infra_keep_regex()}"' in central
+    assert ms.federated_infra_families() == ("container_", "kubelet_")

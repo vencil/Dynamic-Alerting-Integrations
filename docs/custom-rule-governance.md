@@ -277,12 +277,12 @@ lint 工具的內建政策**就是**下面這份檔（`.github/custom-rule-polic
 >   不等式、沒寫 matcher 都會讀到每個租戶的 series；寫成別的租戶就是讀別人的。KSM 這類只有 namespace
 >   的指標寫 `namespace="<租戶>", tenant=""`（只寫 namespace 時，同時帶兩個 label 而值不同的 series 也會被選到）。
 >   讀 pack 的 record 也要寫，例如 `tenant:mysql_up:max{tenant="db-a"}`。
->   反過來，series 本身不帶 `tenant` 的指標（kube-state-metrics、Prometheus 與 Alertmanager 自己的指標：
+>   反過來，series 本身不帶 `tenant` 的指標（kube-state-metrics、cAdvisor、kubelet volume stats、Prometheus 與 Alertmanager 自己的指標：
 >   抓取它們的 job 不寫 tenant）寫成 `tenant="<租戶>"` 也是 ERROR：它選不到任何 series，規則永遠不響
->   （包在 `absent()` 裡則永遠在響）。series 帶該租戶 namespace 的（kube-state-metrics 的 namespaced 物件）改寫成
+>   （包在 `absent()` 裡則永遠在響）。series 帶該租戶 namespace 的（kube-state-metrics 的 namespaced 物件、cAdvisor、kubelet volume stats）改寫成
 >   `namespace="<租戶>", tenant=""`；不帶的（Prometheus、Alertmanager 自己的指標、以節點為單位的 `kube_node_*`）不是任何
 >   租戶的資料，租戶規則讀不到。⚠️ lint 不知道哪些指標帶 namespace，所以寫成 namespace 形式卻選不到東西的情況它看不出來。哪些指標屬於這類，依
->   `_lib_metric_sources.tenant_presence()` 判定（cadvisor 與 kubelet volume stats 在抓取時已補上 tenant，不在此列）；
+>   `_lib_metric_sources.tenant_presence()` 判定（cAdvisor 與 kubelet volume stats 也在此列：抓取時不寫 tenant，[#4178](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4178)）；
 >   名稱帶冒號的（recording rule，Prometheus 的命名規則）與同一檔定義的 record 不判（[#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)）。
 > - alert、recording rule 與 group 的 `labels:` 把 `tenant`（或 `namespace`）寫成該租戶以外的值。alert 可以寫該租戶，
 >   或照抄 series 的 `{{ $labels.tenant }}`；recording rule 的 labels 不展開模板（Prometheus 照字面寫入），只能寫該租戶。
