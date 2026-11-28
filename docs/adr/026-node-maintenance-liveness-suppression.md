@@ -9,7 +9,7 @@ tracking_kind: adr
 status: proposed
 domain: k8s
 created_at: 2026-06-18
-updated_at: 2026-11-22
+updated_at: 2026-11-28
 ---
 
 # ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統
@@ -47,10 +47,14 @@ threshold-exporter 因此對這個租戶輸出 `user_state_filter{filter="mainte
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
         for: 3m
+        # ...
+        keep_firing_for: 10m
         labels:
           severity: warning
           maintenance: mute
 ```
+
+`keep_firing_for` 讓這條告警在條件消失後多響 10 分鐘（節點反覆 NotReady 時只通知一次，而不是每個週期一次）。排除條件生效也是「條件消失」的一種：租戶在告警**已經響著**的時候才開啟維護，這條告警要再過 10 分鐘才解除；先開維護、節點才 NotReady，則完全不觸發。
 
 租戶宣告的某一種 exporter 全部沒有回應（`TenantExporterAbsent`）則標 `page`，規則不帶排除條件，維護期間照常觸發：
 
@@ -72,6 +76,7 @@ threshold-exporter 因此對這個租戶輸出 `user_state_filter{filter="mainte
 | 告警 | 乾淨 drain 會響？ | 維護期間 |
 |---|---|---|
 | `NodeNotReady`（`for: 3m`） | cordon 不等於 NotReady → 不會 | `mute` |
+| `NodeReadinessFlapping`（15 分鐘內 NotReady 三次） | 一次維修每個節點至多 NotReady 一次 → 不會 | `mute` |
 | `ContainerCrashLoop` | graceful evict 不是 crash → 不會 | `mute` |
 | 閾值類（例如連線數過高） | 看負載 | 依各條標籤 |
 | 租戶自訂告警 | 看宣告 | `mute`（編譯器一律寫入排除條件） |
@@ -88,6 +93,7 @@ threshold-exporter 因此對這個租戶輸出 `user_state_filter{filter="mainte
 - **單實例 exporter 的租戶，drain 時會被叫醒。** 這是刻意的：平台分不出「維護中缺席」與「真的停機」。平台可以提供預設 HA 的 exporter chart 來降低門檻，但目前沒有，要由部署方自己把 exporter 跑成多副本。
 - **exporter 缺席偵測是 opt-in。** 只有在 `_expected_exporters` 宣告了種類的租戶，才會被 `TenantExporterAbsent` 監看；沒宣告的租戶，exporter 消失不會有這條告警。
 - **維護以租戶為單位，不分叢集。** 排除條件以 `on(tenant)` 配對，一個租戶跑在好幾個叢集時（[ADR-006](006-tenant-mapping-topologies.md)），開啟維護會擋掉它在所有叢集的 `mute` 告警。
+- **帶 `keep_firing_for` 的告警，維護開啟後不會立刻安靜。** `NodeNotReady` 若在開啟維護時已經響著，會再響滿它的 `keep_firing_for`（10 分鐘）才解除。要避免，先開維護再動手。這個行為是否要改成全平台一致的規則，追蹤在 [#4348](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4348)。
 - **擋掉的告警沒有紀錄。** `mute` 告警在維護期間不觸發，TSDB 沒有 `ALERTS` 紀錄；要事後看「維護期間發生過什麼」，得看原始指標。
 - **方向要先用現場資料驗。** 這個決策是在實作前拿到客戶拓撲之後才定下的；新的抑制需求，也先確認「這是不是客戶真的會遇到的噪音」，再投入設計。
 

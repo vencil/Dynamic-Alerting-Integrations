@@ -111,6 +111,10 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_label import safe_label  # noqa: E402  (#3415)
+# #3981: every write under --work-dir is a runtime class write.
+from _lib_output import (  # noqa: E402
+    OutputWriteError, make_runtime_dir, open_runtime_file, write_runtime_file,
+)
 import _gsvc_child  # noqa: E402  (imports the whole generator — see _gsvc_child)
 from _gsvc_child import ChildJob, gar  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
@@ -454,9 +458,7 @@ def snapshot_policy(path: Optional[str], into: str) -> PolicySnapshot:
             data = fh.read()
     except OSError as exc:
         return PolicySnapshot(True, False, error=f"--policy: cannot read {path!r}: {exc}")
-    with open(copy, "wb") as fh:
-        fh.write(data)
-    os.chmod(copy, 0o600)
+    write_runtime_file(copy, data)
     digest = hashlib.sha256(data).hexdigest()
     try:
         doc = load_policy_document(copy)
@@ -759,7 +761,7 @@ class Service:
     def _new_job_dir(self) -> str:
         self._job_seq += 1
         path = os.path.join(_jobs_dir(self.s.work_dir), f"job-{self._job_seq}")
-        os.mkdir(path, 0o700)
+        make_runtime_dir(path, exist_ok=False)
         return path
 
     def _job(self, request: ValidateRequest, job_dir: str,
@@ -1188,7 +1190,7 @@ class Service:
         """A directory of its own (0700) for one process of a round."""
         self._self_check_seq += 1
         work = os.path.join(_jobs_dir(self.s.work_dir), f"selfcheck-{self._self_check_seq}")
-        os.mkdir(work, 0o700)
+        make_runtime_dir(work, exist_ok=False)
         return work
 
     async def _repo_probe(self) -> Optional[str]:
@@ -1329,11 +1331,11 @@ class Service:
         caller)."""
         out_path, err_path = os.path.join(work, "stdout"), os.path.join(work, "stderr")
         # 0600 from creation (the work directory is 0700 already): what a
-        # self-check prints is the service's to read, nobody else's
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
-        out = os.open(out_path, flags, 0o600)
+        # self-check prints is the service's to read, nobody else's (#3981:
+        # the runtime file entry)
+        out = open_runtime_file(out_path)
         try:
-            err = os.open(err_path, flags, 0o600)
+            err = open_runtime_file(err_path)
         except OSError:
             os.close(out)
             raise
@@ -1432,7 +1434,7 @@ class Service:
 
     def _policy_now(self) -> PolicySnapshot:
         tmp = os.path.join(_jobs_dir(self.s.work_dir), "status")
-        os.makedirs(tmp, mode=0o700, exist_ok=True)
+        make_runtime_dir(tmp, parents=True)
         try:
             return snapshot_policy(self.s.policy, tmp)
         finally:
@@ -2058,7 +2060,7 @@ def _prepare_work_dir(path: str) -> None:
     it answered ``File exists`` — the message this change set out to end
     (blind review of #4192)."""
     try:
-        os.makedirs(path, mode=0o700, exist_ok=True)
+        make_runtime_dir(path, parents=True)
         if os.path.islink(_jobs_dir(path)):
             # `rmtree` refuses a link too, with no reason one can read
             # (`[Errno None] None`).
@@ -2068,14 +2070,17 @@ def _prepare_work_dir(path: str) -> None:
             shutil.rmtree(_jobs_dir(path))
         except FileNotFoundError:
             pass  # no jobs directory yet: the first start
-        os.mkdir(_jobs_dir(path), 0o700)
+        make_runtime_dir(_jobs_dir(path), exist_ok=False)
     except OSError as exc:
+        # #3981: the runtime entry's refusal is told by its reason, the
+        # sentence below already names the flag and the path.
+        reason = exc.cause if isinstance(exc, OutputWriteError) else exc
         # `safe_label` on the PATH is what keeps a newline in it from
         # forging a second `ERROR:` line (pinned). On the exception's text
         # it is belt and braces: OSError already shows its path through
         # `repr`, so no test can tell it from its absence.
         raise RuntimeError(f"--work-dir {safe_label(path)}: cannot be used as the work "
-                           f"directory: {safe_label(str(exc))}") from exc
+                           f"directory: {safe_label(str(reason))}") from exc
 
 
 async def serve(settings: Settings, object_format: str) -> None:

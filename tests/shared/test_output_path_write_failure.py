@@ -116,8 +116,12 @@ every file in it, not one chosen as representative.
 A write is attributed to an entry by the innermost entry frame on its
 stack, and then held to the function that DOES that class's write: an
 operator write must have been opened by ``_kernel_open_operator_output``, an
-artifact's by ``_lib_atomic_write``. The entry's name on the stack is not
-enough — an entry rewritten to open the path itself still carries it.
+artifact's by ``_lib_atomic_write``, a runtime one (#3981, the third class:
+no row here, the generator-service control run of
+``tests/ops/test_gsvc_runtime_writes.py`` reads its log with these same
+functions) by ``_make_private_dir`` / ``_create_private_file``. The entry's
+name on the stack is not enough — an entry rewritten to open the path
+itself still carries it.
 
 What is not counted, each for a stated reason and each with a test
 (``TestWriteAuditPlacing``, ``TestTheHookItself``):
@@ -1708,6 +1712,13 @@ def _via(event: dict, frames: dict[str, str]) -> str:
 #: they exist.
 _OPERATOR_OPENER = "scripts/tools/_lib_output.py:_kernel_open_operator_output"
 _ATOMIC_WRITER = "scripts/tools/_lib_atomic_write.py:"
+#: #3981: the third class's. A runtime write is made by one of these two —
+#: the private directory and the private file — and nothing else: the
+#: innermost `scripts/` frame of its event. `write_runtime_file` only wraps
+#: the descriptor the second one opened.
+_RUNTIME_WRITERS = frozenset({"scripts/tools/_lib_output.py:_make_private_dir",
+                              "scripts/tools/_lib_output.py:_create_private_file"})
+_RUNTIME_FD_WRAPPER = "scripts/tools/_lib_output.py:write_runtime_file"
 
 
 def _placed(event: dict) -> str | None:
@@ -1998,6 +2009,19 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
             if not any(frame.startswith(_ATOMIC_WRITER) for frame in stack):
                 faults.append(f"{event['ev']} {rel} came through the artifact entry but "
                               "not through `_lib_atomic_write`: not the atomic writer")
+        elif kind == "runtime":
+            doer = stack[0] if stack else ""
+            if on_fd:
+                # The file entry wraps the descriptor it made (`fdopen`), the
+                # directory entry sets a new directory's mode on its own one.
+                if not ((event["ev"] == "open" and doer == _RUNTIME_FD_WRAPPER)
+                        or (event["ev"] == "os.chmod" and doer in _RUNTIME_WRITERS)):
+                    faults.append(f"{event['ev']} on a descriptor of {rel} under the "
+                                  "runtime entry, outside its writers")
+            elif doer not in _RUNTIME_WRITERS:
+                faults.append(f"{event['ev']} {rel} came through the runtime entry but was "
+                              f"made by {doer or '<no scripts/ frame>'}, not by "
+                              "`_make_private_dir` / `_create_private_file`")
         bucket = sites.setdefault(kind, [])
         if site not in bucket:
             bucket.append(site)
@@ -3411,6 +3435,9 @@ def test_the_entry_point_list_is_complete():
     assert callable(getattr(_lib_output, _OPERATOR_OPENER.rpartition(":")[2], None)), (
         f"{_OPERATOR_OPENER} is gone: name the function that opens an operator path now")
     assert (REPO_ROOT / _ATOMIC_WRITER.rstrip(":")).is_file(), _ATOMIC_WRITER
+    for frame in (*_RUNTIME_WRITERS, _RUNTIME_FD_WRAPPER):
+        assert callable(getattr(_lib_output, frame.rpartition(":")[2], None)), (
+            f"{frame} is gone: name the function that makes a runtime write now")
     named = {name for names in _lib_output.OUTPUT_ENTRY_POINTS.values() for name in names}
     assert len(named) == sum(len(v) for v in _lib_output.OUTPUT_ENTRY_POINTS.values()), (
         "a function is listed under two kinds")
@@ -3700,6 +3727,26 @@ class TestWriteAuditVerdict:
         log.spawn("/usr/local/bin/python3.13", "-c", "pass").spawn("git", "--no-pager", "log")
         log.spawn("/x/da-guard", "parse-tree")
         assert log.seen(_audit_row()).spawned == ("cp", "da-guard", "git", "python")
+
+    def test_a_runtime_write_must_have_been_made_by_its_writers(self, tmp_path):
+        """#3981: the runtime entry's frame on the stack is not enough — the
+        event must be raised in `_make_private_dir` / `_create_private_file`
+        (or, on the file's descriptor, in `write_runtime_file`). An entry
+        rewritten to `open(path, "wb")` itself still carries its name."""
+        rt = "scripts/tools/_lib_output.py:"
+        made = [f"{rt}_create_private_file", f"{rt}open_runtime_file",
+                f"{rt}write_runtime_file", "scripts/tools/ops/t.py:main"]
+        mkdir = [f"{rt}_make_private_dir", f"{rt}make_runtime_dir", "scripts/tools/ops/t.py:main"]
+        log = _Log(tmp_path).add("os.mkdir", "d", mkdir).add("os.chmod", "d", mkdir, fd=4)
+        log.add("open", "d/f", made).add("open", "d/f", made[2:], fd=5)
+        audit = _audit(log.events, tmp_path, log.tool)
+        assert audit.faults == () and set(audit.sites) == {"runtime"}, audit
+        own = _Log(tmp_path).add("open", "d/f", made[2:])
+        faults = _audit(own.events, tmp_path, own.tool).faults
+        assert len(faults) == 1 and "not by `_make_private_dir`" in faults[0], faults
+        wrapped = _Log(tmp_path).add("os.chmod", "d/f", made[2:], fd=5)
+        faults = _audit(wrapped.events, tmp_path, wrapped.tool).faults
+        assert len(faults) == 1 and "outside its writers" in faults[0], faults
 
     def test_the_innermost_entry_decides(self, tmp_path):
         """What is asked is who opened the file. A wrapper over the operator

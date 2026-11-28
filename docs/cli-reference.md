@@ -2176,7 +2176,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | `--socket <path>` | 監聽的 Unix socket（建立時權限 0600；對端程序的 uid 必須與服務相同，否則不回應直接關閉；威脅模型見 `generator_service.py` 模組說明）。路徑上若是舊的 socket 檔就換掉；是其他種類的檔則拒絕啟動（exit 2） |
 | `--repo <dir>` | git repo 的根目錄（唯讀掛載即可；bare repo、`.git` 是 `gitdir:` 檔的 worktree 都可以）。檔案一律從 git 物件取（`git ls-tree` 加 `git cat-file`），不讀工作目錄、不用 `git archive`。不是 repo、或是 work tree 裡的子目錄 ⇒ 不啟動（bare repo 裡的子目錄解析到同一個 repo、讀到同一份 conf.d，不擋），結束碼 `2`，stderr 點名 `--repo <path>`（先前子目錄會被當成外層 repo、以空的 conf.d 照常服務；非 repo 時只有 git 原文）。本服務執行的 git 一律去掉 `git rev-parse --local-env-vars` 列出的環境變數（`GIT_DIR`、`GIT_WORK_TREE` 等；只帶設定的 `GIT_CONFIG*` 保留，例如以 `GIT_CONFIG_COUNT` 設 `safe.directory`），先前繼承的 `GIT_DIR` 會蓋過 `--repo`（[#3739](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3739)） |
 | `--config-subdir <path>` | conf.d 在 repo 內的相對路徑（`.` 為 repo 根；絕對路徑或含 `..` 時拒絕啟動，exit 2）。啟動時以每次判定讀樹的同一個 `git ls-tree` 讀 `HEAD`：這個路徑在 `HEAD` 的樹裡存在、但不是目錄（一個檔、symlink、submodule）時拒絕啟動，exit 2（[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)；先前照常啟動，每次判定讀到空的 conf.d，連重複租戶都回 `pass`）。樹裡完全沒有這個路徑時 stderr 說明、照常啟動：git 不保存空目錄，最後一個租戶移除後的 conf.d 與還沒建立的 conf.d 讀起來相同，而第一筆寫入仍要由本服務判定。`HEAD` 還不是 commit（沒有任何提交的 repo）時無從判定，stderr 說明後照常啟動 |
-| `--work-dir <dir>` | 暫存目錄，放每次判定實體化的樹（在它底下的 `jobs/`）；判定結束（含被終止）後刪除。啟動時會清空 `<dir>/jobs`（上一次執行留下的），目錄裡其他東西不動 |
+| `--work-dir <dir>` | 暫存目錄，放每次判定實體化的樹（在它底下的 `jobs/`）；判定結束（含被終止）後刪除。啟動時會清空 `<dir>/jobs`（上一次執行留下的），目錄裡其他東西不動。必須是私有目錄（[#3981](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3981)）：不存在時以 0700 建立；已存在的必須屬於執行身分（euid）、group 與 others 沒有任何權限位，且不可是 symlink，否則拒絕啟動。底下的目錄一律 0700、檔一律 0600 |
 | `--policy <FILE>` | 部署端 policy 檔（`allowed_domains`、`min_generator_version`、`shared_secrets`），每次判定都重讀；其他鍵（例如 custom rule lint 的 `denied_functions`）會讓這次讀取失敗，寫入一律 503 `POLICY_UNAVAILABLE`。⚠️ Breaking（[#3797](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3797)）：先前混在同一份檔的 lint 鍵被默默忽略，升級前請把 lint 政策拆到另一份檔 |
 | `--warm-ref <ref>` | 啟動時預熱的 commit（預設 `HEAD`；空字串關閉）。解析不到只記 log 與 metric，不影響可用性 |
 
@@ -2225,7 +2225,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | Code | 含義 |
 |------|------|
 | 0 | 收到 SIGTERM／SIGINT 後正常結束 |
-| 2 | caller error：`--repo` 不是 git repo，或它的 `HEAD` 指不到 git 讀得了的 commit——repo 消失或讀不了、`HEAD` 指向的 commit 物件不見了；只有還沒有任何 commit 的分支照常啟動（[#3903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3903)：以前這些都被當成「no HEAD commit」照常啟動、回 ready，之後每個請求才以 `git_read` 拒絕）、`--socket` 路徑上是非 socket 的檔或無法監聽、`--work-dir` 建不起來、`RLIMIT_NOFILE` 的硬上限容不下 `--max-connections` 加預留的 fd、`--max-inflight-body-bytes` 小於 `--max-body-bytes` |
+| 2 | caller error：`--repo` 不是 git repo，或它的 `HEAD` 指不到 git 讀得了的 commit——repo 消失或讀不了、`HEAD` 指向的 commit 物件不見了；只有還沒有任何 commit 的分支照常啟動（[#3903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3903)：以前這些都被當成「no HEAD commit」照常啟動、回 ready，之後每個請求才以 `git_read` 拒絕）、`--socket` 路徑上是非 socket 的檔或無法監聽、`--work-dir` 建不起來或不是私有目錄（symlink、別的 uid 的、group／others 有權限位）、`RLIMIT_NOFILE` 的硬上限容不下 `--max-connections` 加預留的 fd、`--max-inflight-body-bytes` 小於 `--max-body-bytes` |
 
 ---
 
