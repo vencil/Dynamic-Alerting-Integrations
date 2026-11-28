@@ -1106,10 +1106,21 @@ keys:
     metric_class: latency
     arming: operator
     portability: portable
-    # The same rules.yml also carries a Flink rule at 10% ("Threshold: more than
-    # 100ms/sec of GC time (10% of wall clock)."); one organisation is one source.
-    # Elasticsearch: the default of monitor.jvm.gc.overhead.warn (its info level
-    # is 25, its debug level 10 — a debug log line is not a warning-tier source).
+    # What the two sources below do and do not support:
+    #   - Elasticsearch grades GC overhead itself: debug 10 / info 25 / warn 50
+    #     (monitor.jvm.gc.overhead.{debug,info,warn}; the quoted `50,` is the
+    #     default of .warn). Only its warn level is a warning-tier source, and
+    #     it sits far above this key: it gives the consensus its UPPER bound,
+    #     it does not say 10 is right.
+    #   - This pack's 10 / 25 line up with two figures that cannot be
+    #     registered: the Flink rule in the same rules.yml ("Threshold: more
+    #     than 100ms/sec of GC time (10% of wall clock)." — the gate takes one
+    #     source per organisation, and awesome-prometheus-alerts is already
+    #     here with its JVM rule at 5), and Elasticsearch's INFO level, 25 (a
+    #     <base>_critical carries no validation, and an info log line is not
+    #     a critical-tier source).
+    #   So: 10 lies between a 5 and a 50; the 25 of the critical tier rests on
+    #   no registered source.
     validation:
       basis: consensus
       sources:

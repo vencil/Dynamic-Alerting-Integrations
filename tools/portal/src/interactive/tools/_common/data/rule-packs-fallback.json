@@ -658,7 +658,7 @@
       "required": false,
       "defaults": {},
       "metrics": [
-        "gc_pause",
+        "gc_time",
         "heap_usage",
         "thread_pool",
         "class_loading"

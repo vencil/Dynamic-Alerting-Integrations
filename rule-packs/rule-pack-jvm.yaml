@@ -72,9 +72,15 @@ groups:
       #     exporter that adds another per-series label splits a JVM into
       #     parts and this reads the largest part — too low, where naming the
       #     identity labels would read too high.
-      #   - Each exporter is collapsed to one value per JVM BEFORE `or`, so a
-      #     JVM exposing both name sets has one label set on both sides and
-      #     `or` keeps the left (Micrometer) sample: counted once.
+      #   - Each exporter is collapsed to one value per JVM BEFORE `or`. A
+      #     JVM exposing both name sets on the same labels then has ONE label
+      #     set on both sides and `or` keeps the left (Micrometer) sample —
+      #     the client_java value is not read, even when it is the larger.
+      #     If its Micrometer series carry a label the client_java ones lack
+      #     (a common tag such as `application`), the label sets differ, `or`
+      #     keeps both and the outer max reads the larger. Either way one
+      #     JVM's value, never the two added (measured: t-both / t-tags in
+      #     tests/rulepacks/rule-pack-jvm-gc-time_test.yaml).
       #   - `gc!~".*Cycles"` (client_java / jmx_exporter only): the
       #     "ZGC Cycles", "ZGC Major Cycles", "ZGC Minor Cycles" and
       #     "Shenandoah Cycles" collector beans time whole concurrent cycles,

@@ -309,7 +309,7 @@ METRICS_COVERAGE = {
     "clickhouse": ["queries", "merges", "replicated_lag"],
     "kafka": ["consumer_lag", "broker_active", "controller", "isr_shrink", "under_replicated"],
     "rabbitmq": ["queue_depth", "consumers", "memory", "disk_free", "connections"],
-    "jvm": ["gc_pause", "heap_usage", "thread_pool", "class_loading"],
+    "jvm": ["gc_time", "heap_usage", "thread_pool", "class_loading"],
     "nginx": ["active_connections", "request_rate", "connection_backlog"],
     "kubernetes": ["pod_restart", "cpu_limit", "memory_limit", "pvc_usage"],
     "liveness": ["expected_exporter", "exporter_up"],
