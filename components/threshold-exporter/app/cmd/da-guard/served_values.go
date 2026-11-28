@@ -1664,7 +1664,11 @@ func addRootRefused(tv servedTenantValues, overrides map[string]config.Scheduled
 // --disable-effects decides.
 func addRootDisabled(tv servedTenantValues, cfg *config.ThresholdConfig, tenant string, at time.Time) {
 	for _, k := range cfg.InheritedRootDisables(tenant, at) {
-		if _, listed := tv.Keys[k]; !listed {
+		e, listed := tv.Keys[k]
+		// #4333 review: a tenant line that expired and gave way is read as
+		// deleted — the root's `disable` is what the tenant is served, not
+		// the no_row servedKeys made of the line as written.
+		if !listed || (e.Reason == keyReasonNoRow && cfg.GaveWay(tenant, k)) {
 			tv.Keys[k] = servedKey{Reason: keyReasonDisabled}
 		}
 	}

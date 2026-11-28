@@ -1061,9 +1061,10 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		if !dimensionalRowRead(key, c.Dimensions) {
 			continue
 		}
-		// The tenant's own value is served below, unless it has expired and
-		// the root serves one in its place (lapsesToRoot).
-		if sv, own := overrides[key]; own && (!isThresholdExpired(sv, c.expiryReadAt(now)) || !lapsesToRoot(key, defaults)) {
+		// The tenant's own value is served below. An expired one the merge
+		// left in place has nothing beneath to give way to (decideExpiry,
+		// #4263): it is served, never re-judged here.
+		if _, own := overrides[key]; own {
 			continue
 		}
 		if familyOff(key) {
@@ -1080,12 +1081,6 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		}
 		if rec != nil {
 			rec.claim(key) // #3378
-		}
-		// An expired value gives way to the root's only where the root
-		// serves one (lapsesToRoot: a finite number, #4263); with none it is
-		// served past `expires:` (PREVENT #656).
-		if isThresholdExpired(sv, c.expiryReadAt(now)) && lapsesToRoot(key, defaults) {
-			continue // the default above is served
 		}
 		rows = c.appendDimensionalRow(rows, tenant, key, sv, familyOff(key), now, sink, logf, rec)
 	}

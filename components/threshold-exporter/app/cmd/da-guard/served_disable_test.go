@@ -544,3 +544,25 @@ func TestServedValues_AnExpiredDisableIsListedUnderTheDescribedSpelling(t *testi
 		t.Errorf("mysql_threads_running disable %q, want %q (the expired disable, listed under the described spelling)", e.Disable, disableNoop)
 	}
 }
+
+// #4333 review: the root `defaults:` disables a key and the tenant's number
+// for it has expired. The merge left the number out, so the tenant is served
+// the root's `disable` — the key reads `disabled`, exactly as for a tenant
+// with no line for it, not `no_row` from the line as written.
+func TestServedValues_ALapsedValueOverARootDisableReadsDisabled(t *testing.T) {
+	t.Parallel()
+	for name, tenant := range map[string]string{
+		"lapsed": "tenants:\n  a:\n    pg_replication_lag:\n      default: \"5\"\n" +
+			"      expires: \"2020-01-01T00:00:00Z\"\n",
+		"no line": "tenants:\n  a:\n    _metadata: {owner: x}\n",
+	} {
+		code, doc, _, stderr := servedWith(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  pg_replication_lag: disable\n",
+			"a.yaml":         tenant,
+		}, "2026-07-01T03:00:00Z")
+		mustOK(t, code, stderr)
+		if e := doc.Tenants["a"].Keys["pg_replication_lag"]; e.Reason != keyReasonDisabled {
+			t.Errorf("%s: pg_replication_lag reads %+v, want reason %q", name, e, keyReasonDisabled)
+		}
+	}
+}

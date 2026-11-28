@@ -236,8 +236,9 @@ type ConfigManager struct {
 	// the whole reload makes the two windows of one reload contiguous
 	// relative to any other reload.
 	//
-	// ⛔ Taken ONLY at the outermost reload entries (fireDebounced and the
-	// window<=0 branch of triggerDebouncedReload). sync.Mutex is not
+	// ⛔ Taken ONLY at the outermost reload entries (fireDebounced, the
+	// window<=0 branch of triggerDebouncedReload, and the single-file
+	// tick's reload, #4263). sync.Mutex is not
 	// reentrant, and the reload internals call each other (diffAndReload →
 	// Load, incrementalLoadFrom → fullDirLoadFrom, …), so taking it lower
 	// down would self-deadlock. Lock order: reloadMu is the OUTERMOST lock —
@@ -2131,10 +2132,17 @@ func (m *ConfigManager) tickOnce() {
 
 	// #4263: an unchanged file is loaded again once the committed config no
 	// longer answers for the clock (its next `expires:`, or the clock set
-	// back before the last one).
-	if changed || m.expiredCommit() {
+	// back before the last one) — unless the expiry reload is already
+	// pending, which this tick would only push back.
+	if changed || (m.expiredCommit() && !m.debouncePending()) {
 		m.getLogger().Printf("Config changed, reloading...")
-		if err := m.Load(); err != nil {
+		// The expiry timer reloads this file too (triggerDebouncedReload,
+		// under reloadMu): this reload takes reloadMu as well, so an older
+		// read can never commit over a newer one (#4333 review).
+		m.reloadMu.Lock()
+		err := m.Load()
+		m.reloadMu.Unlock()
+		if err != nil {
 			m.getLogger().Printf("ERROR: failed to reload config: %v", err)
 		}
 	}

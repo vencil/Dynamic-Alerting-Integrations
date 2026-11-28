@@ -109,6 +109,27 @@ func (c *ThresholdConfig) DescribedTenant(tenant string) map[string]ScheduledVal
 	return m
 }
 
+// GaveWay reports whether tenant's line for key (any #1231 spelling) passed
+// its `expires:` at the instant the config was built and gave way: the merge
+// left it out, so what the tenant is served is what the tree serves with the
+// line deleted (#4263). A describe-reader reads such a key as that.
+func (c *ThresholdConfig) GaveWay(tenant, key string) bool {
+	if c == nil || c.expiry == nil || c.expiry.written == nil {
+		return false
+	}
+	canon, _ := canonicalKeyFor(key)
+	if _, held := heldAcrossSpellings(c.Tenants[tenant], canon); held {
+		return false
+	}
+	w := c.expiry.written[tenant]
+	k, written := heldAcrossSpellings(w, canon)
+	if !written {
+		return false
+	}
+	t, ok := expiryInstant(w[k])
+	return ok && !t.After(c.expiry.at)
+}
+
 // WrittenTenant is tenant's merged map of the whole tree as written, before
 // `expires:` was decided: every time-boxed value in place, expired or not
 // (#4263). Tenants[tenant] when the build decided nothing away.
@@ -212,10 +233,14 @@ func filterPartials(configs map[string]ThresholdConfig, keep expiryKeep) map[str
 	return out
 }
 
-// bodiesHoldTimed is whether any value of bodies carries an `expires:`.
+// bodiesHoldTimed is whether any threshold value of bodies (not a `_` key)
+// carries an `expires:`.
 func bodiesHoldTimed(bodies map[string]map[string]ScheduledValue) bool {
 	for _, body := range bodies {
-		for _, sv := range body {
+		for k, sv := range body {
+			if baseRowsSkipKey(k) {
+				continue
+			}
 			if _, ok := expiryInstant(sv); ok {
 				return true
 			}
@@ -231,7 +256,9 @@ func filterBodies(bodies map[string]map[string]ScheduledValue, keep expiryKeep) 
 	for name, body := range bodies {
 		var kept map[string]ScheduledValue
 		for k, sv := range body {
-			if keep(sv) {
+			// A `_` key is no threshold: it never lapses (eachTimed skips
+			// it, the readers ignore its `expires:`), so it is never cut.
+			if baseRowsSkipKey(k) || keep(sv) {
 				continue
 			}
 			if kept == nil {
@@ -267,6 +294,9 @@ func filterLevels(parsed map[string]map[string]any, keep expiryKeep) map[string]
 	for path, level := range parsed {
 		var kept map[string]any
 		for k, raw := range level {
+			if baseRowsSkipKey(k) {
+				continue
+			}
 			m, isMap := raw.(map[string]any)
 			if !isMap {
 				continue // a scalar carries no `expires:`
@@ -310,8 +340,16 @@ func filterLevels(parsed map[string]map[string]any, keep expiryKeep) map[string]
 // test of PREVENT #656.
 func servable(view *ThresholdConfig, tenant, key string, canonDefaults map[string]float64) bool {
 	canon, _ := canonicalKeyFor(key)
-	if held, ok := heldAcrossSpellings(view.Tenants[tenant], canon); ok && isThresholdShaped(view.Tenants[tenant][held]) {
-		return true
+	if held, ok := heldAcrossSpellings(view.Tenants[tenant], canon); ok {
+		if isThresholdShaped(view.Tenants[tenant][held]) {
+			return true
+		}
+		// A dimensional key's resolver takes the tenant's own value over the
+		// root's and drops it unread: the root serves nothing then. A base or
+		// `_critical` key's falls to the root's number (#4333 review).
+		if isDimensionalKey(canon) {
+			return false
+		}
 	}
 	return lapsesToRoot(canon, canonDefaults)
 }
@@ -359,13 +397,14 @@ func decideExpiry(at time.Time, full, now, untimed *ThresholdConfig, last, next 
 		written: full.Tenants}
 	nowDefaults := canonicalizeDefaults(now.Defaults)
 	untimedDefaults := canonicalizeDefaults(untimed.Defaults)
+	owned := map[string]bool{} // tenants whose map of now putBack already copied
 	for tenant, overrides := range full.Tenants {
 		eachTimed(overrides, func(key, canon string, sv ScheduledValue, t time.Time) {
 			if t.After(at) {
 				return // not expired: judged on now, below
 			}
 			if !servable(now, tenant, canon, nowDefaults) {
-				putBack(now, tenant, key, sv)
+				putBack(now, owned, tenant, key, sv)
 				return // judged on now, below: honoured false
 			}
 			if st.honoured[tenant] == nil {
@@ -417,19 +456,19 @@ func eachTimed(overrides map[string]ScheduledValue, f func(key, canon string, sv
 }
 
 // putBack writes sv, the tenant's value of key in the whole tree, into its
-// merged map of now in place of any other spelling of the threshold.
-func putBack(now *ThresholdConfig, tenant, key string, sv ScheduledValue) {
+// merged map of now in place of any other spelling of the threshold. The map
+// may be shared with another merge, so it is copied — once per build: owned
+// records the tenants whose map is already this build's own.
+func putBack(now *ThresholdConfig, owned map[string]bool, tenant, key string, sv ScheduledValue) {
 	m := now.Tenants[tenant]
-	if m == nil {
-		m = map[string]ScheduledValue{}
-		now.Tenants[tenant] = m
-	} else {
+	if !owned[tenant] {
 		cp := make(map[string]ScheduledValue, len(m)+1)
 		for k, v := range m {
 			cp[k] = v
 		}
 		m = cp
 		now.Tenants[tenant] = m
+		owned[tenant] = true
 	}
 	var buf [2]string
 	for _, s := range otherSpellings(key, &buf) {

@@ -44,6 +44,8 @@ func TestThresholdExpiry_ExporterMergesAgainAtTheNextExpiry(t *testing.T) {
 			}
 			m := NewConfigManagerWithDebounce(dir, 0)
 			t.Cleanup(m.Close)
+			fresh, _ := freshMetrics(t)
+			m.SetMetrics(fresh)
 			fc := clockwork.NewFakeClockAt(start)
 			m.SetClock(fc)
 			m.SetLogger(log.New(io.Discard, "", 0))
@@ -90,12 +92,16 @@ func TestThresholdExpiry_SingleFileGivesWayToTheProfile(t *testing.T) {
 	}
 	m := NewConfigManager(path)
 	t.Cleanup(m.Close)
+	fresh, _ := freshMetrics(t)
+	m.SetMetrics(fresh)
+	fc := clockwork.NewFakeClockAt(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))
+	m.SetClock(fc)
 	m.SetLogger(log.New(io.Discard, "", 0))
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	var got []string
-	for _, r := range m.GetConfig().ResolveAt(time.Now()) {
+	for _, r := range m.GetConfig().ResolveAt(fc.Now()) {
 		if r.Tenant == "tx" && r.Component == "redis" {
 			got = append(got, strconv.FormatFloat(r.Value, 'g', -1, 64))
 		}
@@ -122,6 +128,10 @@ func TestThresholdExpiry_FlatEditMergesWhole(t *testing.T) {
 	write("t.yaml", "tenants:\n  tx:\n    _profile: p\n"+line)
 	m := NewConfigManagerWithDebounce(dir, 0)
 	t.Cleanup(m.Close)
+	fresh, _ := freshMetrics(t)
+	m.SetMetrics(fresh)
+	fc := clockwork.NewFakeClockAt(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))
+	m.SetClock(fc)
 	m.SetLogger(log.New(io.Discard, "", 0))
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
@@ -130,7 +140,7 @@ func TestThresholdExpiry_FlatEditMergesWhole(t *testing.T) {
 	write("t.yaml", "tenants:\n  tx:\n    _profile: p\n    _metadata: {owner: x}\n"+line)
 	m.tickOnce()
 	var got []string
-	for _, r := range m.GetConfig().ResolveAt(time.Now()) {
+	for _, r := range m.GetConfig().ResolveAt(fc.Now()) {
 		if r.Tenant == "tx" && r.Component == "redis" {
 			got = append(got, strconv.FormatFloat(r.Value, 'g', -1, 64))
 		}
@@ -153,6 +163,8 @@ func TestThresholdExpiry_SingleFileTickSeesTheClockSetBack(t *testing.T) {
 	}
 	m := NewConfigManager(path)
 	t.Cleanup(m.Close)
+	fresh, _ := freshMetrics(t)
+	m.SetMetrics(fresh)
 	fc := clockwork.NewFakeClockAt(time.Date(2026, 1, 1, 2, 0, 0, 0, time.UTC))
 	m.SetClock(fc)
 	m.SetLogger(log.New(io.Discard, "", 0))
@@ -239,6 +251,8 @@ func TestThresholdExpiry_TheTickDoesNotStarveTheMerge(t *testing.T) {
 		"      default: \"5\"\n      expires: \"2026-01-01T01:00:00Z\"\n"), 0o600)
 	m := NewConfigManagerWithDebounce(dir, 60*time.Second)
 	t.Cleanup(m.Close)
+	fresh, _ := freshMetrics(t)
+	m.SetMetrics(fresh)
 	fc := clockwork.NewFakeClockAt(time.Date(2026, 1, 1, 0, 59, 0, 0, time.UTC))
 	m.SetClock(fc)
 	m.SetLogger(log.New(io.Discard, "", 0))
@@ -255,4 +269,48 @@ func TestThresholdExpiry_TheTickDoesNotStarveTheMerge(t *testing.T) {
 		}
 	}
 	t.Errorf("10 minutes past the expires: the merge never committed (debounce fired %d times)", m.DebounceFiredCount())
+}
+
+// #4333 review: in single-file mode the expiry timer reloads through
+// triggerDebouncedReload, under reloadMu; the tick's own reload of a changed
+// file takes reloadMu too, so the two never interleave (an older read
+// committing over a newer one).
+func TestThresholdExpiry_SingleFileTickReloadsUnderReloadMu(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	write := func(v string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("defaults:\n  redis_connected_clients: "+v+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("70")
+	m := NewConfigManager(path)
+	t.Cleanup(m.Close)
+	fresh, _ := freshMetrics(t)
+	m.SetMetrics(fresh)
+	m.SetClock(clockwork.NewFakeClockAt(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)))
+	m.SetLogger(log.New(io.Discard, "", 0))
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	before := m.GetConfig()
+	write("80")
+	m.reloadMu.Lock()
+	done := make(chan struct{})
+	go func() { m.tickOnce(); close(done) }()
+	select {
+	case <-done:
+		m.reloadMu.Unlock()
+		t.Fatal("the tick reloaded while another reload held reloadMu")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if m.GetConfig() != before {
+		t.Error("the tick committed while another reload held reloadMu")
+	}
+	m.reloadMu.Unlock()
+	<-done
+	if m.GetConfig().Defaults["redis_connected_clients"] != 80 {
+		t.Errorf("after reloadMu: %v, want the changed file's 80", m.GetConfig().Defaults)
+	}
 }

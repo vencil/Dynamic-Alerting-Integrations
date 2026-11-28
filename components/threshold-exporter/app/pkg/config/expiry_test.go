@@ -466,3 +466,45 @@ func TestExpiry_OneExpiredEventPerKey(t *testing.T) {
 		t.Errorf("%d expired events for one key, want 1", n)
 	}
 }
+
+// #4333 review: beneath the expired line, a profile writes the dimensional
+// key a value no reader takes (`abc`). The dimensional resolver takes the
+// tenant's own value over the root's and drops it unread, so the root's 50
+// is no replacement: the expired 5 is put back and served (PREVENT #656) —
+// not silence, and not the root's 50 the resolver would once have re-judged
+// it to.
+func TestExpiry_AnUnservableValueBeneathHidesTheRoot(t *testing.T) {
+	t.Parallel()
+	k := `redis_connected_clients{db="a"}`
+	files := map[string]string{
+		"_defaults.yaml": "dimensions:\n  redis_connected_clients: [db]\ndefaults:\n  " + k + ": 50\n",
+		"_profiles.yaml": "profiles:\n  p:\n    " + k + ": \"abc\"\n",
+		"t.yaml": "tenants:\n  tx:\n    _profile: p\n    " + k + ":\n      default: \"5\"\n" +
+			"      expires: \"" + expiredAt + "\"\n",
+	}
+	cfg := loadTreeAt(t, files, expiryAt)
+	if got := strings.Join(offRows(cfg, "tx", "redis", expiryAt), "|"); got != "redis_connected_clients warning 5" {
+		t.Errorf("/metrics %q, want the expired 5 put back: nothing beneath serves the key", got)
+	}
+	m := MergeTenantWithRootDefaults(writeUndeliverableTree(t, files), "tx", []byte(files["t.yaml"]))
+	if got := strings.Join(offRows(&m.ThresholdConfig, "tx", "redis", expiryAt), "|"); got != "redis_connected_clients warning 5" {
+		t.Errorf("tenant-api %q, want the expired 5 /metrics serves", got)
+	}
+}
+
+// #4333 review: a `_` key is no threshold and never lapses — the readers
+// ignore its `expires:`. The expiry filter must not cut it: on tenant-api a
+// map-form `_severity_dedup: {default: disable, expires: <past>}` vanished
+// from the merge, and the reader then fell to its own default.
+func TestExpiry_AReservedKeyIsNeverCut(t *testing.T) {
+	t.Parallel()
+	body := "tenants:\n  tx:\n    _severity_dedup:\n      default: disable\n      expires: \"" + expiredAt + "\"\n"
+	files := map[string]string{"_defaults.yaml": "defaults: {}\n", "t.yaml": body}
+	if sv, ok := loadTreeAt(t, files, expiryAt).Tenants["tx"]["_severity_dedup"]; !ok || sv.Default != "disable" {
+		t.Errorf("/metrics: _severity_dedup = %+v (held %v), want disable", sv, ok)
+	}
+	m := MergeTenantWithRootDefaults(writeUndeliverableTree(t, files), "tx", []byte(body))
+	if sv, ok := m.Tenants["tx"]["_severity_dedup"]; !ok || sv.Default != "disable" {
+		t.Errorf("tenant-api: _severity_dedup = %+v (held %v), want disable", sv, ok)
+	}
+}

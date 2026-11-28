@@ -248,7 +248,7 @@ $ da-guard effective --config-dir conf.d | jq -jcS '.tenants["fin-db-001"].effec
 
 **重新載入的時機**：exporter 每 30 秒（`-reload-interval`）掃描一次 conf.d/。偵測到變動後等 300 毫秒（`-scan-debounce`）再重新載入：這段等待叫去抖動（debounce），把短時間內接連發生的變動合成一次，`git pull` 一次改了 20 個檔也只重新載入一次。
 
-檔案沒變也會重新載入：設定是依當下時刻合併的，過了 `expires:` 的閾值等於沒寫（決策 10）。所以到了樹裡下一個 `expires:` 的時刻，exporter 經同樣的去抖動後重新合併；時鐘被調回到上一個已過的 `expires:` 之前時，下一次掃描也會重新合併。重新合併一直沒提交時（例如這次載入被拒），exporter 照送上一版的答案，已過期的值也照送，和其他任何凍結的設定一樣；`da_config_valid_until_unixtime_seconds` 停在過去的那一刻，超過 5 分鐘就響告警 `ConfigExpiryRebuildOverdue`。
+檔案沒變也會重新載入：設定是依當下時刻合併的，過了 `expires:` 的閾值等於沒寫；下面沒有任何一層給值時除外，那時照送原值（決策 10）。所以到了樹裡下一個 `expires:` 的時刻，exporter 經同樣的去抖動後重新合併；時鐘被調回到上一個已過的 `expires:` 之前時，下一次掃描也會重新合併。重新合併一直沒提交時（例如這次載入被拒），exporter 照送上一版的答案，已過期的值也照送，和其他任何凍結的設定一樣；`da_config_valid_until_unixtime_seconds` 停在過去的那一刻，超過 5 分鐘就響告警 `ConfigExpiryRebuildOverdue`。
 
 **每次重新載入都重建全部設定。** 兩個雜湊決定的是這次變更記成什麼，供 metrics 使用，包括受影響租戶數（`da_config_blast_radius_tenants_affected`，一次變更影響多少租戶）：
 
