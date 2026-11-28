@@ -358,6 +358,13 @@ type CheckInput struct {
 	// reports a threshold key only when this says true; nil reports none.
 	RedundantThresholds map[string]map[string]bool `json:"-"`
 
+	// ReservedOwnedElsewhere maps tenant ID → reserved key of the tenant's
+	// own file → whether another finding owns the line (da-guard's
+	// redundantThresholds, #4331: value_not_served, or a finding of the
+	// shared key verdict naming it): redundant_override then leaves it to
+	// that finding. nil: none is owned.
+	ReservedOwnedElsewhere map[string]map[string]bool `json:"-"`
+
 	// ValuesNotServed maps tenant ID → key → why /metrics does not serve
 	// that key as the tenant's effective config shows it
 	// (config.EffectiveConfig.NotServed, filled by ScopeEffective). The

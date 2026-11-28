@@ -1070,14 +1070,14 @@ ROWS: list[Row] = [
       shapes=("artifact_is_dir",), artifact=".pre-commit-config.da.yaml",
       variant="force", writer="python+da-guard"),
     R("ops/migrate_rule.py", "-o/--output-dir", "dir", "operator",
-      lambda c, out: [_legacy_rules(c.tmp), "--tenant", "t1", "-o", str(out)],
-      reach="tmp legacy Prometheus rules file",
-      # The conf.d files in it are `da-guard write`'s; the rest is Python's.
-      # #3107: `artifact_is_dir` reaches one of the five writes after the
-      # mkdirs — the report. All five calls are driven one by one, in
-      # process, by tests/ops/test_migrate_rule_outputs.py.
+      lambda c, out: [_legacy_rules(c.tmp), "--tenant", "t1", "--owner", "team",
+                      "--expiry", "2099-12-31", "--no-dictionary", "-o", str(out)],
+      reach="tmp legacy Prometheus rules file (--no-dictionary: the alert is migrated, "
+            "not named golden)",
+      # #4226: three files, all Python's (no conf.d). #3107: `artifact_is_dir`
+      # reaches the report, judged with the other two before the first write.
       shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
-      artifact="migration-report.txt", writer="python+da-guard"),
+      artifact="migration-report-t1.txt", writer="python"),
     R("ops/migrate_to_operator.py", "--output-dir", "dir", "operator",
       lambda c, out: ["--source-dir", str(_jsc.K8S_MONITORING), "--output-dir", str(out)],
       reach="in-repo k8s/03-monitoring",
@@ -2182,7 +2182,7 @@ SPAWNS: dict[Key, tuple[str, ...]] = {
     ("ops/generate_tenant_mapping_rules.py", "-o/--output"): ("da-guard",),
     ("ops/init_project.py", "-o/--output-dir"): ("da-guard",),
     ("ops/migrate_credentials.py", "--manifests-out"): ("da-guard",),
-    ("ops/migrate_rule.py", "-o/--output-dir"): ("da-guard", "da-read"),
+    ("ops/migrate_rule.py", "-o/--output-dir"): ("da-crdecode", "da-guard", "da-read"),
     ("ops/migrate_to_operator.py", "--output-dir"): ("da-crdecode", "da-guard", "da-read"),
     ("ops/onboard_platform.py", "-o/--output-dir"): ("da-crdecode", "da-read"),
     ("ops/operator_generate.py", "--output-dir"): ("da-read",),
@@ -4286,7 +4286,6 @@ UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
     ("../ops/plan_race_shards.py", "_write_github_output", "write_operator_output"): 1,
     ("../ops/plan_race_shards.py", "fetch_timings", "ensure_dir"): 1,
     ("../ops/plan_race_shards.py", "fetch_timings", "write_repo_artifact"): 1,
-    ("ops/migrate_rule.py", "main", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_draft", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_phase2_outputs", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_phase3_outputs", "ensure_dir_or_die"): 1,

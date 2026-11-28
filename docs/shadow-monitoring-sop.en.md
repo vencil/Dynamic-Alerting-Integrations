@@ -11,6 +11,7 @@ lang: en
 >
 > **Audience**: SRE / Platform Engineer / DevOps
 > **Prerequisites**: Completed `da-tools migrate` conversion with new and old Recording Rules running simultaneously in Prometheus
+> **Note**: the current `da-tools migrate` migrates rules verbatim (alerts carry `component: migrated`) and its migration mapping is now `.migration/mapping/<tenant>.yaml`; this SOP's `prefix-mapping.yaml` and `migration_status: shadow` belong to the earlier migrate, and `validate` support for the new mapping comes in the follow-up [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)
 > **Tools**: `da-tools validate` (`--watch` continuous mode / single-run mode), `da-tools diagnose` (health checks)
 
 ---
@@ -19,7 +20,7 @@ lang: en
 
 Shadow Monitoring is the **parallel validation phase** of the migration process: new rules (with `custom_` prefix) run alongside old rules, with `da-tools validate` continuously comparing numerical outputs to confirm behavioral equivalence before switching.
 
-Alert Rules produced by `migrate_rule.py` automatically carry the `migration_status: shadow` label, which Alertmanager uses to intercept notifications and prevent false positives.
+Alert Rules produced by the earlier `migrate_rule.py` automatically carry the `migration_status: shadow` label, which Alertmanager uses to intercept notifications and prevent false positives.
 
 This SOP covers: pre-flight checks → launch → daily inspections → troubleshooting → convergence validation → cutover.
 
@@ -52,7 +53,7 @@ da-tools shadow-verify preflight \
 
 ### 2.3 Alertmanager Interception Configuration
 
-Rules produced by `migrate_rule.py` automatically carry the `migration_status: shadow` label. Alertmanager must be configured to intercept these to prevent false positives:
+Rules produced by the earlier `migrate_rule.py` automatically carry the `migration_status: shadow` label. Alertmanager must be configured to intercept these to prevent false positives:
 
 ```yaml
 # alertmanager.yml — add this route

@@ -218,7 +218,8 @@ ALLOWED = {
     ('scripts/tools/ops/generate_alertmanager_routes.py', 'resolve_policy'):
         (1, 'the deployment policy (--policy); its reader is the generator itself (Python), tenant-api only hashes it'),
     ('scripts/tools/ops/migrate_rule.py', 'main'):
-        (1, "the rule file (input_file), read through _lib_input.document as text (#4040): no YAML is parsed in Python, da-read prometheus-rules reads it"),
+        (2, "the rule file (input_file), read through _lib_input.document as text (#4040): no YAML is parsed in Python, da-read prometheus-rules reads it; "
+            "and the self-lint's --policy (#4226), decoded as lint_custom_rules.POLICY_DOCUMENT, the custom-rule lint's own policy that only Python reads"),
     ('scripts/tools/ops/onboard_platform.py', 'main'):
         (2, "--alertmanager-config and --scrape-config, read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-crdecode and da-read read them"),
     ('scripts/tools/ops/operator_check.py', 'load_mount_list'):

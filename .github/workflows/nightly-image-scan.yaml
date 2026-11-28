@@ -242,7 +242,7 @@ jobs:
         # alert (NOT a silent clean) — add a docker/login-action step then.
         include:
           - name: vector # helm/vector/values.yaml
-            ref: "timberio/vector:0.61.0-distroless-libc@sha256:1a3451978644d5cd4b99a0b28c990791e2f7e1efbea4184122f1c59a56448143"
+            ref: "timberio/vector:0.62.0-distroless-libc@sha256:22100806cedabab3768edd6ac919be1a3a026b1020c5b280174a54573572db9d"
           - name: victoria-logs # helm/victorialogs/values.yaml
             ref: "victoriametrics/victoria-logs:v1.53.0@sha256:251121fa882af99b95ba0c230a4a2f412ea602d2698c64a96c58dc9842bb755d"
           - name: vmauth # helm/victorialogs/values.yaml auth.image (#1295)

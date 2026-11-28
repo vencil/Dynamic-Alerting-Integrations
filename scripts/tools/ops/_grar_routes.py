@@ -1116,6 +1116,12 @@ def _build_custom_alert_routes(tenant_names: list[str] | None = None,
 #: name-only, so it notifies no one; the alerts stay visible in Alertmanager.
 MIGRATED_SHADOW_RECEIVER = "migrated-alerts-shadow"
 
+#: ⛔ THE label every migrated rule carries (#4226: migrate-rule writes it,
+#: this route matches it): ``component="migrated"``. Static, so the alert's
+#: identity is the same before and after cutover.
+MIGRATED_LABEL = "component"
+MIGRATED_VALUE = "migrated"
+
 
 def _build_migrated_alert_routes(active_tenants: "Iterable[str]" = ()
                                  ) -> tuple[list[dict], list[dict]]:
@@ -1138,7 +1144,7 @@ def _build_migrated_alert_routes(active_tenants: "Iterable[str]" = ()
     without it a shadow alert would reach the NOC — and adds its name-only
     receiver. A merge given no set: every tenant in shadow.
     """
-    matchers = ['component="migrated"']
+    matchers = [f'{MIGRATED_LABEL}="{MIGRATED_VALUE}"']
     active = sorted(set(active_tenants))
     if active:
         matchers.append(
