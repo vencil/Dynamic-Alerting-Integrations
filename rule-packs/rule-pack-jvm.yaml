@@ -15,6 +15,9 @@
 #   Shenandoah 需 >= 1.7.0、ZGC 需 >= 1.8.0、generational ZGC（JDK 21
 #   -XX:+ZGenerational 的 "ZGC Major/Minor Cycles"）需 >= 1.12.4 或 >= 1.13.0
 #   （1.11.x 沒有）。依據：Micrometer JvmMemory.isConcurrentPhase 在各 tag 的內容。
+#   thread 數（jvm_threads）需 >= 1.1.0：1.0.x（Spring Boot 2.0）的 jvm.threads.live
+#   沒有 base unit，吐的是 jvm_threads_live，這個 pack 不讀，告警不會響。依據：
+#   Micrometer JvmThreadMetrics.java 在 v1.0.0／v1.0.11／v1.1.0 各 tag 的內容。
 #
 # >>> GENERATED:threshold-registry:pack-jvm — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter 閾值（全部內建在讀取端，conf.d 不必列；[chart-default]=平台出貨即啟用，省略就用平台值；未標者沒有平台值，「未啟用」一行寫原因，租戶、子目錄或 profile 給值才發射）:
@@ -160,6 +163,10 @@ groups:
       #     Micrometer exports jvm_threads_live_threads, client_java and the
       #     jmx_exporter javaagent export jvm_threads_current. With only the
       #     second the alert never fired for a Micrometer tenant.
+      #   - Micrometer >= 1.1.0. In 1.0.x (Spring Boot 2.0) the meter has no
+      #     base unit and is exported as jvm_threads_live, which is NOT read:
+      #     such a tenant still gets no thread alert. (Read from
+      #     JvmThreadMetrics.java at v1.0.0 / v1.0.11 / v1.1.0, not run.)
       #   - No per-JVM collapse before `or`: each name is ONE gauge per JVM.
       #     A JVM exposing both names on the same labels is kept once — `or`
       #     keeps the left (Micrometer) sample and the client_java one is not

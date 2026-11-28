@@ -499,7 +499,7 @@ jvm_threads_live_threads:
   maps_to: jvm_threads
   golden_rule: JVMThreadPoolExhaustion
   rule_pack: jvm
-  note: "Live thread count as Micrometer names it — the JVM with the most threads"
+  note: "Live thread count as Micrometer >= 1.1 names it (1.0.x exports jvm_threads_live, not read) — the JVM with the most threads"
 
 jvm_threads_current:
   maps_to: jvm_threads

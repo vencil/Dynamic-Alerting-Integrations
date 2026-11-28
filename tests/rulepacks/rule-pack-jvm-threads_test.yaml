@@ -2,9 +2,10 @@
 # Run: promtool test rules tests/rulepacks/rule-pack-jvm-threads_test.yaml
 #
 # tenant:jvm_threads:current is, per (tenant, da_cluster), the live thread
-# count of the JVM with the most threads. Micrometer names the gauge
+# count of the JVM with the most threads. Micrometer (>= 1.1) names the gauge
 # jvm_threads_live_threads, client_java / the jmx_exporter javaagent
-# jvm_threads_current. Thresholds here: warning 500, critical 800.
+# jvm_threads_current. Thresholds here: warning 500, critical 800, unless
+# stated.
 #   t-mm    Micrometer only, 900 ⇒ warning and critical, same metric_group on
 #           both (the pair Alertmanager deduplicates). Before #4328 the record
 #           had no sample for this tenant and neither alert could fire.
@@ -22,10 +23,24 @@
 #   t-two   two Micrometer JVMs, 600 and 300 ⇒ 600, the one with the most
 #           threads: warning fires, critical quiet. Summed they read 900 and
 #           critical fires too; averaged 450 and nothing fires.
-# The gauges are flat from t=0. The alert group may read the record one
-# evaluation late (#4033), so pending starts at 0–15s and the alerts fire at
-# 5m–5m15s (for: 5m) / 3m–3m15s (for: 3m). Asserted quiet at 4m30s / 2m30s
-# and firing at 10m: every assertion is 30s or more from either edge.
+#   t-dc    da_cluster=east at 600, da_cluster=west at 300 ⇒ two samples, one
+#           per cluster, and one warning carrying da_cluster=east. Grouped by
+#           tenant alone there is one sample and the alert has no da_cluster.
+#   t-maint 900 in maintenance ⇒ both alerts muted.
+#   t-thr   600, two user_threshold series per severity (told apart by `pod`):
+#           warning 500 / 700, critical 800 / 1000 ⇒ the threshold records
+#           read the larger, 700 and 1000, and the warning stays quiet. With
+#           `min` they read 500 / 800 and the warning fires.
+#   t-eq    500 against warning 500 ⇒ quiet: the comparison is `>`, not `>=`.
+#   t-eqc   800 against critical 800 ⇒ warning fires, critical quiet (same).
+#           Thread counts and thresholds are integers, so equal is exact.
+# `for:`. The gauges are flat from t=0. The alert group may read the record
+# one evaluation late (#4033), so pending starts at 0–15s and the alerts fire
+# at 5m–5m15s (for: 5m) / 3m–3m15s (for: 3m). Asserted quiet at 4m30s / 2m30s
+# and firing at 5m45s / 3m45s: a `for:` one minute shorter or longer is off
+# by at least 15s at one of the two, and every assertion is 15s or more (a
+# whole interval) from either edge. $value is flat, so the annotations do not
+# depend on which evaluation the alert read.
 rule_files:
   - ../../rule-packs/rule-pack-jvm.yaml
 
@@ -74,6 +89,49 @@ tests:
         values: '500x48'
       - series: 'user_threshold{tenant="t-two", component="jvm", metric="threads", severity="critical"}'
         values: '800x48'
+
+      - series: 'jvm_threads_live_threads{tenant="t-dc", da_cluster="east", instance="app-0:8080"}'
+        values: '600x48'
+      - series: 'jvm_threads_live_threads{tenant="t-dc", da_cluster="west", instance="app-0:8080"}'
+        values: '300x48'
+      - series: 'user_threshold{tenant="t-dc", component="jvm", metric="threads", severity="warning"}'
+        values: '500x48'
+      - series: 'user_threshold{tenant="t-dc", component="jvm", metric="threads", severity="critical"}'
+        values: '800x48'
+
+      - series: 'jvm_threads_live_threads{tenant="t-maint", instance="app-0:8080"}'
+        values: '900x48'
+      - series: 'user_threshold{tenant="t-maint", component="jvm", metric="threads", severity="warning"}'
+        values: '500x48'
+      - series: 'user_threshold{tenant="t-maint", component="jvm", metric="threads", severity="critical"}'
+        values: '800x48'
+      - series: 'user_state_filter{tenant="t-maint", filter="maintenance"}'
+        values: '1x48'
+
+      - series: 'jvm_threads_live_threads{tenant="t-thr", instance="app-0:8080"}'
+        values: '600x48'
+      - series: 'user_threshold{tenant="t-thr", component="jvm", metric="threads", severity="warning", pod="exporter-0"}'
+        values: '500x48'
+      - series: 'user_threshold{tenant="t-thr", component="jvm", metric="threads", severity="critical", pod="exporter-0"}'
+        values: '800x48'
+      - series: 'user_threshold{tenant="t-thr", component="jvm", metric="threads", severity="warning", pod="exporter-1"}'
+        values: '700x48'
+      - series: 'user_threshold{tenant="t-thr", component="jvm", metric="threads", severity="critical", pod="exporter-1"}'
+        values: '1000x48'
+
+      - series: 'jvm_threads_live_threads{tenant="t-eq", instance="app-0:8080"}'
+        values: '500x48'
+      - series: 'user_threshold{tenant="t-eq", component="jvm", metric="threads", severity="warning"}'
+        values: '500x48'
+      - series: 'user_threshold{tenant="t-eq", component="jvm", metric="threads", severity="critical"}'
+        values: '800x48'
+
+      - series: 'jvm_threads_live_threads{tenant="t-eqc", instance="app-0:8080"}'
+        values: '800x48'
+      - series: 'user_threshold{tenant="t-eqc", component="jvm", metric="threads", severity="warning"}'
+        values: '500x48'
+      - series: 'user_threshold{tenant="t-eqc", component="jvm", metric="threads", severity="critical"}'
+        values: '800x48'
     promql_expr_test:
       - expr: tenant:jvm_threads:current
         eval_time: 10m
@@ -88,6 +146,28 @@ tests:
             value: 600
           - labels: 'tenant:jvm_threads:current{tenant="t-two"}'
             value: 600
+          - labels: 'tenant:jvm_threads:current{tenant="t-dc", da_cluster="east"}'
+            value: 600
+          - labels: 'tenant:jvm_threads:current{tenant="t-dc", da_cluster="west"}'
+            value: 300
+          - labels: 'tenant:jvm_threads:current{tenant="t-maint"}'
+            value: 900
+          - labels: 'tenant:jvm_threads:current{tenant="t-thr"}'
+            value: 600
+          - labels: 'tenant:jvm_threads:current{tenant="t-eq"}'
+            value: 500
+          - labels: 'tenant:jvm_threads:current{tenant="t-eqc"}'
+            value: 800
+      - expr: tenant:alert_threshold:jvm_threads{tenant="t-thr"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:jvm_threads{tenant="t-thr"}'
+            value: 700
+      - expr: tenant:alert_threshold:jvm_threads_critical{tenant="t-thr"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'tenant:alert_threshold:jvm_threads_critical{tenant="t-thr"}'
+            value: 1000
     alert_rule_test:
       - eval_time: 4m30s
         alertname: JVMThreadPoolExhaustion
@@ -95,6 +175,100 @@ tests:
       - eval_time: 2m30s
         alertname: JVMThreadPoolExhaustionCritical
         exp_alerts: []
+      - eval_time: 5m45s
+        alertname: JVMThreadPoolExhaustion
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_threads
+              tenant: t-mm
+            exp_annotations:
+              summary: "JVMThreadPoolExhaustion on t-mm"
+              summary_zh: "t-mm 上 JVM thread pool 耗盡"
+              platform_summary: "[] t-mm: thread pool saturation — request backlog risk"
+              platform_summary_zh: "[] t-mm：thread pool 飽和 — request 積壓風險"
+              description: "Active threads 900 exceeds threshold"
+              description_zh: "活動 thread 數 900 超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_threads
+              tenant: t-cj
+            exp_annotations:
+              summary: "JVMThreadPoolExhaustion on t-cj"
+              summary_zh: "t-cj 上 JVM thread pool 耗盡"
+              platform_summary: "[] t-cj: thread pool saturation — request backlog risk"
+              platform_summary_zh: "[] t-cj：thread pool 飽和 — request 積壓風險"
+              description: "Active threads 600 exceeds threshold"
+              description_zh: "活動 thread 數 600 超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_threads
+              tenant: t-tags
+            exp_annotations:
+              summary: "JVMThreadPoolExhaustion on t-tags"
+              summary_zh: "t-tags 上 JVM thread pool 耗盡"
+              platform_summary: "[] t-tags: thread pool saturation — request backlog risk"
+              platform_summary_zh: "[] t-tags：thread pool 飽和 — request 積壓風險"
+              description: "Active threads 600 exceeds threshold"
+              description_zh: "活動 thread 數 600 超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_threads
+              tenant: t-two
+            exp_annotations:
+              summary: "JVMThreadPoolExhaustion on t-two"
+              summary_zh: "t-two 上 JVM thread pool 耗盡"
+              platform_summary: "[] t-two: thread pool saturation — request backlog risk"
+              platform_summary_zh: "[] t-two：thread pool 飽和 — request 積壓風險"
+              description: "Active threads 600 exceeds threshold"
+              description_zh: "活動 thread 數 600 超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_threads
+              tenant: t-dc
+              da_cluster: east
+            exp_annotations:
+              summary: "JVMThreadPoolExhaustion on t-dc"
+              summary_zh: "t-dc 上 JVM thread pool 耗盡"
+              platform_summary: "[] t-dc: thread pool saturation — request backlog risk"
+              platform_summary_zh: "[] t-dc：thread pool 飽和 — request 積壓風險"
+              description: "Active threads 600 exceeds threshold"
+              description_zh: "活動 thread 數 600 超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_threads
+              tenant: t-eqc
+            exp_annotations:
+              summary: "JVMThreadPoolExhaustion on t-eqc"
+              summary_zh: "t-eqc 上 JVM thread pool 耗盡"
+              platform_summary: "[] t-eqc: thread pool saturation — request backlog risk"
+              platform_summary_zh: "[] t-eqc：thread pool 飽和 — request 積壓風險"
+              description: "Active threads 800 exceeds threshold"
+              description_zh: "活動 thread 數 800 超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
       - eval_time: 10m
         alertname: JVMThreadPoolExhaustion
         exp_alerts:
@@ -155,6 +329,55 @@ tests:
               platform_summary_zh: "[] t-two：thread pool 飽和 — request 積壓風險"
               description: "Active threads 600 exceeds threshold"
               description_zh: "活動 thread 數 600 超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_threads
+              tenant: t-dc
+              da_cluster: east
+            exp_annotations:
+              summary: "JVMThreadPoolExhaustion on t-dc"
+              summary_zh: "t-dc 上 JVM thread pool 耗盡"
+              platform_summary: "[] t-dc: thread pool saturation — request backlog risk"
+              platform_summary_zh: "[] t-dc：thread pool 飽和 — request 積壓風險"
+              description: "Active threads 600 exceeds threshold"
+              description_zh: "活動 thread 數 600 超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: jvm_threads
+              tenant: t-eqc
+            exp_annotations:
+              summary: "JVMThreadPoolExhaustion on t-eqc"
+              summary_zh: "t-eqc 上 JVM thread pool 耗盡"
+              platform_summary: "[] t-eqc: thread pool saturation — request backlog risk"
+              platform_summary_zh: "[] t-eqc：thread pool 飽和 — request 積壓風險"
+              description: "Active threads 800 exceeds threshold"
+              description_zh: "活動 thread 數 800 超出閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 3m45s
+        alertname: JVMThreadPoolExhaustionCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: mute
+              metric_group: jvm_threads
+              tenant: t-mm
+            exp_annotations:
+              summary: "JVMThreadPoolExhaustionCritical on t-mm"
+              summary_zh: "t-mm 上 JVM thread pool 嚴重耗盡"
+              platform_summary: "[] t-mm: critical thread exhaustion — service degradation likely"
+              platform_summary_zh: "[] t-mm：嚴重 thread 耗盡 — 服務降級可能性高"
+              description: "Active threads 900 exceeds critical threshold"
+              description_zh: "活動 thread 數 900 超出嚴重閾值"
               runbook_url: ""
               owner: ""
               tier: ""
