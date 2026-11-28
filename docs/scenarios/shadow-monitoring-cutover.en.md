@@ -195,6 +195,8 @@ python3 scripts/tools/ops/validate_config.py \
 
 ### Phase 2: Transformation (Day 0)
 
+> Running `migrate_rule.py` directly needs three binaries, da-read, da-guard and da-crdecode: build them and set the variables as in [the migration guide §4](../migration-guide.en.md#4-migrate-existing-rules-da-tools-migrate).
+
 ```bash
 # 2.1 Execute rule migration (input is one tenant's legacy Prometheus rule file, one file per run)
 python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \

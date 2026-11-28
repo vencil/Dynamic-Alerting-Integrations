@@ -189,6 +189,8 @@ python3 scripts/tools/ops/validate_config.py \
 
 ### 階段 2：轉換（Day 0）
 
+> 直接跑 `migrate_rule.py` 需要 da-read、da-guard、da-crdecode 三支執行檔：照[遷移指南 §4](../migration-guide.md#4-遷移既有規則da-tools-migrate) 建好並設環境變數。
+
 ```bash
 # 2.1 執行規則遷移（輸入是一個租戶的舊 Prometheus 規則檔，一次一個檔）
 python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \

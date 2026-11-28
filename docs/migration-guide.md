@@ -118,16 +118,24 @@ da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /d
 
 已有傳統 Prometheus alert rules 的團隊，用 `migrate` 把一個租戶的規則**原樣**遷移成 migrated 規則（PromQL 由 Prometheus 自己的 parser 讀成語法樹；它拒收的規則檔以 rc 2 結束，沒有降級路徑）：
 
+⚠️ v2.9.0 映像仍是舊的轉換引擎（`custom_` key 與三件套），下一版 da-tools 映像發布前，新引擎要從 repo checkout 執行。它需要三支 Go 執行檔：`da-read`（`promql-pin` 釘 selector）、`da-guard`（寫入前判斷輸出目錄）與 `da-crdecode`（lint 自己的輸出）；`make da-read-build da-guard-build da-crdecode-build` 建到 `.build/`，再用環境變數指給它（以下範例都在 repo 根目錄、以這個方式執行） <!-- image-caveat: v2.9.0 -->
+
 ```bash
-da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run         # 預覽報告
-da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o /data/output  # 正式遷移
+make da-read-build da-guard-build da-crdecode-build
+export DA_READ_BINARY="$PWD/.build/da-read" DA_GUARD_BINARY="$PWD/.build/da-guard" \
+       DA_CRDECODE_BINARY="$PWD/.build/da-crdecode"
+```
+
+```bash
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run         # 預覽報告
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o output  # 正式遷移
 ```
 
 - **原樣保留、注入租戶隔離**：expr 語意、`for`、labels、annotations、alertname 不變；每個 selector 以語法樹注入租戶 matcher（`tenant="db-a"`；kube-state-metrics 有 namespace 的物件與 cAdvisor／kubelet 的基礎設施指標是 `namespace="db-a", tenant=""`）。叢集層級的物件（`kube_node_*`）、每個抓取目標都有的序列（`up`）、Prometheus／Alertmanager 自己的序列沒有一種注入只選到一個租戶：那是平台層級的規則，逐條列出、結束碼 2、一個檔都不寫
 - **標記與治理**：每條告警加 `tenant`、`component: migrated` label 與 `owner`、`expiry` annotation，另附到期前 14 天起響的 `MigratedRulesExpiring`；寫之前對自己的輸出跑 custom rule lint，有 ERROR 就不寫
 - **黃金標準**：只讀一個指標、而 `metric-dictionary.yaml` 有黃金標準規則的告警不遷移，報告點名改用平台 Rule Pack
 - **多叢集**：原式子點名身分 label 卻沒有 `da_cluster` 的 `by(...)`／`on(...)` 只在報告標出，不改寫
-- **輸出**：`.migration/migrated/<tenant>/rules.yml`（規則檔）、`.migration/mapping/<tenant>.yaml`（每條規則的 selector 注入前後對照）、`migration-report-<tenant>.txt`。下一版 da-tools 映像發布前，新引擎要從 repo 執行（`python3 scripts/tools/ops/migrate_rule.py …`，旗標相同）；v2.9.0 映像仍是舊的轉換引擎（`custom_` key 與三件套） <!-- image-caveat: v2.9.0 -->
+- **輸出**：`.migration/migrated/<tenant>/rules.yml`（規則檔）、`.migration/mapping/<tenant>.yaml`（每條規則的 selector 注入前後對照）、`migration-report-<tenant>.txt`
 
 ⛔ 規則檔由**抓取原始指標的那台 Prometheus** 載入（單一 Prometheus，或 federation 架構下的 edge），不掛進平台 Rule Pack 的 projected volume。Alertmanager 把 `component="migrated"` 的告警送到只有名字的 shadow receiver，直到租戶設 `_routing_migrated: active`（[`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)）；影子比對之後，再由人決定提升成平台規則（§8 的三件套）或 recipe。
 
@@ -347,11 +355,12 @@ kubectl logs -n monitoring -l app=threshold-exporter --tail=20
 擁有 1000+ 條規則的大型租戶採三階段策略：**Phase A 預覽** (~1 天) → **Phase B Shadow Monitoring** (~1-2 週) → **Phase C 切換與收斂** (~1 天)。
 
 ```bash
+# 新引擎從 repo 根目錄執行，先照 §4 建 da-read／da-guard／da-crdecode 並設好環境變數
 # Phase A: 預覽（被拒的規則逐條列出、改用黃金標準的告警點名）
-da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run
 
 # Phase B: 產出 migrated 規則交給 edge／單一 Prometheus 載入，告警先走 shadow receiver
-da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o /data/migration_output/
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o migration_output/
 # 影子比對讀 .migration/mapping/db-a.yaml；validate 對它的支援在後續的 #4227
 
 # Phase C: 收斂後切換

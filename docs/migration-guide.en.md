@@ -118,16 +118,24 @@ The three ConfigMap injection paths (Helm / kubectl / GitOps): [threshold-export
 
 Teams with legacy Prometheus alert rules use `migrate` to move one tenant's rules **verbatim** into migrated rules (PromQL is read into Prometheus' own parse tree; a rule file its parser refuses ends the run with rc 2 — there is no fallback):
 
+⚠️ The v2.9.0 image still ships the old conversion engine (`custom_` keys and the three-piece set); until the next da-tools image is released, run the new engine from a repo checkout. It needs three Go binaries: `da-read` (`promql-pin` pins the selectors), `da-guard` (judges the output directory before writing) and `da-crdecode` (lints its own output); `make da-read-build da-guard-build da-crdecode-build` builds them into `.build/`, and environment variables point the tool at them (every example below runs this way, from the repo root) <!-- image-caveat: v2.9.0 -->
+
 ```bash
-da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run         # Preview the report
-da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o /data/output  # Migrate
+make da-read-build da-guard-build da-crdecode-build
+export DA_READ_BINARY="$PWD/.build/da-read" DA_GUARD_BINARY="$PWD/.build/da-guard" \
+       DA_CRDECODE_BINARY="$PWD/.build/da-crdecode"
+```
+
+```bash
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run         # Preview the report
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o output  # Migrate
 ```
 
 - **Kept as written, tenant isolation injected**: the expr semantics, `for`, labels, annotations and alertname do not change; a tenant matcher is injected into every selector on the parse tree (`tenant="db-a"`; for kube-state-metrics series of a namespaced object and cAdvisor's / the kubelet's infrastructure series, `namespace="db-a", tenant=""`). Cluster-scoped objects (`kube_node_*`), series every scrape target yields (`up`) and Prometheus' / Alertmanager's own series have no injection that selects one tenant: those are platform-level rules, listed one by one, exit 2, nothing written
 - **Marking and governance**: every alert gets the `tenant` and `component: migrated` labels and the `owner` and `expiry` annotations, plus `MigratedRulesExpiring`, which fires from 14 days before the expiry; before writing, the tool runs the custom rule lint on its own output and writes nothing on an ERROR
 - **Golden standard**: an alert that reads a single metric for which `metric-dictionary.yaml` has a golden rule is not migrated; the report points it at the platform Rule Pack
 - **Multi-cluster**: a `by(...)` / `on(...)` in the original expression that names an identity label without `da_cluster` is only flagged in the report, never rewritten
-- **Output**: `.migration/migrated/<tenant>/rules.yml` (the rule file), `.migration/mapping/<tenant>.yaml` (each rule's selectors before and after injection), `migration-report-<tenant>.txt`. Until the next da-tools image is released, run the new engine from the repo (`python3 scripts/tools/ops/migrate_rule.py …`, same flags); the v2.9.0 image still ships the old conversion engine (`custom_` keys and the three-piece set) <!-- image-caveat: v2.9.0 -->
+- **Output**: `.migration/migrated/<tenant>/rules.yml` (the rule file), `.migration/mapping/<tenant>.yaml` (each rule's selectors before and after injection), `migration-report-<tenant>.txt`
 
 ⛔ The rule file is loaded by **the Prometheus that scrapes the raw metrics** (a single Prometheus, or the edge in a federation setup), not mounted in the platform Rule Packs' projected volume. Alertmanager sends `component="migrated"` alerts to a name-only shadow receiver until the tenant sets `_routing_migrated: active` ([`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)); after the shadow comparison a human decides whether to promote them to platform rules (the three-piece set of §8) or recipes.
 
@@ -347,11 +355,12 @@ kubectl logs -n monitoring -l app=threshold-exporter --tail=20
 Large tenants with 1000+ rules adopt a three-phase strategy: **Phase A Preview** (~1 day) → **Phase B Shadow Monitoring** (~1-2 weeks) → **Phase C Switchover & Convergence** (~1 day).
 
 ```bash
+# Run the new engine from the repo root; build da-read / da-guard / da-crdecode and set the variables as in §4 first
 # Phase A: preview (refused rules listed one by one, golden-standard alerts named)
-da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run
 
 # Phase B: write the migrated rules for the edge / single Prometheus to load; alerts go to the shadow receiver first
-da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o /data/migration_output/
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o migration_output/
 # The shadow comparison reads .migration/mapping/db-a.yaml; validate support for it comes in the follow-up #4227
 
 # Phase C: cutover after convergence
