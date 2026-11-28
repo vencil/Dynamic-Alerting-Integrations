@@ -639,9 +639,21 @@ LIVE.update({
         "box": {"from.yaml": _file(_PACK_ONE)},
         "live": _file(_PACK_ONE), "minimal": _file("groups: []\n"),
     },
+    # #4226: one alert migrated, against none.
     "migrate input_file": {
-        "argv": ["{F}", "-o", "{BOX}/out", "--dry-run"],
+        "argv": ["{F}", "-o", "{BOX}/out", "--dry-run", "--tenant", "t1", "--owner", "team",
+                 "--expiry", "2099-12-31", "--no-dictionary"],
         "live": _file(_PACK_ONE), "minimal": _file("groups: []\n"),
+    },
+    # The self-lint's policy: it admits the migrated rule, or denies its rate().
+    "migrate --policy": {
+        "argv": ["{BOX}/rules.yml", "-o", "{BOX}/out", "--dry-run", "--tenant", "t1",
+                 "--owner", "team", "--expiry", "2099-12-31", "--no-dictionary",
+                 "--policy", "{F}"],
+        "box": {"rules.yml": _file("groups:\n  - name: g\n    rules:\n      - alert: HighErr\n"
+                                   "        expr: rate(errors_total[5m]) > 1\n")},
+        "live": _file("isolated_label: tenant\n"),
+        "minimal": _file("isolated_label: tenant\ndenied_functions: [rate]\n"),
     },
     # One Secret mounted, against none: the list's row compares them.
     "operator-check --secret-mounts": {

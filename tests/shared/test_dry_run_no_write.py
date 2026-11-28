@@ -583,7 +583,8 @@ RECIPES: list[Recipe] = [
                     "--dry-run", "-o", _out(t, "project")]),
 
     R("migrate_rule",
-      lambda t, s: [_legacy_rules(t), "--dry-run",
+      lambda t, s: [_legacy_rules(t), "--tenant", "t1", "--owner", "team",
+                    "--expiry", "2099-12-31", "--no-dictionary", "--dry-run",
                     "-o", _out(t, "migration")]),
 
     # ── argv shapes reused from the --json gate's dry-run recipes ──────────

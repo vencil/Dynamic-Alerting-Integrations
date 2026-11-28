@@ -33,7 +33,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `patch-config` | ConfigMap 局部更新工具，支援 preview（--diff）和直接應用 | --diff, --json, --exporter-namespace <NS> | `da-tools patch-config --help` |
 | `generator-service` | 產生器容器的服務：經 Unix socket 判定寫入後的 conf.d（ADR-036 §3） | --socket <PATH>, --repo <DIR>, --config-subdir <PATH>, --work-dir <DIR>, --policy <FILE> | `da-tools generator-service --help` |
 | `scaffold` | 產生新 tenant 配置（互動式或非互動式） | --non-interactive, --tenant <NAME>, --db <LIST> | `da-tools scaffold --help` |
-| `migrate` | 將傳統 Prometheus 規則轉換為動態格式（AST 引擎） | -o <DIR>, --dry-run, --triage | `da-tools migrate --help` |
+| `migrate` | 把一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則（注入租戶隔離） | --tenant <ID>, --owner <OWNER>, --expiry <YYYY-MM-DD>, -o <DIR>, --dry-run | `da-tools migrate --help` |
 | `validate-config` | 一站式配置驗證：YAML 格式、schema、routing、policy、版本一致性 | --config-dir <PATH>, --policy <FILE>, --json | `da-tools validate-config --help` |
 | `offboard` | 下架 tenant 配置與相關資源 | --config-dir <PATH>, --state <PATH>, --execute | `da-tools offboard --help` |
 | `deprecate` | 下架指標：從 `defaults:`／`optional_overrides:`／租戶檔刪除其 key | --config-dir <PATH>, --execute, --subtree <DIR> | `da-tools deprecate --help` |

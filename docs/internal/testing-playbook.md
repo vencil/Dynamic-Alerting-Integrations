@@ -242,7 +242,7 @@ echo "$1" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.s
 - **grep PromQL 特殊字元**：用 `grep -F "max by(tenant)"` 做 literal match
 - **修改輸出格式時**：搜尋所有 `assert_.*contains` 確認同步更新
 - **`set -euo pipefail`**：負載測試輔助腳本不宜用（`kubectl logs` 對 ContainerCreating Pod 返回非零）
-- **migrate_rule.py 分類**：Perfect / Complex / Unparseable
+- **onboard_platform.py 分類**：Perfect / Complex / Unparseable（migrate_rule.py 不分類：規則原樣遷移，被拒的逐條列出）
 
 ### CI 同步守衛
 

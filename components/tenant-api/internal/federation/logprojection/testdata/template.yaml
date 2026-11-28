@@ -1,0 +1,37 @@
+# A template of the shape helm/vector renders (#4212): the placeholders are
+# what Render fills; everything else is the chart's and passes through as is.
+transforms:
+  tenant_project:
+    type: remap
+    inputs:
+      - tenant_eligible
+    drop_on_abort: true
+    drop_on_error: true
+    reroute_dropped: false
+    source: |
+      tid = to_string(.tenant_id) ?? ""
+      if tid == "" { abort }
+      account_map = __DA_ACCOUNT_MAP__
+      aid = get(account_map, [tid]) ?? null
+      if aid == null { abort }
+      visible_map = __DA_VISIBLE_MAP__
+      kept = {}
+      kept.account_id = aid
+      . = kept
+  tenant_route:
+    type: route
+    inputs:
+      - tenant_project
+    route:
+      t___DA_ACCOUNT_ID__: '.account_id == __DA_ACCOUNT_ID__'
+sinks:
+  vl_tenant___DA_ACCOUNT_ID__:
+    type: elasticsearch
+    inputs:
+      - tenant_route.t___DA_ACCOUNT_ID__
+    endpoints:
+      - http://victorialogs.monitoring.svc:9428/insert/elasticsearch/
+    request:
+      headers:
+        AccountID: "__DA_ACCOUNT_ID__"
+        ProjectID: "0"

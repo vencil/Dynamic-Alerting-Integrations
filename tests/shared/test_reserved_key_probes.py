@@ -6,7 +6,8 @@ decision 2). This file measures it (decision 3): for every key and layer it
 writes a minimal conf.d tree with the key in that layer and runs the readers.
 Both ways, for every reader whose output can be compared (the exporter via
 `da-guard served-values`, the route generator, the custom-alert compiler,
-Policy-as-Code):
+Policy-as-Code, the log projection generator via `tenant-api log-projection
+render`):
 
 - a reader the registry says reads the key there must change its output —
   catches "registered, but the code no longer reads it";
@@ -44,6 +45,9 @@ _REGISTRY = os.path.join(_REPO, "components", "threshold-exporter", "app", "pkg"
 _GEN = os.path.join(_REPO, "scripts", "tools", "ops", "generate_alertmanager_routes.py")
 _CAC = os.path.join(_REPO, "scripts", "tools", "dx", "compile_custom_alerts.py")
 _POL = os.path.join(_REPO, "scripts", "tools", "ops", "policy_engine.py")
+# #4212: the template the log projection generator's own tests use.
+_LP_TEMPLATE = os.path.join(_REPO, "components", "tenant-api", "internal", "federation",
+                            "logprojection", "testdata", "template.yaml")
 
 with open(_REGISTRY, encoding="utf-8") as _f:
     _REG = json.load(_f)
@@ -80,6 +84,8 @@ _SENTINELS = {
                           "{receiver: {type: webhook, url: 'https://w.example/rd'}}"),
     "_routing_enforced": ("_routing_enforced",
                           "{enabled: true, receiver: {type: webhook, url: 'https://w.example/noc'}}"),
+    # #4212: t2 holds an AccountID in the probe's ledger, so `enable` projects it.
+    "_log_projection": ("_log_projection", "enable"),
     "_policies": ("_policies",
                   "[{name: probe, target: owner_tag, operator: required, severity: error}]"),
     # `_state_<filter>` for the filter the probe tree declares (on by default).
@@ -136,8 +142,9 @@ def _run(cmd, env):
 
 
 class _Readers:
-    def __init__(self, guard, tmp):
+    def __init__(self, guard, tenant_api, tmp):
         self.guard = guard
+        self.tenant_api = tenant_api
         self.tmp = tmp
         self.env = dict(os.environ, DA_GUARD_BINARY=guard)
 
@@ -180,6 +187,17 @@ class _Readers:
         return self._file_out([sys.executable, _CAC, "--config-dir", d, "--out", out,
                                "--allow-empty"], d, out, ok=(0,))
 
+    def log_projection(self, d):
+        """(rc, the config written): t2 holds an AccountID in the ledger."""
+        state = d + ".state"
+        os.makedirs(state, exist_ok=True)
+        _write(os.path.join(state, "_account_registry.yaml"),
+               "schema_version: v1\nnext_account_id: 1001\nallocations:\n  t2: 1000\n")
+        p = _run([self.tenant_api, "log-projection", "render", "--config-dir", d,
+                  "--state-from", state, "--template", _LP_TEMPLATE], self.env)
+        assert p.returncode == 0, f"log-projection render rc {p.returncode} on {d}:\n{p.stderr[-800:]}"
+        return (p.returncode, p.stdout)
+
     def policy_engine(self, d):
         p = _run([sys.executable, _POL, "--config-dir", d, "--json"], self.env)
         assert p.returncode in (0, 1), f"policy_engine rc {p.returncode}:\n{p.stderr[-800:]}"
@@ -187,8 +205,8 @@ class _Readers:
 
 
 @pytest.fixture(scope="module")
-def readers(da_guard_binary, tmp_path_factory):
-    return _Readers(da_guard_binary, str(tmp_path_factory.mktemp("probes")))
+def readers(da_guard_binary, tenant_api_binary, tmp_path_factory):
+    return _Readers(da_guard_binary, tenant_api_binary, str(tmp_path_factory.mktemp("probes")))
 
 
 def _registered():
@@ -238,7 +256,8 @@ def test_a_declared_reader_changes_its_output(readers, name, layer):
             f"did not change when the probe wrote it there: fix the registry or the reader")
 
 
-_MEASURED = ("exporter", "generator", "custom_alert_compiler", "policy_engine")
+# Every reader the registry lists, but the one it says is not measured.
+_MEASURED = tuple(r for r in _REG["readers"] if r != "annotation")
 
 
 @pytest.mark.parametrize("name,layer", _CASES, ids=[f"{n}@{l}" for n, l in _CASES])

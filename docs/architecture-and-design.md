@@ -158,13 +158,13 @@ graph TB
 
 ### 1.3 客戶導入與 GitOps 治理管線 (Day-0 / Day-1 / Day-2)
 
-客戶導入管線把「Day-0 把既有 PromRule corpus 轉進來」「Day-1 用 GitOps PR 治理」「Day-2 運行期熱重載」三階段串成一條可離線、可在 air-gapped 跑、可獨立驗 supply-chain 的端到端流程。產出 `_custom_alerts` recipe 的批次導入見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)，尚未出貨：
+客戶導入管線把「Day-0 把既有 PromRule corpus 轉進來」「Day-1 用 GitOps PR 治理」「Day-2 運行期熱重載」三階段串成一條可離線、可在 air-gapped 跑、可獨立驗 supply-chain 的端到端流程。逐租戶的 `migrate` 把規則原樣遷移成 migrated 規則檔、交給抓取原始指標的那台 Prometheus（或 federation 的 edge）載入，conf.d 這一側只管切換（`_routing_migrated`，[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)）：
 
 ```mermaid
 graph LR
     subgraph Day0["Day-0: Customer Migration"]
         PR["PromRule corpus<br/>(CRD / YAML)"] -->|da-parser| JSON["Canonical JSON<br/>+ prom_portable flag"]
-        PR -->|逐租戶 migrate| MIG["conf.d 租戶檔<br/>(.migration/conf.d/&lt;id&gt;.yaml)"]
+        PR -->|逐租戶 migrate| MIG["migrated 規則檔<br/>(.migration/migrated/&lt;id&gt;/rules.yml)"]
     end
 
     subgraph Day1["Day-1: GitOps 治理"]
