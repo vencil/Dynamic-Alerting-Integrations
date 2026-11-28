@@ -1757,7 +1757,10 @@ repos:
         # + commit.
         # (check_threshold_reachability.py is in the filter because its
         # KNOWN_UNWIRED list feeds the membership universe.)
-        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|components/threshold-exporter/app/pkg/config/(retired_threshold_keys|builtin_defaults|namespace_keyed_prefixes)_gen\.go|changelog\.d/.*\.md|CHANGELOG\.md)$
+        # Every file --regen writes (_registry_lib.GENERATED_FILES and the
+        # surface_specs paths) must match `files:` below — pinned by
+        # tests/lint/test_check_threshold_registry.py (#4346).
+        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|components/threshold-exporter/app/pkg/config/(retired_threshold_keys|builtin_defaults|unset_threshold_keys|expected_exporter_kinds|namespace_keyed_prefixes)_gen\.go|tests/rulepacks/platform-builtin-defaults-digest_test\.yaml|changelog\.d/.*\.md|CHANGELOG\.md)$
 
       - id: retired-keys-not-taught
         name: "a retired threshold key (registry retired_keys) is not named in docs, samples, scripts or the portal (#1200)"
