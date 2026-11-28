@@ -621,17 +621,13 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 //   - deleting it leaves what the exporter serves for the tenant the same
 //     from now on (config.ScopedTenants.ServedUnchangedWithout — the
 //     exporter's own build and resolve), and
-//   - the advice would not be wrong because another finding owns the line,
-//     each read off that finding's own verdict: a refused value
-//     (value_not_served's selection), a key nothing of is served (the
-//     exporter's NotServed record; the shared key verdict reads it as
-//     unread) — both config.NotServedOwnedElsewhere — or a `disable` that
-//     switches nothing off (a line the shared key verdict reports — not
-//     `read` — with `disable: noop`, asked whenever a line is left unchanged: which `disable` switches
-//     nothing off at some minute is the key verdict's to say, not a guess at
-//     the value here).
-//     A retired key the exporter still serves is not one: its retirement and
-//     its repeating the inherited value are two causes, two findings.
+//   - no other finding reports the line: value_not_served (a refused value,
+//     config.NotServedOwnedElsewhere — which also hands a key nothing of
+//     which is served to the key verdict that reports it), or any finding
+//     the shared key verdict emits naming the tenant and key (a key nothing
+//     reads, a retired key, a `disable` that switches nothing off, a value
+//     the tenant's own base `disable` switches off). The key verdict is asked
+//     whenever a line is left unchanged.
 //
 // A counterfactual or key verdict that cannot be had is named on the process
 // log and judges no threshold key redundant: redundant_override is advice,
@@ -688,23 +684,24 @@ func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[s
 		log.Printf("WARN: redundant_override not judged for threshold keys (the key verdict: %v)", err)
 		return nil
 	}
-	// The key verdict spells a key as the tenant's file does; the candidates
-	// are the decode's (canonical dimensional) spelling: compare canonically.
-	for tenant, vs := range kv.tree.Keys {
-		noop := map[string]bool{}
-		for _, v := range vs {
-			// Owned only when the key verdict reports the line (not `read`)
-			// and what it reports is a `disable` that switches nothing off:
-			// a `noop` disable it reads (a window inside a base the tenant
-			// switches off) has no finding, so the redundancy stands; an
-			// unread retired key with a value is a second cause, not this.
-			if v.Layer != nil && *v.Layer == "tenant" && v.Verdict != "read" && v.Disable != nil && *v.Disable == "noop" {
-				noop[config.CanonicalDimensionalKey(v.Key)] = true
+	// The key verdict's own findings name the lines it reports — whatever
+	// their kind (unread, retired, disable_noop, disable_cascade, …): such a
+	// line is that finding's, one cause one finding, and its redundancy
+	// advice would at best repeat it. A finding spells the key as the file
+	// does; the candidates are the decode's (canonical dimensional) spelling.
+	owned := map[string]map[string]bool{}
+	for _, fd := range kv.tree.Findings {
+		for _, tenant := range fd.Tenants {
+			if owned[tenant] == nil {
+				owned[tenant] = map[string]bool{}
 			}
+			owned[tenant][config.CanonicalDimensionalKey(fd.Key)] = true
 		}
-		for key := range out[tenant] {
-			if noop[config.CanonicalDimensionalKey(key)] {
-				out[tenant][key] = false
+	}
+	for tenant, keys := range out {
+		for key := range keys {
+			if owned[tenant][config.CanonicalDimensionalKey(key)] {
+				keys[key] = false
 			}
 		}
 	}

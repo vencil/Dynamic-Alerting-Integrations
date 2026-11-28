@@ -24,8 +24,8 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-const overlayGuardPlatform = "defaults:\n  mysql_connections: 80\n" +
-	"tenants:\n  tx:\n    mysql_connections: \"60\"\n" +
+const overlayGuardPlatform = "defaults:\n  mysql_connection_usage_percent: 80\n" +
+	"tenants:\n  tx:\n    mysql_connection_usage_percent: \"60\"\n" +
 	"    _routing:\n      group_wait: 10s\n      repeat_interval: 2h\n"
 
 func redundantFields(t *testing.T, dir string) map[string]bool {
@@ -62,7 +62,7 @@ func effectiveWith(t *testing.T, dir, tenantFile string) map[string]any {
 
 func TestGuard_RedundantOverrideFollowsThePlatformLayersReplaceSemantics(t *testing.T) {
 	t.Parallel()
-	const tenant = "tenants:\n  tx:\n    mysql_connections: \"60\"\n    _routing:\n      group_wait: 10s\n"
+	const tenant = "tenants:\n  tx:\n    mysql_connection_usage_percent: \"60\"\n    _routing:\n      group_wait: 10s\n"
 	dir := t.TempDir()
 	testutil.WriteTree(t, dir, map[string]string{
 		"_defaults.yaml": overlayGuardPlatform,
@@ -74,16 +74,16 @@ func TestGuard_RedundantOverrideFollowsThePlatformLayersReplaceSemantics(t *test
 	// override actually does to the effective config.
 	base := effectiveWith(t, dir, tenant)
 	noScalar := effectiveWith(t, dir, "tenants:\n  tx:\n    _routing:\n      group_wait: 10s\n")
-	noLeaf := effectiveWith(t, dir, "tenants:\n  tx:\n    mysql_connections: \"60\"\n    _routing: {}\n")
+	noLeaf := effectiveWith(t, dir, "tenants:\n  tx:\n    mysql_connection_usage_percent: \"60\"\n    _routing: {}\n")
 	if !reflect.DeepEqual(base, noScalar) {
-		t.Fatalf("premise: deleting mysql_connections changed the config (%v → %v)", base, noScalar)
+		t.Fatalf("premise: deleting mysql_connection_usage_percent changed the config (%v → %v)", base, noScalar)
 	}
 	if reflect.DeepEqual(base, noLeaf) {
 		t.Fatalf("premise: deleting _routing.group_wait left the config unchanged (%v)", base)
 	}
 
-	if !got["mysql_connections"] {
-		t.Errorf("mysql_connections equals the platform value it falls back to — want redundant; findings %v", got)
+	if !got["mysql_connection_usage_percent"] {
+		t.Errorf("mysql_connection_usage_percent equals the platform value it falls back to — want redundant; findings %v", got)
 	}
 	if got["_routing.group_wait"] {
 		t.Errorf("_routing.group_wait flagged redundant, but deleting it changes _routing %v → %v", base["_routing"], noLeaf["_routing"])
@@ -134,8 +134,8 @@ func TestGuard_RedundantOverrideUnderAScheduledPlatformValue(t *testing.T) {
 	const without = "tenants:\n  tx:\n    pg_connections: 100\n"
 	cases := []struct {
 		name      string
-		platform  string // tx's mysql_connections under `tenants:` in _defaults.yaml
-		tenant    string // tx's mysql_connections in tx.yaml
+		platform  string // tx's mysql_connection_usage_percent under `tenants:` in _defaults.yaml
+		tenant    string // tx's mysql_connection_usage_percent in tx.yaml
 		redundant bool
 	}{
 		// The measured false advice (FALSE-POSITIVE before the fix).
@@ -154,22 +154,22 @@ func TestGuard_RedundantOverrideUnderAScheduledPlatformValue(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			tenant := "tenants:\n  tx:\n    pg_connections: 100\n    mysql_connections: " + tc.tenant + "\n"
+			tenant := "tenants:\n  tx:\n    pg_connections: 100\n    mysql_connection_usage_percent: " + tc.tenant + "\n"
 			dir := t.TempDir()
 			testutil.WriteTree(t, dir, map[string]string{
-				"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  pg_connections: 100\n" +
-					"tenants:\n  tx:\n    mysql_connections:" + tc.platform,
+				"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  pg_connections: 100\n" +
+					"tenants:\n  tx:\n    mysql_connection_usage_percent:" + tc.platform,
 				"tx.yaml": tenant,
 			})
 
-			withoutV := servedWarningAt(t, dir, without, "mysql_connections", at)
-			withV := servedWarningAt(t, dir, tenant, "mysql_connections", at) // leaves tx.yaml WITH the override
+			withoutV := servedWarningAt(t, dir, without, "mysql_connection_usage_percent", at)
+			withV := servedWarningAt(t, dir, tenant, "mysql_connection_usage_percent", at) // leaves tx.yaml WITH the override
 			if unchanged := reflect.DeepEqual(withV, withoutV); unchanged != tc.redundant {
-				t.Fatalf("premise: /metrics mysql_connections %v with the override, %v without — want redundant=%v", withV, withoutV, tc.redundant)
+				t.Fatalf("premise: /metrics mysql_connection_usage_percent %v with the override, %v without — want redundant=%v", withV, withoutV, tc.redundant)
 			}
 
-			if got := redundantFields(t, dir)["mysql_connections"]; got != tc.redundant {
-				t.Errorf("redundant_override on mysql_connections = %v, want %v (/metrics at %v: %v with the override, %v without)", got, tc.redundant, at, withV, withoutV)
+			if got := redundantFields(t, dir)["mysql_connection_usage_percent"]; got != tc.redundant {
+				t.Errorf("redundant_override on mysql_connection_usage_percent = %v, want %v (/metrics at %v: %v with the override, %v without)", got, tc.redundant, at, withV, withoutV)
 			}
 		})
 	}
