@@ -2022,6 +2022,9 @@ def test_the_cli_takes_migrated_and_refuses_it_with_rule_pack_dir(tmp_path):
     'label_join(x{tenant="t1"}, "da_migrated", ",", "tenant") > 0',
     'count_values("da_migrated", x{tenant="t1"}) > 0',
     'x{tenant="t1"} * on(tenant) group_left(da_migrated) y{tenant="t1"} > 0',
+    # the label's name written with a PromQL string escape: the text holds
+    # no `da_migrated`, the parse tree does
+    'label_replace(x{tenant="t1"}, "\\x64a_migrated", "true", "tenant", "t1") > 0',
 ])
 @pytest.mark.parametrize("migrated", [False, True])
 def test_an_expression_writing_the_migrated_label_is_an_error(tmp_path, expr, migrated):

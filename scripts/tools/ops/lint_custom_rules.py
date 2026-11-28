@@ -667,9 +667,11 @@ def migrated_expression_problems(rules, filepath, shapes_of=None):
     ``group_left`` / ``group_right`` copying it (``_written_labels``).
     *rules* are ``(rule_name, expr)``. An ERROR with or without *migrated*:
     migrate-rule writes the label in ``labels:`` only, and refuses an
-    expression that keeps it. A write names the label as a string, so only
-    expressions holding its name are read (``promql_shape``, *shapes_of*)."""
-    judged = [(n, e) for n, e in rules if isinstance(e, str) and MIGRATED_LABEL in e]
+    expression that keeps it. Every expression is read on Prometheus' parse
+    tree (``promql_shape``, *shapes_of*), not filtered on its text first: a
+    PromQL string escape (``"\\x64a_migrated"``) names the label without
+    the text holding it."""
+    judged = [(n, e) for n, e in rules if isinstance(e, str)]
     if not judged:
         return []
     shapes_of = shapes_of or _lib_consumer_read.promql_shape
