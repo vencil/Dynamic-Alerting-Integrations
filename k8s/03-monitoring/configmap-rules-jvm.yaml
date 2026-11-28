@@ -25,8 +25,8 @@ data:
     n    100 * jvm_memory_bytes_used{area=\\\"heap\\\"}\\n      / (jvm_memory_bytes_max{area=\\\
     \"heap\\\"} > 0),\\n    \\\"mem_source\\\", \\\"legacy\\\", \\\"\\\", \\\"\\\"\
     )\\n)\\n\"\n  - record: tenant:jvm_threads:current\n    expr: \"max by(tenant,\
-    \ da_cluster) (\\n  jvm_threads_current\\n)\\n\"\n- name: jvm-threshold-normalization\n\
-    \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:jvm_gc_time_percent\n\
+    \ da_cluster) (\\n  jvm_threads_live_threads or jvm_threads_current\\n)\\n\"\n\
+    - name: jvm-threshold-normalization\n  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:jvm_gc_time_percent\n\
     \    expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_time_percent\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:jvm_gc_time_percent_critical\n\
     \    expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_time_percent\"\
