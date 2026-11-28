@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
 )
@@ -163,7 +164,7 @@ func selectorName(vs *parser.VectorSelector) string {
 		return vs.Name
 	}
 	for _, m := range vs.LabelMatchers {
-		if m.Name == labels.MetricName && m.Type == labels.MatchEqual {
+		if m.Name == model.MetricNameLabel && m.Type == labels.MatchEqual {
 			return m.Value
 		}
 	}
@@ -191,7 +192,7 @@ func pinMatcher(vs *parser.VectorSelector, w *labels.Matcher) string {
 func namespaceAgrees(vs *parser.VectorSelector, tenant string) string {
 	w := labels.MustNewMatcher(labels.MatchEqual, pinNamespaceLabel, tenant)
 	for _, m := range vs.LabelMatchers {
-		if m.Name == pinNamespaceLabel && !(m.Type == w.Type && m.Value == w.Value) {
+		if m.Name == pinNamespaceLabel && (m.Type != w.Type || m.Value != w.Value) {
 			return fmt.Sprintf("it matches %s, not %s: the tenant's series are its namespace's",
 				m.String(), w.String())
 		}
@@ -210,8 +211,8 @@ func renameSelector(vs *parser.VectorSelector, rename map[string]string) {
 		vs.Name = to
 	}
 	for i, m := range vs.LabelMatchers {
-		if m.Name == labels.MetricName && m.Type == labels.MatchEqual {
-			vs.LabelMatchers[i] = labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, to)
+		if m.Name == model.MetricNameLabel && m.Type == labels.MatchEqual {
+			vs.LabelMatchers[i] = labels.MustNewMatcher(labels.MatchEqual, model.MetricNameLabel, to)
 		}
 	}
 }
