@@ -186,18 +186,42 @@ func keepUntimed(sv ScheduledValue) bool {
 }
 
 // filterPartials is configs with every `tenants:` and `profiles:` value keep
-// refuses left out; a partial with none is shared, not copied.
+// refuses left out; a partial with none is shared, not copied, and configs
+// itself is returned when keep refuses nothing — the untimed tree, every
+// build, pays no copy of the map (the readers only read it).
 func filterPartials(configs map[string]ThresholdConfig, keep expiryKeep) map[string]ThresholdConfig {
-	out := make(map[string]ThresholdConfig, len(configs))
+	var out map[string]ThresholdConfig
 	for name, p := range configs {
 		tenants, tCopied := filterBodies(p.Tenants, keep)
 		profiles, pCopied := filterBodies(p.Profiles, keep)
-		if tCopied || pCopied {
-			p.Tenants, p.Profiles = tenants, profiles
+		if !tCopied && !pCopied {
+			continue
 		}
+		if out == nil {
+			out = make(map[string]ThresholdConfig, len(configs))
+			for n2, p2 := range configs {
+				out[n2] = p2
+			}
+		}
+		p.Tenants, p.Profiles = tenants, profiles
 		out[name] = p
 	}
+	if out == nil {
+		return configs
+	}
 	return out
+}
+
+// bodiesHoldTimed is whether any value of bodies carries an `expires:`.
+func bodiesHoldTimed(bodies map[string]map[string]ScheduledValue) bool {
+	for _, body := range bodies {
+		for _, sv := range body {
+			if _, ok := expiryInstant(sv); ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // filterBodies is bodies without the values keep refuses, and whether that

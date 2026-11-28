@@ -858,6 +858,10 @@ func (r rootPlatform) mergeProfilesInto(dst map[string]map[string]ScheduledValue
 type parsedPlatformFile struct {
 	cfg ThresholdConfig
 	err error
+	// timed: some `tenants:` or `profiles:` value carries an `expires:`.
+	// Decided once per decode, so a merge over a platform file without one
+	// (the cached steady state) does not walk its entries to filter nothing.
+	timed bool
 }
 
 // rootPlatformParseCacheSize bounds the cache. A deployment has a handful of
@@ -895,7 +899,8 @@ func (c *platformParseCache) get(hash string, data []byte) *parsedPlatformFile {
 	c.mu.Unlock()
 
 	cfg, err := ParseConfigFile(data)
-	p := &parsedPlatformFile{cfg: cfg, err: err}
+	p := &parsedPlatformFile{cfg: cfg, err: err,
+		timed: err == nil && (bodiesHoldTimed(cfg.Tenants) || bodiesHoldTimed(cfg.Profiles))}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1004,7 +1009,7 @@ func mergeTenantAt(root rootPlatform, tenantCfg ThresholdConfig, at time.Time) T
 func (r rootPlatform) filtered(keep expiryKeep) rootPlatform {
 	var files []rootPlatformFile
 	for i, f := range r.files {
-		if f.parsed == nil || f.parsed.err != nil {
+		if f.parsed == nil || f.parsed.err != nil || !f.parsed.timed {
 			continue
 		}
 		tenants, tCut := filterBodies(f.parsed.cfg.Tenants, keep)
@@ -1017,7 +1022,7 @@ func (r rootPlatform) filtered(keep expiryKeep) rootPlatform {
 		}
 		cfg := f.parsed.cfg
 		cfg.Tenants, cfg.Profiles = tenants, profiles
-		files[i].parsed = &parsedPlatformFile{cfg: cfg}
+		files[i].parsed = &parsedPlatformFile{cfg: cfg, timed: true}
 	}
 	if files == nil {
 		return r
