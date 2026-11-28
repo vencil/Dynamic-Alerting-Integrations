@@ -65,11 +65,16 @@ _KEYS = {
     "renamed_shadowed": lambda _h, n, v: {f'mysql_cpu{{{n}="{v}"}}': "1",
                                           f'mysql_threads_running{{{n}="{v}"}}': "2"},
     "renamed_critical_dimensional": lambda _h, n, v: {f'mysql_cpu_critical{{{n}="{v}"}}': "1"},
+    # #4253: the canonical line holds no value the layer takes, so the
+    # retired one beside it is served.
+    "renamed_over_refused": lambda _h, n, v: {f'mysql_threads_running{{{n}="{v}"}}': "junk",
+                                              f'mysql_cpu{{{n}="{v}"}}': "1"},
 }
 
 #: The metric name of each kind's key, where it is not the place's.
 _HEADS = {"renamed": "mysql_cpu", "renamed_shadowed": "mysql_cpu",
-          "renamed_critical_dimensional": "mysql_cpu_critical"}
+          "renamed_critical_dimensional": "mysql_cpu_critical",
+          "renamed_over_refused": "mysql_cpu"}
 
 _NOT_APPLICABLE = {
     (k, "metric_name"): "a retired spelling is one the alias table lists: its metric name is "

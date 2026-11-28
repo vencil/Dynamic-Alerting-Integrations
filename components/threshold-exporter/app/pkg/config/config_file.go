@@ -48,7 +48,7 @@ import (
 // as null is no write (dropNullThresholds, #2518 — a `defaults:` key, and a
 // threshold key of a `tenants:` / `profiles:` body), inside `defaults:`
 // a spelling that writes nothing beside one that does is dropped
-// (dropNullShadowingSpellings, #2418), and a reserved key written with a
+// (foldRootSpellings, #2418, #4253), and a reserved key written with a
 // schedule keeps only its `default` — the part its readers read
 // (stripScheduledReserved, #3269; recorded in ScheduledReservedEntries). The
 // tenant set of a file is the key set of the returned Tenants. It also
@@ -129,8 +129,11 @@ func decodeConfigFile(data []byte, generic bool) (ThresholdConfig, error) {
 		}
 		keepReservedMappings(&cfg, data)
 		dropNullThresholds(&cfg, data)
-		dropNullShadowingSpellings(cfg.Defaults, data)
 		normalizeConfigKeys(&cfg)
+		// After the dimensional re-spelling: two spellings of one threshold
+		// whose labels are written differently are one threshold to the fold.
+		twins := foldConfigSpellings(&cfg)
+		cfg.spelled = cfg.spelled || twins
 	}
 	return cfg, err
 }
@@ -159,79 +162,32 @@ func normalizeBodies(m map[string]map[string]ScheduledValue) bool {
 	return spelled
 }
 
-// dropNullShadowingSpellings removes from a decoded `defaults:` map every
-// spelling of a threshold that the file does not write (null, ±Inf, NaN —
-// levelWritesSpelling) while it writes another spelling of the same
-// threshold (#2418).
-//
-// ⛔ WHY. `Defaults` is map[string]float64, so a null decodes to a PRESENT 0
-// (since #2518 dropNullThresholds takes every null out first; the ±Inf /
-// NaN half below is what still reaches here). With the canonical spelling
-// written as null beside the retired spelling
-// at 30 in the root `_defaults.yaml`, resolve's canonical-wins dedup
-// (canonicalizeDefaults) then served the null's 0 over the 30, while the
-// walker's defaults fold — which da-guard and /effective read — drops the
-// null and keeps the 30. The guard therefore judged a tenant writing the
-// retired spelling at 30 redundant, and deleting it moved /metrics from 30
-// to 0.
-//
-// "Does this level write spelling s" is levelWritesSpelling, the predicate
-// the subtree overlay (applySubtreeDefaults) and the walker's fold
-// (noteSpellingWriters) already share: the root level answers it the same
-// way, so the canonical-wins dedup inside one file is among the spellings
-// that file WRITES.
-//
-// What this changes, all of it:
-//   - a null beside the other spelling's value: served that value, not 0;
-//   - `.inf` / `-.inf` / `.nan` beside the other spelling's value: served
-//     that value, not ±Inf / NaN (a non-finite number is not threshold-
-//     shaped, so it writes nothing either);
-//   - every caller of this decode gets it — the conf.d root carrier AND
-//     file mode's single config file (loadFile → ParseTenantFile).
-//
-// What stays: a non-finite spelling with NO written twin decodes as before,
-// and a file writing both spellings with values is untouched (canonical
-// wins). A null never reaches here: dropNullThresholds runs first and takes
-// every null out of `defaults:` (#2518), twin or not.
-//
-// Fast path: the raw re-decode happens only when the map holds two
-// spellings of one threshold — never for a file without aliased keys.
-func dropNullShadowingSpellings(defaults map[string]float64, data []byte) {
-	var pairs []string
-	var buf [2]string
-	for k := range defaults {
-		for _, s := range otherSpellings(k, &buf) {
-			if _, both := defaults[s]; both {
-				pairs = append(pairs, k)
-				break
-			}
-		}
-	}
-	if len(pairs) == 0 {
-		return
-	}
-	var raw struct {
-		Defaults map[string]any `yaml:"defaults"`
-	}
-	if yaml.Unmarshal(data, &raw) != nil {
-		return // cannot happen: the typed decode of the same bytes succeeded
-	}
-	var drop []string
-	for _, k := range pairs {
-		if levelWritesSpelling(raw.Defaults, k) {
-			continue
-		}
-		for _, s := range otherSpellings(k, &buf) {
-			if _, in := defaults[s]; in && levelWritesSpelling(raw.Defaults, s) {
-				drop = append(drop, k)
-				break
-			}
-		}
-	}
-	for _, k := range drop {
-		delete(defaults, k)
-	}
+// foldConfigSpellings is the decode's #1231 fold (foldSpellings, #4253):
+// after it no map of cfg holds a retired spelling. Every decode runs it; a
+// config assembled by hand (a test's) runs it to be one a decode produced.
+// It reports whether some map wrote one threshold under both spellings —
+// the second is a duplicate the spelling readers name (cfg.spelled).
+func foldConfigSpellings(cfg *ThresholdConfig) bool {
+	twins := foldRootSpellings(cfg)
+	twins = foldBodies(cfg.Tenants) || twins
+	return foldBodies(cfg.Profiles) || twins
 }
+
+// foldRootSpellings folds the root `defaults:` map's retired #1231
+// spellings into their canonical keys (foldSpellings, #4253). A line the root
+// takes is a number it serves or its `disable`; a refused value (`abc`,
+// `"off"`, `0x10`, ±Inf, NaN — readRootDefault) is a line it does not take,
+// so beside the other spelling's value that value is the threshold's, the
+// same whatever the refused text looks like. (A null never reaches here:
+// dropNullThresholds runs first.) The folds are kept in cfg.rootFolds.
+func foldRootSpellings(cfg *ThresholdConfig) bool {
+	cfg.Defaults, cfg.rootFolds = foldSpellings(cfg.Defaults, func(_ string, v float64) bool { return rootTakes(v) })
+	return anyTwin(cfg.rootFolds)
+}
+
+// rootTakes reports whether a decoded root `defaults:` value is one the root
+// serves: a finite number, or its `disable`.
+func rootTakes(v float64) bool { return finiteThreshold(v) || RootDisabledDefault(v) }
 
 // ParseTenantFile is ParseConfigFile for a file that declares tenants — a
 // non-`_` conf.d file (the walker's parseTenantDecls) or the single config

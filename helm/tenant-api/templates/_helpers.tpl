@@ -215,14 +215,21 @@ from a second copy.
               generator (which binds the socket) and tenant-api (which dials
               it, --generator-socket, #2903): the service's trust boundary is that mount plus
               the socket's 0600 mode plus a same-uid peer (SO_PEERCRED).
-  workDir     the generator's --work-dir (disk-backed emptyDir).
+  workMount   where the disk-backed emptyDir for the generator's work is
+              mounted.
+  workDir     the generator's --work-dir: a directory the service makes
+              INSIDE that mount, never the mount itself. --work-dir must be
+              private to the generator's euid (#3981: its owner, no group or
+              other mode bit), and an emptyDir's root is root's and 0777 (or
+              group-writable under fsGroup) — the service would refuse it.
   policyDir   where the deployment policy ConfigMap key is projected, at the
               SAME path in both containers (tenant-api hashes it,
               --deploy-policy, #2903).
 */}}
 {{- define "tenant-api.generatorSocketDir" -}}/run/da-generator{{- end }}
 {{- define "tenant-api.generatorSocketPath" -}}{{ include "tenant-api.generatorSocketDir" . }}/generator.sock{{- end }}
-{{- define "tenant-api.generatorWorkDir" -}}/var/lib/da-generator{{- end }}
+{{- define "tenant-api.generatorWorkMount" -}}/var/lib/da-generator{{- end }}
+{{- define "tenant-api.generatorWorkDir" -}}{{ include "tenant-api.generatorWorkMount" . }}/work{{- end }}
 {{- define "tenant-api.generatorPolicyDir" -}}/etc/da-generator-policy{{- end }}
 {{- define "tenant-api.generatorPolicyPath" -}}{{ include "tenant-api.generatorPolicyDir" . }}/policy.yaml{{- end }}
 {{- /* The generator's /tmp emptyDir. It holds what one judgement hands

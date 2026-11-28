@@ -121,7 +121,7 @@ func parsePlatformTenants(key string, f *TreeFile, data []byte) PlatformTenants 
 			pt.tenants = make(map[string]map[string]any, len(doc.Tenants))
 		}
 		var spell *keySpellings
-		if m, spell = normalizeKeys(m); spell != nil { // #2031
+		if m, spell = normalizeKeysTaking(m, levelTakes); spell != nil { // #2031, #4253
 			if pt.spell == nil {
 				pt.spell = make(map[string]*keySpellings)
 			}

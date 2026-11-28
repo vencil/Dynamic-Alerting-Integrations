@@ -26,8 +26,12 @@ that takes a value to be declared in ``caller_path_manifest.yaml`` as one of:
   pair and the write audit); there is no exception list.
 * ``runtime`` (#3983) — a path the tool creates for its own running and does
   not leave as a result: the socket a service binds, the scratch directory
-  it builds in and empties. No write entry is on it and no control run ends
-  with a file to read, so it is not an ``output``; like a ``reader`` it is
+  it builds in and empties. It is the third write class (#3981): a
+  directory there, and every file in it, is made by the runtime entry of
+  ``_lib_output`` (private to the euid: 0700 / 0600, never through a
+  symlink) — only a command that declares a ``runtime`` path may call it,
+  and each one that does must (``test_runtime_entry_callers.py``). No
+  control run ends with a file to read, so it is not an ``output``; like a ``reader`` it is
   held by ``pinned_by``, the test that runs the tool on a path it cannot use
   — and that test's own source must spell the flag (a ``pinned_by`` naming
   some test that exists pinned nothing).

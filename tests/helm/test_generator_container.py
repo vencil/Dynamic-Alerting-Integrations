@@ -261,8 +261,11 @@ def test_work_dir_is_disk_and_tmp_is_writable() -> None:
     work = _volume(pod, "generator-work")["emptyDir"]
     assert "medium" not in work, "Memory would count against the container's limit"
     assert work["sizeLimit"] == "3Gi"
-    paths = {m["mountPath"] for m in _mounts(gen, "generator-work")}
-    assert paths == {_flag(gen, "work-dir")}
+    (mount,) = {m["mountPath"] for m in _mounts(gen, "generator-work")}
+    # #3981: --work-dir is a directory the service makes INSIDE the mount.
+    # The emptyDir's root is root's, 0777 (group-writable under fsGroup): a
+    # --work-dir there is not private to the pod's uid and refuses to start.
+    assert posixpath.dirname(_flag(gen, "work-dir")) == mount
     # /tmp is a volume of its own, never a subPath (kubelet may create a
     # missing subPath directory root-owned, unwritable by the pod's uid)
     (tmp,) = [m for m in gen["volumeMounts"] if m["mountPath"] == "/tmp"]

@@ -1465,3 +1465,54 @@ func TestServedValues_UndeclaredMaintenanceHasNoTimeBox(t *testing.T) {
 		t.Errorf("undeclared maintenance filter: time_boxes %+v, want none", tb)
 	}
 }
+
+// #4253 review F4: both lines of a tenant writing one threshold twice are
+// listed unserved — the kept one and the one folded away — whichever spelling
+// the tenant layer keeps.
+func TestServedValues_BothLinesOfATwiceWrittenThresholdAreListed(t *testing.T) {
+	t.Parallel()
+	retired := "mysql_" + "cpu"
+	for _, c := range []struct{ canon, old string }{{`"abc"`, "disable"}, {"disable", `"abc"`}} {
+		code, doc, _, stderr := served(t, map[string]string{
+			"_defaults.yaml": defaultsOnly + "  mysql_threads_running: 30\n",
+			"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_threads_running: " + c.canon + "\n    " +
+				retired + ": " + c.old + "\n",
+		}, "")
+		mustOK(t, code, stderr)
+		if u := doc.Tenants["tenant-a"].Unserved; len(u) != 2 {
+			t.Errorf("canonical %s, retired %s: unserved %v, want both lines", c.canon, c.old, u)
+		}
+	}
+}
+
+// #4253 review (CodeRabbit): the line the decode served is the one not
+// listed unserved, whichever spelling it is — beside a canonical line the
+// tenant layer does not take, the retired one is served — on the reading at
+// one instant and on the whole day's (--schedules).
+func TestServedValues_TheLineServedIsNotTheUnservedOne(t *testing.T) {
+	t.Parallel()
+	retired := "mysql_" + "cpu"
+	for _, c := range []struct {
+		canon, old, unserved string
+		value                float64
+	}{
+		{`"junk"`, `"44"`, "mysql_threads_running", 44},
+		{`"50"`, `"44"`, retired, 50},
+	} {
+		for _, extra := range [][]string{nil, {"--schedules"}} {
+			code, doc, _, stderr := servedWith(t, map[string]string{
+				"_defaults.yaml": defaultsOnly + "  mysql_threads_running: 30\n",
+				"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_threads_running: " + c.canon + "\n    " +
+					retired + ": " + c.old + "\n",
+			}, "", extra...)
+			mustOK(t, code, stderr)
+			u := doc.Tenants["tenant-a"].Unserved
+			if _, listed := u[c.unserved]; !listed || len(u) != 1 {
+				t.Errorf("canonical %s, retired %s %v: unserved %v, want only %s", c.canon, c.old, extra, u, c.unserved)
+			}
+			if extra == nil {
+				wantValue(t, doc, "tenant-a", "mysql_threads_running", c.value)
+			}
+		}
+	}
+}

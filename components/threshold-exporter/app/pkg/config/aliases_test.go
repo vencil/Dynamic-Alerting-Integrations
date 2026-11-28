@@ -241,6 +241,7 @@ func TestCriticalAliasMatrix(t *testing.T) {
 				Defaults: defaultsFor[cell.base],
 				Tenants:  map[string]map[string]ScheduledValue{tenant: overrides},
 			}
+			foldConfigSpellings(cfg) // as the decode leaves it (#4253)
 
 			assertRowSet(t, rowSet(mustResolveAt(cfg), tenant), cell.wantRows, "rows")
 
@@ -294,7 +295,7 @@ func TestDualEmitContract(t *testing.T) {
 // both-spellings conflict, a tenant rename notice (base), a tenant rename
 // notice (_critical shape), and a tenant both-spellings conflict.
 func noticeFixture() *ThresholdConfig {
-	return &ThresholdConfig{
+	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_cpu": 70, "mysql_threads_running": 72},
 		Tenants: map[string]map[string]ScheduledValue{
 			"tenant-n": {
@@ -307,6 +308,8 @@ func noticeFixture() *ThresholdConfig {
 			},
 		},
 	}
+	foldConfigSpellings(cfg) // as the decode leaves it (#4253)
+	return cfg
 }
 
 func TestDeprecationNotices_NameBothKeysAndNeverBlock(t *testing.T) {
