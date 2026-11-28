@@ -1757,7 +1757,10 @@ repos:
         # + commit.
         # (check_threshold_reachability.py is in the filter because its
         # KNOWN_UNWIRED list feeds the membership universe.)
-        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|components/threshold-exporter/app/pkg/config/(retired_threshold_keys|builtin_defaults|namespace_keyed_prefixes)_gen\.go|changelog\.d/.*\.md|CHANGELOG\.md)$
+        # Every file --regen writes (_registry_lib.GENERATED_FILES and the
+        # surface_specs paths) must match `files:` below — pinned by
+        # tests/lint/test_check_threshold_registry.py (#4346).
+        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|components/threshold-exporter/app/pkg/config/(retired_threshold_keys|builtin_defaults|unset_threshold_keys|expected_exporter_kinds|namespace_keyed_prefixes)_gen\.go|tests/rulepacks/platform-builtin-defaults-digest_test\.yaml|changelog\.d/.*\.md|CHANGELOG\.md)$
 
       - id: retired-keys-not-taught
         name: "a retired threshold key (registry retired_keys) is not named in docs, samples, scripts or the portal (#1200)"
@@ -2105,6 +2108,18 @@ repos:
         # Per-line escape via `<!-- jsx-loader-compat: ignore -->` for legitimate
         # exceptions / illustrative quotes.
 
+      - id: jsx-no-dark-variant
+        name: "ADR-015: portal source writes no Tailwind dark: variant (dark mode is <html data-theme> alone)"
+        entry: '\bdark:[a-z0-9\[!*@-]'
+        language: pygrep
+        files: ^tools/portal/src/.*\.(jsx|js)$
+        # #4290: dark mode is the data-theme attribute and the tokens of
+        # design-tokens.css alone; the loader sets no class `dark` and no
+        # Tailwind darkMode, so the CDN's default (`media`) would make a
+        # `dark:` class follow the OS setting instead of the theme toggle.
+        # .js too: shared helpers there build class strings. The pattern
+        # needs a class right after `dark:` (a letter or digit, `[`, `!`,
+        # `*`, `@`, `-`), so prose ("removed its dark: classes") is not hit.
       - id: window-x-no-fallback-check
         name: Forbid module-scope `const X = window.__X;` no-fallback reads (dev-rules.md §S6, TRK-237)
         entry: python3 -X utf8 scripts/tools/lint/check_window_x_no_fallback.py --ci

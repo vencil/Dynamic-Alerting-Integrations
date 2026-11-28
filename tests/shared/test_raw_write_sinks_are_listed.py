@@ -194,10 +194,6 @@ DEBT: dict[str, dict[str, int]] = {
         "on_pre_build .mkdir [work_dir]": 1,
         "on_pre_build shutil.copy2 [work_dir]": 1,
     },
-    "scripts/ops/parse_go_test_json.py": {
-        "main .mkdir [operator]": 1,
-        "main .write_text [operator]": 1,
-    },
     "scripts/tools/dx/analyze_bench_history.py": {
         "download_artifact .mkdir [work_dir]": 1,
         "download_artifact .write_text [work_dir]": 1,
@@ -238,7 +234,7 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 27
+_DEBT_CEILING = 25
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {

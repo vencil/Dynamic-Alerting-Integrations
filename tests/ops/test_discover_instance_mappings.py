@@ -332,3 +332,17 @@ class TestJsonEmptyEnvelope:
         assert doc["instance_tenant_mapping"] == {}
         assert set(doc) == {"status", "reason", "instance_tenant_mapping"}
         assert "none suitable" in captured.err.lower()
+
+
+
+def test_a_draft_filter_reads_back_as_the_value():
+    """#4264: the draft writes each value as a PromQL string, so the mapping
+    tool (which reads a filter with Prometheus' parser) gets the value back
+    unchanged — a quote or a backslash in it included."""
+    import discover_instance_mappings as D
+    from generate_tenant_mapping_rules import parse_filter_to_matchers
+    draft = D.generate_mapping_draft("db-1", "schema", {'a"b', "c\\d", "plain"})
+    filters = [e["filter"] for e in draft["instance_tenant_mapping"]["db-1"]]
+    assert len(filters) == 3
+    for f in filters:
+        assert parse_filter_to_matchers(f) == [f], f

@@ -8,6 +8,7 @@ package config
 var validReservedKeys = keySet(
 	"_custom_alerts",
 	"_expected_exporters",
+	"_log_projection",
 	"_metadata",
 	"_namespaces",
 	"_profile",
@@ -62,6 +63,9 @@ var reservedKeyReaders = map[string]map[string][]string{
 	"_expected_exporters": {
 		"exporter": {"tenant", "platform_tenants", "profile"},
 	},
+	"_log_projection": {
+		"log_projection": {"tenant", "platform_tenants", "profile"},
+	},
 	"_metadata": {
 		"exporter": {"tenant", "platform_tenants", "profile"},
 	},
@@ -110,6 +114,7 @@ var reservedPrefixReaders = []prefixReaders{
 var reservedValueShapes = map[string]string{
 	"_custom_alerts":      "list",
 	"_expected_exporters": "list",
+	"_log_projection":     "scalar",
 	"_metadata":           "mapping",
 	"_namespaces":         "list",
 	"_policies":           "list",
