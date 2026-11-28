@@ -519,7 +519,7 @@ KEY_CHECK_KINDS = frozenset({
     "renamed_shadowed", "renamed_critical_dimensional", "renamed",
 })
 #: The kinds about a retired spelling (Go's `KeyCheckKind.IsRenamed`): an
-#: advisory; the others are about a `version` label the exporter refuses.
+#: advisory; the others are about a `version` label that fails the exporter's check.
 KEY_CHECK_RENAMED_KINDS = frozenset({"renamed_shadowed", "renamed_critical_dimensional", "renamed"})
 
 

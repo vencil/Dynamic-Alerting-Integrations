@@ -297,7 +297,7 @@ KEY_CHECKS = {
 
 
 def test_validate_prints_the_exporters_key_checks(tmp_path):
-    """A `version` label the exporter refuses and a retired spelling: the
+    """A `version` label that fails the exporter's check and a retired spelling: the
     exporter's own lines (da-guard served-values' key_checks), not a judgement
     of this tool's; reported only (`blocks: never`). The run fails on the
     dimensional key itself, which no row reads (its `version` label is not

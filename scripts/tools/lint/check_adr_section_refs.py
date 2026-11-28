@@ -38,15 +38,21 @@ What is checked, in every git-tracked text file:
    (``D2-B``, ``LD-6 P4b``, ``MED-8``, …) is a finding whatever follows: those
    codes name sections the rewritten ADR does not have. The same holds for
    ``ADR-024`` and the codes of its rollout and the draft it replaced
-   (``OQ-6``, ``PR3b``, ``AC-7``, ``Phase 1``, ``§2b``, ``§3 Reef 1``).
+   (``OQ-6``, ``PR3b``, ``AC-7``, ``Phase 1``, ``Pass-3``, ``§3 Reef 1``).
+   A section number carrying a letter (``§2b``) is one token: it names no
+   heading unless a heading is numbered so.
 3. What a reference names inside its section (#4293), the section being the
-   one its last § names (in either language's file):
+   one its last § names — in either language's file: a section named in one
+   language stands for the section at the same place in the other file:
      - a quoted name right after it (``ADR-036 §2 "Go is the only writer"``, also in
        “…” or 「…」) must appear in that section — its heading or its text,
        markup and spaces ignored: a quote is a section's name or a phrase of
-       it, and a renamed one is the stale reference;
+       it, and a renamed one is the stale reference. A quote opened at the
+       end of a line and closed on the next (its comment prefix removed) is
+       one quote;
      - an item number right after it (``ADR-027 §9 item 8``, ``§2 第 3 項``)
-       must be one of the section's top-level numbered list items.
+       must be one of the numbered list items at the start of a line in the
+       section (its subsections included).
 
 Not checked: a section cited without its ADR (``§7`` alone, ``see §3
 below``) — inside an ADR that is its own; elsewhere it cannot be resolved.
@@ -122,12 +128,15 @@ _OLD_027 = re.compile(
 # draft it replaced, none of them a section of the ADR as written now.
 _OLD_024 = re.compile(
     r"ADR-024(?:'s)?[\s/:：·,，(（-]*"
-    r"(OQ-\d+|PR-?\d+[a-z]?|AC-\d+|Phase\s?\d+|§\s?3\s+Reef(?:\s?\d+)?)(?![\w-])"
+    r"(OQ-\d+|PR-?\d+[a-z]?|AC-\d+|Phase\s?\d+|Pass-\d+|§\s?3\s+Reef(?:\s?\d+)?)(?![\w-])"
 )
 
 # What a reference names inside its section (#4293): a quoted name, or an
 # item number, right after its last section token.
 _QUOTED = re.compile(r'[,，]?\s+["“「]([^"”」\n]{2,80})["”」]')
+# A quote opened at the end of a line, and its rest on the next line.
+_QUOTE_OPEN = re.compile(r'[,，]?\s+["“「]([^"”」\n]{1,80})$')
+_QUOTE_REST = re.compile(r'([^"”」\n]{0,80})["”」]')
 _ITEM = re.compile(r"\s+(?:item\s?(\d+)|第\s?(\d+)\s?[項项条條點点])")
 _LIST_ITEM = re.compile(r"^(\d+)\.\s")
 _SPACES = re.compile(r"\s+")
@@ -148,8 +157,10 @@ class Heading:
 @dataclass(frozen=True)
 class Section:
     heading: Heading
-    items: frozenset[int]  # the numbers of its top-level numbered list items
+    items: frozenset[int]  # the numbers of its numbered list items
     text: str  # heading and body, markup and spaces removed, lower-cased
+    file: str = ""  # the ADR file it is in
+    pos: int = 0  # its place among that file's headings
 
 
 @dataclass(frozen=True)
@@ -230,7 +241,7 @@ def read_sections(path: Path) -> list[Section]:
         end = next((j for j, lv, _ in heads[k + 1:] if lv <= level), len(lines))
         body = lines[i + 1:end]
         items = frozenset(int(m.group(1)) for b in body if (m := _LIST_ITEM.match(b)))
-        out.append(Section(parse_heading(text), items, _flat(" ".join([text, *body]))))
+        out.append(Section(parse_heading(text), items, _flat(" ".join([text, *body])), path.name, k))
     return out
 
 
@@ -284,6 +295,7 @@ class Reference:
     sections: list[str]
     quoted: str | None = None  # a quoted name after the last section
     item: int | None = None  # an item number after the last section
+    quote_open: str | None = None  # a quote opened at the end of the line
 
 
 def _sections_after(m: re.Match[str], text: str) -> Reference:
@@ -297,18 +309,32 @@ def _sections_after(m: re.Match[str], text: str) -> Reference:
             break
         tokens.append(c.group(1))
         pos = c.end()
-    quoted = item = None
+    quoted = item = quote_open = None
     if q := _QUOTED.match(text, pos):
         quoted = q.group(1)
     elif n := _ITEM.match(text, pos):
         item = int(n.group(1) or n.group(2))
-    return Reference(m.group(1), tokens, quoted, item)
+    elif o := _QUOTE_OPEN.match(text, pos):
+        quote_open = o.group(1)
+    return Reference(m.group(1), tokens, quoted, item, quote_open)
+
+
+def _close_quote(ref: Reference, next_line: str | None) -> Reference:
+    """ref with a quote it opened at the end of its line closed on the
+    next line, when the next line closes one."""
+    if ref.quote_open is None or next_line is None:
+        return ref
+    rest = next_line[_COMMENT_PREFIX.match(next_line).end():]
+    m = _QUOTE_REST.match(rest)
+    if not m:
+        return ref
+    return Reference(ref.adr, ref.sections, f"{ref.quote_open} {m.group(1)}", ref.item)
 
 
 def _references(line: str, next_line: str | None) -> list[Reference]:
     """Every reference one line makes, one broken onto the next line
     included."""
-    refs = [_sections_after(m, line) for m in _REF.finditer(line)]
+    refs = [_close_quote(_sections_after(m, line), next_line) for m in _REF.finditer(line)]
     eol = _REF_AT_EOL.search(line)
     if eol and next_line is not None:
         rest = next_line[_COMMENT_PREFIX.match(next_line).end():]
@@ -324,7 +350,12 @@ def _inside_section(sections: list[Section], ref: Reference) -> str | None:
     if ref.quoted is None and ref.item is None:
         return None
     tok = ref.sections[-1]
-    held = [s for s in sections if section_exists([s.heading], tok)]
+    named = [s for s in sections if section_exists([s.heading], tok)]
+    # A section named in one language only: the section at the same place
+    # in a file where the token names nothing is the same section.
+    places = {s.pos for s in named}
+    files = {s.file for s in named}
+    held = named + [s for s in sections if s.file not in files and s.pos in places]
     if ref.quoted is not None:
         want = _flat(ref.quoted)
         if not any(want in s.text for s in held):
