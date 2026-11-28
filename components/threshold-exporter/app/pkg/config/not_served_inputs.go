@@ -113,6 +113,20 @@ func (c *ThresholdConfig) TenantValuesNotServedAndDisabled(tenant string, now ti
 // is none (no time-box, all passed, or unparseable — which the resolver
 // treats as never expiring).
 func ValuesNotServedExpiryEdge(overrides map[string]ScheduledValue, now time.Time) (edge time.Time, ok bool) {
+	for _, t := range expiryInstants(overrides, now) {
+		if !ok || t.Before(edge) {
+			edge, ok = t, true
+		}
+	}
+	return edge, ok
+}
+
+// expiryInstants is every `expires:` instant of overrides that now has not
+// passed (unordered): the instants after which isThresholdExpired changes
+// for one of its values. An unparseable one is left out, as the resolver
+// treats it as never expiring.
+func expiryInstants(overrides map[string]ScheduledValue, now time.Time) []time.Time {
+	var out []time.Time
 	for _, sv := range overrides {
 		if sv.Expiry == nil || sv.Expiry.Expires == "" {
 			continue
@@ -121,9 +135,7 @@ func ValuesNotServedExpiryEdge(overrides map[string]ScheduledValue, now time.Tim
 		if err != nil || now.After(t) {
 			continue
 		}
-		if !ok || t.Before(edge) {
-			edge, ok = t, true
-		}
+		out = append(out, t)
 	}
-	return edge, ok
+	return out
 }

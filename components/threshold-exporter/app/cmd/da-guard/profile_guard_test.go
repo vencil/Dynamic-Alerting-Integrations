@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	profileGuardDefaults = "defaults:\n  mysql_connections: 80\n  pg_connections: 100\n"
-	profileGuardProfiles = "profiles:\n  std:\n    mysql_connections: 60\n"
+	profileGuardDefaults = "defaults:\n  mysql_connection_usage_percent: 80\n  pg_connections: 100\n"
+	profileGuardProfiles = "profiles:\n  std:\n    mysql_connection_usage_percent: 60\n"
 )
 
 // servedWarning is what /metrics serves for tx's warning row of `key`
@@ -67,14 +67,14 @@ func TestGuard_RedundantOverrideFollowsTheProfile(t *testing.T) {
 		// The measured false advice: 80 is the chain's value, but deleting
 		// it falls back to the profile's 60.
 		{"chain-value-under-a-profile-is-not-redundant",
-			"tenants:\n  tx:\n    _profile: std\n    mysql_connections: 80\n",
+			"tenants:\n  tx:\n    _profile: std\n    mysql_connection_usage_percent: 80\n",
 			"tenants:\n  tx:\n    _profile: std\n",
-			"mysql_connections", false, ""},
+			"mysql_connection_usage_percent", false, ""},
 		// Control: the profile's own value IS redundant (deleting it keeps 60).
 		{"profile-value-is-redundant",
-			"tenants:\n  tx:\n    _profile: std\n    mysql_connections: 60\n",
+			"tenants:\n  tx:\n    _profile: std\n    mysql_connection_usage_percent: 60\n",
 			"tenants:\n  tx:\n    _profile: std\n",
-			"mysql_connections", true, ""},
+			"mysql_connection_usage_percent", true, ""},
 		// Control: a key the profile does not set still falls back to the
 		// chain, so the chain's value stays redundant there.
 		{"key-the-profile-does-not-set-follows-the-chain",
@@ -87,10 +87,10 @@ func TestGuard_RedundantOverrideFollowsTheProfile(t *testing.T) {
 		// redundant. (Blind review of a9837f1f: inherited() used to skip
 		// every mapping-valued profile key.)
 		{"chain-value-under-a-scheduled-profile-value-is-not-redundant",
-			"tenants:\n  tx:\n    _profile: std\n    mysql_connections: 80\n",
+			"tenants:\n  tx:\n    _profile: std\n    mysql_connection_usage_percent: 80\n",
 			"tenants:\n  tx:\n    _profile: std\n",
-			"mysql_connections", false,
-			"profiles:\n  std:\n    mysql_connections:\n      default: \"55\"\n"},
+			"mysql_connection_usage_percent", false,
+			"profiles:\n  std:\n    mysql_connection_usage_percent:\n      default: \"55\"\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
