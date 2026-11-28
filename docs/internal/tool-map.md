@@ -282,6 +282,7 @@ lang: zh
 - `scripts/tools/_lib_redact.py`：Which config fields hold a credential, and how a report prints them.
 - `scripts/tools/_lib_registry.py`：Does an image ref resolve? Asked of its registry through the distribution v2 API (#3611).
 - `scripts/tools/_lib_shadow_report.py`：The validation report `validate` writes and `shadow-verify` reads (#3662).
+- `scripts/tools/_lib_site_pages.py`：The site pages that live outside ``docs/`` (#4251).
 - `scripts/tools/_lib_tenant_state.py`：Read tenant-api's state records as tenant-api reads them (#2883, ADR-036 §12).
 - `scripts/tools/_lib_tenant_uniqueness.py`：Does this ARTIFACT declare one tenant twice? One measurement, two producers.
 - `scripts/tools/_lib_tenant_values.py`：Per-tenant values from Go: /metrics via da-guard served-values, /effective via da-guard effective.
