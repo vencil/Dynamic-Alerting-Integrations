@@ -78,9 +78,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_OWNER: vencil
 
+# #3756 ③c (zizmor excessive-permissions): read-only here; each job that
+# pushes to GHCR is granted `packages: write` itself.
 permissions:
   contents: read
-  packages: write
 
 # #3848: two runs for one tag (a re-run while the first is still going) would
 # both find the version absent and both publish. Queued, never cancelled: a
@@ -96,6 +97,9 @@ jobs:
   release-exporter:
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/exporter/')
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
 
@@ -629,6 +633,9 @@ jobs:
   release-portal:
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/portal/')
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
 
@@ -929,6 +936,9 @@ jobs:
   release-tenant-api:
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/tenant-api/')
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
 

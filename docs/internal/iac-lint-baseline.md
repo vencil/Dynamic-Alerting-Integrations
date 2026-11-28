@@ -222,6 +222,21 @@ INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exp
 
 **Baseline 截至 2026-07-05**：**0 findings** ✅ / 0 exemptions（`-shellcheck=` `-pyflakes=` 設定下）。
 
+## GHA 安全稽核（zizmor，[#3756](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3756) ③c）
+
+跑法：`pre-commit run zizmor --all-files`。hook 來自上游 [zizmorcore/zizmor-pre-commit](https://github.com/zizmorcore/zizmor-pre-commit)，釘版見 [`toolchain-versions.md`](toolchain-versions.md)；CI 由 `ci.yml` 的 Lint job 點名呼叫。採純 OSS engine，不加 Vibe wrapper。參數是 `--offline --persona=regular`：offline 表示不打 GitHub API，所以本機與 CI 的結果一致。
+
+**開哪些稽核**：由 [`.github/zizmor.yml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/zizmor.yml) 決定，只開 `excessive-permissions`、`secrets-inherit`、`overprovisioned-secrets` 三項，其餘全部停用。zizmor 遇到不認得的規則名不會報錯，所以停用清單打錯字時，那項稽核會照跑並讓 hook 轉紅——失敗方向是大聲的。
+
+**Severity → action**：有 finding → **BLOCK**（經 required check `Lint`）。
+
+**Baseline**：接入時三項全 repo 歸零，0 findings、0 exemptions，所以沒有 baseline 檔。vendored 的 `third_party/yaml.v3` 自帶上游 workflow，GitHub 不會執行它，由 hook 的 `exclude:` 排除。
+
+**已知不涵蓋（負空間）**：
+- `uses:` 釘 commit SHA（`unpinned-uses`，全開時 252 筆），另案處理（[#4327](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4327)）。
+- 「secrets 寫在哪一層」：沒有現成稽核涵蓋，依裁決不訂規則。
+- 需要 GitHub API 的 online 稽核。
+
 ## 關聯
 
 - [epic #448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) — Container/k8s SAST 4-layer

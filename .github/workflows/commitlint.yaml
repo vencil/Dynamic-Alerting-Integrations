@@ -13,6 +13,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# #3756 ③c (zizmor excessive-permissions): without a top-level block every
+# job that sets none gets the repository's default token scopes. Read-only;
+# a job that needs more says so itself.
+permissions:
+  contents: read
+
 jobs:
   commitlint:
     runs-on: ubuntu-24.04
