@@ -183,6 +183,11 @@ type ScheduledValue struct {
 	// MergePartialConfigs (bench-gate #871). Honored only on base standard metrics
 	// (those in _defaults.yaml); ignored elsewhere (v1).
 	Expiry *ExpiryMeta
+	// fold is what the decode's #1231 fold did to this line (foldSpellings,
+	// #4253): nil for a line written under the canonical key with no other
+	// spelling beside it — every line but a retired spelling's. Behind a
+	// pointer for Expiry's reason.
+	fold *valueFold
 	// deleted marks a reserved (`_`) key a `tenants:` / `profiles:` body
 	// wrote as null: "delete the inherited value" (#3341,
 	// reservedNullMarker). Its Default is "", so a reader that does not ask
@@ -302,6 +307,13 @@ type ThresholdConfig struct {
 	// header per note (#3269: ThresholdConfig is held per file and copied on
 	// every merge).
 	notes *fileNotes
+
+	// rootFolds is what the decode folded in `defaults:` (foldSpellings,
+	// #4253), per canonical key: the spelling the kept line was written in,
+	// and the line folded away beside it. Merged with Defaults, key by key,
+	// for the readers that report what the root wrote (defaultsKeyNotices,
+	// RootSpellingKept). nil when no root file writes a retired spelling.
+	rootFolds map[string]spellingFold
 
 	// expiry is what the build decided about `expires:` at its instant
 	// (expiry.go, #4263): nil for a config assembled by hand or one file's

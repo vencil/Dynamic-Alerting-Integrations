@@ -1406,16 +1406,17 @@ func addUnserved(tv servedTenantValues, cfg *config.ThresholdConfig, overrides m
 func unservedOf(dst map[string]any, cfg *config.ThresholdConfig, overrides map[string]config.ScheduledValue,
 	rootRefused map[string]string, refusedTexts map[string]string, served func(canon string) bool) {
 	for k, sv := range overrides {
-		canon, isAlias := config.CanonicalKeyFor(k)
-		// A retired spelling whose canonical key the same tenant also
-		// writes is shadowed: the canonical key's value is the one
-		// served, so the alias's own value is not.
-		_, canonWritten := overrides[canon]
-		shadowed := isAlias && canonWritten
-		if served(canon) && !shadowed {
+		// #4253: the decode holds one line per threshold, the one the
+		// tenant layer takes, under the canonical key; the other spelling's
+		// line beside it is never served, and is listed as written.
+		if spelling, line, folded := config.FoldedLine(sv); folded {
+			dst[spelling] = rawScheduledValue(line)
+		}
+		canon, _ := config.CanonicalKeyFor(k)
+		if served(canon) {
 			continue
 		}
-		dst[k] = rawScheduledValue(sv)
+		dst[config.WrittenSpellingOf(overrides, k)] = rawScheduledValue(sv)
 	}
 	// #2031: a root dimensional default the tenant does not write is the
 	// tenant's labelled series; one with no row is unserved. #3045: so is

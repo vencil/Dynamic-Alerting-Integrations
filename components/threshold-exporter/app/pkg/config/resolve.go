@@ -1805,16 +1805,22 @@ func (c *ThresholdConfig) defaultsKeyNotices() []string {
 	// (A defaults map carrying ONLY the old spelling is the expected
 	// pre-migration state during the transition window — no notice for that;
 	// the platform-side rename is its own tracked commit in #1231.)
-	for legacy, canon := range deprecatedKeyAliases {
-		if _, hasLegacy := c.Defaults[legacy]; !hasLegacy {
-			continue
-		}
-		if _, hasCanon := c.Defaults[canon]; hasCanon {
+	// #4253: the decode folded both lines into one (foldSpellings); the fold
+	// record says which was kept and which was folded away.
+	for canon, f := range c.rootFolds {
+		switch {
+		case f.folded == "":
+		case f.written == "":
 			out = append(out, fmt.Sprintf(
 				"NOTICE: defaults: deprecated key %q is ignored because its replacement %q is also set — remove %q (#1231 rename)",
-				legacy, canon, legacy))
+				f.folded, canon, f.folded))
+		default:
+			out = append(out, fmt.Sprintf(
+				"NOTICE: defaults: %q is refused, so the deprecated %q beside it is served — fix %q and remove %q (#1231 rename)",
+				canon, f.written, canon, f.written))
 		}
 	}
+	sort.Strings(out)
 	return out
 }
 
@@ -1898,6 +1904,23 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 		}
 
 		for key, sv := range overrides {
+			// #4253: the decode folded the retired spelling into the
+			// canonical key (foldSpellings); what was written is the line's
+			// fold record. Notices only, never an error.
+			if f := sv.fold; f != nil {
+				switch {
+				case f.written != "" && f.folded != "":
+					keyCheck(newKeyCheck(KeyCheckRenamedOverRefused, tenant, f.written, key, ""))
+				case f.written != "":
+					if head, labels := splitKeyHead(key); labels != "" && DimensionBaseRefused(head) {
+						keyCheck(newKeyCheck(KeyCheckRenamedCriticalDimensional, tenant, f.written, key, ""))
+					} else {
+						keyCheck(newKeyCheck(KeyCheckRenamed, tenant, f.written, key, ""))
+					}
+				case f.folded != "":
+					keyCheck(newKeyCheck(KeyCheckRenamedShadowed, tenant, f.folded, key, ""))
+				}
+			}
 			// #1231 alias canonicalization — BEFORE any other check, mirroring
 			// the resolve boundary. Aliased keys get a notice (never an error);
 			// validation below then runs on the canonical spelling.
@@ -2052,7 +2075,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// check, judged whatever the base.
 			if shape == shapeDimensional {
 				_, customLabels, regexLabels := parseKeyWithLabels(canonKey)
-				for _, c := range validateVersionLabel(tenant, key, canonKey, customLabels, regexLabels) {
+				for _, c := range validateVersionLabel(tenant, sv.writtenAs(key), canonKey, customLabels, regexLabels) {
 					keyCheck(c)
 				}
 			}
@@ -2249,6 +2272,11 @@ func (c *ThresholdConfig) applyProfiles(logf func(format string, args ...any)) {
 			}
 		})
 		for key, profileValue := range fill {
+			// #4253: laid canonically — the profile's spelling of the line,
+			// and the twin its decode folded beside it, are the profile's
+			// text, not lines the tenant wrote (as canonicalView drops the
+			// twin above).
+			profileValue.fold = nil
 			overrides[key] = profileValue
 		}
 	}

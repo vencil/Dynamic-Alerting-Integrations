@@ -146,7 +146,7 @@ func newPlatformProfiles(files []profileSourceFile) *PlatformProfiles {
 			if n, ok := nodes.Profiles[name]; ok {
 				withThresholdLeaves(m, resolveAlias(&n)) // #3250
 			}
-			m, spell := normalizeKeys(m) // #2031
+			m, spell := normalizeKeysTaking(m, levelTakes) // #2031, #4253
 			if spell != nil {
 				if pp.spell == nil {
 					pp.spell = make(map[string]map[string]*keySpellings)
@@ -162,6 +162,13 @@ func newPlatformProfiles(files []profileSourceFile) *PlatformProfiles {
 				// value — as on /metrics (ParseConfigFile).
 				if nullThreshold(k, v) {
 					continue
+				}
+				// #4253: a later file's line replaces an earlier one's
+				// whatever its spelling — one threshold, as the typed
+				// decode folds it.
+				var buf [2]string
+				for _, o := range otherSpellings(k, &buf) {
+					delete(pp.byName[name], o)
 				}
 				pp.byName[name][k] = profileEntry{file: f.key, value: v}
 			}

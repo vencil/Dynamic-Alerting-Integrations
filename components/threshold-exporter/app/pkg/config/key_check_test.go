@@ -80,6 +80,15 @@ var keyCheckFixtures = map[KeyCheckKind]keyCheckFixture{
 			`the 2-release transition window; please update this override to ` +
 			`"mysql_threads_running{canary_lbl=\"CaNaRy-r\"}"`,
 	},
+	KeyCheckRenamedOverRefused: {
+		keys: map[string]string{`mysql_threads_running{canary_lbl="CaNaRy-o"}`: "CaNaRy-junk",
+			`mysql_cpu{canary_lbl="CaNaRy-o"}`: "1"},
+		key: `mysql_cpu{canary_lbl="CaNaRy-o"}`, head: "mysql_cpu", replace: "mysql_threads_running",
+		message: `NOTICE: tenant=t-kc: "mysql_threads_running{canary_lbl=\"CaNaRy-o\"}" has no value this ` +
+			`layer takes, so the deprecated "mysql_cpu{canary_lbl=\"CaNaRy-o\"}" beside it is served — fix ` +
+			`"mysql_threads_running{canary_lbl=\"CaNaRy-o\"}" and remove "mysql_cpu{canary_lbl=\"CaNaRy-o\"}" ` +
+			`(#1231 rename)`,
+	},
 }
 
 func keyCheckConfig(keys map[string]string) *ThresholdConfig {
@@ -87,11 +96,13 @@ func keyCheckConfig(keys map[string]string) *ThresholdConfig {
 	for k, v := range keys {
 		m[k] = ScheduledValue{Default: v}
 	}
-	return &ThresholdConfig{
+	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"container_cpu": 80, "mysql_threads_running": 70,
 			"mysql_threads_running_critical": 90},
 		Tenants: map[string]map[string]ScheduledValue{"t-kc": m},
 	}
+	foldConfigSpellings(cfg) // as the decode leaves it (#4253)
+	return cfg
 }
 
 func hasCanary(s string) bool { return strings.Contains(strings.ToLower(s), keyCheckCanary) }

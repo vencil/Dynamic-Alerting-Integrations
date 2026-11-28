@@ -232,10 +232,9 @@ func (s *keySpellings) writtenOf(key string) string {
 // is canonical wins, else the smallest text; a spelling that writes nothing
 // (null, nullThreshold) never wins over one that writes, and is not a
 // duplicate either (#2418's rule: a null beside another spelling writes
-// nothing). The losers are recorded in dups, and so is the #1231 retired
-// spelling of a threshold the map also writes canonically — which stays in
-// the map: canonical-wins dedup further down serves the canonical one, as it
-// always has.
+// nothing). The losers are recorded in dups. A #1231 retired spelling is
+// not this function's: the decode folds it first (normalizeKeysTaking,
+// #4253).
 func normalizeKeys[V any](m map[string]V) (map[string]V, *keySpellings) {
 	out := m
 	var s *keySpellings
@@ -271,21 +270,6 @@ func normalizeKeys[V any](m map[string]V) (map[string]V, *keySpellings) {
 				}
 				s.written[c] = win
 			}
-		}
-	}
-	for k, v := range out {
-		if !touchesAlias(k) {
-			continue
-		}
-		canon, isAlias := canonicalKeyFor(k)
-		if !isAlias || nullThreshold(k, any(v)) {
-			continue
-		}
-		if cv, both := out[canon]; both && !nullThreshold(canon, any(cv)) {
-			if s == nil {
-				s = &keySpellings{}
-			}
-			s.addDup(canon, s.writtenOf(k))
 		}
 	}
 	return out, s

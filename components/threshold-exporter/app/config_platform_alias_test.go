@@ -127,7 +127,7 @@ func TestTheFlatFastPathUnionsAcrossSpellings(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 	reloaded := tenantDefaults(mgr.GetConfig().Tenants["tx"])
-	if reloaded["mysql_cpu"] != "91" {
+	if reloaded["mysql_threads_running"] != "91" { // #4253: folded at the decode
 		t.Fatalf("premise: the tenant edit did not land (tx = %v), so this run proves nothing", reloaded)
 	}
 

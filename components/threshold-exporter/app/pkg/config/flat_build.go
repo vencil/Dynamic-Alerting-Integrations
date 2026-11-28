@@ -989,6 +989,7 @@ func selectedRootCarrierKey(scan *TreeScan) string {
 func mergePartialInto(merged *ThresholdConfig, partial ThresholdConfig) {
 	for k, v := range partial.Defaults {
 		merged.Defaults[k] = v
+		mergeRootFold(merged, partial, k)
 	}
 	for k, v := range partial.StateFilters {
 		merged.StateFilters[k] = v

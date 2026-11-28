@@ -81,6 +81,8 @@ var servedKeyCheckFixtures = map[config.KeyCheckKind]string{
 	config.KeyCheckRenamedShadowed:            "'mysql_cpu{canary_lbl=\"CaNaRy-s\"}': \"1\"\n    'mysql_threads_running{canary_lbl=\"CaNaRy-s\"}': \"2\"",
 	config.KeyCheckRenamedCriticalDimensional: `'mysql_cpu_critical{canary_lbl="CaNaRy-c"}': "1"`,
 	config.KeyCheckRenamed:                    `'mysql_cpu{canary_lbl="CaNaRy-r"}': "1"`,
+	config.KeyCheckRenamedOverRefused: "'mysql_threads_running{canary_lbl=\"CaNaRy-o\"}': \"junk\"\n" +
+		"    'mysql_cpu{canary_lbl=\"CaNaRy-o\"}': \"1\"",
 }
 
 // TestServedValues_KeyChecksCarryNoAuthorTextButKeyAndHead (#3703): for

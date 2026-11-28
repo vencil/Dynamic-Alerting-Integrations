@@ -295,6 +295,9 @@ func withoutDisables(cfg *config.ThresholdConfig, set []tenantKey) *config.Thres
 		out.Tenants[t] = m
 	}
 	for _, tk := range set {
+		// #4253: tk.key names the line as written; the config holds it under
+		// the canonical key.
+		ck, _ := config.CanonicalKeyFor(tk.key)
 		// #3832: a key the root `disable`s (InheritedRootDisables) is taken
 		// away by giving the tenant the built-in value — what the tree serves
 		// it when the root does not opt out — whatever the tenant writes for
@@ -302,24 +305,24 @@ func withoutDisables(cfg *config.ThresholdConfig, set []tenantKey) *config.Thres
 		// `disable` is judged against the platform default (see the top of
 		// this file), and deleting the tenant's value would only fall back
 		// to the root's.
-		if v, root := cfg.Defaults[tk.key]; root && config.RootDisabledDefault(v) {
+		if v, root := cfg.Defaults[ck]; root && config.RootDisabledDefault(v) {
 			m := make(map[string]config.ScheduledValue, len(out.Tenants[tk.tenant])+1)
 			for k, v := range out.Tenants[tk.tenant] {
-				if ck, _ := config.CanonicalKeyFor(k); ck != tk.key {
+				if kc, _ := config.CanonicalKeyFor(k); kc != ck {
 					m[k] = v
 				}
 			}
-			m[tk.key] = config.ScheduledValue{Default: config.BuiltinDefaultText(tk.key)}
+			m[ck] = config.ScheduledValue{Default: config.BuiltinDefaultText(ck)}
 			out.Tenants[tk.tenant] = m
 			continue
 		}
-		sv, ok := cfg.Tenants[tk.tenant][tk.key]
+		sv, ok := cfg.Tenants[tk.tenant][ck]
 		if !ok || !config.IsDisabled(strings.ToLower(strings.TrimSpace(sv.Default))) {
 			continue
 		}
 		m := make(map[string]config.ScheduledValue, len(out.Tenants[tk.tenant]))
 		for k, v := range out.Tenants[tk.tenant] {
-			if k != tk.key {
+			if k != ck {
 				m[k] = v
 			}
 		}

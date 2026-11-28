@@ -187,8 +187,9 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 	blocks := make([]map[string]any, len(chainBytes))
 	rootLevel := -1
 	for i, b := range chainBytes {
-		blocks[i] = ParseChainDefaults(b).block
-		if path.Dir(chain[i]) == SimRoot {
+		root := path.Dir(chain[i]) == SimRoot
+		blocks[i] = parseChainDefaults(b, root).block // #4253: the root's fold reads the root decode's
+		if root {
 			rootLevel = i
 		}
 	}
