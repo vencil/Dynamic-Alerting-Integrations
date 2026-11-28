@@ -10,17 +10,17 @@ lang: en
 > **Language / 語言：** **English (Current)** | [中文](shadow-monitoring-sop.md)
 >
 > **Audience**: SRE / Platform Engineer / DevOps
-> **Prerequisites**: Completed `da-tools migrate` conversion with new and old Recording Rules running simultaneously in Prometheus
-> **Note**: the current `da-tools migrate` migrates rules verbatim (alerts carry `da_migrated: "true"`) and its migration mapping is now `.migration/mapping/<tenant>.yaml`; this SOP's `prefix-mapping.yaml` and `migration_status: shadow` belong to the earlier migrate, and `validate` support for the new mapping comes in the follow-up [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)
+> **Prerequisites**: Completed `da-tools migrate` conversion with the legacy rules and the migrated rules running simultaneously in Prometheus
+> **Note**: the current `da-tools migrate` migrates rules verbatim (alerts carry `da_migrated: "true"`) and its migration mapping is `.migration/mapping/<tenant>.yaml`; `da-tools validate` reads that mapping and compares the sets of alerts each side fires ([#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)). The numeric comparison (`--old` / `--new`, `prefix-mapping.yaml`, `--tolerance`) is removed. The `migration_status: shadow` in the cutover steps of §7 belongs to the earlier migrate. ⚠️ The v2.9.0 image still has the old, numeric validate; this SOP's validate commands do not apply on that image. <!-- image-caveat: v2.9.0 -->
 > **Tools**: `da-tools validate` (`--watch` continuous mode / single-run mode), `da-tools diagnose` (health checks)
 
 ---
 
 ## 1. Overview
 
-Shadow Monitoring is the **parallel validation phase** of the migration process: new rules (with `custom_` prefix) run alongside old rules, with `da-tools validate` continuously comparing numerical outputs to confirm behavioral equivalence before switching.
+Shadow Monitoring is the **parallel validation phase** of the migration process: the migrated rules (the rules `migrate-rule` migrates verbatim, with the tenant injected) run alongside the legacy rules, with `da-tools validate` continuously comparing the sets of alerts each side fires to confirm the same behaviour before switching.
 
-Alert Rules produced by the earlier `migrate_rule.py` automatically carry the `migration_status: shadow` label, which Alertmanager uses to intercept notifications and prevent false positives.
+The alerts `migrate_rule.py` produces carry the `da_migrated: "true"` label; the route `generate-routes` produces takes them to `migrated-alerts-shadow`, a name-only receiver that notifies no one, so one event does not page twice in the shadow period, while the alerts stay in the Alertmanager UI and the `ALERTS` series for the comparison.
 
 This SOP covers: pre-flight checks → launch → daily inspections → troubleshooting → convergence validation → cutover.
 
@@ -43,29 +43,33 @@ python3 scripts/tools/ops/validate_config.py --config-dir components/threshold-e
 ### 2.2 Confirm New Rules Are Loaded
 
 ```bash
-# Automated pre-flight check (rules loaded + mapping + AM interception)
+# Automated pre-flight check (mapping + migrated rules loaded + AM shadow receiver)
 da-tools shadow-verify preflight \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
+  --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090
 ```
 
-> Manual alternative: `curl -s http://localhost:9090/api/v1/rules | python3 -c "..."` + `ls -la migration_output/.migration/prefix-mapping.yaml`
+> `preflight` reads the mapping `migrate-rule` writes: a prefix-mapping, a document not of the shape `migrate-rule` writes, or one with no alert to compare fails the `mapping_file` check with exit code 2. It then checks that every alert of the mapping is loaded as a migrated rule of the tenant (`da_migrated="true"`, `tenant`), and that the Alertmanager configuration has the receiver `migrated-alerts-shadow`.
+>
+> Manual alternative: `curl -s http://localhost:9090/api/v1/rules | python3 -c "..."` + `ls -la migration_output/.migration/mapping/db-a.yaml`
 
 ### 2.3 Alertmanager Interception Configuration
 
-Rules produced by the earlier `migrate_rule.py` automatically carry the `migration_status: shadow` label. Alertmanager must be configured to intercept these to prevent false positives:
+Migrated alerts carry `da_migrated: "true"`, and Alertmanager must send them to a receiver that notifies no one, so one event does not page twice in the shadow period. `generate-routes` produces this route (the fifth platform route); do not write it by hand. What it produces looks like this:
 
 ```yaml
-# alertmanager.yml — add this route
 route:
   routes:
     - matchers:
-        - migration_status="shadow"
-      receiver: "null"
+        - da_migrated="true"
+      group_by: [tenant, alertname]
+      receiver: migrated-alerts-shadow
       continue: false
 receivers:
-  - name: "null"
+  - name: migrated-alerts-shadow
 ```
+
+For the details (`_routing_migrated`, how a tenant is excluded at cutover) see [generate-routes](cli-reference.en.md#generate-routes).
 
 ### 2.4 Establish Baseline (Optional)
 
@@ -79,6 +83,8 @@ Output includes p50/p90/p95/p99 statistics and threshold suggestions in CSV form
 
 ## 3. Launch Shadow Monitoring
 
+⚠️ The validate in this section's `ghcr.io/vencil/da-tools:v2.9.0` image is still the numeric comparison and cannot read `.migration/mapping/<tenant>.yaml`; until the next image is released, run it from the repo as `python3 scripts/tools/ops/validate_migration.py` (the same arguments). <!-- image-caveat: v2.9.0 -->
+
 ### 3.1 Local Port-Forward (Development/Small Environments)
 
 ```bash
@@ -87,21 +93,24 @@ kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  validate --mapping /data/.migration/prefix-mapping.yaml \
+  validate --mapping /data/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
 # 300 second interval × 4032 rounds ≈ 14 days
+# Legacy rules still on another Prometheus: add --legacy-prometheus <URL> (defaults to --prometheus)
 ```
 
 > **Already cloned the project?** You can also run the Python script directly:
 > ```bash
 > python3 scripts/tools/ops/validate_migration.py \
->   --mapping migration_output/.migration/prefix-mapping.yaml \
+>   --mapping migration_output/.migration/mapping/db-a.yaml \
 >   --prometheus http://localhost:9090 \
 >   --watch --interval 300 --rounds 4032
 > ```
 
 ### 3.2 K8s Job (Recommended for Production)
+
+⚠️ The Job below uses the v2.9.0 image, whose validate is still the numeric comparison and cannot read the new migration mapping; until the next image is released, do not deploy this Job: run §3.1's `python3 scripts/tools/ops/validate_migration.py … --watch` from the repo on a machine that reaches Prometheus. <!-- image-caveat: v2.9.0 -->
 
 ```yaml
 apiVersion: batch/v1
@@ -122,7 +131,7 @@ spec:
           args:
             - validate
             - --mapping
-            - /config/prefix-mapping.yaml
+            - /config/db-a.yaml
             - --watch
             - --interval
             - "300"
@@ -138,7 +147,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: prefix-mapping
+            name: migration-mapping-db-a
         - name: output
           emptyDir: {}
       restartPolicy: OnFailure
@@ -148,10 +157,12 @@ spec:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--interval` | 60s | Comparison interval (production recommends 300s) |
+| `--interval` | 60s | Comparison interval, also the alert sampling window (production recommends 300s); neither side's rule groups may be evaluated less often, or the exit code is 2 |
 | `--rounds` | 10 | Number of comparison rounds (14 days ≈ 4032 rounds @300s) |
-| `--tolerance` | 0.001 | Numerical tolerance (0.1%), rate-based metrics can be relaxed |
+| `--legacy-prometheus` | same as `--prometheus` | The Prometheus holding the legacy rules; `--prometheus` is the migrated rules' side |
 | `-o` | `validation_output` | Report output directory |
+
+All flags and exit codes: [validate](cli-reference.en.md#validate).
 
 ## 4. Daily Inspection Workflow
 
@@ -169,56 +180,55 @@ da-tools shadow-verify runtime \
 kubectl logs job/shadow-monitor -n monitoring --tail=50
 ```
 
-> `shadow-verify runtime` automatically checks CSV mismatch ratio, tenant coverage, and Prometheus silent/maintenance mode status. If a tenant is in `silent` or `maintenance` mode, shadow comparison values remain valid, but after cutover alerts will not fire until the mode returns to `normal`.
+> `shadow-verify runtime` automatically checks the CSV's mismatch ratio (`mismatch` plus `pin_selects_nothing`, `rule_not_loaded`, `window_too_short`), the rows that cannot be verified (`unverifiable`; a single one is a FAIL), tenant coverage, and Prometheus silent/maintenance mode status. If a tenant is in `silent` or `maintenance` mode, the shadow comparison results remain valid, but after cutover alerts will not fire until the mode returns to `normal`.
 
 ### 4.2 Health Indicators
 
 | Indicator | Healthy | Needs Investigation |
 |-----------|---------|---------------------|
 | mismatch ratio | 0% | > 0% |
-| missing data | 0 | > 0 (Recording Rule name or label mismatch) |
+| rows that cannot be verified (`unverifiable`) | 0 | > 0 (neither side selects a series, or a legacy alert carries neither `tenant` nor `namespace`) |
 | consecutive mismatches | None | Same tenant for 3+ consecutive rounds |
 | operational_mode | normal | silent / maintenance (must restore before cutover) |
 
 ## 5. Troubleshooting Playbook
 
-### 5.1 Numerical Mismatch
+### 5.1 Alert-Set Mismatch
 
-**Symptom**: `da-tools validate` reports `mismatch` with delta ≠ 0
+**Symptom**: `validation-report.csv` has rows of `Kind` `alert` with `Status` `mismatch`: `Legacy` 1 and `Migrated` 0 means only the legacy rule fired within this round's window, the other way round only the migrated rule did. The `Labels` column holds the rest of the comparison key's labels (`tenant`, `da_migrated` and `alertstate` removed).
 
 ```bash
-# Single query comparison
-docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 \
-  validate --old "<old_query>" --new "<new_query>" \
-  --prometheus http://localhost:9090
+# List the mismatch rows
+grep ',mismatch,' validation_output/validation-report.csv | head -20
 
-# Query Prometheus directly to compare raw data
-curl -s "http://localhost:9090/api/v1/query?query=<old_query>" | python3 -m json.tool
-curl -s "http://localhost:9090/api/v1/query?query=<new_query>" | python3 -m json.tool
+# Query what each side fired within the window (the window equals --interval; run again with alertstate pending)
+curl -s http://localhost:9090/api/v1/query --data-urlencode \
+  'query=max_over_time(ALERTS{alertname="<alert name>", da_migrated="true", tenant="db-a", alertstate="firing"}[5m])' | python3 -m json.tool
+# the legacy side is asked on the Prometheus of the legacy rules (the --legacy-prometheus one, when given)
+export LEGACY_PROMETHEUS=<the URL given to --legacy-prometheus>   # skip it when no --legacy-prometheus was given: both sides are one server
+curl -s "${LEGACY_PROMETHEUS:-http://localhost:9090}/api/v1/query" --data-urlencode \
+  'query=max_over_time(ALERTS{alertname="<alert name>", da_migrated="", alertstate="firing"}[5m])' | python3 -m json.tool
 ```
 
 **Common Causes and Fixes**:
 
 | Cause | Characteristic | Fix |
 |-------|----------------|-----|
-| Different aggregation method | new value = old value × N | Confirm `max by` vs `sum by` vs `avg by` |
-| Label mismatch | `new_missing` / `old_missing` | Check label names in `by()` clause |
-| Different evaluation time window | delta very small but stable | Confirm `rate[5m]` / `[1m]` windows match |
-| Counter reset | Occasional large delta | Normal for rate calculations, observe convergence |
-| Tolerance too strict | delta very small but stable mismatch reported | Increase `--tolerance` (e.g., `0.01` = 1%) |
+| Different label sets | Two mismatch rows for one alert in one round (one 1/0, one 0/1) with different `Labels` | Compare the two rows' `Labels` to find the label on one side only or with a different value |
+| Injection selects fewer series | Fires on the legacy side only, for some series only | Check the alert's `legacy` / `pinned` selectors in the mapping: is the tenant-ownership assumption right? |
+| A same-named legacy rule that was not migrated | One alert keeps firing on the legacy side only | Known limitation: the legacy side queries `ALERTS` by alertname, and another same-named rule that was not migrated (say, in another file) has no migrated counterpart |
 
-### 5.2 Missing Data
+Rows with `Status` `other_tenant` are alerts of other tenants on the legacy side, which the injection narrows away by design; they are not mismatches.
 
-**Symptom**: `old_missing` or `new_missing`
+### 5.2 Unverifiable and Selecting Nothing
 
-```bash
-# Confirm if metric exists in Prometheus
-curl -s "http://localhost:9090/api/v1/label/__name__/values" | \
-  python3 -c "import sys,json; names=json.load(sys.stdin)['data']; \
-  [print(n) for n in names if 'custom_' in n or '<keyword>' in n]"
-```
+**Symptom**: `Status` `unverifiable` or `pin_selects_nothing`
 
-Possible causes: new Recording Rule not yet evaluated (wait 1–2 evaluation intervals), typo in `prefix-mapping.yaml`, metric for that tenant already disabled (three-state mechanism).
+- `Kind` `selector`, `Status` `pin_selects_nothing`: the legacy selector has series and the injected pinned selector has none, so the migrated rule can never fire. `validate` stops with exit code 2 (`--watch` stops at once too). Commonly the tenant-ownership assumption is wrong, or `job=` / `instance=` does not match the platform's scrape configuration; fix it and regenerate the rules and mapping with `migrate-rule`.
+- `Kind` `selector`, `Status` `unverifiable`: neither side has a series; there is no data to verify by now.
+- `Kind` `alert`, `Status` `unverifiable`: the legacy alert carries neither `tenant` nor `namespace`, so its tenant cannot be told.
+
+What cannot be verified never passes (exit code 1, readiness not ready); cutting over then takes `cutover --force`.
 
 ### 5.3 da-tools validate Itself Fails
 
@@ -226,10 +236,11 @@ Possible causes: new Recording Rule not yet evaluated (wait 1–2 evaluation int
 # Confirm Prometheus is reachable
 curl -s http://localhost:9090/-/healthy
 
-# prefix-mapping.yaml needs no separate check: da-tools validate reads it strictly (by the YAML
-# spec) when given --mapping, and names the flag and the reason with rc 2 if it cannot be opened,
-# is not YAML, repeats a key in one mapping, or is not a mapping at the top; an entry in it that
-# cannot be used (an empty value, only one of old_query/new_query) is rc 2 too, named by key and reason
+# The mapping needs no separate check: da-tools validate reads it strictly (by the YAML spec) when
+# given --mapping, and names the flag and the reason with rc 2 if it cannot be opened, is not YAML,
+# or is not a mapping at the top; a prefix-mapping (regenerate it with the new migrate-rule) or a
+# document not of the shape migrate-rule writes is rc 2 too, named; so is a rule not loaded
+# (Kind=rule, rule_not_loaded) or a rule group evaluated less often than --interval (window_too_short)
 
 # Restart K8s Job
 kubectl delete job shadow-monitor -n monitoring
@@ -242,7 +253,7 @@ kubectl apply -f shadow-monitor-job.yaml
 
 | Condition | Validation Method |
 |-----------|-------------------|
-| 7 consecutive days with 0 mismatches | CSV report shows all `match` for last 7 days |
+| 7 consecutive days with 0 mismatches | CSV report has no `mismatch`, `pin_selects_nothing`, `rule_not_loaded`, `window_too_short` or `unverifiable` row for the last 7 days |
 | Coverage of business peak and off-peak hours | Confirm report timestamps span peak hours |
 | Coverage of maintenance windows | Confirm report timestamps include weekends/backup periods |
 | All tenants participating in comparison | Each tenant has data in CSV |
@@ -259,7 +270,7 @@ da-tools shadow-verify convergence \
 
 # Or run all phases at once
 da-tools shadow-verify all \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
+  --mapping migration_output/.migration/mapping/db-a.yaml \
   --report-csv validation_output/validation-report.csv \
   --prometheus http://localhost:9090
 ```
@@ -307,13 +318,13 @@ docker run --rm --network=host \
   ghcr.io/vencil/da-tools:v2.9.0 \
   cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 
-# Step 3: Batch cutover multiple tenants (execute sequentially)
+# Step 3: Batch cutover multiple tenants (execute sequentially; each tenant with its own readiness, validate run with -o validation_output/<tenant> per tenant)
 for tenant in db-a db-b db-c; do
   docker run --rm --network=host \
     -v $(pwd)/validation_output:/data:ro \
     -e PROMETHEUS_URL=http://localhost:9090 \
     ghcr.io/vencil/da-tools:v2.9.0 \
-    cutover --readiness-json /data/cutover-readiness.json --tenant "$tenant"
+    cutover --readiness-json "/data/$tenant/cutover-readiness.json" --tenant "$tenant"
 done
 ```
 <!-- image-caveat: v2.9.0 — the "v2.9.0 image prints this on stdout" comment in the block above -->
@@ -355,6 +366,8 @@ docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 diagnose db-a
 
 ### 7.2 Rollback (If Issues Occur)
 
+⚠️ The re-validation command below uses the v2.9.0 image; until the next image is released, run it from the repo as §3.1 does, `python3 scripts/tools/ops/validate_migration.py`, with `--mapping` given the host path `migration_output/.migration/mapping/db-a.yaml` (`/data/...` is the path inside the container), the other arguments the same. <!-- image-caveat: v2.9.0 -->
+
 ```bash
 # 1. Restore old Recording Rules (if original YAML preserved)
 kubectl apply -f old-recording-rules.yaml
@@ -365,7 +378,7 @@ kubectl apply -f old-recording-rules.yaml
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  validate --mapping /data/.migration/prefix-mapping.yaml \
+  validate --mapping /data/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
 ```
@@ -390,7 +403,7 @@ The following tools reduce manual operations during Shadow Monitoring:
 
 | Tool | Usage | Effect |
 |------|-------|--------|
-| **Auto-convergence** ✅ | `validate --auto-detect-convergence --stability-window 5` | Track cross-round state for each metric pair, auto-generate `cutover-readiness.json` and stop watch when all pairs match for N consecutive rounds |
+| **Auto-convergence** ✅ | `validate --auto-detect-convergence --stability-window 5` | After N consecutive clean rounds (every rule loaded, a clean pre-check, the same alert sets, nothing unverifiable, every query answered), auto-generate `cutover-readiness.json` and stop watch |
 | **Batch health report** ✅ | `batch-diagnose` (da-tools CLI) | Post-cutover: auto-discover tenants → parallel `diagnose` → health score + remediation steps |
 | **Threshold backtest** ✅ | `backtest --config-dir <the PR's conf.d> --baseline <the base's conf.d> --prometheus <url>` | When PR modifies thresholds, backtest 7 days of historical data, CI auto-produces risk assessment |
 | **Shadow Dashboard** ✅ | Grafana mount `shadow-monitoring-dashboard.json` (see §8.1 below) | Real-time display: shadow rule count, per-tenant status, old/new metric trend comparison, delta convergence graph |

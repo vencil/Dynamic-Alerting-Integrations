@@ -298,11 +298,24 @@ _GO_RUNTIME_METRICS = (
 )
 
 
+#: A mapping as migrate-rule writes it, whose alert the `/migration` stub
+#: loads on both sides; every count and ALERTS query answers the /rich
+#: vector on both, so a round is clean (#4227).
+MIGRATION_MAPPING = (
+    "tenant: tenant-one\nrules_file: r.yml\nrules:\n"
+    "- {group: g, alert: StubAlert, selectors: [{legacy: up, pinned: 'up{tenant=\"tenant-one\"}'}]}\n")
+
+
 def _stub_payload(path: str) -> tuple[int, bytes, str]:
     """(status, body, content_type) for a stubbed upstream path."""
     def j(obj):
         return 200, json.dumps(obj).encode(), "application/json"
 
+    # `/migration`: the /rich answers, and the rules of validate's mapping
+    # (`MIGRATION_MAPPING`) loaded on both sides (#4227).
+    migration = path.startswith("/migration")
+    if migration:
+        path = "/rich" + (path[len("/migration"):] or "/")
     rich = path.startswith("/rich")
     if rich:
         path = path[len("/rich"):] or "/"
@@ -325,6 +338,12 @@ def _stub_payload(path: str) -> tuple[int, bytes, str]:
             return j(_RICH_MATRIX if rich else _EMPTY_MATRIX)
         return j(_RICH_VECTOR if rich else _EMPTY_VECTOR)
     if path.startswith("/api/v1/rules"):
+        if migration:
+            return j({"status": "success", "data": {"groups": [{
+                "name": "g", "interval": 0.001, "rules": [
+                    {"name": "StubAlert", "type": "alerting", "labels": {}},
+                    {"name": "StubAlert", "type": "alerting",
+                     "labels": {"tenant": "tenant-one", "da_migrated": "true"}}]}]}})
         return j({"status": "success", "data": {"groups": []}})
     if path.startswith("/api/v1/alerts"):
         return j({"status": "success", "data": {"alerts": []}})
@@ -533,14 +552,16 @@ def _write(p: Path, text: str) -> str:
 def _readiness_json(tmp: Path) -> str:
     # Required fields per cutover_tenant.load_cutover_readiness(): omitting any
     # of them diverts the tool onto its `load_readiness` caller-error path.
+    # #4227: the fields are `_lib_shadow_report.READINESS_FIELDS`.
     return _write(tmp / "cutover-readiness.json", json.dumps({
         "ready": True,
-        "convergence_percentage": 100.0,
-        "converged_count": 4,
-        "total_pairs": 4,
         "timestamp": "2026-07-14T00:00:00Z",
-        "zero_mismatch_days": 7,
-        "tenants": {},
+        "tenant": "tenant-one",
+        "round_count": 5,
+        "stability_window": 5,
+        "clean_rounds": 5,
+        "last_round": {},
+        "recommendation": "Safe to cutover",
     }))
 
 
@@ -598,15 +619,17 @@ def _runtime_rules_json(tmp: Path) -> str:
 
 
 def _mapping_yaml(tmp: Path) -> str:
-    return _write(tmp / "prefix-mapping.yaml",
-                  "legacy_prefix_a: new_prefix_a\nlegacy_prefix_b: new_prefix_b\n")
+    # #4227: a mapping as migrate-rule writes it.
+    return _write(tmp / "mapping.yaml",
+                  "tenant: tenant-one\nrules_file: r.yml\nrules:\n"
+                  "- {group: g, alert: A, selectors: [{legacy: m, pinned: 'm{tenant=\"tenant-one\"}'}]}\n")
 
 
 def _report_csv(tmp: Path) -> str:
     # #3662: a report as `validate` writes it (`_lib_shadow_report`'s header).
     return _write(tmp / "validation-report.csv",
-                  "Label,Tenant,Old Query,New Query,Old Value,New Value,Delta,Status,Timestamp\n"
-                  "conn,tenant-one,old_q,new_q,10,10,0,match,2026-01-01 00:00:00\n")
+                  "Kind,Rule,Tenant,State,Labels,Legacy,Migrated,Status,Timestamp\n"
+                  "alert,A,tenant-one,firing,{},1,1,match,2026-01-01 00:00:00\n")
 
 
 def _alerts_json(tmp: Path) -> str:

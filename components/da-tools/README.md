@@ -136,7 +136,7 @@ docker run --rm \
 
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
-| `validate` | Shadow Monitoring 雙軌比對（含 auto-convergence） | `--mapping <file>` 或 `--old <q> --new <q>` |
+| `validate` | Shadow Monitoring 雙軌告警集合比對（含 auto-convergence） | `--mapping <file>`（`migrate` 寫的 `.migration/mapping/<tenant>.yaml`） |
 | `shadow-verify` | Shadow Monitoring 雙軌驗證（精簡版，CI 用） | `--mapping <file>` |
 | `backtest` | PR threshold 變更歷史回測 | `--config-dir <dir> --baseline <dir>` 或 `--tenant <id> --metric <key> --new-value <v>` |
 | `cutover` | 一鍵切換（停 shadow → 移 recording rules → 移 shadow route → 健康檢驗） | `--readiness-json <file> --tenant <name>` |
@@ -226,12 +226,12 @@ $DA diagnose db-a
 $DA baseline --tenant db-a --duration 300
 
 # 3. Shadow Monitoring 雙軌比對（auto-convergence）
-#    --mapping 讀舊版 migrate 的 prefix-mapping.yaml；讀新對照 .migration/mapping/<tenant>.yaml 的支援在 #4227
+#    --mapping 讀 migrate 寫的 .migration/mapping/<tenant>.yaml，比對 legacy 與 migrated 規則響的告警集合
 docker run --rm --network=host \
-  -v $(pwd)/migration_output/.migration/prefix-mapping.yaml:/data/prefix-mapping.yaml:ro \
+  -v $(pwd)/migration_output/.migration/mapping/db-a.yaml:/data/db-a.yaml:ro \
   -e PROMETHEUS_URL=$PROM \
   ghcr.io/vencil/da-tools \
-  validate --mapping /data/prefix-mapping.yaml --watch --rounds 5
+  validate --mapping /data/db-a.yaml --watch --rounds 5
 ```
 
 ### 5.2 規則遷移（離線、無 Prometheus）

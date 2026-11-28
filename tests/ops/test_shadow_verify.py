@@ -73,8 +73,22 @@ def _read(args):
                            ["preflight", "runtime", "convergence"])
 
 
+#: A mapping as migrate-rule writes it (#4227).
+_MAPPING = {"tenant": "tenant-x", "rules_file": "r.yml", "rules": [
+    {"group": "g", "alert": "QueueDeep",
+     "selectors": [{"legacy": "q", "pinned": 'q{tenant="tenant-x"}'}]},
+    {"group": "migrated-expiry", "alert": "MigratedRulesExpiring", "added": True,
+     "selectors": []}]}
+
+#: A readiness as `validate --auto-detect-convergence` writes it (#4227).
+def _readiness(ready, clean=5):
+    return {"ready": ready, "timestamp": "2026-03-15T10:00:00+00:00", "tenant": "tenant-x",
+            "round_count": 7, "stability_window": 5, "clean_rounds": clean,
+            "last_round": {}, "recommendation": ""}
+
+
 def _write_mapping(tmp_path, content):
-    p = tmp_path / "prefix-mapping.yaml"
+    p = tmp_path / "mapping.yaml"
     p.write_text(yaml.dump(content), encoding="utf-8")
     return str(p)
 
@@ -255,10 +269,10 @@ class TestInputsAreJudged:
         import validate_migration as vm
         monkeypatch.setenv("TZ", "Asia/Taipei")
         time.tzset()
-        result = {"label": "l", "old_query": "o", "new_query": "n",
-                  "diffs": [{"tenant": "db-a", "old_value": 1, "new_value": 2,
-                             "delta": 1, "status": "mismatch"}]}
-        path = vm.write_csv_report([result, None], str(tmp_path))
+        result = {"rows": [{"kind": "alert", "rule": "A", "tenant": "db-a", "state": "firing",
+                            "labels": "{}", "legacy": 1, "migrated": 0,
+                            "status": "mismatch"}], "query_errors": 0}
+        path = vm.write_csv_report(result, str(tmp_path))
         (record,) = sv.judge_inputs(_parsed(report_csv=path), ["runtime"])["report_csv"]
         assert (record["Tenant"], record["Status"]) == ("db-a", "mismatch")
         age = datetime.now(timezone.utc) - parse_timestamp(record["Timestamp"])
@@ -271,18 +285,50 @@ class TestInputsAreJudged:
 # check_preflight
 # ---------------------------------------------------------------------------
 class TestCheckPreflight:
-    def test_mapping_file_found(self, tmp_path):
-        mapping = {"metric_a": {"original_metric": "old_a"}, "metric_b": {"original_metric": "old_b"}}
-        mp = _write_mapping(tmp_path, mapping)
-        args = _args(mapping=mp)
+    def _preflight(self, tmp_path, mapping, rules=None):
+        args = _args(mapping=_write_mapping(tmp_path, mapping))
 
-        with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "unreachable")):
+        def get(url, **_kw):
+            if "/api/v1/rules" in url and rules is not None:
+                return {"status": "success", "data": {"groups": [
+                    {"name": "g", "rules": rules}]}}, None
+            return None, "unreachable"
+        with patch.object(_lib_prometheus, "http_get_json", side_effect=get):
             with patch("urllib.request.urlopen", side_effect=OSError("fail")):
-                checks = sv.check_preflight(args, _read(args))
+                return {c["check"]: c for c in sv.check_preflight(args, _read(args))}
 
-        mapping_check = next(c for c in checks if c["check"] == "mapping_file")
-        assert mapping_check["status"] == "pass"
-        assert "2 comparison pairs" in mapping_check["detail"]
+    def test_mapping_file_found(self, tmp_path):
+        c = self._preflight(tmp_path, _MAPPING)["mapping_file"]
+        assert c["status"] == "pass"
+        assert c["detail"] == "tenant tenant-x: 1 alerts to compare, 1 selector pairs"
+
+    def test_the_prefix_mapping_is_a_caller_error(self, tmp_path):
+        """#4227: the numeric comparison is gone; its mapping is named, rc 2."""
+        c = self._preflight(tmp_path, {"m": {"original_metric": "old_m"}})["mapping_file"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert c["detail"].startswith("prefix-mapping of the numeric comparison")
+
+    def test_no_alert_to_compare_fails_closed(self, tmp_path):
+        """#4227: 0 comparison pairs was a pass — nothing verified."""
+        only_added = {**_MAPPING, "rules": _MAPPING["rules"][1:]}
+        c = self._preflight(tmp_path, only_added)["mapping_file"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert c["detail"].startswith("0 alerts to compare")
+
+    def test_a_document_that_is_not_the_mapping_is_named(self, tmp_path):
+        c = self._preflight(tmp_path, {"tenant": "t", "rules": [{"group": "g"}]})["mapping_file"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert "rules[0] (expected alert_or_record)" in c["detail"]
+
+    def test_the_migrated_rules_must_be_loaded_for_the_tenant(self, tmp_path):
+        mine = {"name": "QueueDeep", "labels": {"tenant": "tenant-x", "da_migrated": "true"}}
+        other = {"name": "QueueDeep", "labels": {"tenant": "other", "da_migrated": "true"}}
+        legacy = {"name": "QueueDeep", "labels": {}}
+        assert self._preflight(tmp_path, _MAPPING, [mine])[
+            "migrated_rules_loaded"]["status"] == "pass"
+        c = self._preflight(tmp_path, _MAPPING, [other, legacy])["migrated_rules_loaded"]
+        assert (c["status"], c["detail"]) == (
+            "fail", "not loaded as migrated rules of tenant-x: QueueDeep")
 
     def test_no_mapping_provided(self):
         args = _args(mapping=None)
@@ -411,11 +457,7 @@ class TestCheckRuntime:
 # ---------------------------------------------------------------------------
 class TestCheckConvergence:
     def test_readiness_ready(self, tmp_path):
-        rj = _write_readiness(tmp_path, {
-            "ready": True,
-            "convergence_percentage": 100,
-            "unconverged_pairs": [],
-        })
+        rj = _write_readiness(tmp_path, _readiness(True))
         args = _args(readiness_json=rj, report_csv=None)
         checks = sv.check_convergence(args, _read(args))
 
@@ -424,17 +466,44 @@ class TestCheckConvergence:
         assert "READY" in readiness["detail"]
 
     def test_readiness_not_ready(self, tmp_path):
-        rj = _write_readiness(tmp_path, {
-            "ready": False,
-            "convergence_percentage": 85,
-            "unconverged_pairs": ["metric_a", "metric_b"],
-        })
+        rj = _write_readiness(tmp_path, _readiness(False, clean=2))
         args = _args(readiness_json=rj, report_csv=None)
         checks = sv.check_convergence(args, _read(args))
 
         readiness = next(c for c in checks if c["check"] == "cutover_readiness_json")
         assert readiness["status"] == "fail"
-        assert "2 pairs" in readiness["detail"]
+        assert readiness["detail"] == "2/5 consecutive clean rounds, not ready"
+
+    def test_a_readiness_of_the_numeric_comparison_is_a_caller_error(self, tmp_path):
+        """#4227: it lacks the fields validate writes now — named, rc 2."""
+        rj = _write_readiness(tmp_path, {"ready": True, "convergence_percentage": 100,
+                                         "unconverged_pairs": []})
+        args = _args(readiness_json=rj, report_csv=None)
+        (c,) = sv.check_convergence(args, _read(args))
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert c["detail"].startswith("missing fields ['timestamp', 'tenant'")
+
+    def test_a_pin_selecting_nothing_counts_as_a_mismatch(self, tmp_path):
+        now = datetime.now(timezone.utc)
+        recent_ts = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        rows = [{"Tenant": "db-a", "Status": "pin_selects_nothing", "Timestamp": recent_ts}]
+        args = _args(report_csv=_write_csv(tmp_path, rows), readiness_json=None)
+        (c,) = sv.check_convergence(args, _read(args))
+        assert (c["status"], c["detail"]) == (
+            "fail", "1 mismatches or unverifiable rows in last 7 days (1 rows)")
+
+    def test_an_unverifiable_row_never_passes(self, tmp_path):
+        """#4227 review: what cannot be verified never passes — runtime
+        warned (Overall PASS) and the 7-day check counted only mismatches."""
+        now = datetime.now(timezone.utc)
+        recent_ts = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        rows = [{"Tenant": "db-a", "Status": "unverifiable", "Timestamp": recent_ts}]
+        args = _args(report_csv=_write_csv(tmp_path, rows), readiness_json=None)
+        (c,) = sv.check_convergence(args, _read(args))
+        assert c["status"] == "fail"
+        with patch.object(sv, "query_prometheus", return_value=([], None)):
+            runtime = {c["check"]: c for c in sv.check_runtime(args, _read(args))}
+        assert runtime["csv_unverifiable"]["status"] == "fail"
 
     def test_seven_day_zero_mismatch(self, tmp_path):
         now = datetime.now(timezone.utc)
@@ -494,14 +563,13 @@ class TestFormatOutput:
 # ---------------------------------------------------------------------------
 class TestMainCLI:
     def test_json_output_all_phases(self, tmp_path, capsys):
-        mapping = {"m": {"original_metric": "old_m"}}
-        mp = _write_mapping(tmp_path, mapping)
+        mp = _write_mapping(tmp_path, _MAPPING)
         now = datetime.now(timezone.utc)
         recent_ts = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
         csv_path = _write_csv(tmp_path, [
             {"Tenant": "db-a", "Status": "match", "Timestamp": recent_ts}
         ])
-        rj = _write_readiness(tmp_path, {"ready": True, "convergence_percentage": 100, "unconverged_pairs": []})
+        rj = _write_readiness(tmp_path, _readiness(True))
 
         mock_resp = MagicMock()
         mock_resp.read.return_value = b"OK"
@@ -553,8 +621,7 @@ class TestMainCLI:
     def test_json_exit_is_the_verdict(self, tmp_path, capsys):
         """#3216: under --json the document goes out through run(), and a
         failed check is still the exit (rc 1), not the document's rc 0."""
-        rj = _write_readiness(tmp_path, {"ready": False, "convergence_percentage": 50,
-                                         "unconverged_pairs": ["a"]})
+        rj = _write_readiness(tmp_path, _readiness(False, clean=0))
         with patch.object(sv, "query_prometheus", return_value=([], None)):
             with patch("sys.argv", ["shadow_verify.py", "convergence",
                                     "--readiness-json", rj, "--json"]):
@@ -582,7 +649,7 @@ def _run(check, answer_for):
 
     def _get(url, **_kw):
         if "/api/v2/status" in url:
-            return {"config": {"original": "migration_status"}}, None
+            return {"config": {"original": "migrated-alerts-shadow"}}, None
         return answer_for(up.parse_qs(up.urlsplit(url).query).get("query", [""])[0])
     healthy = MagicMock()
     healthy.read.return_value = b"Prometheus is Healthy."
@@ -606,35 +673,18 @@ class TestQueryNotAnsweredIsACheck:
         assert (c["status"], c.get("caller_error")) == ("fail", True)
         assert c["detail"] == "Query failed: HTTP 503"
 
-    @pytest.mark.parametrize("value", ["NaN", "+Inf"])
-    def test_a_count_that_is_not_finite_is_a_caller_error(self, value):
-        """It used to crash on int(float('nan'))."""
-        c = _run(sv.check_preflight, lambda q: _vector(value) if "shadow" in q
-                 else _vector("3"))["shadow_rules_present"]
-        assert (c["status"], c.get("caller_error")) == ("fail", True)
+    def test_a_malformed_rules_answer_is_a_caller_error(self, tmp_path):
+        """#3133: the rules API answer is read by the lib (`rules_groups`)."""
+        args = _args(mapping=_write_mapping(tmp_path, _MAPPING))
 
-    def test_a_malformed_answer_is_a_caller_error(self):
-        bad = ({"status": "success", "data": {"resultType": "vector",
-                                              "result": [{"value": "3"}]}}, None)
-        c = _run(sv.check_preflight, lambda q: bad if "tenant:.*" in q
-                 else _vector("3"))["recording_rules_loaded"]
-        assert (c["status"], c.get("caller_error")) == ("fail", True)
-
-    def test_an_empty_count_still_reads_as_zero(self):
-        c = _run(sv.check_preflight, lambda q: _vector())["recording_rules_loaded"]
-        assert (c["status"], c["detail"]) == ("warn", "0 tenant:* recording rule metric names found")
-
-
-@pytest.mark.parametrize("marker,check", [
-    ("tenant:.*", "recording_rules_loaded"),
-    ("shadow", "shadow_rules_present"),
-])
-@pytest.mark.parametrize("value", ["NaN", "+Inf"])
-def test_every_count_refuses_a_non_finite_count(marker, check, value):
-    """#3133: both count positions are a named caller_error, not a crash."""
-    c = _run(sv.check_preflight, lambda q: _vector(value) if marker in q
-             else _vector("3"))[check]
-    assert (c["status"], c.get("caller_error")) == ("fail", True)
+        def get(url, **_kw):
+            return ({"status": "success", "data": {"groups": "x"}}, None) \
+                if "/api/v1/rules" in url else _vector("3")
+        with patch.object(_lib_prometheus, "http_get_json", side_effect=get):
+            with patch("urllib.request.urlopen", side_effect=OSError("fail")):
+                c = {c["check"]: c for c in sv.check_preflight(args, _read(args))}
+        assert (c["migrated_rules_loaded"]["status"],
+                c["migrated_rules_loaded"].get("caller_error")) == ("fail", True)
 
 
 class TestAlertmanagerIsReadOnlyWhenGiven:
@@ -662,8 +712,8 @@ class TestAlertmanagerIsReadOnlyWhenGiven:
     @pytest.mark.parametrize("am", [(None, "refused"), ({}, None)], ids=["unreachable", "no-config"])
     def test_the_default_alertmanager_not_answering_is_a_skip(self, monkeypatch, am):
         """#3133 batch 4: an answer without config.original (required by the
-        AM v2 API) is not an empty config — it used to warn "No
-        migration_status matcher found"; nobody asked for it, so a skip."""
+        AM v2 API) is not an empty config — it used to warn that the shadow
+        route was not found; nobody asked for it, so a skip."""
         seen = []
 
         def get(url, **_kw):
@@ -675,15 +725,39 @@ class TestAlertmanagerIsReadOnlyWhenGiven:
         assert c["status"] == "skip"
         assert "http://localhost:9093/api/v2/status" in seen
 
-    def test_a_given_alertmanager_with_the_route_passes(self, monkeypatch):
+    @staticmethod
+    def _am(monkeypatch, original):
         def get(url, **_kw):
-            return (({"config": {"original": "route: {matchers: [migration_status=shadow]}"}}, None)
-                    if url == "http://am:9093/api/v2/status" else
-                    (None, "refused") if "/api/v2/status" in url else _vector("3"))
+            return (({"config": {"original": original}}, None)
+                    if "/api/v2/status" in url else _vector("3"))
         monkeypatch.setattr(_lib_prometheus, "http_get_json", get)
         with patch("urllib.request.urlopen", side_effect=OSError("fail")):
-            c = {c["check"]: c for c in sv.check_preflight(_args(alertmanager="http://am:9093"))}
-        assert c["alertmanager_shadow_route"]["status"] == "pass"
+            return {c["check"]: c for c in sv.check_preflight(
+                _args(alertmanager="http://am:9093"))}["alertmanager_shadow_route"]
+
+    _RECEIVERS = "receivers:\n- name: default\n- name: migrated-alerts-shadow\n"
+
+    def test_a_given_alertmanager_with_the_route_passes(self, monkeypatch, da_read_env):
+        c = self._am(monkeypatch, "route:\n  receiver: default\n  routes:\n"
+                                  "  - receiver: migrated-alerts-shadow\n"
+                                  "    matchers: ['da_migrated=\"true\"']\n" + self._RECEIVERS)
+        assert c["status"] == "pass"
+
+    @pytest.mark.parametrize("original", [
+        # #4277: E′'s shadow route is the receiver generate-routes routes to;
+        # the recipe-era `migration_status` matcher is no longer looked for.
+        "route:\n  receiver: default\n  routes:\n  - receiver: default\n"
+        "    matchers: ['migration_status=\"shadow\"']\nreceivers:\n- name: default\n",
+        # CodeRabbit on #4381: the receiver defined, no route sending to it —
+        # a substring of the text used to pass.
+        "route:\n  receiver: default\n" + _RECEIVERS,
+    ], ids=["recipe-era-matcher", "receiver-only-defined"])
+    def test_no_route_to_the_shadow_receiver_warns(self, monkeypatch, da_read_env, original):
+        assert self._am(monkeypatch, original)["status"] == "warn"
+
+    def test_a_config_alertmanager_refuses_is_a_caller_error(self, monkeypatch, da_read_env):
+        c = self._am(monkeypatch, "route: [1]\n")
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
 
 
 @pytest.mark.parametrize("phase", ["runtime", "convergence"])

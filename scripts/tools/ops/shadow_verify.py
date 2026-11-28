@@ -2,14 +2,14 @@
 """shadow_verify.py — Shadow Monitoring readiness and convergence verification.
 
 Automates the manual verification steps from the Shadow Monitoring SOP:
-  - Pre-flight: rules loaded, mapping file, AM interception route
+  - Pre-flight: mapping file, migrated rules loaded, AM shadow receiver
   - Runtime: mismatch count, tenant coverage, operational modes
   - Convergence: cutover-readiness.json assessment + 7-day zero-mismatch check
 
 Usage:
   # Pre-flight check (before starting shadow monitoring)
   python3 shadow_verify.py preflight \
-    --mapping migration_output/.migration/prefix-mapping.yaml \
+    --mapping migration_output/.migration/mapping/db-a.yaml \
     --prometheus http://localhost:9090
 
   # Runtime health check (during shadow monitoring)
@@ -25,7 +25,7 @@ Usage:
 
   # All checks combined
   python3 shadow_verify.py all \
-    --mapping migration_output/.migration/prefix-mapping.yaml \
+    --mapping migration_output/.migration/mapping/db-a.yaml \
     --report-csv validation_output/validation-report.csv \
     --prometheus http://localhost:9090
 """
@@ -43,10 +43,14 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import probe_health, add_prometheus_arg, prometheus_url, url_type  # noqa: E402
+from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035: the mapping's tenant)
+from _lib_consumer_read import ConsumerReadError, alertmanager_config  # noqa: E402  (da-read)
 # #3133: every answer is checked by the lib; a query not answered is a failed
 # check, never a missing one.
 from _lib_prometheus import (  # noqa: E402
-    QueryError, alertmanager_status, collapse_replicas, instant_or_error, vector_count)
+    QueryError, alertmanager_status, collapse_replicas, instant_or_error, prometheus_rules)
+from _grar_routes import (  # noqa: E402  (#4355 / #4277: the one spelling)
+    MIGRATED_LABEL, MIGRATED_SHADOW_RECEIVER, MIGRATED_VALUE)
 
 #: The tenants in maintenance, one row each however many exporter replicas
 #: serve the filter (#3483).
@@ -59,6 +63,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, partial_answer)
 import _lib_input  # noqa: E402  (#3445: the input files are read by the lib)
 from _lib_shadow_report import REPORT_COLUMNS, REPORT_FORMATS, parse_timestamp, split_tenant_cell  # noqa: E402  (#3662)
+import _lib_shadow_report as shadow_report  # noqa: E402  (#4227: mapping, statuses, readiness)
 
 #: The input files (#3445): read by `_lib_input.document` before any phase
 #: runs — a path or content that cannot be read, or a top level of another
@@ -87,15 +92,6 @@ def _query_failed(check, err):
     }
 
 
-def _count(check, results):
-    """``(count, None)`` — 0 for an empty answer, as before — or ``(None,
-    check)`` when the sample is not a finite count (#3133; it used to crash)."""
-    try:
-        return vector_count(results) or 0, None
-    except QueryError as exc:
-        return None, _query_failed(check, str(exc))
-
-
 def run_cmd(cmd):
     """Execute a command safely using list arguments only (no shell=True)."""
     if not isinstance(cmd, list):
@@ -106,6 +102,67 @@ def run_cmd(cmd):
         return None
 
 
+def routes_to(config_text, receiver):
+    """Whether a route of the Alertmanager config *config_text* — read as
+    Alertmanager loads it (``da-read alertmanager``) — sends to *receiver*.
+    A receiver only defined, no route naming it, is no shadow route
+    (CodeRabbit on #4381: a substring of the text was)."""
+    config = alertmanager_config(config_text)
+    todo = [config.get("route")]
+    while todo:
+        route = todo.pop()
+        if not isinstance(route, dict):
+            continue
+        if route.get("receiver") == receiver:
+            return True
+        todo.extend(route.get("routes") or [])
+    return False
+
+
+def _mapping_check(mapping_doc):
+    """``(check, mapping)`` for the --mapping document (#4227): the mapping
+    `validate` reads (``_lib_shadow_report.read_mapping``) — or a failed
+    check, a caller error (rc 2), for the prefix-mapping of the numeric
+    comparison, a document that is not the mapping migrate-rule writes, and
+    one with no alert to compare (fail-closed: it was a pass with 0 pairs)."""
+    def refused(detail):
+        return {"check": "mapping_file", "status": "fail", "caller_error": True,
+                "detail": detail}, None
+
+    if shadow_report.is_prefix_mapping(mapping_doc):
+        return refused("prefix-mapping of the numeric comparison (removed): regenerate the "
+                       "mapping with migrate-rule (.migration/mapping/<tenant>.yaml)")
+    mapping, problems = shadow_report.read_mapping(mapping_doc, is_valid_tenant_id)
+    if problems:
+        return refused(f"not the mapping migrate-rule writes: {len(problems)} place(s): "
+                       + "; ".join(f"{where} (expected {want})" for where, want in problems))
+    if not mapping.alerts:
+        return refused(f"0 alerts to compare (the {len(mapping.added)} added by migrate-rule "
+                       "are not compared): nothing would be verified")
+    return {"check": "mapping_file", "status": "pass",
+            "detail": f"tenant {mapping.tenant}: {len(mapping.alerts)} alerts to compare, "
+                      f"{len(mapping.selectors)} selector pairs"}, mapping
+
+
+def _migrated_rules_check(prom_url, mapping):
+    """Whether every alert of *mapping* is loaded on *prom_url* as a migrated
+    rule of its tenant (``da_migrated="true"`` and ``tenant``, #4355)."""
+    try:
+        groups = prometheus_rules(prom_url, rule_type="alert")
+    except QueryError as exc:
+        return _query_failed("migrated_rules_loaded", str(exc))
+    loaded = shadow_report.loaded_alert_rules(
+        groups, mapping.alerts, migrated=True, tenant=mapping.tenant,
+        label=MIGRATED_LABEL, value=MIGRATED_VALUE)
+    missing = [a for a in mapping.alerts if not loaded[a]]
+    return {
+        "check": "migrated_rules_loaded",
+        "status": "fail" if missing else "pass",
+        "detail": (f"not loaded as migrated rules of {mapping.tenant}: {', '.join(missing)}"
+                   if missing else f"{len(mapping.alerts)} migrated alerts loaded"),
+    }
+
+
 def check_preflight(args, inputs=None):
     """Pre-flight checks before starting shadow monitoring. *inputs*: the
     documents `judge_inputs` read, by argparse dest."""
@@ -113,17 +170,11 @@ def check_preflight(args, inputs=None):
     inputs = inputs or {}
 
     # 1. Mapping file — read and judged by `judge_inputs` before any phase
-    # runs (#3392: a missing one was this check's "fail", rc 1, a finding;
-    # #3445: content it cannot read is named there too).
-    mapping = inputs.get("mapping")
-    if mapping is not None:
-        pair_count = sum(1 for v in mapping.values()
-                        if isinstance(v, dict) and v.get("original_metric"))
-        checks.append({
-            "check": "mapping_file",
-            "status": "pass",
-            "detail": f"{pair_count} comparison pairs found",
-        })
+    # runs (#3392 / #3445); its shape judged here (#4227).
+    mapping = None
+    if inputs.get("mapping") is not None:
+        check, mapping = _mapping_check(inputs["mapping"])
+        checks.append(check)
     else:
         checks.append({
             "check": "mapping_file",
@@ -153,31 +204,19 @@ def check_preflight(args, inputs=None):
             "detail": probe_err[:80],
         })
 
-    # 3. Rule groups loaded
-    results, err = query_prometheus(prom_url, "count(count by(__name__) ({__name__=~\"tenant:.*\"}))")
-    if err:
-        checks.append(_query_failed("recording_rules_loaded", err))
+    # 3. The mapping's alerts loaded as migrated rules (#4227: the recipe-era
+    # `tenant:*` recording rules and `migration_status=shadow` series are
+    # gone — E′ keeps every rule as it was, labelled da_migrated).
+    if mapping is not None:
+        checks.append(_migrated_rules_check(prom_url, mapping))
     else:
-        count, failed = _count("recording_rules_loaded", results)
-        checks.append(failed or {
-            "check": "recording_rules_loaded",
-            "status": "pass" if count > 0 else "warn",
-            "detail": f"{count} tenant:* recording rule metric names found",
+        checks.append({
+            "check": "migrated_rules_loaded",
+            "status": "skip",
+            "detail": "No usable --mapping",
         })
 
-    # 4. Shadow rules present (migration_status=shadow)
-    results, err = query_prometheus(prom_url, 'count({migration_status="shadow"}) or vector(0)')
-    if err:
-        checks.append(_query_failed("shadow_rules_present", err))
-    else:
-        count, failed = _count("shadow_rules_present", results)
-        checks.append(failed or {
-            "check": "shadow_rules_present",
-            "status": "pass" if count > 0 else "warn",
-            "detail": f"{count} shadow-tagged metric series",
-        })
-
-    # 5. Alertmanager shadow interception route
+    # 4. Alertmanager shadow route (#4277: the receiver generate-routes adds)
     # Given (--alertmanager) and not answering: a caller error, exit 2. The
     # default URL not answering stays a skip — nobody asked for it (#3133).
     try:
@@ -192,13 +231,17 @@ def check_preflight(args, inputs=None):
                 "detail": f"Alertmanager not reachable: {str(exc)[:60]}",
             })
     else:
-        config_str = am_status["config"]["original"]
-        has_shadow_route = "migration_status" in config_str
+        try:
+            has_shadow_route = routes_to(am_status["config"]["original"], MIGRATED_SHADOW_RECEIVER)
+        except ConsumerReadError as exc:
+            checks.append(_query_failed("alertmanager_shadow_route", str(exc)))
+            return checks
         checks.append({
             "check": "alertmanager_shadow_route",
             "status": "pass" if has_shadow_route else "warn",
-            "detail": "Shadow interception route found" if has_shadow_route
-                      else "No migration_status matcher found in AM config",
+            "detail": f"Receiver {MIGRATED_SHADOW_RECEIVER} found" if has_shadow_route
+                      else f"No receiver {MIGRATED_SHADOW_RECEIVER} in AM config "
+                           "(regenerate the routes with generate-routes)",
         })
 
     return checks
@@ -216,12 +259,17 @@ def check_runtime(args, inputs=None):
     records = inputs.get("report_csv")
     if records is not None:
         mismatch_count = 0
+        unverifiable = 0
         total_rows = 0
         tenants = set()
         for row in records:
             total_rows += 1
-            if row["Status"].strip() == "mismatch":
+            status = row["Status"].strip()
+            # #4227: an alert on one side only, or a pin selecting nothing.
+            if status in shadow_report.FINDING_STATUSES:
                 mismatch_count += 1
+            elif status == shadow_report.STATUS_UNVERIFIABLE:
+                unverifiable += 1
             # A row is one (tenant, cluster) group (#1200): the tenant is
             # counted once however many clusters it has rows for.
             tenant = split_tenant_cell(row["Tenant"].strip())[0]
@@ -233,6 +281,13 @@ def check_runtime(args, inputs=None):
             "check": "csv_mismatch_ratio",
             "status": "pass" if mismatch_count == 0 else "fail",
             "detail": f"{mismatch_count}/{total_rows} mismatches ({mismatch_pct:.1f}%)",
+        })
+        # #4227 (owner 2026-11-28): what cannot be verified never passes.
+        checks.append({
+            "check": "csv_unverifiable",
+            "status": "pass" if unverifiable == 0 else "fail",
+            "detail": f"{unverifiable} row(s) cannot be verified (no series on either side, "
+                      "or a legacy alert with neither tenant nor namespace)",
         })
         checks.append({
             "check": "csv_tenant_coverage",
@@ -292,15 +347,24 @@ def check_convergence(args, inputs=None):
     # one was a "skip" and an Overall PASS)
     report = inputs.get("readiness_json")
     if report is not None:
-        ready = report.get("ready", False)
-        pct = report.get("convergence_percentage", 0)
-        unconverged = report.get("unconverged_pairs", [])
-        checks.append({
-            "check": "cutover_readiness_json",
-            "status": "pass" if ready else "fail",
-            "detail": f"Convergence {pct}%, "
-                      + ("READY" if ready else f"{len(unconverged)} pairs not yet stable"),
-        })
+        missing = [f for f in shadow_report.READINESS_FIELDS if f not in report]
+        if missing:
+            # #4227: a readiness of the numeric comparison — not this one.
+            checks.append({
+                "check": "cutover_readiness_json",
+                "status": "fail",
+                "caller_error": True,
+                "detail": f"missing fields {missing}: rerun validate "
+                          "--auto-detect-convergence",
+            })
+        else:
+            ready = report["ready"] is True
+            checks.append({
+                "check": "cutover_readiness_json",
+                "status": "pass" if ready else "fail",
+                "detail": f"{report['clean_rounds']}/{report['stability_window']} "
+                          "consecutive clean rounds, " + ("READY" if ready else "not ready"),
+            })
 
     # 2. 7-day zero-mismatch (from CSV)
     records = inputs.get("report_csv")
@@ -314,14 +378,15 @@ def check_convergence(args, inputs=None):
             age_days = (now - parse_timestamp(row["Timestamp"])).total_seconds() / 86400
             if age_days <= 7:
                 recent_rows += 1
-                if row["Status"].strip() == "mismatch":
+                if row["Status"].strip() in shadow_report.BLOCKING_STATUSES:
                     recent_mismatches += 1
 
         if recent_rows > 0:
             checks.append({
                 "check": "seven_day_zero_mismatch",
                 "status": "pass" if recent_mismatches == 0 else "fail",
-                "detail": f"{recent_mismatches} mismatches in last 7 days ({recent_rows} rows)",
+                "detail": f"{recent_mismatches} mismatches or unverifiable rows in last 7 days "
+                          f"({recent_rows} rows)",
             })
         else:
             checks.append({
@@ -400,7 +465,8 @@ def build_parser():
         help="Verification phase to run",
     )
     _lib_input.add_input(parser, "--mapping", decode=MAPPING_DOCUMENT,
-                         help="Path to prefix-mapping.yaml")
+                         help="Path to the mapping migrate-rule writes "
+                              "(.migration/mapping/<tenant>.yaml)")
     _lib_input.add_input(parser, "--report-csv", decode=REPORT_CSV_DOCUMENT,
                          help="Path to validation-report.csv")
     _lib_input.add_input(parser, "--readiness-json", decode=READINESS_DOCUMENT,

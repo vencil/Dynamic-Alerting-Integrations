@@ -171,8 +171,8 @@ ALLOWED = {
         (1, "the customer repo's GitHub workflows, read by GitHub Actions; no Go consumer"),
     ('scripts/tools/ops/migrate_rule.py', 'load_metric_dictionary'):
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
-    ('scripts/tools/ops/validate_migration.py', 'load_mapping_pairs'):
-        (1, 'the prefix-mapping file, a migration input read only by Python tools'),
+    ('scripts/tools/ops/validate_migration.py', 'load_mapping'):
+        (1, 'the migration mapping migrate-rule writes (#4227), a migration input read only by Python tools'),
     # #3445: `_lib_input.document` reads a declared input file (`decode_bytes`,
     # which parses YAML for a YAML declaration only); each call is a point.
     ('scripts/tools/ops/alert_correlate.py', 'main'):

@@ -284,6 +284,13 @@ from _platform_fs import DIR_WRITE_ERROR, has_posix_modes, symlink_or_skip
 from _tree import repo_files
 from _go_refusal import assert_refused  # (#3206)
 
+
+def _migration_mapping(c) -> str:
+    """validate's --mapping for the `/migration` stub (#4227)."""
+    path = c.tmp / "migration-mapping.yaml"
+    path.write_text(_jsc.MIGRATION_MAPPING, encoding="utf-8")
+    return str(path)
+
 # #2115: blind_spot_discovery 與 analyze_rule_pack_gaps（目錄模式）的值來自
 # `da-guard served-values`；子行程經 `$DA_GUARD_BINARY` 找到本 repo 建出的 da-guard。
 # #2476: `da_assembler --render-cr` 同理經 `$DA_CRDECODE_BINARY` 找到 da-crdecode。
@@ -1052,11 +1059,12 @@ ROWS: list[Row] = [
     # The convergence report of a --watch run: its own flag, its own path
     # (it lands under -o when the flag is absent — that is the -o row's).
     R("ops/validate_migration.py", "--convergence-output", "file", "operator",
-      lambda c, out: ["--old", "up", "--new", "up", "--prometheus", c.stub + "/rich",
-                      "--watch", "--rounds", "2", "--interval", "0",
+      lambda c, out: ["--mapping", _migration_mapping(c), "--prometheus", c.stub + "/migration",
+                      "--watch", "--rounds", "2", "--interval", "0.001",
                       "--auto-detect-convergence", "--stability-window", "2",
                       "-o", str(c.tmp / "validation"), "--convergence-output", str(out)],
-      reach="local Prometheus stub (/rich: identical vectors ⇒ match); two watch "
+      reach="local Prometheus stub (/migration: the mapping's rule loaded on both sides, "
+            "the same ALERTS on both ⇒ clean); two watch "
             "rounds with a stability window of two converge (rc 0) and write the "
             "report",
       out_name="convergence.json",
@@ -1142,9 +1150,10 @@ ROWS: list[Row] = [
       shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="scaffold-report.txt", writer="python+da-guard"),
     R("ops/validate_migration.py", "-o/--output-dir", "dir", "operator",
-      lambda c, out: ["--old", "up", "--new", "up", "--prometheus", c.stub + "/rich",
+      lambda c, out: ["--mapping", _migration_mapping(c), "--prometheus", c.stub + "/migration",
                       "-o", str(out)],
-      reach="local Prometheus stub (/rich: identical vectors ⇒ match)",
+      reach="local Prometheus stub (/migration: the mapping's rule loaded on both sides, "
+            "the same ALERTS on both ⇒ clean)",
       # #3107: `artifact_is_dir` gets past the mkdir to the CSV write.
       shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="validation-report.csv"),
@@ -4404,8 +4413,6 @@ UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
     ("ops/onboard_platform.py", "write_migration_csv", "write_operator_output_or_die"): 1,
     ("ops/onboard_platform.py", "write_outputs", "write_onboard_hints"): 1,
     ("ops/operator_generate.py", "write_crds", "write_yaml_crd"): 1,
-    ("ops/validate_migration.py", "main", "ensure_dir_or_die"): 1,
-    ("ops/validate_migration.py", "main", "write_operator_output_or_die"): 1,
 }
 
 

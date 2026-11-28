@@ -1,7 +1,14 @@
 {
   "ready": false,
   "timestamp": "2026-03-07T12:00:00Z",
-  "convergence_percentage": 0.0,
-  "converged_count": 0,
-  "total_pairs": 0
+  "tenant": "t",
+  "round_count": 10,
+  "stability_window": 5,
+  "clean_rounds": 0,
+  "last_round": {
+    "match": 2,
+    "mismatch": 0,
+    "query_errors": 0
+  },
+  "recommendation": "0/5 consecutive clean rounds"
 }

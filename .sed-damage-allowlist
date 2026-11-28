@@ -296,9 +296,8 @@ docs/adr/036-single-parser-effective-config.en.md
 # #2789: ADR-007 rewritten to the ADR writing rules; the version history, pseudo-code and duplicated rationale left (to 48% of before).
 docs/adr/007-cross-domain-routing-profiles.md
 docs/adr/007-cross-domain-routing-profiles.en.md
-# #4226: the migrate half of these unreleased fragments was removed with the feature; the validate half stays.
-changelog.d/tools-migrate-rule-per-cluster.md
-changelog.d/1818-migrate-annotations-validate-pairs.md
+# #4227: the numeric comparison's fixture gave way to a one-alert migration mapping.
+tests/shared/_fault_injection/fixtures/validate-mapping/minimal.yaml
 # #4226: the tests of the removed conversion engine left; the parse helpers onboard reads keep theirs.
 tests/ops/test_migrate_ast.py
 tests/ops/test_migrate_v3.py

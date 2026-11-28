@@ -140,7 +140,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | `diagnose` | Tenant health check (config + metrics + alert state) | `<tenant>` |
 | `batch-diagnose` | Multi-tenant health check (auto-discover + parallel) | (auto-discover) |
 | `baseline` | Observe metrics + recommend thresholds | `--tenant <name>` |
-| `validate` | Shadow Monitoring dual-track comparison (with auto-convergence) | `--mapping <file>` or `--old <query> --new <query>` |
+| `validate` | Shadow Monitoring: compare the alert sets of the legacy and migrated rules (with auto-convergence) | `--mapping <file>` |
 | `cutover` | Shadow Monitoring one-click cutover | `--tenant <name>` |
 | `blind-spot` | Scan cluster targets vs tenant config blind spots | `--config-dir <dir>` |
 | `backtest` | Backtest PR threshold changes against historical data | `--config-dir` + `--baseline` or `--tenant` + `--metric` + `--old-value`/`--new-value` |
@@ -478,78 +478,83 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 
 #### validate
 
-Shadow Monitoring validation tool: compare new vs old Recording Rule values, detect auto-convergence.
+Shadow Monitoring validation: compares the alert sets of the legacy rules and the migrated rules (the rules `migrate-rule` keeps as they were, each selector pinned to the tenant), and detects convergence.
 
-**Purpose**: Monitor rule equivalence during migration; determine when it's safe to cutover.
+**Purpose**: confirm through the shadow period that the migrated rules behave as the legacy ones; decide when it is safe to cut over (`cutover` reads the readiness it writes).
 
 **Syntax**
 
 ```bash
-da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
+da-tools validate --mapping <file> [options]
 ```
 
-**Required Parameters**
+**Required Arguments**
 
-Choose one mode:
+`--mapping <file>`: the migration mapping `migrate-rule` writes, `.migration/mapping/<tenant>.yaml`. It looks like this:
 
-1. **Mapping Mode**: `--mapping <file>`
-   Reads the `prefix-mapping.yaml` that earlier versions of `da-tools migrate` wrote under `.migration/` in its output directory (the current `migrate` no longer writes it; its migration mapping is now `.migration/mapping/<tenant>.yaml`, and `validate` support for it comes in the follow-up [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)). CSV is not accepted: a CSV file, content that is not valid YAML or a top level that is not a mapping exits 2 with one stderr line naming `--mapping` and the path ([#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445); it used to be a traceback). The file looks like this (output of an earlier `migrate`):
-   ```yaml
-   custom_mysql_global_status_threads_connected:
-     original_metric: mysql_global_status_threads_connected
-     alert_name: MySQLTooManyConnections
-     golden_match: null
-     golden_rule: null
-     old_query: max by(tenant, da_cluster) (mysql_global_status_threads_connected)
-     new_query: tenant:custom_mysql_global_status_threads_connected:max
-   ```
-   Each entry becomes one comparison pair. The new query `new_query` is the recording rule migrate generated. The old query `old_query` is the original rule's left-hand side, aggregated per (tenant, cluster) the same way; rate-style rules keep their `rate()` (for example `sum by(tenant, da_cluster) (rate(mysql_global_status_slow_queries[5m]))` against `tenant:custom_mysql_global_status_slow_queries:sum`). Both sides have the same units, so the values agree once the recording rule is loaded and evaluating. The two sides are paired by (tenant, `da_cluster`): a Prometheus holding several clusters' data returns several rows for one tenant, each cluster is compared on its own, and the report's `Tenant` column reads `<tenant> (da_cluster=<cluster>)`; a cluster present on one side only is a `mismatch` naming the cluster (a `\`, `(`, `)` or line end in the cluster's name is `\`-escaped in that column) (for example when one side is still a `by(tenant)` rule from an older migrate). When the series have no `da_cluster`, the comparison and the report are what they were. The v2.9.0 image's migrate generates `by(tenant)` and its validate pairs by tenant only (of two rows for one tenant the later overwrites the earlier) <!-- image-caveat: v2.9.0 --> If the raw series carry no `tenant` label, the old query yields an extra group with no tenant, reported as missing on the new side. Entries the dictionary sends to a golden rule (those with `golden_rule`) get no recording rule from migrate and no such fields; validate skips them and lists them on stderr.
-   Files from an older migrate have no `old_query`/`new_query`. validate then warns on stderr and falls back to "raw metric vs `tenant:<key>:max`"; rate-style and `:sum` pairs cannot be compared from such a file: add the two fields by hand, or regenerate it with the migrate that wrote it (migrate no longer writes this file since #4226; validate takes the new mapping in #4227). ⚠️ The v2.9.0 image still ships the old migrate and validate behavior. <!-- image-caveat: v2.9.0 -->
-   An unusable entry stops the whole run with exit code 2: one stderr line names every such entry by key and reason, and no pair is compared ([#4210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4210); such entries used to be skipped without a word while the rest were compared). Unusable shapes: a value that is not a mapping (for example left empty, so null), a key that is not a string, an `old_query`/`new_query` that is given but not a non-empty string, an `original_metric` that is not a non-empty string when the entry falls back to the legacy comparison, only one of `old_query` and `new_query`, or neither of them together with no `original_metric` and no `golden_rule`. A file migrate writes normally does not hit these; `original_metric` is checked only when the entry falls back to the legacy comparison.
+```yaml
+tenant: tenant-x
+rules_file: .migration/migrated/tenant-x/rules.yml
+rules:
+- group: mysql
+  alert: MySQLTooManyConnections
+  selectors:
+  - legacy: mysql_global_status_threads_connected
+    pinned: mysql_global_status_threads_connected{tenant="tenant-x"}
+- group: migrated-expiry
+  alert: MigratedRulesExpiring
+  added: true
+  selectors: []
+```
 
-2. **Query Mode**: `--old <query> --new <query>`
-   Directly specify two PromQL expressions.
+⛔ The numeric comparison (`--old` / `--new`, `prefix-mapping.yaml`, `--tolerance`) is removed ([#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)). A prefix-mapping is exit code `2`, one stderr line saying to regenerate the mapping with the current `migrate-rule`. Every place of the mapping that is not what `migrate-rule` writes (a field's type, a `tenant` that is not a valid tenant id, an alert both compared and `added`, `added` on an alert other than `MigratedRulesExpiring`; an alert two groups define is compared once) is named, exit code `2`, nothing compared; a mapping with no alert that has a legacy twin is `2` too.
+
+**What each round does**
+
+1. **Rules**: the legacy side must load an alerting rule of that name without `da_migrated`, the migrated side the tenant's migrated rule (`/api/v1/rules`). Not loaded on either side, or loaded in a group evaluated less often than `--interval` (the window may hold no evaluation): exit code `2`; loaded but failing to evaluate (a non-empty `lastError`: it writes no ALERTS) → unverifiable.
+2. **Count precheck**: each selector pair of the mapping is counted, `legacy` on the legacy side and `pinned` on the migrated side. Series on the legacy side and none pinned → the pin selects nothing (the tenant assumption is wrong, or `job=` / `instance=` differ from the platform's scrape config): exit code `2`, named. None on either side → unverifiable.
+3. **Alert sets**: both sides are asked `max_over_time(ALERTS{…}[<interval>])` — the series that fired during this round's window — firing and pending compared apart. The key is (tenant, `da_cluster`, alertname, state) plus the series' other labels, without `tenant`, `da_migrated` and `alertstate`. The tenant: on the migrated side the static `tenant` the rule writes; on the legacy side the alert's `tenant`, else its `namespace`, else unverifiable. A legacy alert of another tenant is what the pin narrows away by design: listed as `other_tenant`, not a mismatch. Alerts marked `added: true` are not compared.
+
+What is unverifiable never passes (exit code `1`, the readiness not ready); cutting over then takes `cutover --force`. A window is used, not an instant value, because two Prometheus servers evaluating out of phase make instant values report false mismatches; the cost is that a difference shorter than a round is not seen. Known limit: the legacy side is queried by alertname, so another legacy rule of the same name that was not migrated stays a mismatch.
 
 **Options**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--mapping <FILE>` | Mapping mode: path to `prefix-mapping.yaml` (see above) | (none) |
-| `--old <QUERY>` | Query mode: PromQL of the old Recording Rule (with `--new`) | (none) |
-| `--new <QUERY>` | Query mode: PromQL of the new Recording Rule (with `--old`) | (none) |
-| `--prometheus <URL>` | Prometheus Query API URL. When the flag is not given, the tool reads (and checks) `$PROMETHEUS_URL` only when it queries Prometheus | `$PROMETHEUS_URL`, else `http://localhost:9090` |
+| `--mapping <FILE>` | The migration mapping (above) | (required) |
+| `--prometheus <URL>` | Prometheus Query API URL of the migrated rules. Without the flag, the tool reads `$PROMETHEUS_URL` (and checks it) when it queries Prometheus | `$PROMETHEUS_URL`, else `http://localhost:9090` |
+| `--legacy-prometheus <URL>` | The Prometheus of the legacy rules (when they still run on the customer's original Prometheus) | the same as `--prometheus` |
 | `--watch` | Continuous monitoring mode (compare every N seconds) | false |
-| `--interval <SEC>` | Monitoring interval in seconds (>= 0, fractions allowed; `0` = no pause between rounds, capped by `--rounds`; a negative value, `nan` or `inf` exits `2`) | `60` |
-| `--rounds <N>` | Number of monitoring rounds. ⚠️ `0` is not infinite — it runs **no rounds at all** (`for i in range(rounds)`) | `10` |
-| `--tolerance <RATIO>` | Allowed deviation as a **ratio**, not a percentage: `0.01` = 1%. Must be a finite number ≥ 0; `inf`, `nan` or a negative value exits 2 | `0.001` |
-| `--auto-detect-convergence` | Auto-detect convergence and output readiness JSON | false |
-| `-o, --output-dir <DIR>` | Output directory; `validation-report.csv` (and, in watch mode, `cutover-readiness.json`) are written there. `-` is not a directory and is refused (exit code `2`, [#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)) | `validation_output` |
-| `--stability-window <N>` | Consecutive all-match rounds `--auto-detect-convergence` needs to call it converged | `5` |
-| `--convergence-output <FILE>` | Where the readiness JSON is written (`--watch --auto-detect-convergence`). `-`, an empty value and the file this run's stdout already writes (e.g. `/dev/stdout`) are exit 2 (stdout already carries the progress and summary; for a file named `-`, pass `./-`); mode `0600`, set only on a regular file the caller owns ([#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)) | `cutover-readiness.json` under `-o/--output-dir` |
+| `--interval <SEC>` | The interval of a round, and the alert sampling window (seconds, > 0, fractions allowed; `0`, a negative number, `nan` or `inf` is `2`) | `60` |
+| `--rounds <N>` | Number of monitoring rounds (≥ 1) | `10` |
+| `--auto-detect-convergence` | Write the readiness JSON and stop after `--stability-window` clean rounds in a row | false |
+| `-o, --output-dir <DIR>` | Output directory; `validation-report.csv` (and, in watch mode, `cutover-readiness.json`) is written here. `-` is not a directory and is refused (exit code `2`, [#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)) | `validation_output` |
+| `--stability-window <N>` | Clean rounds in a row required for convergence (≥ 1): every rule loaded, the precheck clean, no mismatch, nothing unverifiable, every query answered | `5` |
+| `--convergence-output <FILE>` | Write path of the readiness JSON (`--watch --auto-detect-convergence`). `-`, an empty value, and a file this run's stdout is already writing (e.g. `/dev/stdout`) are exit code `2` (stdout holds the progress and summary; for a file named `-`, pass `./-`); mode `0600`, set only on a regular file the caller owns ([#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)) | `cutover-readiness.json` under `-o/--output-dir` |
 
 **Output**
 
-`<output-dir>/validation-report.csv`, one row per rule and tenant, with the fixed columns `Label,Tenant,Old Query,New Query,Old Value,New Value,Delta,Status,Timestamp` (`Timestamp` in UTC; with no comparison result it holds the header only, which `shadow-verify --report-csv` refuses; `shadow-verify` reads it by the same definition, [#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)); the summary is also printed to stdout. ⚠️ There is no single-file output flag — `--output <FILE>` is accepted by argparse as an abbreviation of `--output-dir`, so it creates a **directory** named `<FILE>`.
+`<output-dir>/validation-report.csv`, with the fixed columns `Kind,Rule,Tenant,State,Labels,Legacy,Migrated,Status,Timestamp` (`shadow-verify --report-csv` reads it by the same definition, [#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)). `Kind` is `rule` (the rule check; only a problem is listed), `selector` (the precheck; `Legacy` / `Migrated` are the two sides' series counts) or `alert` (one alert series; `Legacy` / `Migrated` are 1 / 0); `Status` is one of `match`, `mismatch`, `other_tenant`, `unverifiable`, `ok`, `pin_selects_nothing`, `rule_not_loaded`, `window_too_short`. A query not answered leaves an `unverifiable` row too (`Labels` starting with 查詢失敗, "query failed"), so the report read alone never takes a round missing an answer for a clean one. For a row that carries `da_cluster`, `Tenant` is `<tenant> (da_cluster=<cluster>)` (`\`, `(`, `)` and line ends in the cluster's name escaped with `\`). `Timestamp` is UTC; the summary is also printed to stdout. ⚠️ There is no single-file output flag — `--output <FILE>` is accepted by argparse as an abbreviation of `--output-dir`, so it creates a **directory** named `<FILE>`.
 
-With `--watch --auto-detect-convergence`, `cutover-readiness.json` is additionally written into the same directory for the `cutover` command (`--convergence-output <FILE>` overrides the path); single-shot mode (no `--watch`) never writes this file.
+With `--watch --auto-detect-convergence`, `cutover-readiness.json` is additionally written into the same directory for `cutover` (`--convergence-output <FILE>` overrides the path), with the fields `ready`, `timestamp`, `tenant`, `round_count`, `stability_window`, `clean_rounds`, `last_round`, `recommendation`; `cutover` takes the readiness of its own tenant only. Single-shot mode (no `--watch`) never writes this file.
 
 **Examples**
 
 ```bash
-da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml
-da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml --watch --interval 60 --rounds 1440
-da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml --watch --auto-detect-convergence -o ./validation_output
+da-tools validate --mapping migration_output/.migration/mapping/tenant-x.yaml
+da-tools validate --mapping migration_output/.migration/mapping/tenant-x.yaml --prometheus http://edge:9090 --legacy-prometheus http://legacy:9090
+da-tools validate --mapping migration_output/.migration/mapping/tenant-x.yaml --watch --interval 60 --rounds 1440 --auto-detect-convergence -o ./validation_output
 ```
 
 **Exit Codes**
 
 | Code | Description |
 |------|-------------|
-| `0` | Every pair matches; with `--watch --auto-detect-convergence`, converged |
-| `1` | A mismatch, or a value found on only one side (`old_missing` / `new_missing`); with `--watch --auto-detect-convergence`, still not converged after `--rounds` |
-| `2` | Caller error: bad arguments, no comparison pairs in the mapping, a Prometheus connection or query failure, or a malformed answer (an unreadable sample value used to be reported as `old_missing` / `new_missing` at exit code `1`, [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) (`--watch` looks at the last round only; ignored once converged), or the output path given to `-o/--output-dir` / `--convergence-output` cannot be written (#1641). A `--mapping` that does not exist, is not a regular file, cannot be opened, or whose content cannot be read (not UTF-8, not valid YAML, a top level that is not a mapping, an empty file too) is one stderr line naming the flag and the path (e.g. `ERROR: --mapping /x/m.yaml: 頂層不是映射（實為清單）` — this tool speaks Chinese), not a traceback ([#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445); an empty file used to end as "No comparison pairs found", also 2) |
+| `0` | The round is clean (every rule loaded, the precheck clean, the alert sets equal); with `--watch --auto-detect-convergence`, converged |
+| `1` | A mismatch, or something unverifiable; with `--watch --auto-detect-convergence`, not converged after `--rounds` (even when the last round happens to be clean) |
+| `2` | Caller error: bad arguments; a `--mapping` that cannot be read, is a prefix-mapping, or is not what `migrate-rule` writes; a Prometheus connection or query failure, or a malformed answer; a rule not loaded, a group evaluated less often than the window, a pin that selects nothing (setup problems no waiting clears; `--watch` stops at once); or an output path given to `-o/--output-dir` / `--convergence-output` that cannot be written (#1641). A `--mapping` that does not exist, is not a regular file, cannot be opened, or whose content is not UTF-8, not valid YAML or not a mapping at the top is one stderr line naming the flag and the path ([#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)) |
 
-⚠️ The v2.9.0 image does not have these exit codes yet. It returns `2` only for bad arguments and `0` for everything else, and it still prints "🎉 可以安全切換" (safe to cut over) when Prometheus is unreachable. On v2.9.0, do not gate on the exit code; read the mismatch / missing counts in the summary instead. <!-- image-caveat: v2.9.0 -->
+⚠️ The v2.9.0 image still has the numeric-comparison validate, without this behaviour or these exit codes. <!-- image-caveat: v2.9.0 -->
 
 ---
 
@@ -832,25 +837,25 @@ da-tools shadow-verify <phase> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--mapping <FILE>` | Path to prefix-mapping.yaml (for preflight) | (none) |
-| `--report-csv <FILE>` | Path to the validation-report.csv `validate` writes (for runtime/convergence). Its header must be exactly the 9 columns `validate` writes (`Label,Tenant,Old Query,New Query,Old Value,New Value,Delta,Status,Timestamp`, one definition), with at least one data row, every row as many fields, and `Timestamp` as `YYYY-MM-DD HH:MM:SS` (UTC); otherwise exit code 2, naming the flag and the path. ⚠️ An empty file, a header only, another tool's CSV, a row with too many fields or a malformed timestamp used to be read as "no mismatch": `runtime` PASS, `convergence`'s 7-day check a warn only, exit code 0; a row with too few fields was a traceback (exit code 2) ([#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)) | (none) |
+| `--mapping <FILE>` | The migration mapping `migrate-rule` writes, `.migration/mapping/<tenant>.yaml` (for preflight). A prefix-mapping, a document that is not what `migrate-rule` writes, or one with no alert to compare FAILs that check at exit code 2 ([#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227); zero comparison pairs used to pass) | (none) |
+| `--report-csv <FILE>` | Path to the validation-report.csv `validate` writes (for runtime/convergence). Its header must be exactly the 9 columns `validate` writes (`Kind,Rule,Tenant,State,Labels,Legacy,Migrated,Status,Timestamp`, one definition; the header of the numeric comparison is refused too, #4227), with at least one data row, every row as many fields, and `Timestamp` as `YYYY-MM-DD HH:MM:SS` (UTC); otherwise exit code 2, naming the flag and the path. ⚠️ An empty file, a header only, another tool's CSV, a row with too many fields or a malformed timestamp used to be read as "no mismatch": `runtime` PASS, `convergence`'s 7-day check a warn only, exit code 0; a row with too few fields was a traceback (exit code 2) ([#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)) | (none) |
 | `--readiness-json <FILE>` | Path to cutover-readiness.json (for convergence) | (none) |
 | `--prometheus <URL>` | Prometheus Query API URL | `http://localhost:9090` |
-| `--alertmanager <URL>` | Alertmanager API URL. Given and not read (unreachable, errored or answered in the wrong shape), the shadow-route check FAILs and the exit code is 2; not given, the default is read and not answering stays a skip ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)). The wrong shape includes a missing `config` or `config.original` (required by the AM v2 API): such an answer used to read as an empty config, a warn "No migration_status matcher found", exit code 0 | `http://localhost:9093` |
+| `--alertmanager <URL>` | Alertmanager API URL. Given and not read (unreachable, errored or answered in the wrong shape), the shadow-route check FAILs and the exit code is 2; not given, the default is read and not answering stays a skip ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)). The wrong shape includes a missing `config` or `config.original` (required by the AM v2 API): such an answer used to read as an empty config, a warn, exit code 0. A config without the receiver `migrated-alerts-shadow` (the shadow route `generate-routes` adds, #4277) is a warn for that check | `http://localhost:9093` |
 | `--json` | JSON structured output (for CI) | false |
 
 **Three-Phase Checks**
 
 | Phase | Checks |
 |-------|--------|
-| `preflight` | Mapping file exists, recording rules loaded, AM interception route |
-| `runtime` | Mismatch count, tenant coverage, three-state mode consistency |
-| `convergence` | cutover-readiness assessment, 7-day zero-mismatch check |
+| `preflight` | The mapping readable with alerts to compare, its alerts loaded as migrated rules of the tenant, the shadow receiver in the AM config |
+| `runtime` | Mismatch count (a pin selecting nothing and a rule not loaded included), unverifiable rows (FAIL), tenant coverage, three-state mode consistency |
+| `convergence` | cutover-readiness assessment (missing fields are exit code 2), no mismatch or unverifiable row in the last 7 days |
 
 **Examples**
 
 ```bash
-da-tools shadow-verify preflight --mapping migration_output/.migration/prefix-mapping.yaml
+da-tools shadow-verify preflight --mapping migration_output/.migration/mapping/tenant-x.yaml
 da-tools shadow-verify runtime --report-csv validation_output/validation-report.csv
 da-tools shadow-verify convergence --report-csv validation_output/validation-report.csv --readiness-json validation_output/cutover-readiness.json
 da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
@@ -3854,7 +3859,7 @@ spec:
 
 ### Q: How to specify multiple metrics for validate?
 
-**A**: Point `--mapping` at the `prefix-mapping.yaml` generated by an earlier `da-tools migrate` (CSV is not accepted); the current `migrate` writes `.migration/mapping/<tenant>.yaml`, which `validate` will read after the follow-up #4227. See [validate](#validate) command documentation.
+**A**: No metric is named: `validate` reads, with `--mapping`, the `.migration/mapping/<tenant>.yaml` that `migrate-rule` writes, and compares every alert and every selector pair in it (the numeric comparison and `prefix-mapping.yaml` are removed, #4227). See [validate](#validate) command documentation.
 
 ### Q: What's the difference between blind-spot and analyze-gaps?
 

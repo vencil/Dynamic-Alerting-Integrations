@@ -1,8 +1,8 @@
 """
-tests/test_offboard_deprecate.py — pytest style unit tests for offboard_tenant.py,
-deprecate_rule.py, and validate_migration.py pure logic.
-Tests the filesystem-based lifecycle tools and vector comparison logic
-introduced in v0.6.0.
+tests/test_offboard_deprecate.py — pytest style unit tests for offboard_tenant.py
+and deprecate_rule.py pure logic (the filesystem-based lifecycle tools
+introduced in v0.6.0). validate_migration's comparison is in
+test_validate_migration_alert_set.py (#4227).
 """
 
 import os
@@ -19,7 +19,6 @@ import yaml
 
 import offboard_tenant  # noqa: E402
 import deprecate_rule  # noqa: E402
-import validate_migration  # noqa: E402
 
 
 # ===================================================================
@@ -400,115 +399,6 @@ def test_remove_from_tenants_skips_defaults():
         removed = deprecate_rule.remove_from_tenants(
             "mysql_connections", d, execute=True)
         assert len(removed) == 0
-
-
-# ===================================================================
-# 8. validate_migration — extract_value_map
-# ===================================================================
-
-def test_extract_value_map_normal():
-    """測試正常提取值對映。"""
-    results = [
-        {"metric": {"tenant": "db-a"}, "value": [1234567890, "42"]},
-        {"metric": {"tenant": "db-b"}, "value": [1234567890, "99"]},
-    ]
-    vmap = validate_migration.extract_value_map(results)
-    assert vmap["db-a"] == 42.0
-    assert vmap["db-b"] == 99.0
-
-def test_extract_value_map_no_tenant_label():
-    """測試無租戶標籤。"""
-    results = [
-        {"metric": {}, "value": [0, "10"]},
-    ]
-    vmap = validate_migration.extract_value_map(results)
-    assert "__no_label__" in vmap
-
-def test_a_null_sample_is_refused_upstream():
-    """#3133：樣本值是 null 時，查詢在上游就被拒（rc 2），不會以「缺值」
-    進到 extract_value_map（以前讀成 None，報成單邊缺值、rc 1）。"""
-    import _lib_prometheus
-    body = {"status": "success", "data": {"resultType": "vector", "result": [
-        {"metric": {"tenant": "db-a"}, "value": [0, None]}]}}
-    with pytest.raises(_lib_prometheus.QueryError, match=r"result\[0\]\.value"):
-        _lib_prometheus._vector_rows(body)
-
-
-def test_extract_value_map_histogram_row_is_none():
-    """只有 histogram 的列沒有浮點樣本，記為 None。"""
-    vmap = validate_migration.extract_value_map(
-        [{"metric": {"tenant": "db-a"}, "histogram": [0, {}]}])
-    assert vmap["db-a"] is None
-
-def test_extract_value_map_empty_results():
-    """測試空結果。"""
-    vmap = validate_migration.extract_value_map([])
-    assert vmap == {}
-
-
-# ===================================================================
-# 9. validate_migration — compare_vectors
-# ===================================================================
-
-def test_compare_vectors_match():
-    """測試向量匹配。"""
-    old = {"db-a": 100.0}
-    new = {"db-a": 100.0}
-    diffs = validate_migration.compare_vectors(old, new)
-    assert len(diffs) == 1
-    assert diffs[0]["status"] == "match"
-
-def test_compare_vectors_within_tolerance():
-    """測試容差內的匹配。"""
-    old = {"db-a": 100.0}
-    new = {"db-a": 100.05}
-    diffs = validate_migration.compare_vectors(old, new, tolerance=0.001)
-    assert diffs[0]["status"] == "match"
-
-def test_compare_vectors_mismatch():
-    """測試不匹配。"""
-    old = {"db-a": 100.0}
-    new = {"db-a": 200.0}
-    diffs = validate_migration.compare_vectors(old, new)
-    assert diffs[0]["status"] == "mismatch"
-    assert diffs[0]["delta"] == 100.0
-
-def test_compare_vectors_old_missing():
-    """測試舊值缺失。"""
-    old = {}
-    new = {"db-a": 50.0}
-    diffs = validate_migration.compare_vectors(old, new)
-    assert diffs[0]["status"] == "old_missing"
-
-def test_compare_vectors_new_missing():
-    """測試新值缺失。"""
-    old = {"db-a": 50.0}
-    new = {}
-    diffs = validate_migration.compare_vectors(old, new)
-    assert diffs[0]["status"] == "new_missing"
-
-def test_compare_vectors_both_empty():
-    """測試兩邊都空。"""
-    old = {"db-a": None}
-    new = {"db-a": None}
-    diffs = validate_migration.compare_vectors(old, new)
-    assert diffs[0]["status"] == "both_empty"
-
-def test_compare_vectors_zero_values_match():
-    """測試零值匹配。"""
-    old = {"db-a": 0.0}
-    new = {"db-a": 0.0}
-    diffs = validate_migration.compare_vectors(old, new)
-    assert diffs[0]["status"] == "match"
-
-def test_compare_vectors_multi_tenant():
-    """測試多租戶向量。"""
-    old = {"db-a": 10.0, "db-b": 20.0}
-    new = {"db-a": 10.0, "db-b": 25.0}
-    diffs = validate_migration.compare_vectors(old, new)
-    statuses = {d["tenant"]: d["status"] for d in diffs}
-    assert statuses["db-a"] == "match"
-    assert statuses["db-b"] == "mismatch"
 
 
 # ---------------------------------------------------------------------------

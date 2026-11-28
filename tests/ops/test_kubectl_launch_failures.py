@@ -62,9 +62,12 @@ def inputs(tmp_path):
     (d / "dashdir").mkdir()
     for name in ("a.json", "b.json", "c.json"):
         (d / "dashdir" / name).write_text(json.dumps({"title": name}), encoding="utf-8")
+    # #4227: the fields are `_lib_shadow_report.READINESS_FIELDS`, the tenant
+    # the one cut over.
     (d / "ready.json").write_text(json.dumps({
-        "ready": True, "timestamp": "2026-01-01T00:00:00Z",
-        "convergence_percentage": 100, "converged_count": 1, "total_pairs": 1,
+        "ready": True, "timestamp": "2026-01-01T00:00:00Z", "tenant": TENANT,
+        "round_count": 5, "stability_window": 5, "clean_rounds": 5, "last_round": {},
+        "recommendation": "Safe to cutover",
     }), encoding="utf-8")
     (d / "state-keys.txt").write_text("synth-0000.yaml\n", encoding="utf-8")
     return d

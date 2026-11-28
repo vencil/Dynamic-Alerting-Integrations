@@ -432,7 +432,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 | **deprecate_rule.py** | Rule offboarding | `rule-name-1 rule-name-2 --config-dir conf.d/ --execute` (without `--config-dir` it points at a path inside the repo) |
 | **onboard_platform.py** | Pre-migration scan | `--alertmanager-config <am.yml> --rule-files <rules-dir> --output-dir migration_input/`(on the v2.9.0 image a directory selects no file: give a quoted glob) <!-- image-caveat: v2.9.0 --> |
 | **migrate_rule.py** | Verbatim rule migration | `<legacy-rules.yaml> --tenant <name> --owner <owner> --expiry <YYYY-MM-DD> --output-dir migration_output/` |
-| **validate_migration.py** | Parallel migration test (support for migrate's new mapping `.migration/mapping/<tenant>.yaml` comes in #4227) | `--mapping prefix-mapping.yaml --watch --auto-detect-convergence` |
+| **validate_migration.py** | Parallel migration test (compares the sets of alerts the legacy and migrated rules fire) | `--mapping migration_output/.migration/mapping/<tenant>.yaml --watch --auto-detect-convergence` |
 | **cutover_tenant.py** | Migration switch | `--tenant <name> --readiness-json file.json --dry-run` |
 
 ## Checklist

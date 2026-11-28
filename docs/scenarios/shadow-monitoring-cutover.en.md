@@ -101,11 +101,11 @@ graph LR
 
 ### 1. Convergence Detection
 
-New and old rules are deemed "behaviorally equivalent" when:
+The legacy rules and the migrated rules are deemed to "behave the same" when:
 
 | Condition | Verification | Notes |
 |-----------|--------------|-------|
-| **Numeric accuracy** | delta < tolerance (default 0.1%) | Rate-based metrics can relax to 1% |
+| **Same alert sets** | In every round's window both sides fired the same alert series (firing and pending compared apart), with a clean pre-check and nothing unverifiable | Comparison key and tenant ownership: [validate](../cli-reference.en.md#validate) |
 | **Continuous period** | 7 consecutive days of zero mismatches | Spans full business week |
 | **Peak/valley coverage** | Timestamps cover peak and off-peak hours | Validates scaling scenarios |
 | **All tenants** | Every tenant has validation data | No orphaned tenants |
@@ -116,34 +116,33 @@ New and old rules are deemed "behaviorally equivalent" when:
 ```bash
 # validate_migration.py auto-detects and generates cutover-readiness.json
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
+  --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
   --auto-detect-convergence --stability-window 5
-  # stability-window=5: 5 consecutive rounds of zero mismatch → convergence declared
+  # stability-window=5: 5 consecutive clean rounds (every rule loaded, a clean pre-check, no mismatch, nothing unverifiable) → convergence declared; this only shows the flags: 5 rounds cover about 4 × --interval, the 7-day setting is in Phase 3
 ```
 
-Output: `validation_output/cutover-readiness.json` (contains `ready`, `timestamp`, `convergence_percentage`, `converged_count`, `total_pairs`, `unconverged_pairs`, `recommendation` and other fields). Use `da-tools shadow-verify convergence --readiness-json <path>` to auto-interpret.
+Output: `validation_output/cutover-readiness.json` (fields `ready`, `timestamp`, `tenant`, `round_count`, `stability_window`, `clean_rounds`, `last_round`, `recommendation`). `cutover` accepts only a readiness of the same tenant. Use `da-tools shadow-verify convergence --readiness-json <path>` to auto-interpret.
 
-### 2. Tolerance Thresholds
+### 2. Comparison Window
 
-Different metric types warrant different tolerances:
+`validate` compares alert sets, not values, so there is no tolerance to tune. Each round both sides query `max_over_time(ALERTS{…}[<interval>])`, the series that fired within this round's window; the window is `--interval`. A window rather than an instant value, because instant values raise false mismatches when the two Prometheus servers evaluate out of phase; the cost is that a lag shorter than one round is not seen.
 
-| Metric type | Default tolerance | Adjustment scenario |
-|-------------|-------------------|-------------------|
-| Absolute values (connections, threads) | 0.1% | Rarely adjusted |
-| Rate (QPS, throughput) | 1% | Higher volatility, can relax |
-| Percentile (p95 latency) | 5% | Spike-sensitive, higher margin |
-| Ratio (utilization %) | 0.5% | Moderate sensitivity |
+| Setting | Constraint |
+|---------|------------|
+| `--interval` | Neither side's rule groups may be evaluated less often (the window could hold no evaluation), or the exit code is 2 |
+| `--prometheus` | The Prometheus holding the migrated rules |
+| `--legacy-prometheus` | The Prometheus holding the legacy rules; defaults to `--prometheus` |
 
-Pass `--tolerance` to `validate_migration.py`:
+With the legacy rules still on the customer's original Prometheus, name the two sides apart:
 
 ```bash
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
-  --prometheus http://localhost:9090 \
-  --watch \
-  --tolerance 0.01  # 1% tolerance
+  --mapping migration_output/.migration/mapping/db-a.yaml \
+  --prometheus http://edge-prometheus:9090 \
+  --legacy-prometheus http://legacy-prometheus:9090 \
+  --watch
 ```
 
 ### 3. Rollback Triggers
@@ -206,7 +205,7 @@ python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
 #     carry the da_migrated: "true" label and owner / expiry annotations, plus
 #     MigratedRulesExpiring, which carries no da_migrated)
 #   - .migration/mapping/db-a.yaml (each rule's selectors before and after injection;
-#     validate_migration support for it comes in #4227)
+#     validate_migration reads it through --mapping)
 #   - migration-report-db-a.txt (migration report)
 # Platform-level rules that select no single tenant (kube_node_*, up) are refused: exit 2,
 # nothing written.
@@ -230,27 +229,28 @@ kubectl rollout restart deployment alertmanager -n monitoring
 
 ### Phase 3: Validation (Days 1–14)
 
-> ⚠️ **The new migrate's output does not feed the automated validation and cutover from 3.1 on yet**: it writes `.migration/mapping/db-a.yaml`, and `validate_migration.py` reads it from [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227) on. Until then 3.1 applies only to the old migrate's `prefix-mapping.yaml`, so the `validation-report.csv` and `cutover-readiness.json` that 3.2 and Phase 4 need are not produced. Before #4227 the new output can only be compared by hand, and **matching alert counts are not convergence**:
->
-> 1. **Whether each selector selects data**: for every `legacy` / `pinned` pair in the mapping, run `count(<selector>)` against the target Prometheus. A pair where legacy has series and pinned has none is an injection that selects nothing — commonly a recording rule of another rule file whose producer does not write `tenant`.
-> 2. **The alerts' label sets**: during the shadow period, query both expressions below repeatedly (and again with `alertstate="pending"`); both should be empty. Scope both sides to the one tenant first — otherwise `ignoring(tenant)` lets another tenant's alert with the same other labels hide this tenant's difference. The migrated side takes `tenant="db-a"`; fill the legacy side's `<legacy tenant matcher>` with `tenant="db-a"` or `namespace="db-a"`, whichever label that alert's output carries. An alert whose aggregation keeps neither cannot be split by tenant with these expressions; compare it by hand. `MigratedRulesExpiring` is the added expiry alert with no legacy counterpart. It carries no `da_migrated`, so the migrated side does not select it, but it carries `tenant="db-a"`, so the legacy side would: the legacy side therefore says `alertname!="MigratedRulesExpiring"`; fill `<alert names in the file>` with the alertnames of the original legacy rule file. Both sides keep the series' own `component`, so `ignoring` leaves out only `tenant` and `da_migrated`.
->    - Firing only on the migrated side: `ALERTS{da_migrated="true", tenant="db-a", alertstate="firing"} unless ignoring(tenant, da_migrated) ALERTS{da_migrated="", <legacy tenant matcher>, alertstate="firing"}`
->    - Firing only on the legacy side: `ALERTS{da_migrated="", <legacy tenant matcher>, alertstate="firing", alertname=~"<alert names in the file>", alertname!="MigratedRulesExpiring"} unless ignoring(tenant, da_migrated) ALERTS{da_migrated="true", tenant="db-a", alertstate="firing"}`
+`validate_migration.py` reads the `.migration/mapping/db-a.yaml` migrate writes and makes the comparisons below every round by itself, with no manual query (**matching alert counts are not convergence**: it compares every alert series):
+
+1. **Whether the rules are loaded**: the legacy side must have the same-named alert rules without `da_migrated` loaded, the migrated side the migrated rules of `db-a`; a side without them, or a rule group evaluated less often than `--interval`, is exit code 2.
+2. **Whether each selector selects data**: every `legacy` / `pinned` pair in the mapping is counted once on its side. Legacy with series and pinned with none is an injection that selects nothing (commonly a recording rule of another rule file whose producer does not write `tenant`): exit code 2, named; neither side with series → unverifiable.
+3. **The alerts' label sets**: both sides query `max_over_time(ALERTS{…}[<interval>])`, firing and pending compared apart. The comparison key is (tenant, `da_cluster`, alertname, state) plus the series' other labels, with `tenant`, `da_migrated` and `alertstate` removed (the series' own `component` is kept). The legacy side's tenant is the alert's `tenant`, else its `namespace`; neither → unverifiable; a legacy alert of another tenant is listed as `other_tenant`, not a mismatch. The added expiry alert `MigratedRulesExpiring` (`added: true` in the mapping) has no legacy counterpart and is not compared.
+
+What cannot be verified never passes; cutting over then takes `cutover --force`.
 
 ```bash
-# 3.1 Start parallel validation (only for the old migrate's prefix-mapping.yaml; see the note above)
+# 3.1 Start parallel validation (2017 consecutive clean rounds write cutover-readiness.json and stop: after the first round each round waits 300 s, so 2017 rounds = 2016 waits = at least 7 days; convergence counts rounds. The queries of each round leave small gaps between windows: the coverage is not seamless)
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
+  --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
-  --auto-detect-convergence --stability-window 7 \
+  --auto-detect-convergence --stability-window 2017 \
   -o validation_output/
 
 # 3.2 Daily inspection (automated via shadow-verify)
 da-tools shadow-verify runtime \
   --report-csv validation_output/validation-report.csv \
   --prometheus http://localhost:9090
-# If mismatches appear, see shadow-monitoring-sop.md §5 for troubleshooting
+# A mismatch or an unverifiable row is a FAIL; see shadow-monitoring-sop.md §5 for troubleshooting
 ```
 
 ### Phase 4: Pre-Cutover Verification (Day 14+)
@@ -312,11 +312,11 @@ python3 scripts/tools/ops/cutover_tenant.py \
 # ✅ Cutover completed successfully.
 # If any step fails it prints ❌ Cutover failed at step: <step> with the reason, and points to SOP §7.2 for rollback.
 
-# 5.2 Batch cutover multiple tenants (sequential execution)
+# 5.2 Batch cutover multiple tenants (sequential execution; each tenant with its own readiness: run validate with -o validation_output/<tenant> per tenant, cutover takes only its own tenant's file)
 for tenant in db-a db-b db-c; do
   echo "[INFO] Cutting over $tenant..."
   python3 scripts/tools/ops/cutover_tenant.py \
-    --readiness-json validation_output/cutover-readiness.json \
+    --readiness-json "validation_output/$tenant/cutover-readiness.json" \
     --tenant "$tenant" \
     --prometheus http://localhost:9090
 
@@ -344,36 +344,11 @@ rm -rf conf.d.bak alertmanager.yml.bak
 
 ## Common Scenarios and Responses
 
-### Scenario 1: Numeric Mismatch During Validation
+### Scenario 1: Alert-Set Mismatch During Validation
 
-**Symptom**: `validation-report.csv` shows persistent `mismatch` entries
+**Symptom**: `validation-report.csv` shows persistent `mismatch` entries (an alert series firing on one side only)
 
-**Diagnosis**:
-
-```bash
-# View specific mismatched metric pairs
-grep "mismatch" validation_output/validation-report.csv | head -5
-
-# Manual comparison query
-curl -s "http://localhost:9090/api/v1/query?query=<old_query>" | python3 -m json.tool
-curl -s "http://localhost:9090/api/v1/query?query=<new_query>" | python3 -m json.tool
-```
-
-**Common causes**:
-
-| Cause | Signature | Fix |
-|-------|-----------|-----|
-| Aggregation logic differs | new = old × N | Check `max by` vs `sum by` |
-| Label mismatch | old_missing / new_missing | Check recording rule `by` clause |
-| Eval window differs | delta constant but tiny | Verify rate[5m] / [1m] consistency |
-| Tolerance too strict | delta < 0.05% but still mismatches | Increase tolerance (e.g., 0.01 = 1%) |
-
-**Fix workflow**:
-
-1. Adjust `migrate_rule.py` transformation logic or tolerance parameter
-2. Re-transform rules (Phase 2)
-3. Restart validation (Phase 3, new watch cycle)
-4. Confirm 7 days zero-mismatch before re-executing Phase 4
+**Diagnosis and fix**: see the mismatch / unverifiable diagnosis tables in [Shadow Monitoring SOP §5](../shadow-monitoring-sop.en.md). Common causes are different label sets on the two sides' alerts, an injection that selects fewer series, and another same-named legacy rule that was not migrated. After the fix, re-transform the rules and restart validation (a new watch cycle + 7 days zero-mismatch).
 
 ### Scenario 2: Alert Doesn't Fire Post-Cutover
 
@@ -454,21 +429,20 @@ kubectl patch configmap alertmanager-config -n monitoring \
 
 ## Advanced Options
 
-### Option A: Accelerated Validation (--tolerance relaxed + --stability-window shortened)
+### Option A: Accelerated Validation (--stability-window shortened)
 
 To accept higher risk and speed up validation:
 
 ```bash
-# Relax tolerance to 5%, declare convergence at 3 consecutive zero-mismatch rounds
+# Declare convergence at 289 consecutive clean rounds (288 waits of 300 s = at least 1 day)
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
+  --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
-  --watch --interval 300 --rounds 288 \
-  --auto-detect-convergence --stability-window 3 \
-  --tolerance 0.05
+  --watch --interval 300 --rounds 576 \
+  --auto-detect-convergence --stability-window 289
 
-# Validation period reduces from 14 days to ~3 days
-# Risk: rate-based metrics susceptible to short-term volatility false positives
+# The validation period drops from 7 days to 1 day; keep --rounds above --stability-window to leave room to converge
+# Risk: a short observation misses alerts that fire only at business peaks, off-peak or in maintenance windows
 ```
 
 **When to use**: Test environments, low-risk tenants (e.g., dev)

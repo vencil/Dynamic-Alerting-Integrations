@@ -96,11 +96,11 @@ graph LR
 
 ### 1. 收斂偵測（Convergence Detection）
 
-新舊規則「行為等價」由以下條件判定：
+legacy 規則與 migrated 規則「行為一致」由以下條件判定：
 
 | 條件 | 驗證方式 | 說明 |
 |------|--------|------|
-| **數值誤差** | delta < tolerance（預設 0.1%） | rate-based metrics 可適度放寬至 1% |
+| **告警集合一致** | 每一輪窗口內兩邊響過的告警序列相同（firing 與 pending 分開比），預檢乾淨、沒有不可驗 | 比對鍵與租戶歸屬見 [validate](../cli-reference.md#validate) |
 | **連續週期** | 連續 7 天 0 mismatch | 涵蓋週一至週日完整業務週期 |
 | **峰谷覆蓋** | 時間戳跨越業務高峰+低谷 | 確保 scaling 場景也通過驗證 |
 | **所有 tenant** | 每個 tenant 至少有驗證數據 | 無遺漏租戶 |
@@ -111,34 +111,33 @@ graph LR
 ```bash
 # validate_migration.py 自動偵測收斂並產出 cutover-readiness.json
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
+  --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
   --auto-detect-convergence --stability-window 5
-  # stability-window=5 表示連續 5 輪無 mismatch 即宣告收斂
+  # stability-window=5 表示連續 5 輪乾淨（規則都已載入、預檢乾淨、沒有 mismatch、沒有不可驗）即宣告收斂；這裡只示範旗標，5 輪只涵蓋約 4 × --interval，7 天驗證的設定見階段 3
 ```
 
-輸出：`validation_output/cutover-readiness.json`（包含 `ready`、`timestamp`、`convergence_percentage`、`converged_count`、`total_pairs`、`unconverged_pairs`、`recommendation` 等欄位）。可用 `da-tools shadow-verify convergence --readiness-json <path>` 自動解讀。
+輸出：`validation_output/cutover-readiness.json`（欄位為 `ready`、`timestamp`、`tenant`、`round_count`、`stability_window`、`clean_rounds`、`last_round`、`recommendation`）。`cutover` 只收同一個租戶的 readiness。可用 `da-tools shadow-verify convergence --readiness-json <path>` 自動解讀。
 
-### 2. 容忍度閾值（Tolerance Thresholds）
+### 2. 比對窗口（Comparison Window）
 
-不同類型的指標應設置差異化的容忍度：
+`validate` 比的是告警集合，不是數值，所以沒有容忍度可調。每一輪兩邊各查 `max_over_time(ALERTS{…}[<interval>])`，即這一輪窗口內響過的序列；窗口就是 `--interval`。用窗口而不是瞬時值，是因為兩台 Prometheus 的評估相位不同時瞬時值會誤報；代價是短於一輪的時差看不到。
 
-| 指標類型 | 預設容忍度 | 調整場景 |
-|---------|----------|--------|
-| 絕對值（connections、threads） | 0.1% | 極少調整 |
-| Rate（QPS、throughput） | 1% | 波動較大，可放寬 |
-| Percentile（p95 latency） | 5% | 尖峰敏感，容忍度較高 |
-| Ratio（利用率 %） | 0.5% | 中等敏感 |
+| 設定 | 限制 |
+|------|------|
+| `--interval` | 兩邊規則組的評估間隔都不可大於它（窗口裡可能沒有任何一次評估），否則結束碼 2 |
+| `--prometheus` | migrated 規則所在的 Prometheus |
+| `--legacy-prometheus` | legacy 規則所在的 Prometheus，預設與 `--prometheus` 相同 |
 
-在 `validate_migration.py` 中傳入 `--tolerance` 參數：
+legacy 規則還在客戶原本的 Prometheus 上時，兩端分別指定：
 
 ```bash
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
-  --prometheus http://localhost:9090 \
-  --watch \
-  --tolerance 0.01  # 1% 容忍度
+  --mapping migration_output/.migration/mapping/db-a.yaml \
+  --prometheus http://edge-prometheus:9090 \
+  --legacy-prometheus http://legacy-prometheus:9090 \
+  --watch
 ```
 
 ### 3. 回退條件（Rollback Triggers）
@@ -198,7 +197,7 @@ python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
 # 產出（migration_output/）：
 #   - .migration/migrated/db-a/rules.yml（規則原樣保留、注入租戶隔離；告警帶 da_migrated: "true"
 #     label 與 owner／expiry annotation，另附不帶 da_migrated 的 MigratedRulesExpiring）
-#   - .migration/mapping/db-a.yaml（每條規則的 selector 注入前後；validate_migration 讀它的支援在 #4227）
+#   - .migration/mapping/db-a.yaml（每條規則的 selector 注入前後；validate_migration 以 --mapping 讀它）
 #   - migration-report-db-a.txt（遷移報告）
 # 選不出一個租戶的平台層級規則（kube_node_*、up）整批拒絕、結束碼 2、一個檔都不寫。
 # ⚠️ v2.9.0 映像的 migrate 仍是舊的轉換引擎（平台 recording／alert rule、租戶 conf.d 檔、
@@ -219,27 +218,28 @@ kubectl rollout restart deployment alertmanager -n monitoring
 
 ### 階段 3：驗證（Day 1–14）
 
-> ⚠️ **新版 migrate 的產出目前接不上 3.1 之後的自動驗證與切換**：它寫的是 `.migration/mapping/db-a.yaml`，`validate_migration.py` 讀它的支援在 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)。在那之前 3.1 只適用舊版 migrate 的 `prefix-mapping.yaml`，也就產不出 3.2 與階段 4 要的 `validation-report.csv`、`cutover-readiness.json`。新產出在 #4227 之前只能手動比對，且**告警數量一致不算收斂**：
->
-> 1. **selector 有沒有選到資料**：對 mapping 每一組 `legacy`／`pinned`，在目標 Prometheus 各跑一次 `count(<selector>)`。legacy 有、pinned 沒有的，代表注入選不到——常見原因是它其實是另一個規則檔的 recording rule，而那邊沒寫 `tenant`。
-> 2. **告警的 label 組合**：shadow 期間反覆查以下兩式（`alertstate` 換成 `pending` 再查一次），兩邊都應為空。兩側都要先限定到同一個租戶——否則 `ignoring(tenant)` 會讓別的租戶的同名告警遮掉這個租戶的差異。migrated 側用 `tenant="db-a"`；legacy 側的 `<legacy 的租戶 matcher>` 照該告警輸出帶的 label 填 `tenant="db-a"` 或 `namespace="db-a"`，聚合後兩者都不剩的告警無法用這兩式分租戶，要逐條人工比對。`MigratedRulesExpiring` 是新增的到期告警，沒有對應的 legacy 告警。它不帶 `da_migrated`，所以 migrated 側選不到它，但它帶 `tenant="db-a"`，legacy 側選得到：legacy 側因此明寫 `alertname!="MigratedRulesExpiring"`；`<本檔告警名>` 填原本 legacy 規則檔裡的 alertname。兩側都保留序列自己的 `component`，所以 `ignoring` 只略過 `tenant` 與 `da_migrated`。
->    - 只在 migrated 響：`ALERTS{da_migrated="true", tenant="db-a", alertstate="firing"} unless ignoring(tenant, da_migrated) ALERTS{da_migrated="", <legacy 的租戶 matcher>, alertstate="firing"}`
->    - 只在 legacy 響：`ALERTS{da_migrated="", <legacy 的租戶 matcher>, alertstate="firing", alertname=~"<本檔告警名>", alertname!="MigratedRulesExpiring"} unless ignoring(tenant, da_migrated) ALERTS{da_migrated="true", tenant="db-a", alertstate="firing"}`
+`validate_migration.py` 讀 migrate 寫的 `.migration/mapping/db-a.yaml`，每一輪自動做完以下比對，不必手動查（**告警數量一致不算收斂**，它比的是每一條告警序列）：
+
+1. **規則有沒有載入**：legacy 端要載入不帶 `da_migrated` 的同名告警規則，migrated 端要載入 `db-a` 的 migrated 規則；任一邊沒載入，或規則組的評估間隔大於 `--interval`，結束碼 2。
+2. **selector 有沒有選到資料**：對照裡每一組 `legacy`／`pinned` 各數一次序列。legacy 有、pinned 是 0 代表注入選不到（常見原因是它其實是另一個規則檔的 recording rule，而那邊沒寫 `tenant`），結束碼 2 並點名；兩邊都是 0 → 不可驗。
+3. **告警的 label 組合**：兩邊各查 `max_over_time(ALERTS{…}[<interval>])`，firing 與 pending 分開比。比對鍵是（租戶, `da_cluster`, alertname, 狀態）加上序列其餘的 label，去掉 `tenant`、`da_migrated`、`alertstate`（序列自己的 `component` 保留）。legacy 側的租戶取告警的 `tenant`，沒有就取 `namespace`，兩者都沒有 → 不可驗；legacy 側其他租戶的告警列為 `other_tenant`，不算 mismatch。新增的到期告警 `MigratedRulesExpiring`（對照裡 `added: true`）沒有 legacy 對應，不比。
+
+不可驗一律不放行；要切換只能用 `cutover --force`。
 
 ```bash
-# 3.1 啟動並行驗證（只適用舊版 migrate 的 prefix-mapping.yaml，見上方說明）
+# 3.1 啟動並行驗證（連續 2017 輪乾淨就寫 cutover-readiness.json 並停止：第一輪之後每輪先等 300 秒，2017 輪＝2016 次等待＝至少 7 天；收斂看的是輪數。各輪的查詢耗時讓窗口之間有小縫，不是無縫覆蓋）
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
+  --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
-  --auto-detect-convergence --stability-window 7 \
+  --auto-detect-convergence --stability-window 2017 \
   -o validation_output/
 
 # 3.2 日常巡檢（每日一次，使用 shadow-verify 自動化）
 da-tools shadow-verify runtime \
   --report-csv validation_output/validation-report.csv \
   --prometheus http://localhost:9090
-# 若有 mismatch，參見 shadow-monitoring-sop.md §5 異常處理
+# 有 mismatch 或不可驗列（unverifiable）都是 FAIL，參見 shadow-monitoring-sop.md §5 異常處理
 ```
 
 ### 階段 4：切換前確認（Day 14+）
@@ -301,11 +301,11 @@ python3 scripts/tools/ops/cutover_tenant.py \
 # ✅ Cutover completed successfully.
 # 任一步失敗時印出 ❌ Cutover failed at step: <步驟> 與原因，並指向 SOP §7.2 的回退步驟。
 
-# 5.2 批次切換多個 tenant（逐一執行）
+# 5.2 批次切換多個 tenant（逐一執行；每個租戶用自己的 readiness：validate 以 -o validation_output/<租戶> 分別跑，cutover 只收同租戶的檔）
 for tenant in db-a db-b db-c; do
   echo "[INFO] Cutting over $tenant..."
   python3 scripts/tools/ops/cutover_tenant.py \
-    --readiness-json validation_output/cutover-readiness.json \
+    --readiness-json "validation_output/$tenant/cutover-readiness.json" \
     --tenant "$tenant" \
     --prometheus http://localhost:9090
 
@@ -333,11 +333,11 @@ rm -rf conf.d.bak alertmanager.yml.bak
 
 ## 常見情況與應對
 
-### 情況 1：驗證期間發現數值 Mismatch
+### 情況 1：驗證期間發現告警集合 Mismatch
 
-**症狀**：`validation-report.csv` 中持續出現 `mismatch` 項目
+**症狀**：`validation-report.csv` 中持續出現 `mismatch` 項目（某條告警序列只在一邊響）
 
-**診斷與修復**：詳見 [Shadow Monitoring SOP §5](../shadow-monitoring-sop.md) 的完整 Mismatch/Missing 診斷表。常見原因包括聚合邏輯差異、label 不匹配、評估窗口差異。修復後需重新轉換規則並重啟驗證（新一輪 watch + 7 天無 mismatch）。
+**診斷與修復**：詳見 [Shadow Monitoring SOP §5](../shadow-monitoring-sop.md) 的 Mismatch／不可驗診斷表。常見原因包括兩邊告警的 label 組合不同、注入後選到的序列較少、另一條同名但沒有遷移的 legacy 規則。修復後需重新轉換規則並重啟驗證（新一輪 watch + 7 天無 mismatch）。
 
 ### 情況 2：切換後 Alert 仍未觸發
 
@@ -405,21 +405,20 @@ kubectl patch configmap alertmanager-config -n monitoring \
 
 ## 高級選項
 
-### Option A: Accelerated Validation (--tolerance relaxed + --stability-window shortened)
+### Option A: Accelerated Validation (--stability-window shortened)
 
 若組織願意接受更高風險，可加速驗證期：
 
 ```bash
-# 容忍度提寬至 5%，連續 3 輪無 mismatch 即宣告收斂
+# 連續 289 輪乾淨即宣告收斂（288 次 300 秒的等待＝至少 1 天）
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
+  --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
-  --watch --interval 300 --rounds 288 \
-  --auto-detect-convergence --stability-window 3 \
-  --tolerance 0.05
+  --watch --interval 300 --rounds 576 \
+  --auto-detect-convergence --stability-window 289
 
-# 驗證週期從 14 天降至 ~3 天
-# 風險：rate-based metrics 容易出現短期波動誤報
+# 驗證期從 7 天降至 1 天；--rounds 要大於 --stability-window，留出等待收斂的餘裕
+# 風險：觀察期短，沒涵蓋業務高峰、低谷與維護窗口時才會響的告警
 ```
 
 **何時使用**：測試環境、低風險租戶（如開發環境）
