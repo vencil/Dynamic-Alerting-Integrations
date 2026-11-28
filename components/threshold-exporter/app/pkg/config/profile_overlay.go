@@ -163,6 +163,13 @@ func newPlatformProfiles(files []profileSourceFile) *PlatformProfiles {
 				if nullThreshold(k, v) {
 					continue
 				}
+				// #4253: a later file's line replaces an earlier one's
+				// whatever its spelling — one threshold, as the typed
+				// decode folds it.
+				var buf [2]string
+				for _, o := range otherSpellings(k, &buf) {
+					delete(pp.byName[name], o)
+				}
 				pp.byName[name][k] = profileEntry{file: f.key, value: v}
 			}
 		}

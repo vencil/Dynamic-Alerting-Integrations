@@ -254,3 +254,87 @@ func TestSpellingFold_AnExpiryEventNamesTheLineAsWritten(t *testing.T) {
 		t.Errorf("expiry events %v, want tx/%s (the line as written)", got, retiredSpelling)
 	}
 }
+
+// #4253 review (CodeRabbit): a version label check names the key as the
+// tenant wrote it, as the rename notice beside it does.
+func TestSpellingFold_AVersionCheckNamesTheKeyAsWritten(t *testing.T) {
+	t.Parallel()
+	written := retiredSpelling + `{version="BAD!"}`
+	cfg := loadTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+		"t.yaml":         "tenants:\n  tx:\n    '" + written + "': \"5\"\n",
+	})
+	var keys []string
+	for _, c := range cfg.ValidateTenantKeys().KeyChecks {
+		if !c.Kind.IsRenamed() {
+			keys = append(keys, c.Key)
+		}
+	}
+	if len(keys) == 0 {
+		t.Fatal("premise: no version label check")
+	}
+	for _, k := range keys {
+		if k != written {
+			t.Errorf("version check names %q, want %q (as written)", k, written)
+		}
+	}
+}
+
+// #4253 review (CodeRabbit): an expired `_critical` line gives way to the
+// other spelling only when the critical reader can read that one; else it
+// keeps serving (#4263: an expired value whose absence leaves the key
+// unserved is put back).
+func TestSpellingFold_AnExpiredCriticalLineKeepsServingOverAnUnreadableOther(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ other, want string }{
+		{`"7:critical"`, "mysql_threads_running critical 9"},
+		{`"7"`, "mysql_threads_running critical 7"},
+	} {
+		cfg := loadTree(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+			"t.yaml": "tenants:\n  tx:\n    mysql_threads_running_critical:\n      default: \"9\"\n" +
+				"      expires: \"2026-06-01T00:00:00Z\"\n    " + retiredSpelling + "_critical: " + c.other + "\n",
+		})
+		var got []string
+		for _, r := range strings.Split(threadsRows(cfg), "|") {
+			if strings.Contains(r, "critical") {
+				got = append(got, r)
+			}
+		}
+		if strings.Join(got, "|") != c.want {
+			t.Errorf("other %s: critical rows %v, want %q", c.other, got, c.want)
+		}
+	}
+}
+
+// #4253 review (CodeRabbit): two root platform files writing one profile's
+// threshold in the two spellings — the later file's line is the profile's,
+// on /effective as on /metrics.
+func TestSpellingFold_ALaterProfileFileWinsAcrossSpellings(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+		"_a.yaml":        "profiles:\n  p:\n    mysql_threads_running: \"70\"\n",
+		"_b.yaml":        "profiles:\n  p:\n    " + retiredSpelling + ": \"60\"\n",
+		"tx.yaml":        "tenants:\n  tx:\n    _profile: p\n",
+	}
+	if got := threadsRows(loadTree(t, files)); got != "mysql_threads_running warning 60" {
+		t.Fatalf("premise: /metrics %q, want the later file's 60", got)
+	}
+	dir := t.TempDir()
+	writeMergeTree(t, dir, files)
+	ec, err := ResolveEffective(dir, "tx", fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vals []string
+	for k, v := range ec.EffectiveConfig {
+		if c, _ := canonicalKeyFor(k); c == "mysql_threads_running" {
+			vals = append(vals, k+"="+fmt.Sprint(v))
+		}
+	}
+	// The profile layer is laid canonically (canonicalView), as on /metrics.
+	if strings.Join(vals, ",") != "mysql_threads_running=60" {
+		t.Errorf("/effective %v, want mysql_threads_running=60 (as /metrics)", vals)
+	}
+}

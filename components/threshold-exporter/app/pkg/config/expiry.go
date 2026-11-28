@@ -29,6 +29,7 @@ package config
 // exporter does on the first scrape past it.
 
 import (
+	"strings"
 	"time"
 )
 
@@ -240,9 +241,9 @@ func filterPartials(configs map[string]ThresholdConfig, keep expiryKeep) map[str
 
 // lapseOf is the line the layer writes in sv's place once sv's `expires:`
 // passes: the other spelling's line sv was folded over (valueFold.other),
-// when the layer takes it; and whether there is one.
-func lapseOf(sv ScheduledValue) (ScheduledValue, bool) {
-	if sv.fold == nil || sv.fold.other == nil || !isThresholdShaped(*sv.fold.other) {
+// when its reader serves it (tenantValueServes); and whether there is one.
+func lapseOf(key string, sv ScheduledValue) (ScheduledValue, bool) {
+	if sv.fold == nil || sv.fold.other == nil || !tenantValueServes(key, *sv.fold.other) {
 		return ScheduledValue{}, false
 	}
 	return *sv.fold.other, true
@@ -279,7 +280,7 @@ func filterBodies(bodies map[string]map[string]ScheduledValue, keep expiryKeep) 
 			// #4253: a line folded over another spelling's gives way to it
 			// (lapseOf) — the other line is what the layer writes with this
 			// one deleted.
-			lapse, hasLapse := lapseOf(sv)
+			lapse, hasLapse := lapseOf(k, sv)
 			if hasLapse && keep(lapse) {
 				if kept == nil {
 					kept = make(map[string]ScheduledValue, len(body))
@@ -370,7 +371,7 @@ func filterLevels(parsed map[string]map[string]any, keep expiryKeep) map[string]
 func servable(view *ThresholdConfig, tenant, key string, canonDefaults map[string]float64) bool {
 	canon, _ := canonicalKeyFor(key)
 	if held, ok := heldAcrossSpellings(view.Tenants[tenant], canon); ok {
-		if isThresholdShaped(view.Tenants[tenant][held]) {
+		if tenantValueServes(canon, view.Tenants[tenant][held]) {
 			return true
 		}
 		// A dimensional key's resolver takes the tenant's own value over the
@@ -381,6 +382,26 @@ func servable(view *ThresholdConfig, tenant, key string, canonDefaults map[strin
 		}
 	}
 	return lapsesToRoot(canon, canonDefaults)
+}
+
+// tenantValueServes reports whether a tenant layer's value sv for key
+// (canonical) is one its reader serves: threshold-shaped, and for a
+// `<base>_critical` key a value the critical reader takes — its whole text a
+// number (or its `disable`), never `7:critical` (resolveCriticalRows reads
+// it with parseThresholdNumber). A schedule is judged by its shape.
+func tenantValueServes(key string, sv ScheduledValue) bool {
+	if !isThresholdShaped(sv) {
+		return false
+	}
+	if _, critical := criticalRowBase(key); !critical || len(sv.Overrides) > 0 {
+		return true
+	}
+	text := strings.TrimSpace(sv.Default)
+	if off, _ := thresholdRowDisabled(text); off {
+		return true
+	}
+	_, ok := parseThresholdNumber(text)
+	return ok
 }
 
 // lapsesToRoot reports whether, with no value of the tenant's for key

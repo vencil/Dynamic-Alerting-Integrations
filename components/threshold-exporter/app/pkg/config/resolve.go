@@ -2074,7 +2074,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// check, judged whatever the base.
 			if shape == shapeDimensional {
 				_, customLabels, regexLabels := parseKeyWithLabels(canonKey)
-				for _, c := range validateVersionLabel(tenant, key, canonKey, customLabels, regexLabels) {
+				for _, c := range validateVersionLabel(tenant, sv.writtenAs(key), canonKey, customLabels, regexLabels) {
 					keyCheck(c)
 				}
 			}

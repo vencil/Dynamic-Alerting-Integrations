@@ -361,6 +361,16 @@ func writesRetired(sv ScheduledValue) bool {
 	return isAlias
 }
 
+// FoldedLine is the other spelling's line the decode folded away beside sv's
+// (#4253) — a line the tenant layer wrote and does not serve — with the
+// spelling it was written in; ok is false when there is none.
+func FoldedLine(sv ScheduledValue) (spelling string, line ScheduledValue, ok bool) {
+	if sv.fold == nil || sv.fold.other == nil {
+		return "", ScheduledValue{}, false
+	}
+	return sv.fold.folded, *sv.fold.other, true
+}
+
 // WrittenSpellingOf is the spelling the tenant wrote its line of threshold
 // canon in, overrides being its decoded map (keyed canonically, #4253): the
 // retired one where that is the line the tenant layer kept. canon itself
