@@ -109,7 +109,8 @@ _CUSTOMER_BASE = textwrap.dedent("""\
         webhook_configs:
           - url: https://deadman.example.com/ping
     inhibit_rules:
-      - source_matchers: ['alertname="CustDown"', 'cluster=~".+"']
+      # #4355: an operator's own rule excludes migrated alerts too (--strict)
+      - source_matchers: ['alertname="CustDown"', 'cluster=~".+"', 'da_migrated=""']
         target_matchers: ['alertname="CustDegraded"', 'cluster=~".+"']
         equal: [cluster]
 """)

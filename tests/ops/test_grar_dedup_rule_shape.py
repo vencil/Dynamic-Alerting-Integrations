@@ -31,6 +31,7 @@ from _grar_routes import (  # noqa: E402
     build_dedup_inhibit_rules,
     pre3899_dedup_inhibit_rule,
     pre4097_dedup_inhibit_rule,
+    pre4355_dedup_inhibit_rules,
 )
 from _grar_validate import (  # noqa: E402
     _normalised_rule,
@@ -67,6 +68,40 @@ def test_the_pre4097_shape_is_the_rule_main_wrote_before_clusters():
                             'tenant!~"tb|tc"'],
         "equal": ["tenant", "metric_group"],
     }
+
+
+def test_the_pre4355_shapes_are_the_rules_main_wrote_before_the_migrated_gate():
+    """Copied from `git show 7285dba59:scripts/tools/ops/_grar_routes.py`
+    (`build_dedup_inhibit_rules(["tb", "tc"])`); the recognition helper must
+    not drift, and today's rules are those plus `da_migrated=""` on the
+    source (#4355)."""
+    old = [{
+        "source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant=~".+"',
+                            'da_cluster=~".+"'],
+        "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant=~".+"',
+                            'da_cluster=~".+"', 'tenant!~"tb|tc"'],
+        "equal": ["tenant", "metric_group", "da_cluster"],
+    }, {
+        "source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant=~".+"',
+                            'da_cluster=""'],
+        "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant=~".+"',
+                            'da_cluster=""', 'tenant!~"tb|tc"'],
+        "equal": ["tenant", "metric_group"],
+    }]
+    assert pre4355_dedup_inhibit_rules(["tb", "tc"]) == old
+    assert [r["source_matchers"] for r in build_dedup_inhibit_rules(["tb", "tc"])] == [
+        [*o["source_matchers"], 'da_migrated=""'] for o in old]
+
+
+@pytest.mark.parametrize("excluded", [[], ["tb", "tc"]])
+def test_an_output_written_before_the_migrated_gate_is_still_recognised(excluded):
+    """An older output fed back as the source: its dedup rules must still be
+    the generator's (refused in a base), not operator policy kept beside
+    today's — they would go on letting a migrated critical dedup (#4355)."""
+    for rule in pre4355_dedup_inhibit_rules(excluded):
+        assert is_generated_dedup_rule(rule), rule
+        with pytest.raises(ValueError, match="severity dedup"):
+            render.assert_base_has_no_dedup_rule({"inhibit_rules": [rule]})
 
 
 # ── refused: the generator's own shapes, however spelled ─────────────────

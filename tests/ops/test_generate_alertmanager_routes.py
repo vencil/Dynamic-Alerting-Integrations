@@ -339,17 +339,18 @@ class TestGenerateInhibitRules:
 
     def test_enabled_tenant_rule_structure(self):
         """#3899／#4097：兩條全域規則——tenant 與 metric_group 兩側都 gate、都進 equal；
-        第一條兩側都帶 da_cluster 且 da_cluster 進 equal，第二條兩側都不帶。"""
+        第一條兩側都帶 da_cluster 且 da_cluster 進 equal，第二條兩側都不帶。
+        #4355：source 都排除 migrated 告警（da_migrated=""）。"""
         rules, _ = generate_inhibit_rules({"db-a": "enable"})
         assert rules == [{
             "source_matchers": ['severity="critical"', 'metric_group=~".+"',
-                                'tenant=~".+"', 'da_cluster=~".+"'],
+                                'tenant=~".+"', 'da_cluster=~".+"', 'da_migrated=""'],
             "target_matchers": ['severity="warning"', 'metric_group=~".+"',
                                 'tenant=~".+"', 'da_cluster=~".+"'],
             "equal": ["tenant", "metric_group", "da_cluster"],
         }, {
             "source_matchers": ['severity="critical"', 'metric_group=~".+"',
-                                'tenant=~".+"', 'da_cluster=""'],
+                                'tenant=~".+"', 'da_cluster=""', 'da_migrated=""'],
             "target_matchers": ['severity="warning"', 'metric_group=~".+"',
                                 'tenant=~".+"', 'da_cluster=""'],
             "equal": ["tenant", "metric_group"],
@@ -365,7 +366,7 @@ class TestGenerateInhibitRules:
             assert len(rule["target_matchers"]) == 5
             assert rule["source_matchers"] == [
                 'severity="critical"', 'metric_group=~".+"', 'tenant=~".+"',
-                cluster]
+                cluster, 'da_migrated=""']
         assert [w.tenant for w in warnings] == ["db-b"]
 
     def test_rule_count_does_not_grow_with_tenants(self):

@@ -77,13 +77,15 @@ def test_fixture_holds_the_two_dedup_rules_excluding_disable_and_none():
     clustered, unlabelled = rules
     assert clustered["equal"] == ["tenant", "metric_group", "da_cluster"]
     assert clustered["source_matchers"] == [
-        'severity="critical"', 'metric_group=~".+"', 'tenant=~".+"', 'da_cluster=~".+"']
+        'severity="critical"', 'metric_group=~".+"', 'tenant=~".+"', 'da_cluster=~".+"',
+        'da_migrated=""']
     assert clustered["target_matchers"] == [
         'severity="warning"', 'metric_group=~".+"', 'tenant=~".+"', 'da_cluster=~".+"',
         'tenant!~"tb|tc"']
     assert unlabelled["equal"] == ["tenant", "metric_group"]
     assert unlabelled["source_matchers"] == [
-        'severity="critical"', 'metric_group=~".+"', 'tenant=~".+"', 'da_cluster=""']
+        'severity="critical"', 'metric_group=~".+"', 'tenant=~".+"', 'da_cluster=""',
+        'da_migrated=""']
     assert unlabelled["target_matchers"] == [
         'severity="warning"', 'metric_group=~".+"', 'tenant=~".+"', 'da_cluster=""',
         'tenant!~"tb|tc"']

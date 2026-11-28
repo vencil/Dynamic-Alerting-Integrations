@@ -244,3 +244,89 @@ def test_the_verdict_assembles_with_the_set_it_was_given(monkeypatch):
     monkeypatch.setattr(render, "assemble_configmap", spy)
     render.evaluate_generated_config([], [], [], [], migrated_active=["t-a"])
     assert seen == [{"t-a"}]
+
+
+# ── #4355: migrated alerts reach no other platform route, mute nothing ──
+
+GATE = f'{routes_mod.MIGRATED_LABEL}=""'
+
+
+def test_every_platform_route_but_the_migrated_one_excludes_migrated_alerts():
+    out_routes, _ = render._inject_custom_alert_isolation([], [])
+    platform = out_routes[:render.PLATFORM_ROUTE_COUNT]
+    assert [GATE in r["matchers"] for r in platform] == [True, True, True, True, False]
+    assert MIG in platform[-1]["matchers"]
+
+
+def test_re_injecting_an_injected_tree_does_not_repeat_the_gate():
+    once, _ = render._inject_custom_alert_isolation([], [])
+    twice, _ = render._inject_custom_alert_isolation(once, [])
+    assert twice == once
+    assert all(r["matchers"].count(GATE) <= 1 for r in twice)
+
+
+def test_the_builders_routes_are_not_modified_in_place():
+    """The gate is added to the injected copy; a second call starts clean."""
+    before = routes_mod._build_watchdog_route()[0][0]["matchers"]
+    render._inject_custom_alert_isolation([], [])
+    assert routes_mod._build_watchdog_route()[0][0]["matchers"] == before
+
+
+_UNGATED = {"source_matchers": ['alertname="TenantSilentWarning"', 'tenant=~".+"'],
+            "target_matchers": ['severity="warning"', 'tenant=~".+"', 'alert_source=""'],
+            "equal": ["tenant"]}
+
+
+@pytest.mark.parametrize("source, offending", [
+    (['alertname="X"'], True),
+    (['alertname="X"', 'da_migrated=""'], False),
+    (['alertname="X"', 'da_migrated!="true"'], False),
+    (['alertname="X"', 'da_migrated!~"t.*"'], False),
+    (['alertname="X"', 'da_migrated=~".*"'], True),     # matches "true"
+    (['alertname="X"', 'da_migrated!="false"'], True),  # matches "true"
+    (['{alertname="X", da_migrated=""}'], False),        # several in one element
+    ([], True),                                          # match-all source
+    (['alertname="X'], True),                            # unreadable: fail closed
+])
+def test_a_source_must_exclude_migrated_alerts(source, offending):
+    import _grar_validate as validate
+    rule = {"source_matchers": source, "target_matchers": ['severity="warning"']}
+    assert bool(validate.find_migrated_sourced_inhibits([rule])) is offending
+
+
+def test_the_legacy_source_match_form_is_judged_too():
+    import _grar_validate as validate
+    assert validate.find_migrated_sourced_inhibits(
+        [{"source_match": {"alertname": "X", "da_migrated": ""}, "target_match": {}}]) == []
+    assert validate.find_migrated_sourced_inhibits(
+        [{"source_match": {"alertname": "X"}, "target_match": {}}])
+
+
+def test_an_ungated_source_fails_under_strict_and_warns_without(capsys):
+    with pytest.raises(ValueError, match="#4355"):
+        render._enforce_migrated_alerts_mute_nothing([_UNGATED], strict=True)
+    render._enforce_migrated_alerts_mute_nothing([_UNGATED], strict=False)
+    assert "inhibit_rules[0]" in capsys.readouterr().err
+
+
+def test_the_merge_refuses_an_ungated_base_rule_under_strict(tmp_path):
+    conf = _tree(tmp_path, {"t-a": ...})
+    base = tmp_path / "base.yml"
+    base.write_text(yaml.safe_dump({"route": {"receiver": "default"},
+                                    "receivers": [{"name": "default"}],
+                                    "inhibit_rules": [_UNGATED]}), encoding="utf-8")
+    out = tmp_path / "am.yml"
+    argv = [sys.executable, "-s", str(_GAR), "--config-dir", str(conf), "--output-alertmanager",
+            "--base-config", str(base), "-o", str(out)]
+    strict = subprocess.run([*argv, "--strict"], capture_output=True, text=True,
+                            encoding="utf-8", timeout=300)
+    assert strict.returncode == 1 and "#4355" in strict.stderr, strict.stderr
+    assert not out.exists()
+    plain = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert plain.returncode == 0 and "WARN: inhibit_rules[0]" in plain.stderr, plain.stderr
+
+
+def test_the_generated_dedup_rules_exclude_migrated_sources():
+    rules, _ = routes_mod.generate_inhibit_rules({"t-a": "enable"})
+    import _grar_validate as validate
+    assert validate.find_migrated_sourced_inhibits(rules) == []

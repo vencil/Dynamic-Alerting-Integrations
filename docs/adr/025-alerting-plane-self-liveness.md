@@ -55,6 +55,7 @@ route:
 # ...
     - matchers:
         - alertname="Watchdog"
+        - da_migrated=""
       group_by: ["alertname"]
       group_wait: 0s
       group_interval: 1m
