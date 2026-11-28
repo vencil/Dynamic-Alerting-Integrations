@@ -49,6 +49,7 @@ var findingKinds = map[string]bool{
 	"routing_group_by_invalid":            true,
 	"routing_in_unread_location":          true,
 	"routing_key_ignored":                 true,
+	"routing_migrated_invalid":            true,
 	"routing_not_mapping":                 true,
 	"routing_profile_duplicate":           true,
 	"routing_profile_invalid":             true,

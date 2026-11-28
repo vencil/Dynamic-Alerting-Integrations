@@ -73,6 +73,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the operator entry)
+    exit_on_output_write_error, write_operator_output)
 
 # Gate thresholds. Policy lives here once; bench_gate_compare.sh only orchestrates.
 MAGNITUDE_FLOOR_PCT = 5.0
@@ -425,6 +427,7 @@ def _read(path: str) -> Reading:
     return parse(p.read_text(encoding="utf-8"))
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None) -> int:
     try_utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -473,8 +476,8 @@ def main(argv: list[str] | None = None) -> int:
     v.over_bound = [j for j in over if j.row in counted]  # only what the verdict counts
     if v.basis == "clean" and accepted:
         v.basis = "accepted"
-    with open(args.github_output, "a", encoding="utf-8", newline="\n") as fh:
-        fh.write(render_outputs(v, args.benchstat))
+    write_operator_output(args.github_output, render_outputs(v, args.benchstat),
+                          flag="--github-output", append=True)
     if v.inconclusive_reason:
         print(f"::warning::{v.inconclusive_reason}", file=sys.stderr)
     if v.basis == "timing-not-replicated":

@@ -720,3 +720,153 @@ class TestGeneratedLintRunsThroughRun:
         assert res.returncode == 2, (res.stdout, res.stderr)
         assert "unrecognized arguments: --no-such-flag" in res.stderr
         assert res.stdout == ""
+
+
+# ---------------------------------------------------------------------------
+# #3981: every target is judged before the first write, through the entry
+# ---------------------------------------------------------------------------
+def test_a_refused_target_writes_nothing_and_is_rc2_one_line(tmp_path, monkeypatch, capsys):
+    """The test file's path is a directory (`--force`): it is refused before
+    the script ahead of it is written — rc 2, one line naming it — where the
+    bare write left the script written and ended in the crash handler
+    (`unexpected internal error (IsADirectoryError)`)."""
+    root = tmp_path / "fake_project"
+    lint_dir, test_dir = root / "scripts" / "tools" / "lint", root / "tests" / "lint"
+    lint_dir.mkdir(parents=True)
+    (test_dir / "test_check_dummy.py").mkdir(parents=True)
+    config = root / ".pre-commit-config.yaml"
+    config.write_text("repos:\n  - repo: local\n    hooks:\n      - id: a\n\n", encoding="utf-8")
+    monkeypatch.setattr(sl, "PROJECT_ROOT", root)
+    monkeypatch.setattr(sl, "LINT_DIR", lint_dir)
+    monkeypatch.setattr(sl, "TESTS_DIR", test_dir)
+    monkeypatch.setattr(sl, "PRECOMMIT_CONFIG", config)
+    with pytest.raises(SystemExit) as exc:
+        sl.main(["--name", "dummy", "--kind", "text", "--description", "d", "--force"])
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot write {test_dir / 'test_check_dummy.py'}: not a regular file"
+        " — internal output path, this is a bug or an unwritable workspace"], err
+    assert not (lint_dir / "check_dummy.py").exists()
+    assert "dummy" not in config.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_the_scaffolded_files_get_the_mode_a_checkout_would_give(tmp_path, monkeypatch):
+    """Through the artifact entry: 0644 whatever the umask — a bare write
+    under `umask 077` left the new lint and its test 0600."""
+    root = tmp_path / "fake_project"
+    lint_dir, test_dir = root / "scripts" / "tools" / "lint", root / "tests" / "lint"
+    monkeypatch.setattr(sl, "PROJECT_ROOT", root)
+    monkeypatch.setattr(sl, "LINT_DIR", lint_dir)
+    monkeypatch.setattr(sl, "TESTS_DIR", test_dir)
+    monkeypatch.setattr(sl, "PRECOMMIT_CONFIG", root / ".pre-commit-config.yaml")
+    old = os.umask(0o077)
+    try:
+        assert sl.main(["--name", "dummy", "--kind", "text", "--description", "d",
+                        "--no-hook"]) == 0
+    finally:
+        os.umask(old)
+    for f in (lint_dir / "check_dummy.py", test_dir / "test_check_dummy.py"):
+        assert f.stat().st_mode & 0o777 == 0o644, f
+
+
+def _fake_project(tmp_path, monkeypatch):
+    root = tmp_path / "fake_project"
+    lint_dir, test_dir = root / "scripts" / "tools" / "lint", root / "tests" / "lint"
+    lint_dir.mkdir(parents=True)
+    test_dir.mkdir(parents=True)
+    config = root / ".pre-commit-config.yaml"
+    monkeypatch.setattr(sl, "PROJECT_ROOT", root)
+    monkeypatch.setattr(sl, "LINT_DIR", lint_dir)
+    monkeypatch.setattr(sl, "TESTS_DIR", test_dir)
+    monkeypatch.setattr(sl, "PRECOMMIT_CONFIG", config)
+    return lint_dir, config
+
+
+@pytest.mark.parametrize("shape", ["fifo", "not-utf8"])
+def test_a_config_that_cannot_be_read_is_rc2_one_line(shape, tmp_path, monkeypatch, capsys):
+    """#3981: the hook entry's config was read with no guard — a FIFO blocked
+    forever, non-UTF-8 text ended in the crash handler. Now rc 2, one line
+    naming it, and nothing is written."""
+    import signal
+    lint_dir, config = _fake_project(tmp_path, monkeypatch)
+    if shape == "fifo":
+        if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+            pytest.skip("no FIFO / SIGALRM on this platform")
+        os.mkfifo(config)
+        why = "not a regular file"
+    else:
+        config.write_bytes(b"\xff\xfe")
+        why = "not UTF-8 (invalid start byte)"
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung) if hasattr(signal, "SIGALRM") else None
+    if prev is not None:
+        signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            sl.main(["--name", "dummy", "--kind", "text", "--description", "d"])
+    finally:
+        if prev is not None:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, prev)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot read {config}: {why}"
+        " — internal path, this is a bug or an unreadable workspace"], err
+    assert not (lint_dir / "check_dummy.py").exists()
+
+
+_STDOUT_DRIVER = """\
+import sys
+from pathlib import Path
+sys.path[:0] = [sys.argv[1], sys.argv[2]]
+import scaffold_lint as sl, _lib_exitcodes
+root = Path(sys.argv[3])
+sl.PROJECT_ROOT = root
+sl.LINT_DIR = root / "scripts" / "tools" / "lint"
+sl.TESTS_DIR = root / "tests" / "lint"
+sl.PRECOMMIT_CONFIG = root / ".pre-commit-config.yaml"
+sys.argv = ["scaffold_lint.py", "--name", "dummy", "--kind", "text", "--description", "d"]
+_lib_exitcodes.run(sl.main)
+"""
+
+
+def test_a_config_that_is_this_process_stdout_writes_nothing(tmp_path, monkeypatch):
+    """#3981: stdout appended onto the config the hook entry goes into. It is
+    judged with the script and the test before the first write: rc 2, one
+    line naming it, and neither the script nor the test is written (the bare
+    writes made all three, the report then landing in the config: rc 0)."""
+    lint_dir, config = _fake_project(tmp_path, monkeypatch)
+    body = "repos:\n  - repo: local\n    hooks:\n      - id: a\n\n"
+    config.write_text(body, encoding="utf-8")
+    dx = Path(sl.__file__).resolve().parent
+    with open(config, "a", encoding="utf-8") as out:
+        proc = subprocess.run(
+            [sys.executable, "-c", _STDOUT_DRIVER, str(dx), str(dx.parent),
+             str(tmp_path / "fake_project")],
+            stdout=out, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.strip().splitlines() == [
+        f"ERROR: cannot write {config}: is this process's standard stream"
+        " — internal output path, this is a bug or an unwritable workspace"], proc.stderr
+    assert not (lint_dir / "check_dummy.py").exists()
+    assert config.read_text(encoding="utf-8") == body
+
+
+def test_a_config_read_error_is_an_output_write_error(tmp_path, monkeypatch):
+    """#3981: an OSError on the read (EACCES: root cannot be denied here, so
+    it is raised) is the read-direction OutputWriteError, rc 2 at `main`."""
+    from _lib_output import OutputWriteError
+    config = tmp_path / ".pre-commit-config.yaml"
+    config.write_text("repos: []\n", encoding="utf-8")
+
+    def denied(self, *a, **k):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(Path, "read_text", denied)
+    with pytest.raises(OutputWriteError) as exc:
+        sl._read_config(config)
+    assert exc.value.action == "read" and exc.value.path == str(config)

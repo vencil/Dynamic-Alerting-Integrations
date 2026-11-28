@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -508,6 +510,80 @@ func TestSloCorePairsItsWindowsPerCluster(t *testing.T) {
 				t.Errorf("%s core lacks %q:\n%s", sev, w, expr)
 			}
 		}
+	}
+}
+
+// Severity Dedup suppresses the warning of an slo alert while its critical
+// fires: Alertmanager pairs the two by tenant, metric_group and — when both
+// carry it — da_cluster, and an alert with the cluster never pairs with one
+// without. Both severities come out of one alertRule and one sloCoreRecord;
+// this pins that they stay one pair: the same metric_group, the same labels
+// but for the severity, and cores that aggregate and match on the same labels
+// (so one cannot be per cluster while the other is per tenant). A pack compiled
+// from a tenant's recipes is not in the tree check_metric_group_pairs.py reads.
+func TestSloSeverityPairSharesGroupAndClusterScope(t *testing.T) {
+	e := caEntry(t, CustomAlertServed, []string{"warning", "critical"},
+		`- {recipe: slo_burn_rate, name: a, metric: m_err, denominator_metric: m_req, objective: "99.9"}`)
+	p, err := CompileCustomAlertPack([]TenantCustomAlerts{{Tenant: "t", Entries: []CustomAlertEntry{e}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := packRules(t, p)
+	labels := map[string]map[string]string{}
+	groupings := map[string][]string{}
+	for _, sev := range []string{"warning", "critical"} {
+		alert := rules["Custom_"+e.RecipeID+"/"+sev]
+		if alert == nil {
+			t.Fatalf("no %s alert in the pack: %v", sev, keys(rules))
+		}
+		if got := alert.get("expr"); got != coreName(e.RecipeID, sev) {
+			t.Fatalf("%s alert reads %v, want its core %s", sev, got, coreName(e.RecipeID, sev))
+		}
+		labels[sev] = map[string]string{}
+		for _, kv := range alert.get("labels").(orderedMap) {
+			if kv.Key != "severity" {
+				labels[sev][kv.Key] = kv.Value.(string)
+			}
+		}
+		if got := labels[sev]["metric_group"]; got != "slo_{{ $labels.name }}" {
+			t.Errorf("%s alert has metric_group %q", sev, got)
+		}
+		expr, err := promparser.NewParser(promparser.Options{}).ParseExpr(
+			rules[coreName(e.RecipeID, sev)].get("expr").(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		promparser.Inspect(expr, func(n promparser.Node, _ []promparser.Node) error {
+			switch x := n.(type) {
+			case *promparser.AggregateExpr:
+				groupings[sev] = append(groupings[sev],
+					fmt.Sprintf("%s without=%t (%s)", x.Op, x.Without, strings.Join(x.Grouping, ",")))
+			case *promparser.BinaryExpr:
+				if m := x.VectorMatching; m != nil && (m.On || len(m.MatchingLabels) > 0) {
+					groupings[sev] = append(groupings[sev], fmt.Sprintf("%s on=%t (%s) %s",
+						x.Op, m.On, strings.Join(m.MatchingLabels, ","), m.Card))
+				}
+			}
+			return nil
+		})
+	}
+	if !reflect.DeepEqual(labels["warning"], labels["critical"]) {
+		t.Errorf("the pair's labels differ beyond the severity:\nwarning  %v\ncritical %v",
+			labels["warning"], labels["critical"])
+	}
+	if !reflect.DeepEqual(groupings["warning"], groupings["critical"]) {
+		t.Errorf("the pair's cores group or match differently:\nwarning  %v\ncritical %v",
+			groupings["warning"], groupings["critical"])
+	}
+	// Not an equality of two empty lists: the cores do pair per cluster.
+	perCluster := 0
+	for _, g := range groupings["warning"] {
+		if strings.Contains(g, clusterLabel) {
+			perCluster++
+		}
+	}
+	if perCluster == 0 {
+		t.Fatalf("no grouping or matching of the warning core names %s: %v", clusterLabel, groupings["warning"])
 	}
 }
 

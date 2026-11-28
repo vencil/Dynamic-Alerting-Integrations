@@ -205,3 +205,94 @@ def test_the_base_key_of_a_refused_tier_is_still_accepted(mod, tmp_path):
     p.write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
     assert mod.inject(p, "pg_replication_lag", "30") == 0
     assert "pg_replication_lag: 30" in p.read_text(encoding="utf-8")
+
+
+# ── #3981: the write goes through the artifact entry ────────────────────────
+
+def _run_cli(*args: str, cwd: Path, fsize: int | None = None):
+    """The tool as a process; with *fsize*, a file-size limit (bytes) and
+    SIGXFSZ ignored, so an oversized write fails with EFBIG."""
+    import os
+    import signal
+    import subprocess
+
+    def limit():
+        import resource
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
+
+    return subprocess.run(
+        [sys.executable, str(TOOL_PATH), *args], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=60,
+        preexec_fn=limit if fsize is not None else None, cwd=cwd,
+        env={**_env_for(fsize), "PYTHONUTF8": "1"})
+
+
+def _env_for(fsize: int | None) -> dict[str, str]:
+    """This process's environment; under a file-size limit, without the
+    subprocess-coverage variables — coverage's own atexit save would hit the
+    same limit and print a second traceback, which is not the tool's."""
+    import os
+    if fsize is None:
+        return dict(os.environ)
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith(("COV_CORE_", "COVERAGE_"))}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX resource limits")
+def test_an_existing_file_that_cannot_be_replaced_is_rc2_one_line(tmp_path):
+    """The rewrite of an existing `_defaults.yaml` that lacks the key fails
+    (here: the file-size limit) → rc 2, one line naming `PATH`, and the
+    file keeps its bytes: the replacement is atomic."""
+    target = tmp_path / "_defaults.yaml"
+    before = "defaults:\n  a: 1\n"
+    target.write_text(before, encoding="utf-8")
+    proc = _run_cli(str(target), "bench_trigger", "50", cwd=tmp_path, fsize=4)
+    assert proc.returncode == 2, proc.stderr
+    lines = [ln for ln in proc.stderr.splitlines() if ln.strip()]
+    assert len(lines) == 1 and lines[0].startswith("ERROR: "), proc.stderr
+    assert "PATH" in lines[0]
+    assert target.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no mkfifo")
+def test_a_fifo_target_is_refused_before_it_is_read(tmp_path):
+    """A FIFO used to block the read forever: refused, rc 2, naming `PATH`."""
+    import os
+    fifo = tmp_path / "_defaults.yaml"
+    os.mkfifo(fifo)
+    proc = _run_cli(str(fifo), "bench_trigger", "50", cwd=tmp_path)
+    assert proc.returncode == 2, proc.stderr
+    assert "PATH" in proc.stderr and "Traceback" not in proc.stderr
+
+
+def test_standard_output_is_refused(tmp_path):
+    """`-` used to create a file named `-` in the cwd."""
+    proc = _run_cli("-", "bench_trigger", "50", cwd=tmp_path)
+    assert proc.returncode == 2, proc.stderr
+    assert "PATH" in proc.stderr
+    assert not (tmp_path / "-").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_a_rewritten_file_is_0644_as_conf_d_files_are(tmp_path):
+    """#3535: a conf.d file is a repo artifact, 0644 — the exporter reads the
+    tree as another uid, so an operator output's 0600 would hide it."""
+    target = tmp_path / "_defaults.yaml"
+    target.write_text("defaults:\n  a: 1\n", encoding="utf-8")
+    target.chmod(0o600)
+    proc = _run_cli(str(target), "bench_trigger", "50", cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert oct(target.stat().st_mode & 0o777) == oct(0o644)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_a_rewritten_file_with_the_owner_execute_bit_is_0755(tmp_path):
+    """The artifact entry keeps the owner's execute bit: 0700 becomes 0755,
+    not 0644 (the changelog's two cases)."""
+    target = tmp_path / "_defaults.yaml"
+    target.write_text("defaults:\n  a: 1\n", encoding="utf-8")
+    target.chmod(0o700)
+    proc = _run_cli(str(target), "bench_trigger", "50", cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert oct(target.stat().st_mode & 0o777) == oct(0o755)

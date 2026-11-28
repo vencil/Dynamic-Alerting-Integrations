@@ -121,7 +121,8 @@ _BASE_WATCHDOG_UNWIRED = _CUSTOMER_BASE.replace(
 assert _BASE_WATCHDOG_UNWIRED != _CUSTOMER_BASE
 
 _PLATFORM_RECEIVERS = ("watchdog-heartbeat", "custom-alerts-firehose",
-                       "synthetic-receiver", "sentinel-sinkhole")
+                       "synthetic-receiver", "sentinel-sinkhole",
+                       "migrated-alerts-shadow")
 
 
 def _tree(tmp_path: Path) -> Path:
@@ -291,8 +292,8 @@ def test_customer_routes_are_kept_in_order_between_enforced_and_tenant_routes(tm
     unchanged) and then the tenant routes."""
     routes = _routes_of(_emit_am(tmp_path, _tree(tmp_path), _base(tmp_path)))
     receivers = [r.get("receiver") for r in routes]
-    assert receivers[:4] == list(_PLATFORM_RECEIVERS), receivers
-    assert all(str(r).startswith("platform-enforced") for r in receivers[4:-1]), receivers
+    assert receivers[:len(_PLATFORM_RECEIVERS)] == list(_PLATFORM_RECEIVERS), receivers
+    assert all(str(r).startswith("platform-enforced") for r in receivers[len(_PLATFORM_RECEIVERS):-1]), receivers
     below = _below_enforced(routes)
     assert below["receiver"] == "cust-default"
     children = [r.get("receiver") for r in below["routes"]]
@@ -311,7 +312,7 @@ def test_without_per_tenant_enforced_routes_the_tree_stays_flat(tmp_path):
                                            encoding="utf-8")
     routes = _routes_of(_emit_am(tmp_path, conf_d, _base(tmp_path)))
     assert all("matchers" in r for r in routes), routes
-    assert [r.get("receiver") for r in routes][4:6] == ["noc-pager", "cust-db"]
+    assert [r.get("receiver") for r in routes][len(_PLATFORM_RECEIVERS):len(_PLATFORM_RECEIVERS) + 2] == ["noc-pager", "cust-db"]
 
 
 def test_the_customer_receivers_and_inhibit_rules_are_kept(tmp_path):
@@ -698,7 +699,7 @@ def test_a_base_that_carries_the_platform_routes_gets_each_once(tmp_path):
     receivers = [r.get("receiver") for r in routes]
     for name in _PLATFORM_RECEIVERS:
         assert receivers.count(name) == 1, receivers
-    assert receivers[:4] == list(_PLATFORM_RECEIVERS), receivers
+    assert receivers[:len(_PLATFORM_RECEIVERS)] == list(_PLATFORM_RECEIVERS), receivers
 
 
 def test_a_gitops_configmap_carries_its_source_so_apply_can_take_over(

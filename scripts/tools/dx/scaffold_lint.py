@@ -124,6 +124,9 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    OutputWriteError, check_repo_artifact, ensure_dir, exit_on_output_write_error,
+    is_special_file, write_repo_artifact)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 LINT_DIR = PROJECT_ROOT / "scripts" / "tools" / "lint"
@@ -988,6 +991,23 @@ def insert_hook_entry(
 # CLI
 # ---------------------------------------------------------------------------
 
+def _read_config(path: Path) -> str:
+    """The pre-commit config's text. A FIFO would block the read, and an
+    unreadable or non-UTF-8 one would end in the crash handler: both are one
+    line at rc 2 (#3981). `is_special_file`, not the artifact's check: a
+    `--dry-run` only reads it."""
+    if is_special_file(path):
+        raise OutputWriteError(path, OSError(None, "not a regular file"), action="read")
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise OutputWriteError(path, exc, action="read") from exc
+    except UnicodeDecodeError as exc:  # a ValueError: the crash handler's, before
+        raise OutputWriteError(path, OSError(None, f"not UTF-8 ({exc.reason})"),
+                               action="read") from exc
+
+
+@exit_on_output_write_error
 def main(argv: Optional[list[str]] = None) -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -1066,7 +1086,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Pre-commit hook entry
     if not args.no_hook:
         if PRECOMMIT_CONFIG.exists():
-            current = PRECOMMIT_CONFIG.read_text(encoding="utf-8")
+            current = _read_config(PRECOMMIT_CONFIG)
             new_text, changed = insert_hook_entry(
                 current,
                 render_hook_entry(paths, args.description, files_pattern),
@@ -1076,6 +1096,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                 actions.append(("hook-insert", PRECOMMIT_CONFIG, new_text))
             else:
                 actions.append(("hook-skip-exists", PRECOMMIT_CONFIG, ""))
+
+    # #3981: every target is judged before the first is written, so a
+    # refused one (a directory where the script goes, a FIFO, this process's
+    # stdout) writes nothing. The config was read (and refused if not a
+    # regular file) above.
+    if not args.dry_run:
+        for action, target, _content in actions:
+            if action in ("write", "hook-insert"):
+                check_repo_artifact(target)
 
     # Apply / report
     print(f"Scaffolding lint: {paths.name} (kind={paths.kind})")
@@ -1092,8 +1121,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.dry_run:
             print(f"  + would {action}: {rel} ({len(content)} bytes)")
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8", newline="\n")
+        ensure_dir(target.parent)
+        write_repo_artifact(target, content)
         print(f"  ✓ {action}: {rel}")
 
     if args.dry_run:

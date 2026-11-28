@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""migrate_rule.py — 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。
+"""migrate_rule.py — 傳統 Prometheus 警報規則遷移輔助工具（PromQL 由 Prometheus 的語法樹判讀）。
 
 自動將傳統的 PromQL (寫死數值) 轉換為本專案的「動態多租戶」三件套：
 1. 租戶檔                  → migration_output/.migration/conf.d/<tenant>.yaml（tenants: {<tenant>: …}；--tenant）
@@ -27,18 +27,17 @@
   python3 migrate_rule.py <legacy_rules.yml> --tenant db-a -o /custom/path    # 自訂輸出目錄
   python3 migrate_rule.py <legacy_rules.yml> --triage                         # Triage 模式: 只產出 CSV 分桶報告
   python3 migrate_rule.py <legacy_rules.yml> --tenant db-a --no-prefix        # 停用 custom_ 前綴 (不建議)
-  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a --no-ast           # 強制使用舊版 regex 引擎
 
-v4 升級 (AST Engine — Phase 11):
-  - promql-parser (Rust/PyO3) 取代 regex 進行 metric name 辨識
-  - AST-Informed String Surgery: 精準 tenant label 注入（前綴只加在 key 與 record 名稱，
-    不改來源指標名，issue 1818）
-  - Reparse 驗證: 確保改寫後的 PromQL 仍然合法
-  - Graceful degradation: promql-parser 不可用時自動降級為 regex
+PromQL 的讀法（#4215）：每條運算式都由 Prometheus 自己的 parser 讀成語法樹
+（da-read promql-shape，整份規則檔一次），指標、label matcher、門檻、語義中斷的
+函式都從樹上讀，不掃文字；tenant label 依 selector 在原式中的 byte 位置插入
+（前綴只加在 key 與 record 名稱，不改來源指標名，issue 1818），插入後再讀一次
+確認 Prometheus 接受。
 """
 
 import sys
 import re
+import math
 import os
 import csv
 import io
@@ -74,186 +73,150 @@ _OUTPUT_FLAG = "-o/--output-dir"
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_prompt import prompt_line  # noqa: E402  (#3822: an unreadable stdin is rc 2, named)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
+# ADR-006: the one spelling of the cluster label (shipped flat in da-tools).
+from _lib_cluster_identity import CLUSTER_IDENTITY_LABEL  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# AST Engine: promql-parser (optional — graceful degradation)
-# ---------------------------------------------------------------------------
-try:
-    import promql_parser
-    HAS_AST = True
-except ImportError:
-    HAS_AST = False
+#: 產生的 metric 側 recording rule 的分組（ADR-006「多叢集同租戶」契約 4，
+#: #1200）：逐（租戶、叢集）。`da_cluster` 是 Prometheus 的 external label，
+#: 只在各叢集資料相遇的地方才在序列上；單一 Prometheus 的序列沒有它，分組
+#: 等同逐租戶，結果與 `by(tenant)` 相同。閾值側與維護狀態仍是租戶一份
+#: （契約 3），以 `on(tenant) group_left`／`unless on(tenant)` 套到每個叢集。
+METRIC_GROUPING = f"by(tenant, {CLUSTER_IDENTITY_LABEL})"
 
+#: 與 check_cluster_identity.IDENTITY_LABELS 同一組（由測試釘住；da-tools
+#: 映像不帶 lint）：`by(...)`／`on(...)` 點名其中任一個，就是「逐這個東西」，
+#: 而它在每個叢集各有一份。
+_IDENTITY_LABELS = frozenset({"tenant", "instance", "pod", "namespace", "node"})
 
 # ============================================================
-# AST Engine: PromQL AST 走訪與改寫
+# PromQL：一律讀 Prometheus 的語法樹（#4215）
 # ============================================================
 
-def _walk_vector_selectors(node):
-    """遞迴走訪 AST，yield 所有 VectorSelector 節點。
+def read_trees(exprs):
+    """每條運算式的語法樹（``_lib_consumer_read.promql_shape_each``），整批讀
+    一次；Prometheus 的 parser 拒收的那條是它的 ``InputRefused``。"""
+    return _lib_consumer_read.promql_shape_each(list(exprs))
 
-    支援的 AST 節點類型:
-      BinaryExpr (.lhs, .rhs), ParenExpr (.expr), UnaryExpr (.expr),
-      AggregateExpr (.expr), Call (.args), MatrixSelector (.vector_selector),
-      SubqueryExpr (.expr), VectorSelector (leaf node)
+
+def _tree_of(expr_or_tree):
+    """*expr_or_tree* 的語法樹：已是樹就原樣，是字串就讀一次（拒收即 raise，
+    點名該運算式）。"""
+    if isinstance(expr_or_tree, dict):
+        return expr_or_tree
+    return _lib_consumer_read.promql_shape_each([expr_or_tree], raise_refused=True)[0]
+
+
+def _node_text(src, node):
+    """*node* 在原式 *src*（str）中的原文：offset 是 UTF-8 byte。"""
+    return src.encode("utf-8")[node["start"]:node["end"]].decode("utf-8")
+
+
+def _selectors(tree):
+    return [n for n in _lib_consumer_read.shape_nodes(tree) if n["kind"] == "selector"]
+
+
+def _selector_metric(node):
+    """selector 以 ``__name__`` 等值 matcher 釘住的指標名，或 None。"""
+    for m in node["matchers"]:
+        if m["name"] == "__name__" and m["type"] == "=":
+            return m["value"]
+    return None
+
+
+def _calls(tree):
+    return {n["name"] for n in _lib_consumer_read.shape_nodes(tree) if n["kind"] == "call"}
+
+
+def groupings_without_cluster(tree):
+    """原式子自己寫的、點名身分 label 卻沒有叢集 label 的分組與配對。
+
+    *tree* 是語法樹（或其子樹）。回傳 list（依出現順序、不重複），每項是
+    `on(instance)`、`by(pod, namespace)` 這樣的文字：vector matching 的
+    `on(...)` 與聚合的 `by(...)`，label 清單含 tenant／instance／pod／
+    namespace／node 任一個而不含 `da_cluster`；以及點名 `da_cluster` 的
+    `without(...)`／`ignoring(...)`——那同樣把叢集丟掉。沒點名身分 label 的
+    （`by(le)`、`on()`）、沒點名叢集的 `without(...)`／`ignoring(...)` 不算。讀的是
+    Prometheus 的語法樹，所以 `ON(...)`、`BY (...)`、`by("instance")` 與字串
+    常值裡的文字都不會看錯。
+
+    ⛔ 只偵測、不改寫（#1200）：要不要補 `da_cluster` 取決於配對的兩邊是否都帶
+    這個 label——`x / on(tenant) group_left quota`、右邊是租戶一份的序列時，
+    補上去就什麼都配不到，告警悄悄消失——而這從語法樹看不出來。
     """
-    tname = type(node).__name__
-    if tname == 'VectorSelector':
-        yield node
-        return
-    if tname == 'MatrixSelector':
-        vs = getattr(node, 'vector_selector', None)
-        if vs is not None:
-            yield vs
-        return
-    # Recurse into known child attributes
-    for attr in ('lhs', 'rhs', 'expr'):
-        child = getattr(node, attr, None)
-        if child is not None:
-            yield from _walk_vector_selectors(child)
-    # Function call arguments
-    args = getattr(node, 'args', None)
-    if args:
-        for arg in args:
-            yield from _walk_vector_selectors(arg)
-    # AggregateExpr param (e.g. histogram_quantile(0.95, ...))
-    param = getattr(node, 'param', None)
-    if param is not None and type(param).__name__ not in ('NumberLiteral', 'StringLiteral'):
-        yield from _walk_vector_selectors(param)
+    found = []
+
+    def note(keyword, labels):
+        labels = list(labels)
+        keeps = keyword in ("by", "on")   # the list is what survives
+        if (_IDENTITY_LABELS & set(labels) and CLUSTER_IDENTITY_LABEL not in labels
+                if keeps else CLUSTER_IDENTITY_LABEL in labels):
+            # a quoted label name can hold anything: written so that it stays
+            # on one line of a comment
+            shown = [x if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", x)
+                     else json.dumps(x, ensure_ascii=False) for x in labels]
+            text = f"{keyword}({', '.join(shown)})"
+            if text not in found:
+                found.append(text)
+
+    for node in _lib_consumer_read.shape_nodes(tree):
+        if node["kind"] == "aggregate":
+            note("without" if node["without"] else "by", node["labels"])
+        elif node["kind"] == "binary" and node["matching"]:
+            note("on" if node["matching"]["on"] else "ignoring", node["matching"]["labels"])
+    return found
 
 
-def extract_metrics_ast(expr_str):
-    """使用 AST 精準提取 PromQL 中所有 metric 名稱。
-
-    回傳: list of unique metric names (保留出現順序)。
-    若 promql-parser 不可用或解析失敗，回傳空 list (呼叫端降級為 regex)。
-    """
-    if not HAS_AST:
-        return []
-    try:
-        ast = promql_parser.parse(expr_str)
-    except Exception:
-        return []
-    names = []
-    for vs in _walk_vector_selectors(ast):
-        name = vs.name
-        if name and name not in names:
-            names.append(name)
-    return names
+def cluster_grouping_note(groupings):
+    """一行：原式子的這些分組／配對沒有叢集 label，要人看過（#1200）。"""
+    return (f"原式子的 {'、'.join(groupings)} 不保留 {CLUSTER_IDENTITY_LABEL}：在收了多個叢集的 "
+            f"Prometheus 上會配對或合併不同叢集的同名序列（on() 可能 many-to-many）。"
+            f"兩邊都帶 {CLUSTER_IDENTITY_LABEL} 才補上，請人工確認；工具不改寫")
 
 
-def extract_label_matchers_ast(expr_str):
-    """使用 AST 提取每個 VectorSelector 的 label matchers。
-
-    回傳: list of {"metric": str, "labels": dict}
-    只保留「有意義」的維度標籤 (排除 job/instance/__name__/namespace/pod/container)。
-    """
-    if not HAS_AST:
-        return []
-    try:
-        ast = promql_parser.parse(expr_str)
-    except Exception:
-        return []
-
-    skip_labels = frozenset({'job', 'instance', '__name__', 'namespace', 'pod', 'container'})
-    results = []
-    for vs in _walk_vector_selectors(ast):
-        name = vs.name or ''
-        matchers_obj = vs.matchers
-        if matchers_obj is None:
-            continue
-        inner = getattr(matchers_obj, 'matchers', [])
-        labels = {}
-        for m in inner:
-            if m.name in skip_labels:
-                continue
-            # Only exact-match labels for dimension hints
-            if str(m.op) == 'MatchOp.Equal':
-                labels[m.name] = m.value
-        if labels:
-            results.append({"metric": name, "labels": labels})
-    return results
-
-
-def detect_semantic_break_ast(expr_str):
-    """使用 AST 偵測語義不可轉換的函式 (absent, predict_linear 等)。
-
-    回傳: True 如果表達式包含語義中斷函式。
-    """
-    if not HAS_AST:
-        return False
-    try:
-        ast = promql_parser.parse(expr_str)
-    except Exception:
-        return False
-
-    def _walk_calls(node):
-        tname = type(node).__name__
-        if tname == 'Call':
-            func_obj = getattr(node, 'func', None)
-            if func_obj is not None:
-                fname = getattr(func_obj, 'name', '')
-                if fname in SEMANTIC_BREAK_FUNCS:
-                    return True
-            # Walk into Call arguments (the only children of a Call node)
-            args = getattr(node, 'args', [])
-            if args:
-                for arg in args:
-                    if _walk_calls(arg):
-                        return True
-            return False
-        # Non-Call nodes: walk known child attributes
-        for attr in ('lhs', 'rhs', 'expr'):
-            child = getattr(node, attr, None)
-            if child is not None:
-                if _walk_calls(child):
-                    return True
-        # AggregateExpr / other nodes with args
-        args = getattr(node, 'args', None)
-        if args:
-            for arg in args:
-                if _walk_calls(arg):
-                    return True
-        return False
-
-    return _walk_calls(ast)
-
-
-def rewrite_expr_tenant_label(expr_str, metric_names):
-    """AST-Informed String Surgery: 注入 tenant label matcher。
-
-    對每個 metric name:
-      - 有 {...} 的: 在 { 後插入 tenant=~".+",
-      - 無 label 的: 在 metric name 後附加 {tenant=~".+"}
-    改寫後 reparse 驗證。
-
-    Known limitation: 若同一 metric 同時有帶 label 和裸露的用法 (e.g.
-    "my_metric > on() group_left my_metric{a="1"}")，if/else 分支只會套用
-    帶 label 的 pattern，裸露出現不會被注入 tenant。Recording rule LHS 通常
-    只有一種形式，此限制在實際遷移場景中影響極小。
-    """
-    result = expr_str
-    for name in metric_names:
-        # Pattern 1: metric{existing...} → metric{tenant=~".+",existing...}
-        pattern_with_labels = r'\b' + re.escape(name) + r'\{'
-        if re.search(pattern_with_labels, result):
-            result = re.sub(
-                pattern_with_labels,
-                name + '{tenant=~".+",',
-                result
-            )
+def _skip_blank(data, i, end):
+    """第一個不是空白、也不在 `#` 註解裡的 byte 位置（PromQL 的註解到行尾）。"""
+    while i < end:
+        c = data[i:i + 1]
+        if c.isspace():
+            i += 1
+        elif c == b"#":
+            nl = data.find(b"\n", i, end)
+            i = end if nl < 0 else nl + 1
         else:
-            # Pattern 2: bare metric name → metric{tenant=~".+"}
-            # Negative lookahead: not followed by { or alphanumeric (substring)
-            pattern_bare = r'\b' + re.escape(name) + r'(?![{a-zA-Z0-9_])'
-            result = re.sub(pattern_bare, name + '{tenant=~".+"}', result)
+            break
+    return i
 
-    # Validate rewrite
-    if HAS_AST:
-        try:
-            promql_parser.parse(result)
-        except Exception:
-            return expr_str  # 驗證失敗，回退原始
+
+def rewrite_expr_tenant_label(src, lhs, metric_names):
+    """在 *src* 裡 *lhs* 那段（語法樹節點）的每個讀 *metric_names* 的 selector
+    注入 ``tenant=~".+"``，回傳改寫後的 LHS 原文。
+
+    插入位置取 selector 在原式的 byte offset：有 ``{`` 的插在 ``{`` 之後，沒有的
+    在名稱之後補 ``{tenant=~".+"}``，只寫 ``{__name__="x"}`` 的也插在 ``{`` 之後。
+    字串常值、label 值裡出現同一個名字都不會被動到（它們不是 selector）。改寫後
+    再讀一次；Prometheus 不接受即 raise ``InputRefused``——不退回原式，那會讓
+    一條沒有 tenant 限定的 recording rule 靜默出貨。"""
+    data = src.encode("utf-8")
+    base = lhs["start"]
+    inserts = []
+    for node in _selectors(lhs):
+        if _selector_metric(node) not in metric_names:
+            continue
+        start, end = node["start"], node["end"]
+        # 名稱與 `{` 之間、`{` 之後可以有空白與 `#` 註解
+        after = start + len(node["name"].encode("utf-8"))
+        brace = _skip_blank(data, after, end)
+        if data[brace:brace + 1] == b"{":
+            brace += 1
+            empty = data[_skip_blank(data, brace, end):][:1] == b"}"
+            inserts.append((brace, b'tenant=~".+"' + (b"" if empty else b",")))
+        else:
+            inserts.append((after, b'{tenant=~".+"}'))
+    out = data[base:lhs["end"]]
+    for pos, text in sorted(inserts, reverse=True):
+        out = out[:pos - base] + text + out[pos - base:]
+    result = out.decode("utf-8")
+    _lib_consumer_read.promql_shape_each([result], raise_refused=True)
     return result
 
 
@@ -284,16 +247,17 @@ def load_metric_dictionary(script_dir=None):
 # Heuristics: 智能聚合猜測
 # ============================================================
 
-def guess_aggregation(base_key, expr_str):
-    """根據 metric 名稱和 PromQL 表達式智能猜測聚合模式。
+def guess_aggregation(base_key, expr_or_tree):
+    """根據 metric 名稱和 PromQL 表達式（語法樹，或讀成語法樹的原文）智能猜測
+    聚合模式。函式呼叫與除法從語法樹讀：label 值裡的 `rate(`、`/` 不算。
 
     回傳: (mode, reason) — mode 為 "sum" 或 "max"，reason 為推理說明。
     """
-    expr_lower = expr_str.lower()
+    tree = _tree_of(expr_or_tree)
     key_lower = base_key.lower()
 
     # Rule 1: rate() / increase() / irate() → sum (叢集總量)
-    if re.search(r'\b(rate|increase|irate)\s*\(', expr_lower):
+    if _calls(tree) & {"rate", "increase", "irate"}:
         return "sum", "包含 rate/increase — 叢集聚合總量"
 
     # Rule 2: _total 後綴 (Prometheus counter 命名慣例) → sum
@@ -315,7 +279,8 @@ def guess_aggregation(base_key, expr_str):
             return "sum", f"關鍵字 '{kw}' — 叢集累積量"
 
     # Rule 5: 包含除法 → max (通常是 ratio/percent 計算)
-    if '/' in expr_str:
+    if any(n["kind"] == "binary" and n["op"] == "/"
+           for n in _lib_consumer_read.shape_nodes(tree)):
         return "max", "包含除法運算 — 通常為比率計算"
 
     # Rule 6: 連線數、佇列長度等 → max (單點上限)
@@ -333,123 +298,87 @@ def guess_aggregation(base_key, expr_str):
 # PromQL 解析器
 # ============================================================
 
-# 語義不可轉換的 PromQL 函式
+# 語義不可轉換的 PromQL 函式：遷移政策，不是 PromQL 的函式清單。每個名字都必須是
+# 部署的 Prometheus 認得的函式（tests/ops/test_migrate_ast.py 以 da-read
+# promql-names 對帳）；它不認得的函式，規則在 rule loader 那關就被拒收（rc 2）。
 SEMANTIC_BREAK_FUNCS = frozenset({
     'absent', 'absent_over_time', 'vector', 'scalar',
-    'predict_linear', 'holt_winters', 'label_replace', 'label_join'
+    'predict_linear', 'label_replace', 'label_join'
 })
 
-# PromQL 內建函式/關鍵字 (用於跳過，找到真正的 metric 名稱)
-PROMQL_FUNCS = frozenset({
-    'abs', 'absent', 'absent_over_time', 'avg', 'avg_over_time',
-    'ceil', 'changes', 'clamp', 'clamp_max', 'clamp_min', 'count',
-    'count_over_time', 'day_of_month', 'day_of_week', 'days_in_month',
-    'delta', 'deriv', 'exp', 'floor', 'group', 'histogram_quantile',
-    'holt_winters', 'hour', 'idelta', 'increase', 'irate', 'label_join',
-    'label_replace', 'last_over_time', 'ln', 'log2', 'log10', 'max',
-    'max_over_time', 'min', 'min_over_time', 'minute', 'month',
-    'predict_linear', 'quantile', 'quantile_over_time', 'rate', 'resets',
-    'round', 'scalar', 'sgn', 'sort', 'sort_desc', 'sqrt', 'stddev',
-    'stddev_over_time', 'stdvar', 'stdvar_over_time', 'sum',
-    'sum_over_time', 'time', 'timestamp', 'vector', 'year',
-    'by', 'without', 'on', 'ignoring', 'group_left', 'group_right', 'bool',
-})
+#: 衍生出的閾值 key 與 record 名稱用得上的指標名（Prometheus 的 legacy 命名）。
+_LEGACY_METRIC_NAME = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
+#: 比較運算子：告警運算式的根節點是 `LHS <op> 數字` 才切得出門檻。
+_COMPARISONS = frozenset({"==", "!=", ">", "<", ">=", "<="})
+#: 維度提示不收的 label：scrape 身分與 Kubernetes 位置，不是業務維度。
+_NON_DIMENSION_LABELS = frozenset({'job', 'instance', '__name__', 'namespace', 'pod', 'container'})
 
 
-def extract_label_matchers(expr_str):
-    """從 PromQL 表達式中提取 label matchers。
+def extract_label_matchers(expr_or_tree):
+    """每個帶名稱的 selector 以 `=` 釘住的業務維度 label。
 
-    v4: 優先使用 AST 引擎，降級為 regex。
-    回傳: list of dict，每個 dict = {"metric": str, "labels": dict}
+    回傳: list of {"metric": str, "labels": dict}（沒有維度的 selector 不列）。
     """
-    # AST path
-    ast_result = extract_label_matchers_ast(expr_str)
-    if ast_result:
-        return ast_result
-
-    # Regex fallback (legacy)
     results = []
-    pattern = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\{([^}]+)\}')
-    for m in pattern.finditer(expr_str):
-        metric = m.group(1)
-        labels_str = m.group(2)
-        labels = {}
-        for pair in re.finditer(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(!?=~?)\s*"([^"]*)"', labels_str):
-            lk, op, lv = pair.group(1), pair.group(2), pair.group(3)
-            if lk in ('job', 'instance', '__name__', 'namespace', 'pod', 'container'):
-                continue
-            if op != '=':
-                continue
-            labels[lk] = lv
+    for node in _selectors(_tree_of(expr_or_tree)):
+        labels = {m["name"]: m["value"] for m in node["matchers"]
+                  if m["type"] == "=" and m["name"] not in _NON_DIMENSION_LABELS}
         if labels:
-            results.append({"metric": metric, "labels": labels})
+            results.append({"metric": node["name"], "labels": labels})
     return results
 
 
-def extract_all_metrics(expr_str):
-    """從 PromQL 中提取所有 metric 名稱。
+def _plain_number(text):
+    """門檻寫成閾值檔讀得懂的有限十進位數：PromQL 也接受 `0x1F`、`5m`、`Inf`、
+    `NaN`、`1_000`，但閾值檔與 da-guard 不收，寫檔時才失敗會讓整份遷移沒有
+    產出——它們判成無法解析。"""
+    try:
+        value = float(text)
+    except ValueError:
+        return False
+    digits = text.lstrip("+-")
+    # Prometheus reads an integer with a leading 0 as octal (`012` is 10);
+    # float() reads it as decimal — a different threshold.
+    octal = len(digits) > 1 and digits[0] == "0" and digits.isdigit()
+    return math.isfinite(value) and "_" not in text and not octal
 
-    v4: 優先使用 AST 引擎，降級為 regex + function blacklist。
+
+def parse_expr(expr_str, tree=None):
+    """把告警運算式切成 LHS、比較運算子與門檻數字。
+
+    *tree* 是 *expr_str* 的語法樹，或其中一個子樹（offset 都指向 *expr_str*）；
+    省略時讀一次。根節點不是「不帶 bool 的比較、右邊是數字」、LHS 用到語義
+    中斷的函式、或 Prometheus 拒收，都回 None（無法解析）。
     """
-    # AST path
-    ast_result = extract_metrics_ast(expr_str)
-    if ast_result:
-        return ast_result
-
-    # Regex fallback (legacy)
-    metrics = []
-    for m in re.finditer(r'([a-zA-Z_][a-zA-Z0-9_]*)', expr_str):
-        name = m.group(1)
-        if name not in PROMQL_FUNCS and not name.isdigit():
-            metrics.append(name)
-    return list(dict.fromkeys(metrics))  # deduplicate, preserve order
-
-
-def parse_expr(expr_str, use_ast=True):
-    """解析 PromQL 表達式，嘗試切分為 LHS, Operator, RHS (閾值數值)。
-
-    v4: 使用 AST 進行 metric name 辨識與語義中斷偵測。
-    """
-    match = re.match(
-        r'^\s*(.*?)\s*(==|!=|>=|<=|>|<)\s*([0-9.]+(?:[eE][+-]?[0-9]+)?)\s*$',
-        expr_str
-    )
-    if not match:
+    if tree is None:
+        (tree,) = read_trees([expr_str])
+    if isinstance(tree, _lib_consumer_read.InputRefused):
         return None
-
-    lhs, op, rhs = match.groups()
-
-    # 語義不可轉換的函式偵測
-    if use_ast and HAS_AST and detect_semantic_break_ast(lhs):
+    if not (tree["kind"] == "binary" and tree["op"] in _COMPARISONS
+            and not tree["bool"] and tree["rhs"]["kind"] == "number"):
         return None
-    elif not use_ast or not HAS_AST:
-        # Regex fallback — when AST is disabled or unavailable
-        first_func = re.match(r'\s*([a-zA-Z_]+)\s*\(', lhs)
-        if first_func and first_func.group(1) in SEMANTIC_BREAK_FUNCS:
-            return None
-
-    is_complex = bool(re.search(r'[\(\)\[\]/+\-*]', lhs))
-
-    # v4: AST-based metric extraction (精準，不需 function blacklist)
-    base_key = "unknown_metric"
-    ast_metrics = extract_metrics_ast(lhs) if use_ast else []
-    if ast_metrics:
-        base_key = ast_metrics[0]
-
-    # Regex fallback
-    if base_key == "unknown_metric":
-        for m in re.finditer(r'([a-zA-Z_][a-zA-Z0-9_]*)', lhs):
-            if m.group(1) not in PROMQL_FUNCS:
-                base_key = m.group(1)
-                break
-
+    lhs = tree["lhs"]
+    if _calls(lhs) & SEMANTIC_BREAK_FUNCS:
+        return None
+    val = _node_text(expr_str, tree["rhs"])
+    if not _plain_number(val):
+        return None
+    metrics = _lib_consumer_read.shape_metric_names(lhs)
+    # The derived key and record names are built from the first metric: it must
+    # be one a bare selector can spell (`{__name__="legacy metric"}` is not), and
+    # there must be one — a shared `unknown_metric` key would merge unrelated
+    # rules' thresholds and recordings.
+    if not metrics or not _LEGACY_METRIC_NAME.fullmatch(metrics[0]):
+        return None
     return {
-        "lhs": lhs.strip(),
-        "op": op,
-        "val": rhs,
-        "is_complex": is_complex,
-        "base_key": base_key,
-        "all_metrics": ast_metrics,
+        "lhs": _node_text(expr_str, lhs),
+        "op": tree["op"],
+        "val": val,
+        "is_complex": not (lhs["kind"] == "selector" and not lhs["range"]),
+        "base_key": metrics[0],
+        "all_metrics": metrics,
+        "expr": expr_str,
+        "lhs_tree": lhs,
     }
 
 
@@ -488,6 +417,9 @@ class MigrationResult:
         self.record_name = None       # 新的 recording rule 名（validate 的新查詢）
         self.recording_lhs_original = None  # 原規則的 LHS（validate 的舊查詢）
         self.dropped_label_refs = []  # 改讀 tenant 的 $labels 名
+        # 原式子自己的 on()/by() 點名身分 label 卻沒有 da_cluster 的那幾個
+        # （groupings_without_cluster，#1200）。
+        self.cluster_groupings = []
 
 
 def lookup_dictionary(metric_name, dictionary):
@@ -497,7 +429,7 @@ def lookup_dictionary(metric_name, dictionary):
     return dictionary.get(metric_name)
 
 
-def _build_unparseable_result(alert_name, expr, severity, rule, dictionary):
+def _build_unparseable_result(alert_name, expr, severity, rule, dictionary, tree=None):
     """處理無法解析的規則，嘗試字典比對並產生 LLM prompt。"""
     result = MigrationResult(alert_name, "unparseable", severity)
     result.original_expr = expr
@@ -506,14 +438,19 @@ def _build_unparseable_result(alert_name, expr, severity, rule, dictionary):
         f"請將以下傳統 Prometheus Alert 轉換為本專案的動態多租戶架構：\n"
         f"要求：\n"
         f"1. 提取閾值並提供 threshold-config.yaml 範例。\n"
-        f"2. 提供包含 sum/max by(tenant) 的 Recording Rule。\n"
-        f"3. 提供套用 group_left 與 unless maintenance 邏輯的 Alert Rule。\n"
+        f"2. 提供包含 sum/max {METRIC_GROUPING} 的 Recording Rule"
+        f"（逐租戶、逐叢集；閾值側維持 max by(tenant)）。\n"
+        f"3. 提供套用 on(tenant) group_left 與 unless on(tenant) maintenance "
+        f"邏輯的 Alert Rule。\n"
         f"4. 如有維度標籤 (如 queue, db, index)，請用 \"metric{{label=\\\"value\\\"}}\" "
         f"語法提供範例。\n\n"
         f"原始規則：\n{yaml.dump([rule], sort_keys=False)}"
     )
     # Check dictionary for guidance even on unparseable
-    all_metrics = extract_all_metrics(expr)
+    if tree is None:
+        (tree,) = read_trees([expr])
+    all_metrics = ([] if isinstance(tree, _lib_consumer_read.InputRefused)
+                   else _lib_consumer_read.shape_metric_names(tree))
     for m in all_metrics:
         match = lookup_dictionary(m, dictionary)
         if match and match.get("golden_rule"):
@@ -541,8 +478,8 @@ def split_threshold_key(key):
     return key[:idx], key[idx + 1:]
 
 
-def _build_recording_rules(parsed, prefixed_key, severity, agg_mode, use_ast):
-    """產生 Recording Rules（含 AST 改寫）。
+def _build_recording_rules(parsed, prefixed_key, severity, agg_mode):
+    """產生 Recording Rules（LHS 注入 tenant label）。
 
     Returns (recording_rules_list, record_name, threshold_name).
     """
@@ -550,22 +487,21 @@ def _build_recording_rules(parsed, prefixed_key, severity, agg_mode, use_ast):
     threshold_suffix = "_critical" if severity == "critical" else ""
     threshold_name = f"tenant:alert_threshold:{prefixed_key}{threshold_suffix}"
 
-    # v4: AST-Informed String Surgery — 改寫 LHS 表達式
+    # 依語法樹的 byte offset 改寫 LHS（#4215）
     # 只注入 tenant label，不改指標名。前綴只用在 key 與 record 名稱上：
     # 來源指標是客戶既有的 exporter 發的，沒有任何東西會產生
     # `custom_<指標>` 這個名字的 series，改名後 recording rule 恆為空
     # （issue 1818）。
     recording_lhs = parsed['lhs']
-    if use_ast and HAS_AST:
-        all_metrics = parsed.get('all_metrics', [])
-        if all_metrics:
-            recording_lhs = rewrite_expr_tenant_label(recording_lhs, all_metrics)
+    if parsed['all_metrics']:
+        recording_lhs = rewrite_expr_tenant_label(
+            parsed['expr'], parsed['lhs_tree'], set(parsed['all_metrics']))
 
     component, metric = split_threshold_key(prefixed_key)
     rules = [
         {
             "record": record_name,
-            "expr": f"{agg_mode} by(tenant) ({recording_lhs})",
+            "expr": f"{agg_mode} {METRIC_GROUPING} ({recording_lhs})",
         },
         {
             "record": threshold_name,
@@ -577,34 +513,31 @@ def _build_recording_rules(parsed, prefixed_key, severity, agg_mode, use_ast):
     return rules, record_name, threshold_name
 
 
-# recording rule 一律 `by(tenant)`，告警的 $labels 只剩 tenant。
-_SURVIVING_LABELS = frozenset({"tenant"})
+# recording rule 一律 `by(tenant, da_cluster)`（METRIC_GROUPING），告警的
+# $labels 只剩 tenant 與 da_cluster。
+_SURVIVING_LABELS = frozenset({"tenant", CLUSTER_IDENTITY_LABEL})
 _LABEL_REF = re.compile(r'\$labels\.([a-zA-Z_][a-zA-Z0-9_]*)')
 _SIMPLE_LABEL_ACTION = re.compile(
     r'\{\{-?\s*\$labels\.([a-zA-Z_][a-zA-Z0-9_]*)\s*-?\}\}')
-_MATCHER = re.compile(
-    r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"')
-
-
 def static_label_values(lhs):
-    """原式子裡被等值 matcher 定死的 label：{label: value}。
+    """原式子（語法樹，或讀成語法樹的原文）裡被等值 matcher 定死的 label：
+    {label: value}。
 
     只在式子只讀一個指標、且每個 selector 都以 `=` 把該 label 釘成同一個值時
-    才算定死：多個指標時另一邊的 series 可能帶別的值；`!=`／`=~`／`!~` 或
-    含跳脫字元的值也不算。
+    才算定死：多個指標時另一邊的 series 可能帶別的值；沒寫 matcher 的 selector
+    什麼都沒釘；`!=`／`=~`／`!~`、含反斜線或引號的值也不算（它要原樣代入
+    模板）。
     """
-    if len(set(extract_all_metrics(lhs))) != 1:
+    tree = _tree_of(lhs)
+    if len(set(_lib_consumer_read.shape_metric_names(tree))) != 1:
         return {}
-    bodies = re.findall(r'\{([^}]*)\}', lhs)
-    if not bodies:
+    per_selector = [
+        {m["name"]: m["value"] for m in node["matchers"]
+         if m["type"] == "=" and m["name"] != "__name__"
+         and "\\" not in m["value"] and '"' not in m["value"]}
+        for node in _selectors(tree)]
+    if not per_selector:
         return {}
-    per_selector = []
-    for body in bodies:
-        pinned = {}
-        for name, op, value in _MATCHER.findall(body):
-            if op == "=" and "\\" not in value:
-                pinned[name] = value
-        per_selector.append(pinned)
     common = per_selector[0]
     return {k: v for k, v in common.items()
             if all(sel.get(k) == v for sel in per_selector[1:])}
@@ -614,8 +547,13 @@ def rewrite_dropped_label_refs(templates, lhs, keep=(), explain=True):
     """改寫 annotation／label 模板裡、聚合後不存在的 `$labels.X`。
 
     舊告警的 $labels 是原查詢 series 的 label；遷移後查詢是
-    `<agg> by(tenant) (...)`，只剩 tenant，其他引用照抄會渲染成空字串
-    （issue 1818）。owner 裁決保留 by(tenant)：
+    `<agg> by(tenant, da_cluster) (...)`，只剩 tenant 與 da_cluster，其他引用
+    照抄會渲染成空字串（issue 1818）。現行規則：粒度是「租戶 × 叢集」，
+    實例層級的 label（instance、pod…）不帶回聚合。這與 issue 1818 的 owner
+    裁決一致——那項裁決講的是不把實例層級的 label 帶回聚合、並改寫引用它們
+    的模板；`da_cluster` 不是實例層級的 label，而是同一個租戶在各叢集各算
+    一次（ADR-006，owner 2026-11-24 裁決，#1200），所以 `$labels.da_cluster`
+    照留，其餘照舊：
     - 被等值 matcher 定死的 label 代入字面值，渲染結果與舊告警相同；
     - 其他改讀 `$labels.tenant` 並附原 label 名，呼叫端負責警告。
     `keep` 是不改寫的名字（規則自己的 static label 本來就不在 $labels 裡，
@@ -684,7 +622,7 @@ def _build_alert_rule(rule, alert_name, parsed, record_name,
         alert_rule['for'] = rule['for']
     static_keys = set(rule.get('labels', {}))
     labels, dropped_l = rewrite_dropped_label_refs(
-        dict(rule.get('labels', {})), parsed['lhs'], keep=static_keys, explain=False)
+        dict(rule.get('labels', {})), parsed['lhs_tree'], keep=static_keys, explain=False)
     if prefix:
         labels['source'] = 'legacy'
         labels['migration_status'] = 'shadow'
@@ -697,15 +635,16 @@ def _build_alert_rule(rule, alert_name, parsed, record_name,
     dropped_a = []
     if 'annotations' in rule:
         alert_rule['annotations'], dropped_a = rewrite_dropped_label_refs(
-            dict(rule['annotations']), parsed['lhs'], keep=static_keys)
+            dict(rule['annotations']), parsed['lhs_tree'], keep=static_keys)
     return alert_rule, sorted(set(dropped_l) | set(dropped_a))
 
 
 def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
-                  use_ast=True):
+                 tree=None):
     """處理單條傳統 Prometheus 規則，回傳 MigrationResult。
 
-    v4: use_ast=True 啟用 AST 引擎進行精準 metric 辨識與表達式改寫。
+    *tree* 是這條規則運算式的語法樹（``read_trees``，main 整份規則檔一次讀）；
+    省略時讀一次。
 
     主要步驟：
     1. 解析表達式 → 無法解析時委派 _build_unparseable_result()
@@ -718,12 +657,14 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
 
     expr = rule.get('expr', '')
     severity = rule.get('labels', {}).get('severity', 'warning')
-    parsed = parse_expr(expr, use_ast=use_ast)
+    if tree is None:
+        (tree,) = read_trees([expr])
+    parsed = parse_expr(expr, tree)
 
     # 情境: 無法解析 — 委派子函式
     if not parsed:
         return _build_unparseable_result(
-            alert_name, expr, severity, rule, dictionary)
+            alert_name, expr, severity, rule, dictionary, tree)
 
     metric_key = parsed["base_key"]
 
@@ -741,7 +682,7 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
                        if severity == "critical" else prefixed_key)
 
     # 智能猜測聚合模式
-    agg_mode, agg_reason = guess_aggregation(parsed["base_key"], parsed["lhs"])
+    agg_mode, agg_reason = guess_aggregation(parsed["base_key"], parsed["lhs_tree"])
 
     # 互動模式: 複雜表達式時詢問使用者
     if interactive and parsed["is_complex"]:
@@ -785,14 +726,25 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
         result.triage_action = "review"
 
     # 維度標籤提示
-    result.dim_hints = extract_label_matchers(expr)
+    result.dim_hints = extract_label_matchers(tree)
+
+    # 沒有以 `__name__=` 釘住名稱的 selector（`{__name__=~"…"}`、`{job="a"}`）
+    # 注入不了 tenant：recording rule 會讀到所有租戶的 series，要人看過（#4215）。
+    unnamed = [_node_text(expr, n) for n in _selectors(parsed["lhs_tree"])
+               if _selector_metric(n) is None]
+    if unnamed:
+        if result.triage_action != "use_golden":
+            result.triage_action = "review"
+        result.notes.append(
+            f"selector 沒有固定的指標名（{', '.join(unnamed)}），無法注入 tenant label："
+            "recording rule 會讀到所有租戶，請改寫成具名的 selector")
 
     # === 產出 1. Tenant Config ===
     result.tenant_config[metric_key_yaml] = parsed['val']
 
     # === 產出 2. Recording Rules ===
     rec_rules, record_name, threshold_name = _build_recording_rules(
-        parsed, prefixed_key, severity, agg_mode, use_ast)
+        parsed, prefixed_key, severity, agg_mode)
     result.recording_rules.extend(rec_rules)
 
     # === 產出 3. Alert Rule ===
@@ -806,6 +758,9 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
             f"已改讀 $labels.tenant；通知裡看不到原本是哪一個 {dropped[0]}")
     result.record_name = record_name
     result.recording_lhs_original = parsed['lhs']
+    result.cluster_groupings = groupings_without_cluster(parsed['lhs_tree'])
+    if result.cluster_groupings:
+        result.notes.append(cluster_grouping_note(result.cluster_groupings))
 
     return result
 
@@ -1032,12 +987,14 @@ def write_prefix_mapping(results, output_dir, prefix):
                 "golden_rule": r.dict_match.get("golden_rule") if r.dict_match else None,
             }
             # validate --mapping 的比對組。新值是 recording rule 本身；舊值是原規則的
-            # LHS 以同一種方式依租戶聚合——rate 類要保留 rate()，聚合要用同一個
-            # agg，否則兩邊量綱或 record 名對不上（issue 1818）。改用黃金標準的
+            # LHS 以同一種方式逐（租戶、叢集）聚合——rate 類要保留 rate()，聚合要用
+            # 同一個 agg 與同一個分組，否則兩邊量綱、列數或 record 名對不上
+            # （issue 1818、#1200）。改用黃金標準的
             # 規則不產出 recording rule，沒有新值可比，不寫。
             if (r.triage_action != "use_golden" and r.record_name
                     and r.recording_lhs_original and r.agg_mode):
-                entry["old_query"] = f"{r.agg_mode} by(tenant) ({r.recording_lhs_original})"
+                entry["old_query"] = (
+                    f"{r.agg_mode} {METRIC_GROUPING} ({r.recording_lhs_original})")
                 entry["new_query"] = r.record_name
             mapping[key] = entry
 
@@ -1319,8 +1276,18 @@ def render_recording_rules(results, prefix="custom_"):
             buf.write("      # ============================================================\n")
         else:
             buf.write(f"      # {r.alert_name} | {r.agg_mode} — {r.agg_reason}\n")
+        if r.cluster_groupings and rr["record"] == r.record_name:
+            buf.write(f"      # ⚠️ {cluster_grouping_note(r.cluster_groupings)}\n")
         buf.write(f"      - record: {rr['record']}\n")
-        buf.write(f"        expr: {rr['expr']}\n")
+        expr_text = rr['expr']
+        if "\n" in expr_text or "#" in expr_text or ": " in expr_text:
+            # A multi-line LHS (#4215: it migrates now), a `#` comment or a
+            # `: ` is no YAML plain scalar — write a literal block.
+            buf.write("        expr: |\n")
+            for line in expr_text.strip().split('\n'):
+                buf.write(f"          {line}\n")
+        else:
+            buf.write(f"        expr: {expr_text}\n")
         buf.write("\n")
     return buf.getvalue()
 
@@ -1409,8 +1376,7 @@ def render_report(results):
 
     buf = io.StringIO()
     buf.write("=" * 60 + "\n")
-    engine = "AST" if HAS_AST else "regex"
-    buf.write(f"遷移報告 (Migration Report) — v4 ({engine} engine)\n")
+    buf.write("遷移報告 (Migration Report)\n")
     buf.write("=" * 60 + "\n\n")
     buf.write(f"總規則數: {len(results)}\n")
     buf.write(f"  ✅ 完美解析: {len(perfect)}\n")
@@ -1468,6 +1434,8 @@ def render_report(results):
             buf.write(f"  • {r.alert_name}: {r.agg_mode} ({r.agg_reason})\n")
             if r.dim_hints:
                 buf.write(f"    📐 維度標籤偵測: {r.dim_hints}\n")
+            if r.cluster_groupings:
+                buf.write(f"    ⚠️ {cluster_grouping_note(r.cluster_groupings)}\n")
         buf.write("\n")
 
     if unparseable:
@@ -1592,6 +1560,8 @@ def print_dry_run(results):
                 print(f"     → {k}: \"{v}\"")
             if r.dim_hints:
                 print(f"     📐 維度: {r.dim_hints}")
+            if r.cluster_groupings:
+                print(f"     ⚠️ {cluster_grouping_note(r.cluster_groupings)}")
     print()
 
 
@@ -1636,10 +1606,10 @@ def print_triage(results):
 
 @exit_on_yaml_file_error  # #4064: an unreadable metric dictionary → rc 2, named
 def main():
-    """CLI entry point: 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。."""
+    """CLI entry point: 傳統 Prometheus 警報規則遷移輔助工具。"""
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
-        description="傳統 Prometheus 警報規則遷移輔助工具 (v4 AST) — 自動轉換為動態多租戶三件套"
+        description="傳統 Prometheus 警報規則遷移輔助工具 — 自動轉換為動態多租戶三件套"
     )
     # #4040：規則檔由 _lib_input 讀一次；da-read 讀的是那份文字，不再開檔。
     _lib_input.add_input(parser, "input_file", decode=_lib_input.Document("text", str),
@@ -1661,18 +1631,10 @@ def main():
                         help="自訂前綴 (預設: custom_)")
     parser.add_argument("--no-dictionary", action="store_true",
                         help="停用啟發式字典比對")
-    parser.add_argument("--no-ast", action="store_true",
-                        help="停用 AST 引擎，強制使用舊版 regex 解析 (除錯用)")
     args = parser.parse_args()
 
     # 確定 prefix
     prefix = "" if args.no_prefix else args.prefix
-
-    # AST 引擎
-    use_ast = (not args.no_ast) and HAS_AST
-    if not args.no_ast and not HAS_AST:
-        print("[WARN] promql-parser 未安裝，降級為 regex 引擎。"
-              "安裝: pip install promql-parser", file=sys.stderr)
 
     # 載入字典
     dictionary = {} if args.no_dictionary else load_metric_dictionary()
@@ -1698,20 +1660,26 @@ def main():
         print("No 'groups' found in YAML.")
         return
 
-    # 處理所有規則
+    # 處理所有規則：每條告警的運算式一次讀成語法樹（#4215）。rule loader 已讀過
+    # 整份檔，Prometheus 的 parser 不會拒收其中任何一條。
+    alerts = [rule for group in groups for rule in group.get('rules', [])
+              if rule.get('alert')]
     results = []
-    for group in groups:
-        rules = group.get('rules', [])
-        for rule in rules:
+    try:
+        trees = read_trees([str(rule.get('expr', '')) for rule in alerts])
+        for rule, tree in zip(alerts, trees):
             result = process_rule(
                 rule,
                 interactive=args.interactive,
                 prefix=prefix,
                 dictionary=dictionary,
-                use_ast=use_ast,
+                tree=tree,
             )
             if result:
                 results.append(result)
+    except _lib_consumer_read.ConsumerReadError as e:
+        print(f"ERROR: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
     if not results:
         print("No alert rules found to process.")

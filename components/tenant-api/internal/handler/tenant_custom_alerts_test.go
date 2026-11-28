@@ -315,3 +315,39 @@ func TestPutCustomAlerts_StringQuantileWrittenQuoted(t *testing.T) {
 		t.Errorf("string quantile must be written quoted (parity contract):\n%s", out)
 	}
 }
+
+// #4289: a selector value Prometheus cannot load — a selectors_re value that
+// does not compile, or U+FFFD, which encoding/json makes of any invalid UTF-8
+// byte in the body — is refused 400 with a locatable violation. Merged, it
+// would make the rule manager refuse every rule file and keep the previous set.
+func TestPutCustomAlerts_UnloadableSelectorValueRejected400(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct{ selectors, want string }{
+		"regex does not compile": {`"selectors_re":{"job":"(unclosed"}`, "not a valid regular expression"},
+		"invalid UTF-8 byte":     {"\"selectors\":{\"job\":\"a\xffb\"}", "U+FFFD"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := setupConfigDir(t, map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults})
+			initGitRepo(t, dir)
+			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+
+			h := cfg.ComputeSourceHash([]byte(caTenantYAML))
+			body := `{"base_hash":"` + h + `","custom_alerts":[{"recipe":"rate","name":"r",` +
+				`"metric":"http_requests_total",` + c.selectors + `,"op":">","threshold":"1:warning","window":"5m"}]}`
+			resp := putCustomAlerts(t, deps, "db-a", body, "alice@example.com", []string{"dba"})
+			b, _ := readBody(resp)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, b)
+			}
+			if !strings.Contains(b, c.want) || !strings.Contains(b, "_custom_alerts[0]") {
+				t.Errorf("400 must carry a locatable %q violation; body: %s", c.want, b)
+			}
+			out, _ := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
+			if strings.Contains(string(out), "_custom_alerts") {
+				t.Errorf("rejected write must not touch the file:\n%s", out)
+			}
+		})
+	}
+}

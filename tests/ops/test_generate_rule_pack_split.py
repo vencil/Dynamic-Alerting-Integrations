@@ -58,6 +58,30 @@ class TestI18n:
         assert grps.t("中文", "english") == "english"
 
 
+_BLOCK_PYYAML = """\
+import runpy, sys
+class _NoPyYAML:
+    def find_spec(self, name, path=None, target=None):
+        if name == "yaml" or name.startswith("yaml."):
+            raise ImportError("PyYAML blocked for this test")
+sys.meta_path.insert(0, _NoPyYAML())
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+
+
+def _run_without_pyyaml(tmp_path, *args):
+    """The tool as a run without PyYAML sees it: `yaml` unimportable."""
+    import subprocess
+    repo = Path(__file__).resolve().parents[2]
+    tool = repo / "scripts" / "tools" / "ops" / "generate_rule_pack_split.py"
+    return subprocess.run(
+        [sys.executable, "-I", "-c", _BLOCK_PYYAML, str(tool),
+         "--rule-packs-dir", str(repo / "rule-packs"), *args],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        cwd=tmp_path, timeout=120)
+
+
 # ---------------------------------------------------------------------------
 # _safe_write — file write
 # ---------------------------------------------------------------------------
@@ -79,19 +103,33 @@ class TestSafeWrite:
         with pytest.raises(RuntimeError, match="YAML"):
             grps.load_rule_pack(str(tmp_path / "anything.yaml"))
 
-    def test_safe_mkdir_keeps_its_fallback_because_that_one_is_reachable(
-            self, tmp_path, monkeypatch):
-        """The other half of the same decision, so it cannot be "tidied" away.
+    def test_the_no_pyyaml_run_refuses_an_unusable_output_dir_naming_the_flag(
+            self, tmp_path):
+        """#3981: `_safe_mkdir` runs before any rule pack is parsed, so the
+        no-PyYAML run reaches it. Its writers come from `_lib_output`
+        (standard library only), so a file where `--output-dir` should be is
+        one line naming the flag there too — it was a raw `NotADirectoryError`
+        traceback reported as an internal error."""
+        blocker = tmp_path / "afile"
+        blocker.write_text("", encoding="utf-8")
+        proc = _run_without_pyyaml(tmp_path, "--output-dir", str(blocker / "out"))
+        assert proc.returncode == 2, proc.stderr
+        assert "--output-dir" in proc.stderr
+        assert "Traceback" not in proc.stderr
+        assert "internal error" not in proc.stderr
 
-        `_safe_mkdir` runs BEFORE any rule pack is parsed, so the no-PyYAML
-        run really does reach its fallback — deleting it (or wrapping it in
-        `output_write`, which lives in the very module that is unimportable
-        then) would break the degraded path this file still supports.
-        """
-        monkeypatch.setattr(grps, "ensure_dir_or_die", None)
-        d = tmp_path / "edge-rules"
-        grps._safe_mkdir(d)
-        assert d.is_dir()
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_the_no_pyyaml_run_writes_its_report_through_the_operator_entry(
+            self, tmp_path):
+        """#3981: every pack is an error without PyYAML, and the report is
+        still written — through the operator entry (0600), not the raw
+        `open` (0644 under the usual umask) it used to fall back to."""
+        out = tmp_path / "out"
+        proc = _run_without_pyyaml(tmp_path, "--output-dir", str(out))
+        assert proc.returncode == 2, proc.stderr
+        report = out / "validation-report.json"
+        assert oct(report.stat().st_mode & 0o777) == oct(0o600)
+        assert "YAML module not available" in report.read_text(encoding="utf-8")
 
     def test_uses_shared_writer_when_available(self, tmp_path, monkeypatch):
         """#1641: the shared writer is the _or_die form and is told which
@@ -752,24 +790,6 @@ class TestMain:
         assert "WARN: wrong-name: no groups" in out
         assert "y.yaml" in out
         assert "foo" in out
-
-    def test_safe_write_without_the_shared_writer_says_so(self, monkeypatch, tmp_path):
-        """#1789 F9: the shared writers are missing (`_SHARED_WRITERS` false)
-        when the `_lib_python` import block failed. Calling one anyway is a
-        `NameError` — a traceback that names neither the cause nor the fix.
-
-        The reachability argument in `_safe_write`'s docstring says this
-        cannot happen (a missing PyYAML kills `load_rule_pack` first). This
-        pins what happens if that argument ever stops holding, so the failure
-        arrives as a sentence instead of as a type error.
-
-        A specific break that reddens this: delete the
-        `if not _SHARED_WRITERS: raise RuntimeError(...)` guard.
-        """
-        monkeypatch.setattr(grps, "_SHARED_WRITERS", False)
-        monkeypatch.delattr(grps, "write_operator_output_or_die")
-        with pytest.raises(RuntimeError, match="shared writer unavailable"):
-            grps._safe_write(str(tmp_path / "x.yaml"), "content\n")
 
     def test_text_output_error_branch(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {

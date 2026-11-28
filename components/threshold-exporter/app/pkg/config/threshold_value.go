@@ -623,3 +623,53 @@ func isASCII(s string) bool {
 	}
 	return true
 }
+
+// TopLevelValuesReadAlike reports whether the exporter reads tenant, a
+// tenant's own top-level value of key, and inherited, the value the tenant
+// would inherit from the defaults chain, as the same value — both raw as
+// yaml.v3 decodes them. It is the reading da-guard's redundant_override
+// judges by (#4288): deleting such an override changes nothing the exporter
+// serves.
+//
+// Two of the exporter's own readers decide, nothing of its own:
+//   - scheduledValueFromRaw, the text the defaults overlay writes into the
+//     tenant's map ("what the tenant file would have held"): a root `80` and
+//     a tenant `"80"` are both the text 80, as the tenant file's own
+//     ScheduledValue decode reads either.
+//   - ReadThresholdText, when the texts differ: the same finite number and
+//     severity, read without refusal, is the same served row (`80` and
+//     `"80.0"`, `"80:warning"`).
+//
+// A value scheduledValueFromRaw does not read as a tenant value (a YAML bool,
+// a null) reads alike only as the same YAML value of the same type, as
+// before.
+func TopLevelValuesReadAlike(key string, tenant, inherited any) bool {
+	if tenant == nil || inherited == nil {
+		return tenant == nil && inherited == nil
+	}
+	if isYAMLCollection(tenant) || isYAMLCollection(inherited) {
+		return false
+	}
+	ts, tok := scheduledValueFromRaw(tenant)
+	is, iok := scheduledValueFromRaw(inherited)
+	if !tok || !iok {
+		return tenant == inherited
+	}
+	if len(ts.Overrides) > 0 || len(is.Overrides) > 0 {
+		return false
+	}
+	if ts.Default == is.Default {
+		return true
+	}
+	tt, it := ReadThresholdText(key, ts.Default), ReadThresholdText(key, is.Default)
+	return tt.HasNumber && it.HasNumber && tt.Refused == "" && it.Refused == "" &&
+		tt.Number == it.Number && tt.Severity == it.Severity
+}
+
+func isYAMLCollection(v any) bool {
+	switch v.(type) {
+	case map[string]any, []any:
+		return true
+	}
+	return false
+}

@@ -431,3 +431,159 @@ def test_workflow_withholds_the_fragment_of_an_incomplete_module() -> None:
     names = {s.get("name") for s in steps}
     problems += [f"step {n!r} is gone" for n in gated - names]
     assert not problems, "an incomplete module could still be parsed/uploaded:\n  " + "\n  ".join(problems)
+
+
+# ── $GITHUB_OUTPUT through the operator entry (#3981) ────────────────────────
+
+def test_github_output_is_appended_to_not_replaced(tmp_path: Path, monkeypatch) -> None:
+    out_file = tmp_path / "gh_output"
+    out_file.write_text("earlier=1\n", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out_file))
+    raw = tmp_path / "raw"
+    _shard(raw, "m", "1", [], 0)
+    prs.main(["merge", "--module", "m", "--shards", "1", "--raw-dir", str(raw),
+              "--output", str(tmp_path / "o.jsonl")])
+    assert out_file.read_text().splitlines()[0] == "earlier=1"
+
+
+def test_an_unwritable_github_output_is_rc2_one_line(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Was a traceback ('unexpected internal error')."""
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "no-such-dir" / "out"))
+    raw = tmp_path / "raw"
+    _shard(raw, "m", "1", [], 0)
+    with pytest.raises(SystemExit) as caught:
+        prs.main(["merge", "--module", "m", "--shards", "1", "--raw-dir", str(raw),
+                  "--output", str(tmp_path / "o.jsonl")])
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "cannot write" in err and "no-such-dir" in err and "Traceback" not in err
+
+
+def test_a_github_output_that_is_a_fifo_is_rc2_not_a_hang(tmp_path: Path, monkeypatch) -> None:
+    import os
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    fifo = tmp_path / "fifo"
+    os.mkfifo(fifo)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(fifo))
+    raw = tmp_path / "raw"
+    _shard(raw, "m", "1", [], 0)
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as caught:
+            prs.main(["merge", "--module", "m", "--shards", "1", "--raw-dir", str(raw),
+                      "--output", str(tmp_path / "o.jsonl")])
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert caught.value.code == 2
+
+
+def test_fetch_timings_into_an_unusable_out_dir_names_the_flag(tmp_path: Path) -> None:
+    """#3981: the directory is created through ensure_dir, so a path under a
+    file is the write class naming --out-dir (rc 2 at main), not a traceback."""
+    import _lib_output
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(_lib_output.OutputWriteError) as caught:
+        prs.fetch_timings("o/r", "w.yaml", "main", blocker / "out", ["a"], runner=_gh({}))
+    assert caught.value.flag == "--out-dir"
+
+
+def test_fetch_timings_cli_with_an_unusable_out_dir_is_rc2(tmp_path: Path, monkeypatch,
+                                                           capsys) -> None:
+    monkeypatch.setattr(prs, "_run", lambda args, cwd=None: subprocess.CompletedProcess(
+        args, 1, b"", b"no network"))
+    monkeypatch.setattr(prs.fetch_timings, "__defaults__", (prs._run,))
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        prs.main(["fetch-timings", "--repo", "o/r", "--workflow", "w.yaml",
+                  "--out-dir", str(blocker / "out")])
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "check the value given to --out-dir" in err and "Traceback" not in err
+
+
+def test_a_timings_file_that_cannot_be_written_names_the_flag(tmp_path: Path) -> None:
+    """#3981: the per-module file goes through the operator entry, naming
+    --out-dir; a target that is a directory is the write class, not a
+    traceback (the directory itself was created fine)."""
+    import _lib_output
+    runs = {"workflow_runs": [{"id": 1}]}
+    gh = _gh({
+        "repos/o/r/actions/workflows/w.yaml/runs": (0, json.dumps(runs).encode()),
+        "repos/o/r/actions/runs/1/artifacts": (0, json.dumps({"artifacts": [
+            {"id": 10, "name": "race-timings-tenant-api", "expired": False}]}).encode()),
+        "repos/o/r/actions/artifacts/10/zip": (0, _zip("race-timings-tenant-api.json",
+                                                       b'{"t/a": 7}')),
+    })
+    (tmp_path / "race-timings-tenant-api.json").mkdir()
+    with pytest.raises(_lib_output.OutputWriteError) as caught:
+        prs.fetch_timings("o/r", "w.yaml", "main", tmp_path, ["tenant-api"], runner=gh)
+    assert caught.value.flag == "--out-dir"
+
+
+def test_timings_to_stdout_is_refused(tmp_path: Path, capsys) -> None:
+    """#3981: `plan --timings-dir` loads the timings file whole, so it is an
+    artifact, and an artifact cannot be standard output: `--output -` is rc 2
+    (it used to write a file named `-`)."""
+    src = tmp_path / "in.jsonl"
+    src.write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        prs.main(["timings", "--input", str(src), "--output", "-"])
+    assert caught.value.code == 2
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "standard output" in err and "--output" in err
+
+
+def test_a_merged_stream_that_cannot_be_written_names_the_flag(tmp_path: Path) -> None:
+    """#3981: the merged stream goes through the artifact entry. A file where
+    the output's directory should be is the write class naming --output, not
+    a `FileExistsError` traceback; a directory at the output path too."""
+    import _lib_output
+    raw = tmp_path / "raw"
+    _shard(raw, "m", "1", ['{"Action":"pass"}'], 0)
+    (tmp_path / "afile").write_text("", encoding="utf-8")
+    with pytest.raises(_lib_output.OutputWriteError) as caught:
+        prs.merge("m", ["1"], raw, tmp_path / "afile" / "merged.jsonl")
+    assert caught.value.flag == "--output"
+    (tmp_path / "adir").mkdir()
+    with pytest.raises(_lib_output.OutputWriteError) as caught:
+        prs.merge("m", ["1"], raw, tmp_path / "adir")
+    assert caught.value.flag == "--output"
+
+
+def test_a_merged_stream_to_stdout_is_refused(tmp_path: Path, monkeypatch, capsys) -> None:
+    """#3981: `timings --input` loads the merged stream whole, so it is an
+    artifact, and `--output -` is rc 2 (it used to write a file named `-`)."""
+    raw = tmp_path / "raw"
+    _shard(raw, "m", "1", ['{"Action":"pass"}'], 0)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    with pytest.raises(SystemExit) as caught:
+        prs.main(["merge", "--module", "m", "--shards", "1", "--raw-dir", str(raw),
+                  "--output", "-"])
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "standard output" in err and "--output" in err
+    assert not (tmp_path / "-").exists()
+
+
+def test_the_merged_stream_keeps_its_bytes(tmp_path: Path) -> None:
+    """The bytes as the shards hold them: no decoding, a missing final
+    newline supplied between shards."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "race-raw-m-1.jsonl").write_bytes(b'{"a":"\xff"}')
+    (raw / "race-rc-m-1").write_text("0\n", encoding="utf-8")
+    _shard(raw, "m", "2", ['{"b":1}'], 0)
+    out = tmp_path / "o.jsonl"
+    prs.merge("m", ["1", "2"], raw, out)
+    assert out.read_bytes() == b'{"a":"\xff"}\n{"b":1}\n'

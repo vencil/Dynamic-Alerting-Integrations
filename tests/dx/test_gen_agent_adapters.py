@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(__file__), "..", "..", "scripts", "tools", "dx",
 ))
 import gen_agent_adapters as gaa  # noqa: E402
+import _lib_output as gaa_output  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
 
 
@@ -718,3 +719,165 @@ def test_main_reports_an_unsafe_path_as_caller_error(tmp_path, monkeypatch, caps
     symlink_or_skip(outside, tmp_path / gaa.SSOT_SKILLS / "alpha" / "extra.md")
     assert gaa.main(["--check"]) == gaa.EXIT_CALLER_ERROR
     assert "refusing" in capsys.readouterr().err
+
+
+# ============================================================
+# writes through the artifact entry (#3981)
+# ============================================================
+
+
+def _generate(capsys):
+    """`main(["--generate"])` -> (rc, stdout, stderr); an unusable target
+    exits through `exit_on_output_write_error` (SystemExit)."""
+    try:
+        rc = gaa.main(["--generate"])
+    except SystemExit as exc:
+        rc = exc.code
+    out, err = capsys.readouterr()
+    return rc, out, err
+
+
+def test_an_adapter_that_is_a_fifo_is_rc2_and_nothing_is_written(tmp_path, monkeypatch, capsys):
+    """`open(..., "wb")` blocked on a FIFO forever, the adapters sorted ahead
+    of it already rewritten. Every target is judged before the first write."""
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    _fake_ssot(tmp_path, monkeypatch)
+    assert _generate(capsys)[0] == gaa.EXIT_OK
+    role = tmp_path / gaa.OUT_ROLES / "r.md"
+    before = role.read_bytes()
+    (tmp_path / gaa.SSOT_ROLES / "r.md").write_bytes(b"---\nname: r\n---\nrole, edited\n")
+    skill = tmp_path / gaa.OUT_SKILLS / "alpha" / "SKILL.md"
+    skill.unlink()
+    os.mkfifo(skill)
+    assert sorted(gaa.planned_outputs()).index(f"{gaa.OUT_ROLES}/r.md") < sorted(
+        gaa.planned_outputs()).index(f"{gaa.OUT_SKILLS}/alpha/SKILL.md")
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        rc, out, err = _generate(capsys)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert rc == gaa.EXIT_CALLER_ERROR, err
+    assert "not a regular file" in err and "Traceback" not in err
+    assert role.read_bytes() == before, "an adapter was written before the refusal"
+    assert "wrote" not in out
+
+
+def test_a_write_refused_part_way_is_rc2_and_names_what_was_written(
+        tmp_path, monkeypatch, capsys):
+    """A target that passes the judgement can still be refused at the write
+    (#4250: an unwritable file); the adapters already written are named."""
+    _fake_ssot(tmp_path, monkeypatch)
+    real = gaa.write_repo_artifact
+
+    def refuse_the_skill(path, data, **kw):
+        if path.endswith("SKILL.md"):
+            raise gaa_output.OutputWriteError(path, PermissionError(13, "Permission denied"))
+        real(path, data, **kw)
+    monkeypatch.setattr(gaa, "write_repo_artifact", refuse_the_skill)
+    rc, out, err = _generate(capsys)
+    assert rc == gaa.EXIT_CALLER_ERROR, err
+    assert f"wrote {gaa.OUT_ROLES}/r.md" in out
+    assert "cannot write" in err and "Permission denied" in err
+    assert "Traceback" not in err
+
+
+def test_an_up_to_date_adapter_is_not_rewritten(tmp_path, monkeypatch, capsys):
+    """Only the adapters that differ are written, so the ones listed are the
+    ones that changed."""
+    _fake_ssot(tmp_path, monkeypatch)
+    rc, out, _err = _generate(capsys)
+    assert rc == gaa.EXIT_OK and f"wrote {gaa.OUT_ROLES}/r.md" in out
+    role = tmp_path / gaa.OUT_ROLES / "r.md"
+    inode = role.stat().st_ino
+    rc, out, _err = _generate(capsys)
+    assert rc == gaa.EXIT_OK
+    assert "wrote" not in out
+    assert role.stat().st_ino == inode, "an up-to-date adapter was replaced"
+
+
+def test_an_adapter_with_another_mode_is_put_back_to_0644(tmp_path, monkeypatch, capsys):
+    """Adapters ship 0644 whatever the file had: an executable one is
+    rewritten even when its bytes are right (the entry's own default would
+    keep the execute bit)."""
+    import stat as stat_mod
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits")
+    _fake_ssot(tmp_path, monkeypatch)
+    assert _generate(capsys)[0] == gaa.EXIT_OK
+    role = tmp_path / gaa.OUT_ROLES / "r.md"
+    role.chmod(0o755)
+    rc, out, _err = _generate(capsys)
+    assert rc == gaa.EXIT_OK
+    assert f"wrote {gaa.OUT_ROLES}/r.md" in out
+    assert stat_mod.S_IMODE(role.stat().st_mode) == 0o644
+
+
+def test_loading_the_paths_map_validator_leaves_the_caller_error_code_at_2(
+        tmp_path, monkeypatch, capsys):
+    """The hook that reads the map declares the hook protocol on import
+    (caller errors and crashes end at 1); the generator loads the shared
+    schema module, never the hook, so an unusable target is still rc 2, not
+    the 1 that reads as drift."""
+    import _lib_exitcodes
+    _fake_ssot(tmp_path, monkeypatch)
+    _fake_paths_map(tmp_path)
+    monkeypatch.setattr(_lib_exitcodes, "_caller_error_code", _lib_exitcodes.EXIT_CALLER_ERROR)
+    monkeypatch.setattr(_lib_exitcodes, "_crash_exit_code", _lib_exitcodes.EXIT_CALLER_ERROR)
+    real = gaa.write_repo_artifact
+
+    def refuse_the_skill(path, data, **kw):
+        if path.endswith("SKILL.md"):
+            raise gaa_output.OutputWriteError(path, PermissionError(13, "Permission denied"))
+        real(path, data, **kw)
+    monkeypatch.setattr(gaa, "write_repo_artifact", refuse_the_skill)
+    rc, _out, err = _generate(capsys)
+    assert any(k.startswith(gaa.OUT_CURSOR) for k in gaa.planned_outputs()), \
+        "the paths map was not projected, so its validator never loaded"
+    assert rc == gaa.EXIT_CALLER_ERROR, err
+    assert _lib_exitcodes.get_crash_exit_code() == _lib_exitcodes.EXIT_CALLER_ERROR
+
+
+def test_a_refused_removal_is_rc2_and_names_what_was_removed(tmp_path, monkeypatch, capsys):
+    """Removing a stale adapter is part of the write: a refusal is rc 2, one
+    line, and the stale adapters removed before it are named."""
+    _fake_ssot(tmp_path, monkeypatch)
+    assert _generate(capsys)[0] == gaa.EXIT_OK
+    for name in ("aaa", "zzz"):
+        ghost = tmp_path / gaa.OUT_ROLES / f"{name}-ghost.md"
+        ghost.write_bytes(b"stale\n")
+    real = os.remove
+    calls = []
+
+    def refuse_the_second(path, *a, **kw):
+        calls.append(path)
+        if len(calls) == 2:
+            raise PermissionError(13, "Permission denied", path)
+        real(path, *a, **kw)
+    monkeypatch.setattr(os, "remove", refuse_the_second)
+    rc, out, err = _generate(capsys)
+    assert rc == gaa.EXIT_CALLER_ERROR, err
+    assert f"removed stale adapter: {gaa.OUT_ROLES}/aaa-ghost.md" in out
+    assert "cannot remove" in err and "Permission denied" in err
+    assert "Traceback" not in err
+
+
+@pytest.mark.parametrize("name, st_mode, expected", [
+    ("posix", 0o100644, True),
+    ("posix", 0o100666, False),
+    ("posix", 0o100755, False),
+    # Windows reports a writable file as 0o666 whatever chmod asked: the
+    # read-only bit is all it keeps, so writable is up to date.
+    ("nt", 0o100666, True),
+    ("nt", 0o100444, False),
+])
+def test_the_adapter_mode_is_judged_by_what_the_platform_can_hold(
+        monkeypatch, name, st_mode, expected):
+    monkeypatch.setattr(gaa.os, "name", name)
+    assert gaa._has_adapter_mode(st_mode) is expected

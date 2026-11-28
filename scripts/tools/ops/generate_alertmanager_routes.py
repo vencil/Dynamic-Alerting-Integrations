@@ -298,7 +298,8 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
                    all_warnings: list[str], sink: list | None = None,
                    key_blocks: "list[str] | None" = None,
                    generated: "list | None" = None, *,
-                   show_loader_reason: bool = False) -> NoReturn:
+                   show_loader_reason: bool = False,
+                   migrated_active: "frozenset[str]" = frozenset()) -> NoReturn:
     """The last step of ``validate_tree``: judge the generation result
     (``evaluate_generated_config``), print the verdict and exit with it.
 
@@ -310,7 +311,7 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     verdict = evaluate_generated_config(
         routes, receivers, inhibit_rules, all_warnings,
         extra_errors=_policy_errors(all_warnings),
-        show_loader_reason=show_loader_reason)
+        show_loader_reason=show_loader_reason, migrated_active=migrated_active)
     if generated is not None:
         generated.append(verdict)
     # #2766: the lines only --validate prints join the findings. A verdict
@@ -396,7 +397,8 @@ def _write_output_or_die(output: str, content: str) -> None:
 
 def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                 namespace: str, configmap_name: str, yes_flag: bool, strict: bool = False,
-                judge_merged=None, *, show_loader_reason: bool = False) -> None:
+                judge_merged=None, *, show_loader_reason: bool = False,
+                migrated_active: "frozenset[str]" = frozenset()) -> None:
     """Handle --apply mode: merge into ConfigMap and reload. *judge_merged*,
     *show_loader_reason*: ``apply_to_configmap``'s (#1211, #3703)."""
     route_count = len(routes)
@@ -443,7 +445,8 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
         success = apply_to_configmap(routes, receivers, inhibit_rules, namespace,
                                      configmap_name, strict=strict,
                                      judge_merged=judge_merged,
-                                     show_loader_reason=show_loader_reason)
+                                     show_loader_reason=show_loader_reason,
+                                     migrated_active=migrated_active)
     except AlertmanagerConfigRejected as exc:
         # #2219 / #3689: Alertmanager refused the merged config (or gave no
         # verdict) BEFORE kubectl was called.
@@ -479,7 +482,8 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
                            mounts_out: str | None = None,
                            mount_root: str = DEFAULT_MOUNT_ROOT,
                            mount_lists: list[tuple[str, dict]] | None = None,
-                           show_loader_reason: bool = False) -> None:
+                           show_loader_reason: bool = False,
+                           migrated_active: "frozenset[str]" = frozenset()) -> None:
     """Handle --output-configmap (*as_configmap*) and --output-alertmanager:
     ``merge_generated`` on *base*, emitted as a ConfigMap or as a plain
     alertmanager.yml — one merge, two wrappers (#1211 gap 2).
@@ -509,10 +513,12 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
         if as_configmap:
             content = assemble_configmap(
                 base, routes, receivers, inhibit_rules,
-                namespace=namespace, configmap_name=configmap_name, strict=strict)
+                namespace=namespace, configmap_name=configmap_name, strict=strict,
+                migrated_active=migrated_active)
         else:
             content = assemble_alertmanager_yml(base, routes, receivers,
-                                                inhibit_rules, strict=strict)
+                                                inhibit_rules, strict=strict,
+                                                migrated_active=migrated_active)
     except ValueError as exc:
         _assembly_failed(exc, f"nothing was written to {target}")
     except PlatformProbeSetUnverifiable as exc:
@@ -2176,7 +2182,8 @@ def validate_tree(config_dir: str, *, strict: bool = False,
             _emit_custom_firehose_findings(undelivered, None, strict=strict,
                                            findings=findings)
         _validate_mode(routes, receivers, inhibit_rules, all_warnings, findings,
-                       key_blocks, generated, show_loader_reason=show_loader_reason)
+                       key_blocks, generated, show_loader_reason=show_loader_reason,
+                       migrated_active=tree.migrated_active)
     except SystemExit as exc:
         code = _exit_code_of(exc)
     return ValidateOutcome(code, findings, generated[0] if generated else None,
@@ -2376,7 +2383,8 @@ def _run(args: argparse.Namespace, findings: list[str], *,
         _apply_mode(routes, receivers, inhibit_rules, namespace,
                     configmap_name, args.yes, strict=args.strict,
                     judge_merged=assembled_judge,
-                    show_loader_reason=args.show_loader_reason)
+                    show_loader_reason=args.show_loader_reason,
+                    migrated_active=tree.migrated_active)
 
     # --output-configmap / --output-alertmanager: one merge, two wrappers.
     _assembled_output_mode(routes, receivers, inhibit_rules, base_config,
@@ -2386,7 +2394,8 @@ def _run(args: argparse.Namespace, findings: list[str], *,
                            mounts_out=args.mount_list_out,
                            mount_root=args.mount_root,
                            mount_lists=mount_lists,
-                           show_loader_reason=args.show_loader_reason)
+                           show_loader_reason=args.show_loader_reason,
+                           migrated_active=tree.migrated_active)
 
 
 if __name__ == "__main__":

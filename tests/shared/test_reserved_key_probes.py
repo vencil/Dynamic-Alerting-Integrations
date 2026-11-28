@@ -73,6 +73,8 @@ _SENTINELS = {
     "_profile": ("_profile", "p9"),
     "_routing": ("_routing", "{receiver: {type: webhook, url: 'https://w.example/probe'}}"),
     "_routing_profile": ("_routing_profile", "rp1"),
+    # #4277: `active` takes the tenant out of the migrated-alerts shadow route.
+    "_routing_migrated": ("_routing_migrated", "active"),
     "_custom_alerts": ("_custom_alerts", "\n" + _CUSTOM_ALERT),
     "_routing_defaults": ("_routing_defaults",
                           "{receiver: {type: webhook, url: 'https://w.example/rd'}}"),

@@ -281,7 +281,6 @@ helm/da-portal/values.yaml
 tests/ops/test_ci_path_filter_coverage.py
 # #3107 ④: the static tripwire over the retired in-place writers left with them (to 38% of before).
 tests/shared/test_write_failure_class.py
-tests/rulepacks/cluster_identity_baseline.yaml  # #4097: the ratchet list shrinks as rules keep da_cluster (119 -> 3 findings)
 # #2789: ADR-034 rewritten to the ADR writing rules; the evidence log and the side-defect section left (to 47% of before).
 docs/adr/034-legal-value-as-fallback.md
 # #3924: the reachability lint's producer faces collapse into one policy (no registry key written or listed); the per-face renderers and their floors left (to 29% of before).

@@ -44,6 +44,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1609,3 +1610,39 @@ def test_each_race_module_restores_the_go_cache_pr_ci_saves_for_it() -> None:
         if not savers:
             missing.append(f"{m['module']}: no ci.yml job running go test in {m['workdir']} saves {want}")
     assert not missing, "\n".join(missing)
+
+
+# ── $GITHUB_STEP_SUMMARY through the operator entry (#3981) ──────────────────
+
+def _main_with_summary(tmp_path: Path, summary: Path, monkeypatch) -> int:
+    frags = tmp_path / "frags"
+    frags.mkdir(parents=True, exist_ok=True)
+    frag = _frag()
+    (frags / f"frag-{frag['module']}.json").write_text(json.dumps(frag), encoding="utf-8")
+    monkeypatch.setenv("DO_FILE", "true")
+    monkeypatch.setenv("REPO", "o/r")
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    return file_race_report.main(
+        ["--frags-dir", str(frags), "--expected-modules", frag["module"],
+         "--run-url", "https://gh/runs/999"],
+        runner=_runner(_gh_ok))
+
+
+def test_the_step_summary_is_appended_to_not_replaced(tmp_path: Path, monkeypatch) -> None:
+    """The runner's summary file collects every step's text: appended to."""
+    summary = tmp_path / "summary.md"
+    summary.write_text("an earlier step\n", encoding="utf-8")
+    _main_with_summary(tmp_path, summary, monkeypatch)
+    text = summary.read_text(encoding="utf-8")
+    assert text.startswith("an earlier step\n") and len(text) > len("an earlier step\n")
+
+
+def test_an_unwritable_step_summary_is_rc2_one_line(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Was a traceback ('unexpected internal error'). A directory stands in
+    for the unwritable file."""
+    with pytest.raises(SystemExit) as caught:
+        _main_with_summary(tmp_path, tmp_path, monkeypatch)
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert f"cannot write {tmp_path}" in err and "Traceback" not in err

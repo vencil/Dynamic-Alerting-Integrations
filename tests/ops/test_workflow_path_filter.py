@@ -85,6 +85,13 @@ jobs:
       - run: python3 ztool/zmain.py
       # BEGIN GENERATED path-trace-assert job=zjob
       # END GENERATED path-trace-assert
+      - name: Upload the trace
+        if: "${{ !cancelled() }}"
+        uses: actions/upload-artifact@v7
+        with:
+          name: path-trace-zflow-zjob
+          path: ${{ runner.temp }}/path-trace.json
+          if-no-files-found: warn
 """
 MAIN = """\
 import os, subprocess, sys
@@ -305,7 +312,7 @@ def test_generate_writes_the_union_and_touches_nothing_else(
     # …and the two steps are in the job, parsed.
     steps = yaml.safe_load(after)["jobs"]["zjob"]["steps"]
     assert [s.get("name") for s in steps] == [
-        None, wpf.ENV_STEP_NAME, None, wpf.ASSERT_STEP_NAME]
+        None, wpf.ENV_STEP_NAME, None, wpf.ASSERT_STEP_NAME, "Upload the trace"]
     assert steps[1]["run"] == wpf.ENV_STEP_RUN and " reset --state " in steps[1]["run"]
     assert " finish --state " in steps[3]["run"]
     assert " && python3 scripts/ops/workflow_path_filter.py assert " in steps[3]["run"]
@@ -573,6 +580,38 @@ ASSERT_ONCE = "generated assert step exactly once, unchanged (found 0)"
     (TOOL_STEP, "      - run: |\n          # leaves core.trustctime alone\n"
                 "          python3 ztool/zmain.py\n",
      "step 3's `run:` mentions `core.trustctime`"),
+    # ── the job runs on every PR the path gate admits (#3756) ──
+    ("  zjob:\n", "  zjob:\n    if: false\n", "job `zjob` has a job-level `if:`"),
+    ("  pull_request:\n    paths:\n", "  pull_request:\n    types: [labeled]\n    paths:\n",
+     "`on.pull_request` narrows the trigger by types"),
+    ("  pull_request:\n    paths:\n", "  pull_request:\n    branches: [nowhere]\n    paths:\n",
+     "`on.pull_request` narrows the trigger by branches"),
+    ("  workflow_dispatch:\n", "  workflow_dispatch:\n  pull_request_target:\n",
+     "triggers on `pull_request_target`"),
+    ("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    strategy:\n      matrix:\n"
+     "        include: [{n: a}]\n        exclude: [{n: a}]\n",
+     "its matrix must be a literal, non-empty `include` list"),
+    ("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    strategy:\n      matrix: "
+     "${{ fromJSON(needs.plan.outputs.m) }}\n",
+     "its matrix must be a literal, non-empty `include` list"),
+    # ── the trace is uploaded: one step, that file, under the assert's `if:` ──
+    ("          path: ${{ runner.temp }}/path-trace.json\n",
+     "          path: ${{ github.workspace }}\n", "the upload step must upload"),
+    ('        if: "${{ !cancelled() }}"\n', '        if: "${{ success() }}"\n',
+     "the upload step's `if:` must be"),
+    ("      - name: Upload the trace\n", "      - name: Upload the trace\n"
+     "        uses: actions/upload-artifact@v7\n      - name: Upload it twice\n",
+     "exactly one step must follow the assert step"),
+    # ── no environment variable that changes git or the assert's Python ──
+    ("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    env:\n      GIT_CONFIG_COUNT: '1'\n",
+     "sets `GIT_CONFIG_COUNT`"),
+    (TOOL_STEP, "      - run: python3 ztool/zmain.py\n        env:\n          GIT_CONFIG_PARAMETERS: x\n",
+     "sets `GIT_CONFIG_PARAMETERS`"),
+    ("jobs:\n", "env:\n  PYTHONPATH: /x\njobs:\n",
+     "sets `PYTHONPATH`, which changes what the assert step's `python3` runs"),
+    # An `env:` the runner expands from an expression cannot be read (CodeRabbit).
+    (TOOL_STEP, TOOL_STEP.rstrip("\n") + "\n        env: ${{ fromJSON(needs.plan.outputs.env) }}\n",
+     "step 3: the step's `env:` is not a literal mapping"),
 ])
 def test_a_job_that_only_looks_wired_is_a_finding(
         repo: Path, tmp_path: Path, capsys, old: str, new: str, message: str) -> None:
@@ -594,10 +633,12 @@ def test_a_wired_job_has_no_wiring_finding_and_each_rule_reports_once(
     _record_and_generate(repo, tmp_path / "t")
     traced = wpf.Traced(repo, _workflow(repo), wpf.tracked_files(repo))
     assert traced.wiring_errors() == []
-    # An artifact upload after the assert step is the one thing allowed there,
-    # and `defaults.run` without a `shell` changes nothing the rule is about.
+    # The upload's own keys besides `if`/`path` (name, if-no-files-found,
+    # retention) are free, and `defaults.run` without a `shell` changes
+    # nothing the rule is about.
     allowed = yaml.safe_load(_workflow(repo).read_text(encoding="utf-8"))
-    allowed["jobs"]["zjob"]["steps"].append({"uses": "actions/upload-artifact@v7"})
+    allowed["jobs"]["zjob"]["steps"][-1]["with"]["retention-days"] = 3
+    allowed["jobs"]["zjob"]["steps"][-1]["name"] = "Upload"
     allowed["jobs"]["zjob"]["defaults"] = {"run": {"working-directory": "."}}
     assert traced.wiring_errors(allowed) == []
     doc = yaml.safe_load(_workflow(repo).read_text(encoding="utf-8"))
@@ -1096,7 +1137,10 @@ def _repo_with_the_tools(tmp_path: Path, monkeypatch) -> Path:
                 "scripts/ops/paths_filter_glob.py", "scripts/tools/_lib_exitcodes.py",
                 "scripts/tools/_lib_compat.py",
                 # #4111: the workflow is read with the strict YAML reading
-                "scripts/tools/_lib_yaml_strict.py"):
+                "scripts/tools/_lib_yaml_strict.py",
+                # #3981: the writes go through the artifact entry
+                "scripts/tools/_lib_output.py", "scripts/tools/_lib_label.py",
+                "scripts/tools/_lib_atomic_write.py"):
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, repo / rel)
     _git(repo, "init", "-q")
@@ -1163,7 +1207,10 @@ def test_the_generated_steps_measure_and_assert_end_to_end(
                              "scripts/ops/workflow_path_filter.py",
                              "scripts/tools/_lib_compat.py",
                              "scripts/tools/_lib_exitcodes.py",
-                             "scripts/tools/_lib_yaml_strict.py"} == block
+                             "scripts/tools/_lib_yaml_strict.py",
+                             "scripts/tools/_lib_output.py",
+                             "scripts/tools/_lib_label.py",
+                             "scripts/tools/_lib_atomic_write.py"} == block
 
     # Second run: green.
     for script in (reset, job, check):
@@ -1567,3 +1614,192 @@ def test_the_matcher_agrees_with_picomatch_on_every_real_pattern_and_file() -> N
     assert paths_filter_glob.covers("*zfoo", "zfoo")
     assert paths_filter_glob.covers("za/*zx*", "za/zx")
     assert not paths_filter_glob.covers("za/*", "za")
+
+
+# ── writes through the artifact entry (#3981) ───────────────────────────────
+
+def _stale_trace_and_drifted_region(repo: Path, tmp_path: Path) -> None:
+    """A tree where `generate` has two targets: the trace file (an entry for
+    a file that is gone) and the workflow (its region loses that entry)."""
+    _record_and_generate(repo, tmp_path / "t")
+    _git(repo, "rm", "-q", "-f", "zlib/zopened.txt")
+
+
+def test_generate_judges_every_target_before_the_first_write(
+        repo: Path, tmp_path: Path, monkeypatch, capsys) -> None:
+    """A target refused at the judgement leaves the ones ahead of it unwritten."""
+    import _lib_output
+    _stale_trace_and_drifted_region(repo, tmp_path)
+    capsys.readouterr()
+    trace_before = _trace_file(repo).read_bytes()
+    workflow_before = _workflow(repo).read_bytes()
+    real = wpf.check_repo_artifact
+
+    def refuse_the_workflow(path, **kw):
+        if Path(path).name == WORKFLOW:
+            raise _lib_output.OutputWriteError(path, PermissionError(13, "Permission denied"))
+        return real(path, **kw)
+    monkeypatch.setattr(wpf, "check_repo_artifact", refuse_the_workflow)
+    with pytest.raises(SystemExit) as caught:
+        _main(repo, "generate")
+    assert caught.value.code == 2
+    assert _trace_file(repo).read_bytes() == trace_before
+    assert _workflow(repo).read_bytes() == workflow_before
+    out, err = capsys.readouterr()
+    assert "wrote" not in out
+    assert "cannot write" in err and "Traceback" not in err
+
+
+def test_a_write_refused_part_way_is_rc2_and_names_what_was_written(
+        repo: Path, tmp_path: Path, monkeypatch, capsys) -> None:
+    """Refused at the write itself (#4250: an unwritable file passes the
+    judgement): rc 2, one line, and the target written before it is named."""
+    import _lib_output
+    _stale_trace_and_drifted_region(repo, tmp_path)
+    capsys.readouterr()
+    real = wpf.write_repo_artifact
+
+    def refuse_the_workflow(path, data, **kw):
+        if Path(path).name == WORKFLOW:
+            raise _lib_output.OutputWriteError(path, PermissionError(13, "Permission denied"))
+        real(path, data, **kw)
+    monkeypatch.setattr(wpf, "write_repo_artifact", refuse_the_workflow)
+    with pytest.raises(SystemExit) as caught:
+        _main(repo, "generate")
+    assert caught.value.code == 2
+    out, err = capsys.readouterr()
+    assert f"wrote .github/path-traces/{WORKFLOW}.json" in out
+    assert "Permission denied" in err and "Traceback" not in err
+
+
+def test_record_whose_write_is_refused_is_rc2_one_line(
+        repo: Path, tmp_path: Path, monkeypatch, capsys) -> None:
+    import _lib_output
+    state = tmp_path / "t"
+    _measure(repo, state)
+
+    def refuse(path, data, **kw):
+        raise _lib_output.OutputWriteError(path, PermissionError(13, "Permission denied"))
+    monkeypatch.setattr(wpf, "write_repo_artifact", refuse)
+    with pytest.raises(SystemExit) as caught:
+        _main(repo, "record", *_job_args(state))
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "cannot write" in err and "Traceback" not in err
+    assert not _trace_file(repo).exists()
+
+
+def _need_fifo() -> None:
+    """Called before the first `os.mkfifo`, so a platform without FIFOs or
+    SIGALRM skips instead of failing on the fixture."""
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+
+
+def _no_hang(call):
+    import signal
+    _need_fifo()
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        return call()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+
+
+def test_a_workflow_that_is_a_fifo_is_a_caller_error_not_a_hang(
+        repo: Path, tmp_path: Path) -> None:
+    """`generate` reads every workflow before it rewrites the traced ones."""
+    _need_fifo()
+    _record_and_generate(repo, tmp_path / "t")
+    other = repo / ".github/workflows/zother.yaml"
+    os.mkfifo(other)
+    trace_before = _trace_file(repo).read_bytes()
+    for argv in (("generate",), ("generate", "--check")):
+        with pytest.raises(CallerError, match="is not a regular file"):
+            _no_hang(lambda: _main(repo, *argv))
+    assert _trace_file(repo).read_bytes() == trace_before
+
+
+def test_a_trace_file_that_is_a_fifo_is_a_caller_error_not_a_hang(
+        repo: Path, tmp_path: Path) -> None:
+    state = tmp_path / "t"
+    _need_fifo()
+    _record_and_generate(repo, state)
+    _trace_file(repo).unlink()
+    os.mkfifo(_trace_file(repo))
+    for argv in (("generate",), ("record", *_job_args(state))):
+        with pytest.raises(CallerError, match="is not a regular file"):
+            _no_hang(lambda: _main(repo, *argv))
+
+
+def test_generate_rewrites_a_workflow_with_the_mode_a_checkout_gives(
+        repo: Path, tmp_path: Path) -> None:
+    """The entry's mode: 0644, or 0755 for a file with the owner's execute
+    bit — not the 0600 the file had."""
+    import stat
+    _stale_trace_and_drifted_region(repo, tmp_path)
+    _workflow(repo).chmod(0o600)
+    _trace_file(repo).chmod(0o755)
+    assert _main(repo, "generate") == 0
+    assert stat.S_IMODE(_workflow(repo).stat().st_mode) == 0o644
+    assert stat.S_IMODE(_trace_file(repo).stat().st_mode) == 0o755
+
+
+def test_record_rewrites_the_trace_file_with_the_mode_a_checkout_gives(
+        repo: Path, tmp_path: Path) -> None:
+    import stat
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    _trace_file(repo).chmod(0o600)
+    assert _main(repo, "record", *_job_args(state)) == 0
+    assert stat.S_IMODE(_trace_file(repo).stat().st_mode) == 0o644
+
+
+# ── #3981: `assert --out` goes through the artifact entry ───────────────────
+
+def test_an_assert_out_that_cannot_be_written_is_rc2_one_line(
+        repo: Path, tmp_path: Path, capsys) -> None:
+    """`merge` loads each leg's `--out` whole, so it is an artifact: a file
+    where its directory should be is rc 2 and one line naming --out — it was
+    a `FileNotFoundError` / `NotADirectoryError` traceback."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    capsys.readouterr()
+    blocker = tmp_path / "afile"
+    blocker.write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        _main(repo, "assert", *_job_args(state), "--out", str(blocker / "trace.json"))
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "--out" in err and "Traceback" not in err
+    assert len([ln for ln in err.splitlines() if ln.startswith("ERROR")]) == 1
+
+
+def test_an_assert_out_in_a_missing_directory_is_made(
+        repo: Path, tmp_path: Path, capsys) -> None:
+    """The directory of --out is created, as `record` makes its trace's: a
+    leg's artifact path need not exist yet."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    out = tmp_path / "legs" / "0" / "trace.json"
+    assert _main(repo, "assert", *_job_args(state), "--out", str(out)) == 0
+    assert json.loads(out.read_text(encoding="utf-8"))["jobs"]["zjob"]
+
+
+def test_an_assert_out_to_stdout_is_refused(repo: Path, tmp_path: Path, capsys,
+                                            monkeypatch) -> None:
+    """`--out -` used to write a file named `-` in the cwd."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as caught:
+        _main(repo, "assert", *_job_args(state), "--out", "-")
+    assert caught.value.code == 2
+    assert "--out" in capsys.readouterr().err
+    assert not (tmp_path / "-").exists()

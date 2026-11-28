@@ -26,9 +26,11 @@ import (
 	"math"
 	"reflect"
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -338,6 +340,53 @@ func rejectTemplateMetachars(value, key string) error {
 	return nil
 }
 
+// rejectUnlexableRunes rejects a selector VALUE the PromQL lexer refuses
+// inside a string literal: it reports utf8.RuneError, which is both invalid
+// UTF-8 and a correctly encoded U+FFFD (what encoding/json makes of any
+// invalid byte in a tenant-api body). escapeSelectorValue cannot write either
+// one in a form the lexer reads, and one such literal makes Prometheus refuse
+// the whole rule pack. TestSelectorValues_MatchPrometheusParser holds this and
+// validateSelectorRegex equal to the parser over a vector corpus.
+func rejectUnlexableRunes(value, key string) error {
+	if strings.ContainsRune(value, utf8.RuneError) { // invalid bytes range as RuneError too
+		return fmt.Errorf("selector value for %q contains invalid UTF-8 or U+FFFD, "+
+			"which Prometheus refuses in a rule's string literal", key)
+	}
+	return nil
+}
+
+// validateSelectorRegex rejects a selectors_re VALUE that Prometheus would not
+// load. It takes the two steps Prometheus's matcher constructor
+// (model/labels.NewFastRegexMatcher, called by the rule loader for every `=~`
+// matcher) takes — parse with Perl flags + DotNL, then compile anchored — on
+// the standard library: importing Prometheus here would pull its module into
+// tenant-api and raise unrelated dependencies there. TestSelectorValues_MatchPrometheusParser
+// holds the two judgements equal over a vector corpus. One difference is
+// known and conservative: Prometheus does not parse a value that is only
+// literals joined by `|`, so a literal past the parser's size limit (tens of
+// millions of characters) is refused here although Prometheus would load it.
+// One bad regex in the
+// emitted pack makes the rule manager refuse every rule file and keep serving
+// the previous set, so later rule changes stop landing (an availability
+// failure; escaping keeps the value inside its string literal).
+func validateSelectorRegex(value, key string) error {
+	err := compileSelectorRegex(value)
+	if err != nil {
+		return fmt.Errorf("selectors_re value for %q is not a valid regular expression "+
+			"(Prometheus would refuse the rule file): %v", key, err)
+	}
+	return nil
+}
+
+func compileSelectorRegex(value string) error {
+	parsed, err := syntax.Parse(value, syntax.Perl|syntax.DotNL)
+	if err != nil {
+		return err
+	}
+	_, err = regexp.Compile("^(?s:" + parsed.String() + ")$")
+	return err
+}
+
 // validateQuantile rejects a p99_latency quantile that is not a bare number in
 // (0,1) (interpolated raw into histogram_quantile).
 func validateQuantile(q string) error {
@@ -478,6 +527,14 @@ func selectorItems(spec CustomAlertSpec) ([]selectorItem, error) {
 		}
 		if err := rejectTemplateMetachars(it.value, it.key); err != nil {
 			return nil, err
+		}
+		if err := rejectUnlexableRunes(it.value, it.key); err != nil {
+			return nil, err
+		}
+		if it.op == "=~" {
+			if err := validateSelectorRegex(it.value, it.key); err != nil {
+				return nil, err
+			}
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {

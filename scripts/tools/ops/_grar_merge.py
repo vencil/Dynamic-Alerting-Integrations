@@ -161,6 +161,9 @@ FINDING_KINDS: dict[str, str] = {
     "unknown_routing_profile":
         "A tenant's _routing_profile names a profile its directory chain "
         "does not define.",
+    "routing_migrated_invalid":
+        "A tenant's _routing_migrated is neither shadow nor active (absent "
+        "means shadow; #4277); the whole tree is refused in every mode.",
     "routing_profile_invalid":
         "A tenant's _routing_profile is neither a profile name (a string) "
         "nor null — a mapping such as a time-window schedule included; the "

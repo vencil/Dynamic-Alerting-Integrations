@@ -75,6 +75,8 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR,
 )
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the operator entry)
+    exit_on_output_write_error, write_operator_output)
 from _lib_validation import i18n_text  # noqa: E402
 import _lib_engine  # noqa: E402
 import _lib_registry as registry  # noqa: E402
@@ -348,8 +350,9 @@ def write_output(**fields: str) -> None:
     path = os.environ.get("GITHUB_OUTPUT")
     if not path:
         return
-    with open(path, "a", encoding="utf-8", newline="\n") as fh:
-        fh.write("".join(f"{k}={v}\n" for k, v in fields.items()))
+    # The runner's file, named by $GITHUB_OUTPUT, not by a flag (flag=None).
+    write_operator_output(path, "".join(f"{k}={v}\n" for k, v in fields.items()),
+                          flag=None, append=True)
 
 
 def _write_output(decision: Decision, with_digest: bool) -> None:
@@ -406,6 +409,7 @@ def _decide(args: argparse.Namespace) -> Decision:
     return decide_chart(args.tgz, args.registry, args.timeout)
 
 
+@exit_on_output_write_error
 def main(argv: Optional[List[str]] = None) -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(

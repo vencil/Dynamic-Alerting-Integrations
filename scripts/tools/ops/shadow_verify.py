@@ -58,7 +58,7 @@ _DEFAULT_ALERTMANAGER = "http://localhost:9093"
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, partial_answer)
 import _lib_input  # noqa: E402  (#3445: the input files are read by the lib)
-from _lib_shadow_report import REPORT_COLUMNS, REPORT_FORMATS, parse_timestamp  # noqa: E402  (#3662)
+from _lib_shadow_report import REPORT_COLUMNS, REPORT_FORMATS, parse_timestamp, split_tenant_cell  # noqa: E402  (#3662)
 
 #: The input files (#3445): read by `_lib_input.document` before any phase
 #: runs — a path or content that cannot be read, or a top level of another
@@ -222,7 +222,9 @@ def check_runtime(args, inputs=None):
             total_rows += 1
             if row["Status"].strip() == "mismatch":
                 mismatch_count += 1
-            tenant = row["Tenant"].strip()
+            # A row is one (tenant, cluster) group (#1200): the tenant is
+            # counted once however many clusters it has rows for.
+            tenant = split_tenant_cell(row["Tenant"].strip())[0]
             if tenant:
                 tenants.add(tenant)
 

@@ -116,6 +116,7 @@ VALID_RESERVED_KEYS: Final[set[str]] = {
     "_namespaces",
     "_profile",
     "_routing",
+    "_routing_migrated",
     "_routing_profile",
     "_severity_dedup",
     "_silent_mode",
@@ -123,6 +124,7 @@ VALID_RESERVED_KEYS: Final[set[str]] = {
 VALID_RESERVED_PREFIXES: Final[tuple[str, ...]] = ("_state_", "_routing")
 TENANT_ROUTING_KEYS: Final[frozenset[str]] = frozenset({
     "_routing",
+    "_routing_migrated",
     "_routing_profile",
 })
 PLATFORM_ROUTING_KEYS: Final[frozenset[str]] = frozenset({
@@ -167,6 +169,9 @@ RESERVED_KEY_READERS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
     },
     "_routing_enforced": {
         "generator": ("platform_top",),
+    },
+    "_routing_migrated": {
+        "generator": ("tenant", "platform_tenants"),
     },
     "_routing_profile": {
         "generator": ("tenant", "platform_tenants"),

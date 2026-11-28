@@ -12,6 +12,7 @@ var validReservedKeys = keySet(
 	"_namespaces",
 	"_profile",
 	"_routing",
+	"_routing_migrated",
 	"_routing_profile",
 	"_severity_dedup",
 	"_silent_mode",
@@ -28,6 +29,7 @@ var validReservedPrefixes = []string{
 // root conf.d `_` file (#2983).
 var tenantRoutingKeys = keySet(
 	"_routing",
+	"_routing_migrated",
 	"_routing_profile",
 )
 
@@ -81,6 +83,9 @@ var reservedKeyReaders = map[string]map[string][]string{
 	"_routing_enforced": {
 		"generator": {"platform_top"},
 	},
+	"_routing_migrated": {
+		"generator": {"tenant", "platform_tenants"},
+	},
 	"_routing_profile": {
 		"generator": {"tenant", "platform_tenants"},
 	},
@@ -112,6 +117,7 @@ var reservedValueShapes = map[string]string{
 	"_routing":            "scalar_or_mapping",
 	"_routing_defaults":   "mapping",
 	"_routing_enforced":   "mapping",
+	"_routing_migrated":   "scalar",
 	"_routing_profile":    "scalar",
 	"_severity_dedup":     "scalar",
 	"_silent_mode":        "scalar_or_mapping",

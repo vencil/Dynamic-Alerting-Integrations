@@ -509,3 +509,25 @@ def test_over_bound_is_not_reported_when_the_verdict_does_not_count_it(ledger_re
     o = _outputs(out)
     assert o["regression_basis"] == "timing-not-replicated"
     assert "over_bound" not in o
+
+
+# ── --github-output through the operator entry (#3981) ───────────────────────
+
+def test_github_output_is_appended_to_not_replaced(tmp_path):
+    out = tmp_path / "gh_out"
+    out.write_text("earlier=1\n", encoding="utf-8")
+    assert bv.main(["verdict", "--benchstat", str(FIX / "deterministic.txt"),
+                    "--github-output", str(out)]) == 0
+    assert out.read_text(encoding="utf-8").startswith("earlier=1\n")
+    assert _outputs(out)["regression"] == "true"
+
+
+def test_an_unwritable_github_output_is_rc2_and_names_the_flag(tmp_path, capsys):
+    """Was a traceback ('unexpected internal error'). A directory stands in
+    for the unwritable file."""
+    with pytest.raises(SystemExit) as caught:
+        bv.main(["verdict", "--benchstat", str(FIX / "deterministic.txt"),
+                 "--github-output", str(tmp_path)])
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "check the value given to --github-output" in err and "Traceback" not in err

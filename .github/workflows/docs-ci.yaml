@@ -27,7 +27,8 @@ name: Documentation CI
 on:
   pull_request:
     branches: [main]
-  # head-blob-hygiene also runs on every push so historical drift is caught
+  # Documentation Checks (HEAD blob hygiene among them) also runs on every
+  # push so historical drift is caught
   # without waiting for a PR that touches docs/.
   push:
     branches: [main]
@@ -49,8 +50,20 @@ permissions:
   contents: read
 
 jobs:
-  validate-mermaid:
-    name: Validate Mermaid Diagrams
+  documentation-checks:
+    # The documentation checks as ONE job (#4224): six jobs each paid
+    # checkout + toolchain setup and a runner slot for a check that runs in
+    # seconds, and on this repo the runner cap, not execution, is what a PR
+    # waits on. Each check keeps its own step, and every check step runs
+    # `if: ${{ !cancelled() }}`: a red check does not stop the ones after it,
+    # so one run reports every check and the red step names which one.
+    # ⛔ Order: MkDocs builds into ./site, inside the workspace, and the link
+    # and coverage checks scan the whole repo — so the build runs LAST.
+    # Unconditional (#2107): no path filter can express "every Markdown file
+    # plus every link target", so a PR that only renamed a linked non-doc
+    # file must still run this. Re-adding an `if:` reds
+    # tests/ops/test_required_checks_ssot.py (`kind: job`).
+    name: Documentation Checks
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -62,8 +75,6 @@ jobs:
           node-version: "24"
           # NOTE: cache: "npm" is intentionally omitted — this repo has no
           # root-level package-lock.json.
-          # Enabling cache without a lockfile makes setup-node fail with
-          # "Dependencies lock file is not found".
 
       - name: Cache npm global dir (mermaid-cli, puppeteer)
         uses: actions/cache@v5
@@ -86,308 +97,62 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          key: ${{ runner.os }}-pip-docs-${{ hashFiles('mkdocs.yml', 'requirements/ci-constraints.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-pip-docs-
 
       - name: Install Python dependencies
         run: |
-          pip install pyyaml -c requirements/ci-constraints.txt
+          pip install pyyaml mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt
 
-      - name: Validate and render Mermaid diagrams
+      - name: Scan HEAD blobs
+        if: ${{ !cancelled() }}
         run: |
-          # Run it twice — once for docs/, once for rule-packs/ — so a failure
-          # names which tree it came from. Both must pass. (validate_mermaid.py
-          # takes nargs='*' since #1702, so one call with both paths would also
-          # work; kept split for the attribution.)
-          python scripts/tools/lint/validate_mermaid.py docs/ --ci --render
-          python scripts/tools/lint/validate_mermaid.py rule-packs/ --ci --render
-
-  check-links:
-    name: Check Documentation Links
-    runs-on: ubuntu-24.04
-    # ⛔ Unconditional on purpose (#2107). Its input set is every Markdown file plus every
-    # link target, wherever it lives; no path filter can express that, so a
-    # PR that only deleted or renamed a linked non-doc file skipped this leg
-    # and merged a broken link. Re-adding an `if:` reds
-    # tests/ops/test_required_checks_ssot.py (`kind: job`). Accepted cost:
-    # every PR pays checkout + pip, and a network flake there reds this
-    # required check.
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install Python dependencies
-        run: |
-          pip install pyyaml -c requirements/ci-constraints.txt
+          # Historical blob corruption the staged-file hygiene hook cannot
+          # fix: NUL bytes and truncated YAML/JSON fail; missing EOF newlines
+          # are reported but not failed (--strict is omitted until the
+          # pre-existing EOF drift is cleaned up).
+          python scripts/tools/lint/check_head_blob_hygiene.py --ci
 
       - name: Check document links and cross-references (Markdown)
+        if: ${{ !cancelled() }}
         run: |
           # check_doc_links.py scans the whole repo from --repo-root (default
-          # ".") and does not accept positional path arguments. Passing
-          # `docs/ rule-packs/` here used to fail with
-          # `unrecognized arguments: docs/ rule-packs/`.
+          # ".") and takes no positional paths.
           python scripts/tools/lint/check_doc_links.py --ci
 
       - name: Check raw HTML doc-links (MkDocs-aware)
+        if: ${{ !cancelled() }}
         run: |
           python scripts/tools/lint/lint_html_doc_links.py --ci
 
-  head-blob-hygiene:
-    name: HEAD Blob Hygiene
-    # Unconditional: historical blob corruption must be caught on every push,
-    # whether or not a given PR touches docs/.
-    # Scans every committed blob in HEAD for corruption the staged-file
-    # hygiene hook cannot retroactively fix:
-    #   - NUL bytes (e.g. the architecture-quiz.jsx regression) — always fatal
-    #   - Truncated YAML/JSON (e.g. mkdocs.yml ending in 'CHANGELOG.m') — always fatal
-    #   - Missing EOF newlines — detected but NOT failed (~40 pre-existing
-    #     drift files as of the harness-hardening PR; needs a separate
-    #     cleanup pass before we can enable --strict in CI).
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-      - name: Scan HEAD blobs
-        run: |
-          # --strict is intentionally omitted until the pre-existing EOF
-          # drift is cleaned up. NUL + TRUNC defects still fail the build.
-          python scripts/tools/lint/check_head_blob_hygiene.py --ci
-
-  check-frontmatter:
-    name: Check Documentation Front Matter
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install Python dependencies
-        run: |
-          pip install pyyaml -c requirements/ci-constraints.txt
-
       - name: Validate documentation YAML front matter
+        if: ${{ !cancelled() }}
         run: |
-          # add_frontmatter.py scans a single base directory via --base-dir
-          # and does not accept positional paths. Run it twice so both
-          # docs/ and rule-packs/ are covered; both must pass.
+          # add_frontmatter.py scans one --base-dir; run it for both trees.
           python scripts/tools/dx/add_frontmatter.py --check --base-dir docs/
           python scripts/tools/dx/add_frontmatter.py --check --base-dir rule-packs/
 
-  check-coverage:
-    name: Check Documentation Coverage
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install Python dependencies
-        run: |
-          pip install pyyaml -c requirements/ci-constraints.txt
-
       - name: Check documentation coverage (80% minimum)
+        if: ${{ !cancelled() }}
         run: |
           # doc_coverage.py scans the whole repo from --repo-root (default
-          # ".") and does not accept positional paths. Passing
-          # `docs/ rule-packs/` here used to fail with
-          # `unrecognized arguments: docs/ rule-packs/`.
+          # ".") and takes no positional paths.
           python scripts/tools/dx/doc_coverage.py --ci
 
-  mkdocs-build:
-    name: MkDocs Build Verification
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-mkdocs-${{ hashFiles('mkdocs.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-mkdocs-
-
-      - name: Install MkDocs and plugins
+      - name: Validate and render Mermaid diagrams
+        if: ${{ !cancelled() }}
         run: |
-          pip install mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt
+          # Once per tree so a failure names which tree it came from.
+          python scripts/tools/lint/validate_mermaid.py docs/ --ci --render
+          python scripts/tools/lint/validate_mermaid.py rule-packs/ --ci --render
 
       - name: Build site (strict mode)
+        if: ${{ !cancelled() }}
         run: |
           # Single source of truth: scripts/tools/lint/mkdocs_strict_check.sh
-          # The same script powers `make lint-docs-mkdocs` for local fast
-          # feedback before push. Filter rationales (known-acceptable
-          # warning patterns) live as comments in that script.
+          # (also `make lint-docs-mkdocs`). LAST: it writes ./site.
           bash scripts/tools/lint/mkdocs_strict_check.sh
-
-  doc-line-count:
-    name: Documentation Line Count Monitor
-    runs-on: ubuntu-24.04
-    # On a push `pull_request.base.sha` is empty, so `base` checks out the
-    # pushed commit itself and the delta is 0 — a no-op, not a failure.
-    steps:
-      - name: Checkout PR
-        uses: actions/checkout@v6
-
-      - name: Checkout base branch
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: base
-
-      - name: Compare doc line counts
-        run: |
-          PR_LINES=$(find docs rule-packs -name '*.md' -exec cat {} + | wc -l)
-          BASE_LINES=$(find base/docs base/rule-packs -name '*.md' -exec cat {} + 2>/dev/null | wc -l)
-          DIFF=$((PR_LINES - BASE_LINES))
-          echo "Base: $BASE_LINES lines | PR: $PR_LINES lines | Delta: $DIFF lines"
-          if [ "$DIFF" -gt 200 ]; then
-            echo "::warning::Doc line count increased by $DIFF lines (threshold: 200). Consider trimming redundant content."
-          elif [ "$DIFF" -lt -50 ]; then
-            echo "::notice::Doc line count decreased by ${DIFF#-} lines. Good job trimming!"
-          fi
-
-  drift-checks:
-    name: Drift Detection (validate_all.py)
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          # Full history required: generate_changelog.py --check walks
-          # commits from the latest vX.Y.Z tag to HEAD. The default
-          # shallow fetch (depth=1) on refs/pull/N/merge left the tag
-          # unreachable, which caused changelog to exit 1 with no
-          # detail on every PR (observed on PRs #17 and #18).
-          fetch-depth: 0
-
-      - name: Fetch the PR base (changelog_format's new-entry cap diffs against origin/$GITHUB_BASE_REF, else origin/main)
-        # fetch-depth: 0 does not guarantee an origin/<base> ref; the cap
-        # exits 2 rather than silently falling back to HEAD when it is absent.
-        # A plain `run:`, not a step `if:` — see the ⛔ note in the script.
-        run: |
-          # ⛔ Unconditional, and defaulted: the cap now resolves its base
-          # through the repo's ONE resolver (_lint_helpers.resolve_diff_base),
-          # which falls back to origin/main off a PR run instead of to HEAD.
-          # The old `if [ -n "$GITHUB_BASE_REF" ]` guard was correct only while
-          # "no base ref" meant "compare against HEAD, always green"; on a push
-          # to main it would now leave origin/main unfetched and the cap would
-          # exit 2 — fail-closed, but red for the wrong reason.
-          git fetch --no-tags origin "${GITHUB_BASE_REF:-main}"
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: 'Set up Node.js (node-backed lint engines, #3611)'
-        # check_cli_contract evaluates the CLI Playground with node and exits 2
-        # without it (#3611 Q1). Pinned to the devcontainer major, as every
-        # other setup-node here, instead of the runner image's floating node.
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-
-      - name: Install Python dependencies
-        run: |
-          # cli_default_drift below loads every da-tools subcommand to capture
-          # its real ArgumentParser, so this leg needs whatever those imports
-          # need. Measured under a meta_path finder that blocks site-packages
-          # selectively:
-          #   * pyyaml is the ONLY hard requirement — block it and a large
-          #     share of the da-tools subcommands land in `blind`, a hard error
-          #     and turns this step red. ⚠️ No count is quoted here on purpose:
-          #     three independent runs of that experiment produced three
-          #     different numbers (20 / 30 / 47) because the answer depends on
-          #     what the measuring process had already imported. The direction
-          #     is robust; the magnitude is an artefact.
-          #   * promql-parser is DEFENSIVE, not required —
-          #     `migrate_rule.py:54-58` guards promql_parser with
-          #     try/except ImportError, and with it removed the captured
-          #     defaults are byte-identical and blind stays 0. It is here so
-          #     a future unguarded import cannot turn a required check red on an
-          #     unrelated PR; it is pinned in the same constraints file.
-          # (An earlier revision called promql-parser required and cited a
-          # measurement — that measurement showed it was LOADED, which is not
-          # the same as needed.)
-          pip install pyyaml promql-parser -c requirements/ci-constraints.txt
-
-      - name: Set up Go (da-read / da-crdecode)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/da-read/go.sum
-
-      # #3206 (ADR-036 §12): the rule files these steps read are read the way
-      # Prometheus' rule loader reads them (`da-read prometheus-rules`) and
-      # their ConfigMaps the way kubectl reads them (da-crdecode). Built from
-      # this checkout and exported; a failed build fails the job, and a tool
-      # without them fails by name — never a PyYAML fallback.
-      - name: Build da-read / da-crdecode
-        run: |
-          make da-read-build da-crdecode-build
-          echo "DA_READ_BINARY=$PWD/.build/da-read" >> "$GITHUB_ENV"
-          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
-
-      - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats, rule-pack-readme, cli-defaults, cli-contract, frontmatter-versions)
-        # cli_contract evaluates the CLI Playground catalog with node (#1379);
-        # a missing node is a hard error (rc 2) everywhere since #3611.
-        run: |
-          python scripts/tools/validate_all.py \
-            --only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,includes,repo_name,alerts,cli_default_drift,cli_contract,frontmatter_versions \
-            --ci
 
   i4-runbook-smoke-test:
     # Runs copies of some jq / amtool / promtool / yq snippets from

@@ -4059,3 +4059,321 @@ class TestPortalPlaygroundPinCapability:
                             _spy)
         assert bump_docs._check_datools_pin_capability("9.9.9") == 1
         assert seen, "the portal half was skipped because the doc half was red"
+
+
+# ---------------------------------------------------------------------------
+# #3981: every target is read once, judged, and written last, through the
+# artifact entry
+# ---------------------------------------------------------------------------
+_TAG = r"ghcr\.io/vencil/da-tools:[0-9]+\.[0-9]+\.[0-9]+"
+
+
+def _tag_rule(name, pattern=_TAG, fmt="ghcr.io/vencil/da-tools:{v}"):
+    return {"file": name, "desc": f"tag in {name}", "pattern": pattern,
+            "replacement": lambda v, fmt=fmt: fmt.format(v=v)}
+
+
+def test_rules_on_one_file_under_two_names_both_land(tmp_path, monkeypatch):
+    """Two rules on one file, the second reaching it through a symlink: the
+    writes wait for every rule, so both must edit one text — keyed by path,
+    the second rule's copy would drop the first rule's edit."""
+    from _platform_fs import symlink_or_skip
+    real = tmp_path / "a.md"
+    real.write_text("ghcr.io/vencil/da-tools:0.1.0\nexporter:0.1.0\n", encoding="utf-8")
+    symlink_or_skip("a.md", tmp_path / "alias.md")
+    monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+    rules = [_tag_rule("a.md"),
+             _tag_rule("alias.md", pattern=r"exporter:[0-9.]+", fmt="exporter:{v}")]
+    bump_docs.apply_rules(rules, "0.2.0", check_only=False)
+    assert real.read_text(encoding="utf-8") == "ghcr.io/vencil/da-tools:0.2.0\nexporter:0.2.0\n"
+    assert (tmp_path / "alias.md").is_symlink()
+
+
+def test_a_fifo_among_the_targets_writes_nothing_and_does_not_hang(tmp_path, monkeypatch):
+    """A FIFO where a target goes blocked the read forever, after the
+    targets ahead of it had been rewritten. Now OutputWriteError (rc 2 at
+    `main`) before any write."""
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    from _lib_output import OutputWriteError
+    a = tmp_path / "a.md"
+    a.write_text("ghcr.io/vencil/da-tools:0.1.0\n", encoding="utf-8")
+    os.mkfifo(tmp_path / "b.md")
+    monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        with pytest.raises(OutputWriteError) as exc:
+            bump_docs.apply_rules([_tag_rule("a.md"), _tag_rule("b.md")], "0.2.0",
+                                  check_only=False)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert exc.value.action == "read" and "not a regular file" in str(exc.value)
+    assert a.read_text(encoding="utf-8") == "ghcr.io/vencil/da-tools:0.1.0\n"
+
+
+_STDOUT_DRIVER = """\
+import sys
+from pathlib import Path
+sys.path[:0] = sys.argv[1:4]
+import bump_docs, _lib_exitcodes
+from _lib_output import exit_on_output_write_error
+bump_docs.REPO_ROOT = Path(sys.argv[4])
+rule = lambda n: {"file": n, "desc": n, "pattern": r"ghcr\\.io/vencil/da-tools:[0-9.]+",
+                  "replacement": lambda v: "ghcr.io/vencil/da-tools:" + v}
+exit_on_output_write_error(lambda: bump_docs.apply_rules(
+    [rule("a.md"), rule("b.md")], "0.2.0", check_only=False))()
+"""
+
+
+def test_no_target_is_written_when_a_later_one_is_this_process_stdout(tmp_path):
+    """stdout appended onto the second target: rc 2, one line naming it, and
+    the first target keeps its text — the bare writes rewrote both, the
+    report then landing in the second (rc 0)."""
+    a, b = tmp_path / "a.md", tmp_path / "b.md"
+    for f in (a, b):
+        f.write_text("ghcr.io/vencil/da-tools:0.1.0\n", encoding="utf-8")
+    dx = Path(bump_docs.__file__).resolve().parent
+    with open(b, "a", encoding="utf-8") as out:
+        proc = subprocess.run(
+            [sys.executable, "-c", _STDOUT_DRIVER, str(dx), str(dx.parent),
+             str(dx.parent / "lint"), str(tmp_path)],
+            stdout=out, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.strip().splitlines() == [
+        f"ERROR: cannot write {b}: is this process's standard stream"
+        " — internal output path, this is a bug or an unwritable workspace"], proc.stderr
+    assert a.read_text(encoding="utf-8") == "ghcr.io/vencil/da-tools:0.1.0\n"
+    assert b.read_text(encoding="utf-8") == "ghcr.io/vencil/da-tools:0.1.0\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+@pytest.mark.parametrize("before,after", [(0o640, 0o644), (0o755, 0o755)])
+def test_a_bumped_file_gets_the_mode_a_checkout_would_give(before, after, tmp_path, monkeypatch):
+    """Through `write_repo_artifact`: 0644, or 0755 for an executable file
+    (the forced chmod made every rewritten file 0644)."""
+    f = tmp_path / "run.sh"
+    f.write_text("ghcr.io/vencil/da-tools:0.1.0\n", encoding="utf-8")
+    f.chmod(before)
+    monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+    bump_docs.apply_rules([_tag_rule("run.sh")], "0.2.0", check_only=False)
+    assert f.stat().st_mode & 0o777 == after
+
+
+def test_count_rules_on_one_file_both_land_and_a_refused_one_writes_nothing(
+        tmp_path, monkeypatch):
+    """`--sync-counts`: two count rules on one file edit one text; a later
+    target that is not a regular file is refused before the first write."""
+    from _lib_output import OutputWriteError
+    readme = tmp_path / "README.md"
+    readme.write_text("packs-15 and 223 tools\n", encoding="utf-8")
+    rules = [
+        {"file": "README.md", "desc": "packs", "pattern": r"packs-\d+",
+         "replacement": lambda _v: "packs-16"},
+        {"file": "README.md", "desc": "tools", "pattern": r"\d+ tools",
+         "replacement": lambda _v: "224 tools"},
+    ]
+    monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(bump_docs, "_build_count_rules", lambda: list(rules))
+    bump_docs.apply_count_updates()
+    assert readme.read_text(encoding="utf-8") == "packs-16 and 224 tools\n"
+
+    readme.write_text("packs-15 and 223 tools\n", encoding="utf-8")
+    (tmp_path / "docs.md").mkdir()
+    rules.append({"file": "docs.md", "desc": "dir", "pattern": r"x", "replacement": lambda _v: "y"})
+    with pytest.raises(OutputWriteError):
+        bump_docs.apply_count_updates()
+    assert readme.read_text(encoding="utf-8") == "packs-15 and 223 tools\n"
+
+
+def test_init_changelog_writes_neither_when_one_is_refused(tmp_path, monkeypatch, capsys):
+    """`--init-changelog --changelog-lang all` with CHANGELOG.en.md a
+    directory: rc 2 at `main`, one line, and CHANGELOG.md keeps its text —
+    the bare writes inserted the zh stub, then ended in the crash handler."""
+    zh = tmp_path / "CHANGELOG.md"
+    zh.write_text("# CL\n\n## [v1.0.0]\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.en.md").mkdir()
+    monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["bump_docs.py", "--init-changelog", "v2.0.0",
+                                      "--changelog-lang", "all"])
+    with pytest.raises(SystemExit) as exc:
+        bump_docs.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert err.strip().splitlines() == [
+        f"ERROR: cannot read {tmp_path / 'CHANGELOG.en.md'}: not a regular file"
+        " — internal path, this is a bug or an unreadable workspace"], err
+    assert zh.read_text(encoding="utf-8") == "# CL\n\n## [v1.0.0]\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_new_en_changelog_is_0644_under_umask_077(tmp_path, monkeypatch):
+    """A created CHANGELOG.en.md gets the checkout mode, not the umask's."""
+    monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+    old = os.umask(0o077)
+    try:
+        bump_docs._init_changelog_entry("2.0.0", lang="en")
+    finally:
+        os.umask(old)
+    assert (tmp_path / "CHANGELOG.en.md").stat().st_mode & 0o777 == 0o644
+
+
+def test_a_read_error_on_a_target_is_the_read_direction_error(tmp_path, monkeypatch):
+    """An OSError on the read (EACCES cannot be denied to root, so it is
+    raised) is OutputWriteError(action="read"): rc 2 at `main`."""
+    from _lib_output import OutputWriteError
+    f = tmp_path / "a.md"
+    f.write_text("x", encoding="utf-8")
+
+    def denied(self, *a, **k):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(Path, "read_text", denied)
+    with pytest.raises(OutputWriteError) as exc:
+        bump_docs._read_target(f)
+    assert exc.value.action == "read" and exc.value.path == str(f)
+
+
+def test_a_target_that_is_not_utf8_is_the_read_direction_error(tmp_path, monkeypatch):
+    """A UnicodeDecodeError is a ValueError: it ended in the crash handler,
+    after the targets ahead of it had been rewritten."""
+    from _lib_output import OutputWriteError
+    a = tmp_path / "a.md"
+    a.write_text("ghcr.io/vencil/da-tools:0.1.0\n", encoding="utf-8")
+    (tmp_path / "b.md").write_bytes(b"\xff\xfe")
+    monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+    with pytest.raises(OutputWriteError, match="not UTF-8"):
+        bump_docs.apply_rules([_tag_rule("a.md"), _tag_rule("b.md")], "0.2.0",
+                              check_only=False)
+    assert a.read_text(encoding="utf-8") == "ghcr.io/vencil/da-tools:0.1.0\n"
+
+
+_INIT_DRIVER = """\
+import sys
+from pathlib import Path
+sys.path[:0] = sys.argv[1:4]
+import bump_docs, _lib_exitcodes
+bump_docs.REPO_ROOT = Path(sys.argv[4])
+sys.argv = ["bump_docs.py", "--init-changelog", "v2.0.0", "--changelog-lang", "all"]
+_lib_exitcodes.run(bump_docs.main)
+"""
+
+
+def test_init_changelog_writes_neither_when_the_en_one_is_this_process_stdout(tmp_path):
+    """stdout appended onto CHANGELOG.en.md: both are judged before the first
+    is written — rc 2, one line, and CHANGELOG.md keeps its text."""
+    zh, en = tmp_path / "CHANGELOG.md", tmp_path / "CHANGELOG.en.md"
+    zh.write_text("# CL\n\n## [v1.0.0]\n", encoding="utf-8")
+    en.write_text("# CL\n\n## [v1.0.0]\n", encoding="utf-8")
+    dx = Path(bump_docs.__file__).resolve().parent
+    with open(en, "a", encoding="utf-8") as out:
+        proc = subprocess.run(
+            [sys.executable, "-c", _INIT_DRIVER, str(dx), str(dx.parent),
+             str(dx.parent / "lint"), str(tmp_path)],
+            stdout=out, stderr=subprocess.PIPE, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.strip().splitlines() == [
+        f"ERROR: cannot write {en}: is this process's standard stream"
+        " — internal output path, this is a bug or an unwritable workspace"], proc.stderr
+    assert zh.read_text(encoding="utf-8") == "# CL\n\n## [v1.0.0]\n"
+
+
+def _hang_guard():
+    import signal
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+    return signal.signal(signal.SIGALRM, hung)
+
+
+def _unguard(prev):
+    import signal
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, prev)
+
+
+def test_what_if_on_a_fifo_target_is_rc2_not_a_hang(tmp_path, monkeypatch, capsys):
+    """`--what-if` read every rule target with no guard: a FIFO blocked."""
+    import signal
+    prev = _hang_guard()
+    os.mkfifo(tmp_path / "pipe.md")
+    line = bump_docs.VERSION_LINES[0]
+    monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(bump_docs, "read_current_versions",
+                        lambda: {v: "1.0.0" for v in bump_docs.VERSION_LINES})
+    monkeypatch.setattr(bump_docs, "_build_rules", lambda: {line: [_tag_rule("pipe.md")]})
+    monkeypatch.setattr(sys, "argv", ["bump_docs.py", "--what-if"])
+    signal.alarm(20)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+    finally:
+        _unguard(prev)
+    err = capsys.readouterr().err
+    assert exc.value.code == 2, err
+    assert f"cannot read {tmp_path / 'pipe.md'}: not a regular file" in err
+
+
+def test_a_source_of_truth_that_is_a_fifo_is_rc2_not_a_hang(tmp_path, monkeypatch):
+    """`--check`, `--what-if` and `--show-current` read the version sources
+    first; a FIFO there blocked them, whatever the rules' guard did."""
+    import signal
+    from _lib_output import OutputWriteError
+    prev = _hang_guard()
+    version = tmp_path / "VERSION"
+    os.mkfifo(version)
+    monkeypatch.setattr(bump_docs, "DA_TOOLS_VERSION", version)
+    signal.alarm(20)
+    try:
+        with pytest.raises(OutputWriteError, match="not a regular file"):
+            bump_docs.read_current_versions()
+    finally:
+        _unguard(prev)
+
+
+def test_init_changelog_through_a_link_keeps_both_stubs(tmp_path, monkeypatch):
+    """CHANGELOG.en.md a link to CHANGELOG.md: both stubs land in the one file
+    (as the bare writes left it), not the second overwriting the first."""
+    from _platform_fs import symlink_or_skip
+    zh = tmp_path / "CHANGELOG.md"
+    zh.write_text("# CL\n\n## [v1.0.0]\n", encoding="utf-8")
+    symlink_or_skip("CHANGELOG.md", tmp_path / "CHANGELOG.en.md")
+    monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+    bump_docs._init_changelog_entry("2.0.0", lang="all")
+    text = zh.read_text(encoding="utf-8")
+    assert text.count("## [v2.0.0]") == 2 and "### 版號" in text and "### Versions" in text
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_target_whose_rule_changes_nothing_is_not_rewritten(tmp_path, monkeypatch):
+    """Only changed targets are written: an up-to-date file keeps its inode
+    and its mode (a rewrite would reset 0600 to 0644)."""
+    f = tmp_path / "a.md"
+    f.write_text("ghcr.io/vencil/da-tools:0.2.0\n", encoding="utf-8")
+    f.chmod(0o600)
+    ino = f.stat().st_ino
+    monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+    bump_docs.apply_rules([_tag_rule("a.md")], "0.2.0", check_only=False)
+    assert f.stat().st_ino == ino and f.stat().st_mode & 0o777 == 0o600
+
+
+def test_a_target_replaced_after_its_read_is_staged_under_the_read_key(tmp_path, monkeypatch):
+    """#4311 review: `set` used a fresh stat, so a target atomically replaced
+    between `read` and `set` was staged under a key `commit` never read —
+    a KeyError. The key recorded at the read is used instead."""
+    f = tmp_path / "a.md"
+    f.write_text("ghcr.io/vencil/da-tools:0.1.0\n", encoding="utf-8")
+    staged = bump_docs._Staged()
+    staged.read(f)
+    replacement = tmp_path / "a.md.new"
+    replacement.write_text("ghcr.io/vencil/da-tools:0.1.0\n", encoding="utf-8")
+    os.replace(replacement, f)  # a new inode under the same name
+    staged.set(f, "ghcr.io/vencil/da-tools:0.2.0\n")
+    staged.commit()
+    assert f.read_text(encoding="utf-8") == "ghcr.io/vencil/da-tools:0.2.0\n"

@@ -70,6 +70,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 import _lib_engine  # noqa: E402
 import check_release_immutable as immutable  # noqa: E402
+from _lib_output import exit_on_output_write_error  # noqa: E402  (#3981)
 
 CallerError, Violation = immutable.CallerError, immutable.Violation
 NoAnswer = immutable.registry.NoAnswer
@@ -232,6 +233,9 @@ def publish_assets(tag: str, title: str, files: List[str]) -> immutable.Decision
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 
+# #3981: the decision goes to $GITHUB_OUTPUT through immutable.write_output,
+# the operator entry; an unwritable one is rc 2, one line.
+@exit_on_output_write_error
 def main(argv: Optional[List[str]] = None) -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(description=i18n_text(

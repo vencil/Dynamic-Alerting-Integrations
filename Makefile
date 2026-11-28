@@ -1135,7 +1135,7 @@ audit-rules: ## 季度 rule-corpus drift 稽核（dev-rules/hooks/skills/feedbac
 
 .PHONY: lint-docs-mkdocs
 lint-docs-mkdocs: ## mkdocs 嚴格 build 檢查（catch site-root vs filesystem path 歧義）— 動 docs/**.md push 前必跑
-	@# Single source of truth：本 target + .github/workflows/docs-ci.yaml `MkDocs Build Verification`
+	@# Single source of truth：本 target + .github/workflows/docs-ci.yaml `Documentation Checks`
 	@# 都呼叫 scripts/tools/lint/mkdocs_strict_check.sh。filter 邏輯只活在那一份 script。
 	@# 為什麼必要：check_doc_links.py 用 filesystem 語意（`../../CHANGELOG.md` from
 	@# `docs/internal/foo.md` 解析到 repo-root，OK），mkdocs 用 site-root 語意（`docs/`

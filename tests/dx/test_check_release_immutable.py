@@ -613,3 +613,23 @@ def test_with_real_helm_formatting_is_not_content_but_metadata_is(monkeypatch, t
         tool.judge_chart(repo, "1.2.3", _helm_package(tmp_path, changed))
     data = _helm_package(tmp_path, plain)
     assert tool.chart_identity(tool._helm_show_chart(data)) == ("demo", "1.2.3")
+
+
+# ── $GITHUB_OUTPUT through the operator entry (#3981) ────────────────────────
+
+def test_the_decision_is_appended_to_github_output(out, monkeypatch, capsys):
+    out.write_text("earlier=1\n", encoding="utf-8")
+    assert _main_image(monkeypatch, Registry(), "--candidate-digest", CANDIDATE) == 0
+    assert out.read_text(encoding="utf-8").startswith("earlier=1\npublish=true\n")
+    capsys.readouterr()
+
+
+def test_an_unwritable_github_output_is_rc2_one_line(out, tmp_path, monkeypatch, capsys):
+    """Was a traceback ('unexpected internal error'). A directory stands in
+    for the unwritable file."""
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path))
+    with pytest.raises(SystemExit) as caught:
+        _main_image(monkeypatch, Registry(), "--candidate-digest", CANDIDATE)
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert f"cannot write {tmp_path}" in err and "Traceback" not in err

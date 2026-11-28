@@ -351,7 +351,7 @@ class TestDepDoctor:
         pkgs = mod._declared_packages()
         assert pkgs, "should parse the repo's real devcontainer.json"
         # Spot-check the ones whose absence silently skipped 28 tests (#1254).
-        assert {"hypothesis", "promql-parser", "pytest", "pyyaml"} <= pkgs
+        assert {"hypothesis", "pytest", "pyyaml"} <= pkgs
 
     def test_probe_exits_nonzero_and_names_missing_packages(self):
         """The in-container probe must FAIL loudly on an absent package."""

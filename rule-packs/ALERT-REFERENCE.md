@@ -228,7 +228,7 @@ lang: zh
 | PostgreSQLHighConnectionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical connection saturation  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:pg_connection_usage:ratio |
 | PostgreSQLHighReplicationLag | warning | 靜音 | [tier] {{ $labels.tenant }}: replication lag elevated  | 檢查複寫狀態、網路連線；檢查複寫隊列堆積情況 | tenant:pg_replication_lag:max |
 | PostgreSQLHighReplicationLagCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical replication lag  | 檢查複寫狀態、網路連線；檢查複寫隊列堆積情況 | tenant:pg_replication_lag:max |
-| PostgreSQLHighDeadlocks | warning | 靜音 | [tier] {{ $labels.tenant }}: deadlocks detected  | 分析死鎖查詢日誌、調整應用邏輯減少衝突；考慮增加鎖定超時時間 | tenant:pg_deadlocks:rate5m |
+| PostgreSQLHighDeadlocks | warning | 靜音 | [tier] {{ $labels.tenant }}: deadlocks detected  | 分析死鎖查詢日誌、調整應用邏輯減少衝突；考慮增加鎖定超時時間 | tenant:pg_deadlocks:increase5m |
 | PostgreSQLHighRollbackRatio | warning | 靜音 | [tier] {{ $labels.tenant }}: high rollback ratio  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:pg_rollback_ratio:rate5m |
 | PostgreSQLRecentRestart | info | 靜音 | PostgreSQL uptime is only {{ $value \| printf "%.0f" }}s (< 5 min) | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | pg_postmaster_start_time_seconds |
 

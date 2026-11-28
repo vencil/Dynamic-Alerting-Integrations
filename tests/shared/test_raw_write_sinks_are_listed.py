@@ -194,73 +194,14 @@ DEBT: dict[str, dict[str, int]] = {
         "on_pre_build .mkdir [work_dir]": 1,
         "on_pre_build shutil.copy2 [work_dir]": 1,
     },
-    "scripts/ops/bench_synth_tenants.py": {
-        "cmd_inject .write_text [operator]": 1,
-    },
-    "scripts/ops/file_race_report.py": {
-        "main open(w) [ci_env_file]": 1,
-    },
-    "scripts/ops/inject_default_key.py": {
-        "inject .mkdir [operator]": 1,
-        "inject .write_text [operator]": 2,
-    },
     "scripts/ops/parse_go_test_json.py": {
         "main .mkdir [operator]": 1,
         "main .write_text [operator]": 1,
-    },
-    "scripts/ops/plan_race_shards.py": {
-        "_write_github_output open(w) [ci_env_file]": 1,
-        "fetch_timings .mkdir [operator]": 1,
-        "fetch_timings .write_text [operator]": 1,
-        "main .mkdir [operator]": 1,
-        "main .write_text [operator]": 1,
-        "merge .mkdir [operator]": 1,
-        "merge .open(w) [operator]": 1,
-    },
-    "scripts/ops/workflow_path_filter.py": {
-        "cmd_assert .write_text [operator]": 1,
-        "cmd_generate .write_bytes [artifact]": 1,
-        # Where `record` and `merge` both write the trace file (#3756): the
-        # two sites that were `cmd_record`'s, moved. `merge` is a second
-        # CALLER of the same raw sinks — this ledger counts sinks, not
-        # callers, so that did not show here.
-        "_write_job_record .mkdir [artifact]": 1,
-        "_write_job_record .write_text [artifact]": 1,
-    },
-    "scripts/tools/_lib_exporter_presence.py": {
-        "main .write_text [artifact]": 1,
     },
     "scripts/tools/dx/analyze_bench_history.py": {
         "download_artifact .mkdir [work_dir]": 1,
         "download_artifact .write_text [work_dir]": 1,
         "main .mkdir [operator]": 1,
-    },
-    "scripts/tools/dx/bench_verdict.py": {
-        "main open(w) [ci_env_file]": 1,
-    },
-    "scripts/tools/dx/bump_docs.py": {
-        "_init_changelog_entry .write_text [artifact]": 2,
-        "_init_changelog_entry os.chmod [artifact]": 2,
-        "apply_count_updates .write_text [artifact]": 1,
-        "apply_count_updates os.chmod [artifact]": 1,
-        "apply_rules .write_text [artifact]": 3,
-        "apply_rules os.chmod [artifact]": 3,
-    },
-    "scripts/tools/dx/bump_playbook_versions.py": {
-        "apply_bump .write_bytes [artifact]": 1,
-    },
-    "scripts/tools/dx/check_release_immutable.py": {
-        "write_output open(w) [ci_env_file]": 1,
-    },
-    "scripts/tools/dx/gen_agent_adapters.py": {
-        "write_outputs open(w) [artifact]": 1,
-        "write_outputs os.chmod [artifact]": 1,
-        "write_outputs os.makedirs [artifact]": 1,
-    },
-    "scripts/tools/dx/generate_platform_data.py": {
-        "main .mkdir [artifact]": 2,
-        "main .write_text [artifact]": 2,
-        "main os.chmod [artifact]": 2,
     },
     "scripts/tools/dx/measure_judgement_budget.py": {
         "judge os.mkdir [work_dir]": 1,
@@ -268,35 +209,11 @@ DEBT: dict[str, dict[str, int]] = {
         "prepare_repo shutil.copytree [work_dir]": 1,
         "run_judgement os.makedirs [work_dir]": 1,
     },
-    "scripts/tools/dx/migrate_ssot_language.py": {
-        "execute_plan .write_text [artifact]": 2,
-    },
-    "scripts/tools/dx/renovate_fixup.py": {
-        "_write .write_text [artifact]": 1,
-    },
     "scripts/tools/dx/run_chaos_soak.py": {
         "trigger_reload .write_text [operator]": 1,
     },
-    "scripts/tools/dx/scaffold_lint.py": {
-        "main .mkdir [artifact]": 1,
-        "main .write_text [artifact]": 1,
-    },
     "scripts/tools/dx/suggest_related.py": {
         "main .write_text [artifact]": 1,
-    },
-    "scripts/tools/dx/sync_tool_registry.py": {
-        "sync_hub_cards .write_text [artifact]": 1,
-        "sync_tool_meta .write_text [artifact]": 1,
-    },
-    "scripts/tools/lint/check_head_blob_hygiene.py": {
-        "_fix_working_copy .write_bytes [artifact]": 1,
-    },
-    "scripts/tools/lint/fix_file_hygiene.py": {
-        "fix_file open(w) [artifact]": 1,
-    },
-    "scripts/tools/lint/validate_docs_versions.py": {
-        "_auto_fix .write_text [artifact]": 1,
-        "_auto_fix os.chmod [artifact]": 1,
     },
     "scripts/tools/ops/_gsvc_child.py": {
         "_parent_dir os.mkdir [work_dir]": 1,
@@ -306,10 +223,6 @@ DEBT: dict[str, dict[str, int]] = {
         "materialise os.mkdir [work_dir]": 1,
         "read_tree open(w) [work_dir]": 1,
         "read_tree os.chmod [work_dir]": 1,
-    },
-    "scripts/tools/ops/generate_rule_pack_split.py": {
-        "_safe_mkdir .mkdir [operator]": 1,
-        "process_rule_packs open(w) [operator]": 1,
     },
     "scripts/tools/ops/generator_service.py": {
         "Service._new_job_dir os.mkdir [work_dir]": 1,
@@ -325,16 +238,24 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 81
+_DEBT_CEILING = 27
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
     "scripts/tools/_lib_atomic_write.py": {
         "_try_atomic os.chmod [entry]": 1,
-        "_try_atomic os.fdopen [entry]": 1,
+        "_try_atomic os.fdopen [entry]": 2,  # text, and bytes as given (#3981)
         "_try_atomic os.replace [entry]": 1,
         "_try_atomic tempfile.mkstemp [entry]": 1,
-        "_write_in_place .write_text [entry]": 1,
+        # #4106: the in-place fallback's pre-check beside the target, the
+        # exclusive create of a file that is not there yet, and the rewrite
+        # of one that is (its put-back goes through the same descriptor).
+        "_create_new os.fdopen [entry]": 2,  # text, and bytes as given
+        "_preflight_beside os.fdopen [entry]": 2,  # text, and bytes as given
+        "_preflight_beside tempfile.mkstemp [entry]": 1,
+        "_rewrite_existing os.fdopen [entry]": 2,  # text, and bytes as given
+        "_write_content .write_bytes [entry]": 1,  # #3981: bytes as given
+        "_write_content .write_text [entry]": 1,
         "_write_in_place os.chmod [entry]": 1,
     },
     "scripts/tools/_lib_output.py": {
@@ -829,7 +750,7 @@ def test_the_two_lists_sum_per_site():
     assert listed(debt, registered) == {"scripts/x.py": Counter({"main .write_text": 3})}
 
 
-@pytest.mark.parametrize("rel", ["scripts/tools/dx/gen_agent_adapters.py",
+@pytest.mark.parametrize("rel", ["scripts/tools/dx/analyze_bench_history.py",
                                  "scripts/tools/lint/check_iac_helm.py",
                                  "scripts/session-guards/session-init.py"])
 def test_the_scan_reaches_each_kind_of_tree(rel):

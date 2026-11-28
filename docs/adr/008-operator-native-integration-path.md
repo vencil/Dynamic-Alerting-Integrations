@@ -65,7 +65,7 @@ kubectl create secret generic alertmanager-routing -n monitoring \
   --from-file=alertmanager.yaml=out.yaml --dry-run=client -o yaml | kubectl apply --server-side --force-conflicts -f -
 ```
 
-`out.yaml` 的 `route.routes` 依序送往：`watchdog-heartbeat`、`custom-alerts-firehose`、`synthetic-receiver`、`sentinel-sinkhole`、`ops-pager`、`tenant-team-a`。用 `amtool config routes test --config.file=out.yaml` 測去向：
+`out.yaml` 的 `route.routes` 依序送往：`watchdog-heartbeat`、`custom-alerts-firehose`、`synthetic-receiver`、`sentinel-sinkhole`、`migrated-alerts-shadow`、`ops-pager`、`tenant-team-a`。用 `amtool config routes test --config.file=out.yaml` 測去向：
 
 | 告警標籤 | 送往 |
 |---|---|

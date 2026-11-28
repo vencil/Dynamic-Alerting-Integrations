@@ -129,12 +129,14 @@ OUTPUT_ENTRY_POINTS: dict[str, tuple[str, ...]] = {
     "operator": ("_lib_output.open_operator_output", "_lib_output.write_operator_output",
                  "_lib_output.write_operator_output_or_die"),
     # A committed file a tool rewrites: replaced atomically.
-    "artifact": ("_lib_output.write_repo_artifact", "_lib_atomic_write.atomic_write_text"),
+    "artifact": ("_lib_output.write_repo_artifact", "_lib_output.write_repo_artifacts",
+                 "_lib_atomic_write.atomic_write_text"),
     # ``mkdir -p`` of an output directory, for either class.
     "directory": ("_lib_output.ensure_dir", "_lib_output.ensure_dir_or_die"),
     # Not writers: they name the flag for a write made by other code — a raw
     # sink inside ``output_write``, the artifact's pre-read check.
-    "names_flag_only": ("_lib_output.output_write", "_lib_output.check_repo_artifact"),
+    "names_flag_only": ("_lib_output.output_write", "_lib_output.check_repo_artifact",
+                        "_lib_output.check_writable_artifact"),
     # Call one of the above with the caller's ``flag``.
     "wrapper": ("_lib_io.write_onboard_hints", "_lib_yaml.write_yaml_crd"),
 }
@@ -481,7 +483,7 @@ def _repo_artifact_mode(path: str) -> int:
     return 0o755 if executable else 0o644
 
 
-def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
+def write_repo_artifact(path: Any, content: "str | bytes", *, flag: Optional[str] = None,
                         mode: Optional[int] = None, atomic_only: bool = False) -> None:
     """Atomically rewrite a committed artifact a regen tool owns.
 
@@ -491,6 +493,9 @@ def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
     before any userspace ``realpath`` runs — and an existing target must be
     a regular file. ``-``, devices, FIFOs and sockets are
     refused with :class:`OutputWriteError`.
+
+    *content* is text (written UTF-8, LF), or ``bytes`` written exactly as
+    given (#3981: a tool that rewrites a file byte for byte, CRLF and all).
 
     *mode* (#3107): the permission bits the file ends up with. Left out, it
     is :func:`_repo_artifact_mode` — a regen leaves a tracked file the way a
@@ -504,6 +509,118 @@ def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
     # Imported here: _lib_atomic_write imports this module (OutputWriteError).
     from _lib_atomic_write import atomic_write_text  # noqa: E402  (implementation)
     atomic_write_text(p, content, mode=mode, flag=flag, atomic_only=atomic_only)
+
+
+def _nearest_existing(path: str) -> str:
+    """*path*, or the closest ancestor of it that exists: a directory the
+    caller's ``ensure_dir`` will create is judged by the one it is made in."""
+    p = os.path.abspath(path)
+    while not os.path.lexists(p):
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+    return p
+
+
+def check_writable_artifact(path: Any, *, flag: Optional[str] = None,
+                            make_dirs: bool = False) -> str:
+    """:func:`check_repo_artifact`, plus what the write would find before it
+    starts (#4250): an existing file this process may not write — the same
+    ``os.access(W_OK)`` the atomic write refuses on — or, for a file not
+    there yet, a directory it cannot be made in. For a tool that will write
+    the file; one that may only read it keeps :func:`check_repo_artifact` or
+    :func:`is_special_file`. Returns ``os.fspath(path)``.
+
+    *make_dirs*: the file's directory is made with :func:`ensure_dir` first,
+    so a missing one is judged by the closest existing one it would be made
+    in — by the path as given, the way ``ensure_dir`` makes it, and never
+    through a link that points nowhere (``ensure_dir`` cannot make what a
+    dangling link names). Without it, a missing directory is refused.
+
+    It cannot see what only the write meets — a full disk, a quota, a mode
+    changed after the check — and root passes every ``os.access``."""
+    p = check_repo_artifact(path, flag=flag)
+    if not p:
+        # `realpath("")` is the working directory: an empty name would pass
+        # as "a new file in a writable directory" (CodeRabbit on #4326).
+        raise OutputWriteError(p, OSError(None, "an empty path names no file"), flag=flag)
+    real = os.path.realpath(p)
+    if os.path.lexists(real):
+        if not os.access(real, os.W_OK):
+            # No errno: the write's own would be EACCES, EPERM (immutable)
+            # or EROFS (read-only mount) — the check cannot tell which.
+            raise OutputWriteError(p, OSError(None, "not writable by this process"), flag=flag)
+        return p
+
+    def refuse(why: str) -> "OutputWriteError":
+        return OutputWriteError(p, OSError(None, why), flag=flag)
+
+    parent = os.path.dirname(real)
+    if os.path.isdir(parent):
+        where = parent
+    elif not make_dirs:
+        raise refuse(f"its directory {parent} does not exist")
+    elif os.path.islink(p):
+        raise refuse(f"a link into {parent}, which does not exist")
+    else:
+        where = _nearest_existing(os.path.dirname(os.path.abspath(p)) or ".")
+        if not os.path.isdir(where):
+            raise refuse(f"{where} is no directory a new one can be made in")
+    if not os.access(where, os.W_OK | os.X_OK):
+        raise refuse(f"{where} takes no new file from this process")
+    return p
+
+
+class OutputBatchStopped(OutputWriteError):
+    """:func:`write_repo_artifacts` stopped on a write that failed after the
+    check passed — a full disk, a quota, a mode changed in between. It
+    carries the failed write's error (:attr:`failed`: same path, errno,
+    line — a full disk keeps its "free space and re-run" — and rc 2), and
+    its line also names :attr:`written`: the files already rewritten, which
+    are not rolled back."""
+
+    def __init__(self, failed: OutputWriteError, written: "list[str]") -> None:
+        super().__init__(failed.path, failed.cause, flag=failed.flag, action=failed.action)
+        self.failed = failed
+        self.written = list(written)
+        self.previous_kept = getattr(failed, "previous_kept", None)
+
+    def __str__(self) -> str:
+        line = str(self.failed)
+        if self.written:
+            line += f"; already written, not rolled back: {', '.join(self.written)}"
+        return line
+
+
+def write_repo_artifacts(items: Any, *, flag: Optional[str] = None,
+                         make_dirs: bool = False) -> "list[str]":
+    """Rewrite several committed artifacts, as :func:`write_repo_artifact`
+    each — but only once every one has passed :func:`check_writable_artifact`
+    (#4250): a read-only file, or a directory that takes no new file, among
+    the later ones no longer leaves the earlier ones rewritten.
+
+    *items*: ``(path, content)`` or ``(path, content, mode)``; pass only the
+    files that will change, so an unchanged read-only one is not refused.
+    *make_dirs*: :func:`ensure_dir` each file's directory before its write.
+    Returns the paths written, in order. A write that still fails raises
+    :class:`OutputBatchStopped` naming the ones before it (or, when none was
+    written, the plain :class:`OutputWriteError`)."""
+    batch = [(it[0], it[1], it[2] if len(it) > 2 else None) for it in items]
+    for path, _content, _mode in batch:
+        check_writable_artifact(path, flag=flag, make_dirs=make_dirs)
+    written: "list[str]" = []
+    for path, content, mode in batch:
+        try:
+            if make_dirs:
+                ensure_dir(os.path.dirname(os.fspath(path)) or ".", flag=flag)
+            write_repo_artifact(path, content, flag=flag, mode=mode)
+        except OutputWriteError as exc:
+            if written:
+                raise OutputBatchStopped(exc, written) from exc
+            raise
+        written.append(os.fspath(path))
+    return written
 
 
 def ensure_dir(path: Any, *, flag: Optional[str] = None, mode: int = 0o777) -> None:

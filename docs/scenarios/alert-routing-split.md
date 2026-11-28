@@ -49,7 +49,7 @@ Dual-Perspective Annotation 把兩種措辭都寫在 Prometheus rule 的 annotat
 
 ### 步驟 1：確認 Rule Pack 已有 platform_summary
 
-Rule Pack 內建的閾值告警都帶 `platform_summary`。⚠️ `rule-pack-custom-alerts.yaml` 裡由 `_custom_alerts` 編譯出的 `Custom_*` 告警不帶（它們也有 runbook_url／owner／tier annotation，不能拿這幾個分辨），所以下面的範例在 `range .Alerts` 裡用 `{{ or .Annotations.platform_summary_zh .Annotations.platform_summary .Annotations.summary_zh .Annotations.summary }}` 補上（依序取第一個有值的），標題也不依賴它。租戶自助告警（`component="custom"`）本身到不了 NOC 的範例：它們先被另一條路由接走，不會進 `_routing_enforced` 的 route。可以用以下命令確認：
+⚠️ Rule Pack 的內建告警不是每一條都帶 `platform_summary`，例如 `MariaDBDown`、`TenantExporterAbsent`、`ClickHouseHighFailedQueryRate` 就沒有。所以下面的範例在 `range .Alerts` 裡用 `{{ or .Annotations.platform_summary_zh .Annotations.platform_summary .Annotations.summary_zh .Annotations.summary }}` 補上（依序取第一個有值的），標題也不依賴它。`rule-pack-custom-alerts.yaml` 裡由 `_custom_alerts` 編譯出的 `Custom_*` 告警同樣不帶（它們也有 runbook_url／owner／tier annotation，不能拿這幾個分辨），但這個補法不是為了它們：租戶自助告警（`component="custom"`）先被另一條路由接走，不會進 `_routing_enforced` 的 route，到不了 NOC 的範例。下面的命令列出每個規則包裡 `platform_summary` 出現的行數（`0` 表示整包都沒有）：
 
 ```bash
 grep -c platform_summary rule-packs/*.yaml

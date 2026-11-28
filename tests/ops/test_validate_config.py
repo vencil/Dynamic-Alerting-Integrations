@@ -265,7 +265,7 @@ class TestCustomRulesCheck:
         rp.mkdir()
         (rp / "rule-pack-x.yaml").write_text(
             "groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up{tenant=\"t\"} == 0\n"
-            "    labels: {tenant: t, severity: warning, owner: o, expiry: '2030-01-01'}\n",
+            "    labels: {tenant: t, severity: warning}\n    annotations: {owner: o, expiry: '2030-01-01'}\n",
             encoding="utf-8")
         assert vc.check_custom_rules(str(rp))["status"] == vc.PASS
         (rp / "extra.yaml").write_text("x: 1\n", encoding="utf-8")
@@ -3483,7 +3483,7 @@ def test_rule_packs_lint_refusal_is_a_caller_error_row(tmp_path, _flat_conf_d, s
     good.mkdir()
     (good / "rule-pack-x.yaml").write_text(
         "groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up{tenant=\"t\"} == 0\n"
-        "    labels: {tenant: t, severity: warning, owner: o, expiry: '2030-01-01'}\n",
+        "    labels: {tenant: t, severity: warning}\n    annotations: {owner: o, expiry: '2030-01-01'}\n",
         encoding="utf-8")
     control = _run_vc("--config-dir", str(_flat_conf_d), "--rule-packs", str(good), "--json")
     assert control.returncode != EXIT_CALLER_ERROR, control.stdout[-2000:] + control.stderr
@@ -3538,7 +3538,7 @@ def test_a_lint_crash_is_not_blamed_on_rule_packs(monkeypatch, tmp_path):
 # ============================================================
 
 _LINT_RULE_PACK = ("groups:\n- name: g\n  rules:\n  - alert: A\n    expr: predict_linear(up{tenant=\"t\"}[5m], 60) > 0\n"
-                   "    labels: {tenant: t, severity: warning, owner: o, expiry: '2030-01-01'}\n")
+                   "    labels: {tenant: t, severity: warning}\n    annotations: {owner: o, expiry: '2030-01-01'}\n")
 
 
 @pytest.mark.usefixtures("da_read_env")

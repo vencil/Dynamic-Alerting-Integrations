@@ -264,3 +264,45 @@ def test_benchmark_sh_rejects_tenants_that_are_not_a_plain_positive_number(
                        env=env, timeout=60)
     assert r.returncode == 1
     assert "--tenants must be" in r.stderr
+
+
+@_posix
+def test_an_unwritable_state_file_is_rc2_one_line_and_nothing_is_injected(cluster, tmp_path):
+    """#3981: the state file is written before the patch, so a refused one
+    stops the run before any tenant is injected (a cleanup trap would not
+    know what to remove). Was a traceback."""
+    cluster.set(**{"_defaults.yaml": "defaults: {}"})
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+    r = cluster.run("inject", "--tenants", "2", "--state-file", str(blocker / "keys"))
+    assert r.returncode == 2, r.stderr
+    assert "check the value given to --state-file" in r.stderr
+    assert "Traceback" not in r.stderr
+    assert sorted(cluster.data()) == ["_defaults.yaml"], "tenants were injected"
+
+
+@_posix
+def test_a_state_file_on_stdout_is_refused_and_nothing_is_injected(cluster, tmp_path):
+    """#3981: `-` is stdout to the operator entry; `cleanup` could never read
+    the keys back, so it is refused before the patch."""
+    cluster.set(**{"_defaults.yaml": "defaults: {}"})
+    r = cluster.run("inject", "--tenants", "2", "--state-file", "-")
+    assert r.returncode == 2, r.stderr
+    assert "--state-file" in r.stderr and "standard output" in r.stderr
+    assert sorted(cluster.data()) == ["_defaults.yaml"], "tenants were injected"
+    assert "synth-" not in r.stdout
+
+
+@_posix
+def test_a_refused_state_file_with_control_characters_is_one_escaped_line(cluster, tmp_path):
+    """#3981 (review): the refusal goes through the shared message, which
+    escapes control characters (#1538) — a newline in the path does not split
+    the line, and no raw ESC reaches the terminal."""
+    cluster.set(**{"_defaults.yaml": "defaults: {}"})
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+    r = cluster.run("inject", "--tenants", "1", "--state-file", str(blocker / "a\nb\x1b[31m"))
+    assert r.returncode == 2, r.stderr
+    lines = [line for line in r.stderr.splitlines() if line.strip()]
+    assert len(lines) == 1, r.stderr
+    assert "\x1b" not in r.stderr

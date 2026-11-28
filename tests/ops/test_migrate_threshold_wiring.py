@@ -54,7 +54,7 @@ def test_split_threshold_key_matches_the_exporter(key, component, metric):
 
 def _process(expr, severity="warning", prefix="custom_"):
     rule = {"alert": "T", "expr": expr, "labels": {"severity": severity}}
-    return mr.process_rule(rule, prefix=prefix, dictionary={}, use_ast=True)
+    return mr.process_rule(rule, prefix=prefix, dictionary={})
 
 
 def _threshold_expr(result):
@@ -142,7 +142,7 @@ def test_defaults_snippet_never_carries_a_critical_or_dimensional_key():
         {"alert": "W", "expr": 'mysql_x{queue="tasks"} > 5', "labels": {"severity": "warning"}},
         {"alert": "C", "expr": 'mysql_x{queue="tasks"} > 9', "labels": {"severity": "critical"}},
     ]
-    results = [mr.process_rule(r, prefix="custom_", dictionary={}, use_ast=True) for r in rules]
+    results = [mr.process_rule(r, prefix="custom_", dictionary={}) for r in rules]
     assert any(r.dim_hints for r in results)
     defaults = yaml.safe_load(mr.render_defaults_snippet(results))["defaults"]
     assert defaults == {"custom_mysql_x": 5}
@@ -189,7 +189,7 @@ def test_generated_rules_fire_end_to_end_under_promtool(tmp_path):
                  "exp_alerts": [{"exp_labels": {
                      "tenant": "t1", "severity": "warning", "source": "legacy",
                      "migration_status": "shadow", "maintenance": "mute", "metric_group": "custom_mysql_global_status_threads_connected"},
-                     # 原規則的 {{ $labels.instance }} 在 by(tenant) 聚合後已不存在，
+                     # 原規則的 {{ $labels.instance }} 在 by(tenant, da_cluster) 聚合後已不存在，
                      # 改讀 tenant（issue 1818，見 test_migrate_label_refs_and_validate_pairs）
                      "exp_annotations": {"summary": "Too many connections on t1"
                                                     "（原為 instance，已依租戶聚合）"}}]},

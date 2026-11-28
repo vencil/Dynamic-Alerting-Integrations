@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-03-13
-updated_at: 2026-11-21
+updated_at: 2026-11-25
 ---
 # ADR-001: 嚴重度 Dedup 採用 Inhibit 規則
 
@@ -24,6 +24,8 @@ updated_at: 2026-11-21
 2026-11-14 修訂：抑制規則由「每個租戶一條」改為「所有租戶共用一條、關掉去重的租戶列在排除清單」；dedup 規則不可再寫在 base 設定裡（[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)）。
 
 2026-11-21 修訂：去重改為同一個叢集內才成立——一個租戶跑在多個叢集時，一個叢集的 critical 不再抑制另一個叢集的 warning；規則由一條變兩條（[#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)）。
+
+2026-11-25 修訂：同一個 `metric_group` 的 warning 與 critical 必須有相同的叢集範圍，CI 會檢查。
 
 ## 名詞
 
@@ -138,7 +140,8 @@ inhibit_rules:
 **要承擔的**
 
 - Alertmanager 的設定變多，而且要和告警規則的標籤對齊：成對的告警缺 `metric_group`，或兩邊的值不同，抑制就不成立，會收到兩則通知。CI 會檢查同名成對的告警（`X` 與 `XCritical`）帶相同的 `metric_group`（`check_metric_group_pairs.py`）；名稱不成對的告警不在這個檢查的範圍內。
-- Kubernetes Rule Pack 的 4 對容器告警（`PodContainerHighCPU`、`PodContainerHighMemory`、`PodContainerCPUThrottled`、`ContainerOOMKilled` 與各自的 `…Critical`）彙總到 `{tenant, version}`（OOM 只到 `{tenant}`），每對帶一個固定的 `metric_group`。代價：同一個租戶同時跑兩個 `version` 時，一個版本的 critical 會抑制另一個版本的 warning；把 `version` 加進 `equal` 就得同時加上 `version=~".+"` 的存在性條件（`equal` 標籤至少一側要有存在性條件的檢查），而那會讓所有不帶 `version` 的 Rule Pack 告警退出去重，所以接受這個殘餘（[#1199](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1199)）。
+- 成對的告警還要有相同的叢集範圍：同一個 `metric_group` 裡的 warning 與 critical，規則算出來的結果都帶 `da_cluster`，或都不帶。一條逐叢集、另一條講整個租戶時，在序列帶 `da_cluster` 的 Prometheus 上，上面兩條抑制規則都配不成對，critical 觸發時 warning 照樣通知。CI 對規則包裡每個 `metric_group` 的 warning 與 critical 檢查這一點（同一支 `check_metric_group_pairs.py`，叢集範圍的判定見 [ADR-006](./006-tenant-mapping-topologies.md) 第 5 點）。兩條都不帶是允許的：同一台 Prometheus 評估時，兩則告警送出去帶的是同一個 `da_cluster`（或都沒有），照樣成對。告警規則自己的 `labels:` 寫了 `da_cluster` 時，規則會蓋掉式子算出來的值，這個檢查直接判為無法判定（失敗）。有三種寫法檢查會放行、實際卻配不成對：用 `label_replace` 把 `da_cluster` 清成空字串、`absent()` 的選擇器裡寫了 `da_cluster="…"`、以及不在式子最外層而兩側範圍不同的 `or`；清單在 `check_metric_group_pairs.py` 開頭的說明裡。租戶自助告警與 `da-tools migrate` 產生的規則不在這個檢查讀的檔案裡，各由產生它們的程式的測試守住同一件事。
+- Kubernetes Rule Pack 的 4 對容器告警（`PodContainerHighCPU`、`PodContainerHighMemory`、`PodContainerCPUThrottled`、`ContainerOOMKilled` 與各自的 `…Critical`）彙總到 `{tenant, version, da_cluster}`（OOM 只到 `{tenant, da_cluster}`），每對帶一個固定的 `metric_group`。代價：同一個租戶同時跑兩個 `version` 時，一個版本的 critical 會抑制另一個版本的 warning；把 `version` 加進 `equal` 就得同時加上 `version=~".+"` 的存在性條件（`equal` 標籤至少一側要有存在性條件的檢查），而那會讓所有不帶 `version` 的 Rule Pack 告警退出去重，所以接受這個殘餘（[#1199](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1199)）。
 - 沒有 `metric_group` 標籤的告警不參與去重：抑制規則的來源與目標都要求 `metric_group=~".+"`；沒有 `tenant` 標籤的告警同理。
 - 沒設 `external_labels.da_cluster` 的 Prometheus，它的告警維持整個租戶配對：兩個叢集都沒設時，一個叢集的 critical 仍會抑制另一個叢集的 warning。一個租戶跑在多個叢集時，每個 Prometheus 都要設這個標籤。
 - 規則寫的是「誰不參與」：告警帶 `tenant`、但那個租戶不在 conf.d 裡（例如還沒納管），也會被去重。

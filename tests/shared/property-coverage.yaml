@@ -203,6 +203,9 @@ modules:
       exit_on_output_write_error: "CLI-entry decorator (stderr + sys.exit on OutputWriteError, #1789); same rationale as exit_on_yaml_file_error, no value computation to fuzz"
       is_special_file: "#3615 → #1560 ⑤-a stat predicate (I/O); pinned through generate-routes' output clashes (/dev/null collides with nothing) in tests/ops"
       same_file: "#3615 → #1560 ⑤-a realpath + samefile judgement (I/O); symlink and hard-link cases pinned by generate-routes' output-clash tests and tests/ops/test_migrate_credentials.py::test_a_manifest_that_is_a_confd_file_is_refused"
+      _nearest_existing: "#4250 lexists walk up to the closest existing ancestor (I/O); pinned by test_a_directory_still_to_be_made_is_judged_by_the_one_it_is_made_in in tests/shared/test_multi_target_write_judges_every_target_first.py"
+      check_writable_artifact: "#4250 check_repo_artifact + os.access(W_OK) on the file or W_OK|X_OK on the directory it would be made in (I/O, uid-bound); every case pinned by example in tests/shared/test_multi_target_write_judges_every_target_first.py"
+      write_repo_artifacts: "#4250 judge the whole batch, then write_repo_artifact each (side-effecting I/O); order, OutputBatchStopped and modes pinned in tests/shared/test_multi_target_write_judges_every_target_first.py"
 
   scripts/tools/_lib_yaml_strict.py:
     # #4064: moved from _lib_io (re-exported there) so _lib_input reads every

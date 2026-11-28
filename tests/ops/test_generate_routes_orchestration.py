@@ -1066,8 +1066,9 @@ class TestAssembleConfigmap:
         # ADR-025 §1 (#838) + S7/S8 (#741) + ADR-025 synthetic-probe + #1095: four
         # platform-static routes are always injected at the FRONT — Watchdog
         # liveness (0), Custom Alerts isolation (1), synthetic-probe sinkhole (2),
-        # sentinel sinkhole (3) — all continue:false; the tenant route follows.
-        assert len(routes_out) == 5
+        # sentinel sinkhole (3), and (#4277) the migrated-alerts shadow (4) —
+        # all continue:false; the tenant route follows.
+        assert len(routes_out) == 6
         assert routes_out[0]["matchers"] == ['alertname="Watchdog"']
         assert routes_out[0]["receiver"] == "watchdog-heartbeat"
         assert routes_out[0]["continue"] is False
@@ -1080,7 +1081,10 @@ class TestAssembleConfigmap:
         assert routes_out[3]["matchers"] == ['component="sentinel"']
         assert routes_out[3]["receiver"] == "sentinel-sinkhole"
         assert routes_out[3]["continue"] is False
-        assert routes_out[4]["receiver"] == "tenant-db-a"
+        assert routes_out[4]["matchers"] == ['component="migrated"']
+        assert routes_out[4]["receiver"] == "migrated-alerts-shadow"
+        assert routes_out[4]["continue"] is False
+        assert routes_out[5]["receiver"] == "tenant-db-a"
         # Base receiver + tenant receiver + injected firehose + watchdog +
         # synthetic + sentinel sink
         names = {r["name"] for r in am_config["receivers"]}
@@ -1199,7 +1203,8 @@ class TestCustomAlertIsolationInjection:
         assert custom_idx == [1], routes    # custom pinned to index 1
         assert probe_idx == [2], routes     # synthetic-probe pinned to index 2
         assert sentinel_idx == [3], routes  # sentinel sink pinned to index 3
-        assert routes[4]["receiver"] == "platform-enforced"
+        assert routes[4]["receiver"] == "migrated-alerts-shadow"  # #4277
+        assert routes[5]["receiver"] == "platform-enforced"
 
     def test_apply_path_prepends_and_preserves_silent_inhibit(self):
         # --apply replaces route.routes; Watchdog must lead (index 0), custom

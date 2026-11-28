@@ -820,7 +820,8 @@ def build_trace_tree(parsed: dict, base: dict | None = None,
     try:
         cm_yaml = assemble_configmap(
             base if base is not None else load_base_config(None),
-            routes, receivers, inhibit_rules)
+            routes, receivers, inhibit_rules,
+            migrated_active=parsed.get("migrated_active") or ())
     except (KeyError, TypeError) as exc:
         # It crashes rather than refuses on a malformed --base-config (a
         # receiver without `name`, `receivers` not a list). Only this call:

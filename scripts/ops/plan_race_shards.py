@@ -58,6 +58,8 @@ from pathlib import Path
 # #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
+from _lib_output import (  # noqa: E402  (#3981: the two entries)
+    ensure_dir, exit_on_output_write_error, write_operator_output, write_repo_artifact)
 
 # Explicit, so `python3 -I` (which drops the script's own directory from
 # sys.path) still finds the sibling parser whose timeout regex, -timeout value
@@ -302,12 +304,16 @@ def _gh_json(runner, path: str):
 
 def fetch_timings(repo: str, workflow: str, branch: str, out_dir: Path,
                   modules: list[str], runner=_run) -> dict[str, str]:
-    """Write `race-timings-<module>.json` for each module that has one. Never raises.
+    """Write `race-timings-<module>.json` for each module that has one.
+
+    gh and artifact failures are warnings, never exceptions; only an unusable
+    *out_dir* (or a timings file in it that cannot be written) raises, as
+    OutputWriteError naming --out-dir (#3981).
 
     Returns {module: source run id} for what was fetched. A module without a
     usable artifact is simply absent; `plan` then round-robins it.
     """
-    out_dir.mkdir(parents=True, exist_ok=True)
+    ensure_dir(out_dir, flag="--out-dir")
     found: dict[str, str] = {}
     try:
         runs = _gh_json(runner, f"repos/{repo}/actions/workflows/{workflow}/runs"
@@ -347,9 +353,10 @@ def fetch_timings(repo: str, workflow: str, branch: str, out_dir: Path,
                     zipfile.BadZipFile, subprocess.SubprocessError) as exc:
                 warn(f"timings artifact of run {run_id} for {module} unusable ({exc})")
                 continue
-            (out_dir / TIMINGS_FILE_TMPL.format(module=module)).write_text(
-                json.dumps(timings, indent=2, sort_keys=True) + "\n", encoding="utf-8",
-                newline="\n")
+            # `plan --timings-dir` loads these whole: the artifact entry.
+            write_repo_artifact(out_dir / TIMINGS_FILE_TMPL.format(module=module),
+                                json.dumps(timings, indent=2, sort_keys=True) + "\n",
+                                flag="--out-dir")
             found[module] = str(run_id)
     for m in modules:
         if m not in found:
@@ -401,24 +408,27 @@ def merge(module: str, shard_ids: list[str], raw_dir: Path, output: Path) -> dic
     """
     missing: list[str] = []
     rcs: list[int] = []
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("wb") as out:
-        for sid in shard_ids:
-            raw = raw_dir / RAW_FILE_TMPL.format(module=module, shard=sid)
-            rc_path = raw_dir / RC_FILE_TMPL.format(module=module, shard=sid)
-            try:
-                rc = int(rc_path.read_text(encoding="utf-8").strip())
-            except (OSError, ValueError):
-                missing.append(sid)
-                continue
-            if not raw.is_file():
-                missing.append(sid)
-                continue
-            rcs.append(rc)
-            data = raw.read_bytes()
-            out.write(data)
-            if data and not data.endswith(b"\n"):
-                out.write(b"\n")
+    parts: list[bytes] = []
+    for sid in shard_ids:
+        raw = raw_dir / RAW_FILE_TMPL.format(module=module, shard=sid)
+        rc_path = raw_dir / RC_FILE_TMPL.format(module=module, shard=sid)
+        try:
+            rc = int(rc_path.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            missing.append(sid)
+            continue
+        if not raw.is_file():
+            missing.append(sid)
+            continue
+        rcs.append(rc)
+        data = raw.read_bytes()
+        parts.append(data)
+        if data and not data.endswith(b"\n"):
+            parts.append(b"\n")
+    # #3981: `timings --input` (this tool) and `parse_go_test_json --input`
+    # load the merged stream whole: the artifact entry, the bytes as they are.
+    ensure_dir(output.parent, flag="--output")
+    write_repo_artifact(output, b"".join(parts), flag="--output")
     rc = next((r for r in rcs if r != 0), 0)
     complete = bool(shard_ids) and not missing
     if missing:
@@ -436,11 +446,12 @@ def _write_github_output(pairs: dict[str, str]) -> None:
     path = os.environ.get("GITHUB_OUTPUT")
     if not path:
         return
-    with open(path, "a", encoding="utf-8", newline="\n") as fh:
-        for k, v in pairs.items():
-            fh.write(f"{k}={v}\n")
+    # The runner's file, named by $GITHUB_OUTPUT, not by a flag (flag=None).
+    write_operator_output(path, "".join(f"{k}={v}\n" for k, v in pairs.items()),
+                          flag=None, append=True)
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -496,9 +507,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "timings":
         with args.input.open("r", encoding="utf-8", errors="replace") as fh:
             timings = stream_timings(fh)
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(timings, indent=2, sort_keys=True) + "\n",
-                               encoding="utf-8", newline="\n")
+        ensure_dir(args.output.parent, flag="--output")
+        # `plan --timings-dir` loads this whole: the artifact entry.
+        write_repo_artifact(args.output, json.dumps(timings, indent=2, sort_keys=True)
+                            + "\n", flag="--output")
         print(f"[plan_race_shards] timings: {len(timings)} package(s)")
         return 0
     return 2

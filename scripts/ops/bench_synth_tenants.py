@@ -31,6 +31,8 @@ _TOOLS = _THIS_DIR.parent / "tools"
 sys.path.insert(0, str(_TOOLS))
 sys.path.insert(0, str(_TOOLS / "ops"))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry — `cleanup` reads it back)
+    OutputWriteError, exit_on_output_write_error, write_repo_artifact)
 import patch_config  # noqa: E402
 from _lib_kubectl import KubectlError, kubectl_run  # noqa: E402  (#3539)
 
@@ -138,7 +140,7 @@ def cmd_inject(n: int, state_file: Path) -> int:
         return EXIT_VIOLATION
     # The state file is written BEFORE the patch, so a cleanup trap still
     # knows which keys to remove if the patch lands and this process dies.
-    state_file.write_text("\n".join(keys) + "\n", encoding="utf-8", newline="\n")
+    write_repo_artifact(state_file, "\n".join(keys) + "\n", flag="--state-file")
     apply_merge_patch({"data": carriers})
     print(f"Injected {len(keys)} synthetic tenants, one key each "
           f"({keys[0]} .. {keys[-1]})")
@@ -161,6 +163,7 @@ def cmd_cleanup(state_file: Path) -> int:
     return EXIT_OK
 
 
+@exit_on_output_write_error
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Inject / remove benchmark synthetic tenants in "
@@ -182,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
                 return EXIT_CALLER_ERROR
             return cmd_inject(args.tenants, args.state_file)
         return cmd_cleanup(args.state_file)
+    except OutputWriteError:
+        raise  # the decorator's one line, control characters escaped (#1538)
     except (RuntimeError, OSError, ValueError, KubectlError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR

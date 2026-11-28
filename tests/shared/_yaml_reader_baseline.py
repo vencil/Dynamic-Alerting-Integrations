@@ -138,9 +138,6 @@ ALLOWED = {
     ('scripts/tools/lint/check_exporter_queries.py', 'load_queries'):
         (1, "rule-packs/exporters/*.yaml, query-exporter's own config (#3833): its only "
             "consumer is query-exporter, a Python program — no Go reader to ask"),
-    ('scripts/tools/lint/check_cluster_identity.py', 'load_baseline'):
-        (1, "tests/rulepacks/cluster_identity_baseline.yaml, this lint's own list of findings "
-            "(#4097); the rule packs go through da-read prometheus-rules and promql-shape"),
     ('scripts/tools/lint/check_vmalert_coverage.py', '_load_yaml'):
         (1, "promtool unit-test fixtures under tests/rulepacks (only their alert_rule_test "
             "alertnames are taken, to count coverage; promtool reads them in CI and no da-read "

@@ -319,7 +319,7 @@ jobs:
           # #3833: rule packs read only what their query-exporter config serves.
           pre-commit run exporter-queries-check --all-files
           # #4097: rules keep da_cluster wherever they keep an identity label
-          # (two-way ratchet on tests/rulepacks/cluster_identity_baseline.yaml).
+          # (zero findings; a deliberate tenant-wide read is declared above its rule).
           pre-commit run cluster-identity-check --all-files
           # #978: same fixed surface and cost as vmalert-coverage-check above.
           pre-commit run percent-render-pinned-check --all-files
@@ -1418,7 +1418,7 @@ jobs:
         # already installs it, but this job did not, and the wiring assertions live
         # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
         # rather than a silent skip.
-        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pymdown-extensions mkdocs -c requirements/ci-constraints.txt
+        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pymdown-extensions mkdocs -c requirements/ci-constraints.txt
 
       # There is deliberately NO separate collect-only step before the real
       # run: it collected the same tree a second time (~30s of the job's

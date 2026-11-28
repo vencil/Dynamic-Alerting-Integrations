@@ -7,6 +7,7 @@
     "_namespaces",
     "_profile",
     "_routing",
+    "_routing_migrated",
     "_routing_profile",
     "_severity_dedup",
     "_silent_mode"

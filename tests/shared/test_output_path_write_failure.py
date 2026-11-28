@@ -585,7 +585,7 @@ def _one_rule_pack_dir(tmp: Path) -> str:
 def _git_repo_with_one_commit(tmp: Path) -> Path:
     repo = tmp / "repo"
     repo.mkdir()
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+    env = {**_tool_env(), "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
            "GIT_CONFIG_NOSYSTEM": "1"}
     for argv in (["git", "init", "-q"],
@@ -753,6 +753,16 @@ ROWS: list[Row] = [
     # different errno, and is kept because an APPEND to an existing path is
     # this tool's normal case (the CI runner's $GITHUB_STEP_SUMMARY already
     # exists) — the shape that most resembles the real one.
+    # #3981: $GITHUB_OUTPUT, appended to; the step passes it as the flag.
+    R("dx/bench_verdict.py", "--github-output", "file", "operator",
+      lambda c, out: ["verdict", "--benchstat",
+                      str(REPO_ROOT / "tests" / "dx" / "fixtures" / "bench_verdict"
+                          / "deterministic.txt"),
+                      "--github-output", str(out)],
+      reach="a benchstat fixture in tests/dx/fixtures/bench_verdict; without "
+            "--ledger-base/--ledger-head no git is run",
+      out_name="gh_output",
+      shapes=("missing_parent", "parent_is_file", "target_is_dir")),
     R("dx/paired_trend_watch.py", "--summary-file", "file", "operator",
       lambda c, out: ["--dataset", str(PAIRED_DATASET), "--summary-file", str(out)],
       reach="the frozen six-night archival dataset in the repo; --dataset is "
@@ -1134,6 +1144,53 @@ ROWS: list[Row] = [
       shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="da-rule-pack-mariadb.yaml"),
     # ── scripts/ops (outside scripts/tools; `tool` is relative to it) ──────
+    # #3981: the nightly race job's fragment and timings files.
+    # Artifact: `plan --timings-dir` loads the file whole (the reader below,
+    # run from the repo root so `go list` lists tenant-api's packages and the
+    # file is read rather than skipped by the single-leg fallback).
+    R("../ops/plan_race_shards.py", "--output", "file", "artifact",
+      lambda c, out: ["timings", "--input", str(_empty_file(c.tmp)), "--output", str(out)],
+      reach="`timings` over an empty `go test -json` stream; no gh, no network",
+      out_name="race-timings-tenant-api.json",
+      cwd=lambda c: REPO_ROOT,
+      readers=lambda c, out: [["plan", "--timings-dir", str(out.parent)]],
+      shapes=("parent_is_file", "target_is_dir")),
+    # #3981, twenty-first batch: `timings --input` (this tool) loads the
+    # merged stream whole, as `parse_go_test_json --input` does.
+    R("../ops/plan_race_shards.py", "--output", "file", "artifact",
+      lambda c, out: ["merge", "--module", "m", "--shards", "0",
+                      "--raw-dir", str(_race_shard_dir(c.tmp)), "--output", str(out)],
+      reach="`merge` over one complete shard (its stream and its rc file); offline",
+      out_name="race-raw-m.jsonl", variant="merge",
+      readers=lambda c, out: [["timings", "--input", str(out),
+                               "--output", str(out.parent / "timings-read.json")]],
+      shapes=("parent_is_file", "target_is_dir")),
+    # A conf.d file: a repo artifact (#3535); the rerun reads it back.
+    R("../ops/inject_default_key.py", "PATH", "file", "artifact",
+      lambda c, out: [str(out), "bench_trigger", "50"],
+      reach="creates `_defaults.yaml` with the one key; offline",
+      out_name="_defaults.yaml",
+      shapes=("parent_is_file", "target_is_dir")),
+    # #3981, twenty-second batch: `merge` loads each leg's `--out` whole.
+    R("../ops/workflow_path_filter.py", "--out", "file", "artifact",
+      lambda c, out: ["--root", str(_traced_repo(c.tmp)), "assert", "--workflow",
+                      "w.yaml", "--job", "zjob", "--state", str(c.tmp / "wpf-state.json"),
+                      "--out", str(out)],
+      reach="`assert` over a git checkout with one traced workflow and a finished "
+            "atime state naming one covered file; offline",
+      out_name="trace.json",
+      readers=lambda c, out: [["--root", str(_traced_repo(c.tmp)), "merge",
+                               "--workflow", "w.yaml", "--job", "zjob", str(out)]],
+      shapes=("parent_is_file", "target_is_dir")),
+    # Artifact: `cleanup` reads the keys back to know what to remove.
+    R("../ops/bench_synth_tenants.py", "--state-file", "file", "artifact",
+      lambda c, out: ["inject", "--tenants", "1", "--state-file", str(out)],
+      reach="test_bench_synth_tenants' stateful stand-in `kubectl` on PATH, "
+            "holding a ConfigMap with no synth tenant",
+      out_name="keys",
+      env=lambda c: _bench_kubectl_env(c.tmp),
+      readers=lambda c, out: [["cleanup", "--state-file", str(out)]],
+      shapes=("missing_parent", "parent_is_file", "target_is_dir")),
     R("../ops/configmap_assemble.py", "--output", "file", "artifact",
       lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output", str(out)],
       reach="in-repo try-local seed conf.d through a stand-in `kubectl` that "
@@ -1189,6 +1246,91 @@ def _fake_kubectl_env(tmp: Path) -> dict[str, str]:
     return {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
 
 
+_TRACED_WORKFLOW = """\
+name: w
+on:
+  pull_request:
+    paths:
+      - "zlib/**"
+      # BEGIN GENERATED path-trace (do not edit)
+      # END GENERATED path-trace
+jobs:
+  zjob:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      # BEGIN GENERATED path-trace-env job=zjob
+      # END GENERATED path-trace-env
+      - run: "true"
+      # BEGIN GENERATED path-trace-assert job=zjob
+      # END GENERATED path-trace-assert
+"""
+
+
+def _traced_repo(tmp: Path) -> Path:
+    """A git checkout with one traced workflow (`w.yaml`, job `zjob`) and
+    one tracked file it covers, and beside it `wpf-state.json`: a finished
+    atime state naming that file as read — what `assert` needs, offline.
+    Made once per directory; the rows' argv and readers call it again."""
+    repo = tmp / "wpf-repo"
+    if not repo.is_dir():
+        (repo / ".github" / "workflows").mkdir(parents=True)
+        (repo / ".github" / "workflows" / "w.yaml").write_text(_TRACED_WORKFLOW,
+                                                               encoding="utf-8")
+        (repo / "zlib").mkdir()
+        (repo / "zlib" / "a.txt").write_text("a\n", encoding="utf-8")
+        for argv in (["init", "-q"], ["add", "-A"]):
+            subprocess.run(["git", *argv], cwd=repo, check=True, capture_output=True,
+                           timeout=TIMEOUT_S, stdin=subprocess.DEVNULL, env=_tool_env())
+        (tmp / "wpf-state.json").write_text(json.dumps({
+            "root": os.path.realpath(repo),
+            "segments": [{"files": ["zlib/a.txt"], "replaced": [], "gone": []}],
+            "files": {"zlib/a.txt": {}}, "finished": {"canary": "ok"}}), encoding="utf-8")
+    return repo
+
+
+def _race_shard_dir(tmp: Path) -> Path:
+    """A raw directory holding one complete shard `0` of module `m`: its
+    `go test -json` stream and its rc file."""
+    raw = tmp / "race-raw"
+    raw.mkdir(exist_ok=True)
+    (raw / "race-raw-m-0.jsonl").write_text(
+        '{"Action":"pass","Package":"p","Test":"T","Elapsed":0.1}\n', encoding="utf-8")
+    (raw / "race-rc-m-0").write_text("0\n", encoding="utf-8")
+    return raw
+
+
+def _bench_kubectl_env(tmp: Path) -> dict[str, str]:
+    """PATH with test_bench_synth_tenants' stateful stand-in `kubectl` first,
+    over a ConfigMap that holds `_defaults.yaml` only (#3981)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_bst_tests", REPO_ROOT / "tests" / "ops" / "test_bench_synth_tenants.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    bindir = tmp / "bench-kubectl-bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    state = bindir / "cm.json"
+    state.write_text(json.dumps({"data": {"_defaults.yaml": "defaults: {}"}}),
+                     encoding="utf-8")
+    impl = bindir / "fake_kubectl.py"
+    impl.write_text(mod._FAKE_KUBECTL, encoding="utf-8")
+    exe = bindir / "kubectl"
+    # Mode 2: the patch is accepted and not persisted — the stand-in writes
+    # nothing, so the run's only write is the one under test.
+    exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{impl}" "{state}" 2 "$@"\n',
+                   encoding="utf-8", newline="\n")
+    exe.chmod(0o755)
+    return {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
+def _empty_file(tmp: Path) -> Path:
+    """An empty input file under the row's temp dir (#3981)."""
+    p = tmp / "empty-input.jsonl"
+    p.write_text("", encoding="utf-8")
+    return p
+
+
 def _kubectl_shim_env(tmp: Path) -> dict[str, str]:
     """PATH with test_configmap_assemble's stand-in `kubectl` first (it builds
     the ConfigMap YAML from `--from-file`), plus the opt-in the tool wants
@@ -1214,9 +1356,61 @@ def _files_under(scope: Path) -> frozenset[str]:
                      if p.is_symlink() or not p.is_dir())
 
 
+# The runner's step files (GitHub Actions file commands). A tool that reads
+# one from the environment appends to it with no flag naming it: a run of
+# the tool here would write into the CI step's real outputs, and the audit
+# reports that write as one no flag gave. The test's runs are hermetic.
+RUNNER_FILE_VARS = ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "GITHUB_ENV",
+                    "GITHUB_PATH", "GITHUB_STATE")
+
+
+# The variables that point git at a repository. A git hook that runs pytest
+# exports them; a tool or a fixture's git here must not follow them out of
+# the fixture (`git add -A` would stage into the caller's index).
+GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                     "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_PREFIX")
+
+
+def _tool_env() -> dict[str, str]:
+    """The environment a tool runs in here: this process's, less the
+    runner's step files and git's location variables, in UTF-8."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in RUNNER_FILE_VARS + GIT_LOCATION_VARS}
+    return {**env, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
+
+@pytest.fixture(autouse=True)
+def _runner_step_files_as_on_ci(monkeypatch, tmp_path_factory):
+    """Every test here runs as it would on a CI runner: the step-file
+    variables are set, to files outside any test's directory. Off CI they
+    are unset, so a run site that hands a tool `os.environ` as it stands
+    would leak only on CI (a reader that appends to $GITHUB_OUTPUT is
+    reported as a write no flag gave). After the test, none of the files
+    may hold anything."""
+    runner = tmp_path_factory.mktemp("runner-step-files")
+    for name in RUNNER_FILE_VARS:
+        monkeypatch.setenv(name, str(runner / name))
+    yield
+    written = sorted(f.name for f in runner.iterdir() if f.stat().st_size)
+    assert not written, f"a tool run here wrote to the runner's step files: {written}"
+
+
+def test_a_tool_run_here_never_sees_the_runners_step_files(monkeypatch, tmp_path):
+    """The environment `_run` and the read-back give a tool holds none of the
+    runner's step files, even when this process has them set."""
+    for name in RUNNER_FILE_VARS:
+        monkeypatch.setenv(name, str(tmp_path / name))
+    for name in GIT_LOCATION_VARS:
+        monkeypatch.setenv(name, str(tmp_path / name))
+    env = _tool_env()
+    assert not set(RUNNER_FILE_VARS) & set(env)
+    assert not set(GIT_LOCATION_VARS) & set(env)
+    assert env["PYTHONUTF8"] == "1"
+
+
 def _run(row: Row, ctx: Ctx, out: Path, *,
          audit_log: Path | None = None) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    env = _tool_env()
     if row.env is not None:
         if os.name == "nt":
             pytest.skip(f"{row.id}: its fake executable is a POSIX launcher")
@@ -1961,6 +2155,8 @@ VIA_OTHER_CLASS: dict[Key, str] = {
 #: stale entry here permits a program the tool no longer needs; it does not
 #: hide a write, which is what the two-directional lists are for.
 SPAWNS: dict[Key, tuple[str, ...]] = {
+    ("../ops/bench_synth_tenants.py", "--state-file"): ("da-guard", "kubectl"),
+    ("../ops/workflow_path_filter.py", "--out"): ("git",),
     ("../ops/configmap_assemble.py", "--output"): ("da-crdecode", "da-guard", "da-read", "kubectl", "python"),
     ("dx/compile_custom_alerts.py", "--out"): ("da-guard",),
     ("dx/describe_tenant.py", "-o/--output"): ("da-guard",),
@@ -2157,7 +2353,7 @@ def _read_back(row: Row, tmp: Path, stub: str) -> tuple[list[str], list[str]]:
     if row.readers is not None:
         runs.extend(row.readers(Ctx(tmp, stub), out))
     ctx = Ctx(tmp, stub)
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    env = _tool_env()
     if row.env is not None:
         env.update(row.env(ctx))
     # What the control run wrote: the files it made, and for a file flag the
@@ -2803,8 +2999,28 @@ NO_ROW: dict[Key, str] = {
         "before any read. What speaks for the write: "
         "tests/ops/test_ops_tool_flags.py "
         "`test_a_target_that_is_stdin_is_refused_and_the_others_are_left_alone`.",
+    # #3981, sixteenth batch.
+    ("lint/fix_file_hygiene.py", "FILE"):
+        "The positional names the files pre-commit hands the hook, which it "
+        "rewrites in place: a row's bad-path shapes (a missing parent, a parent "
+        "that is a file) are skipped by the read like any path the hook cannot "
+        "open, before any write — the pair would measure that skip. What speaks "
+        "for the write: tests/lint/test_fix_file_hygiene.py "
+        "`test_a_refused_file_is_rc2_and_the_others_are_left_alone` (a later "
+        "file that is the process's stdout: rc 2, one line naming it and FILE, "
+        "the earlier file keeps its bytes).",
+    # #3981, nineteenth batch.
+    ("../ops/plan_race_shards.py", "--out-dir"):
+        "`fetch-timings` creates the directory offline (with no gh it warns "
+        "and exits 0), but writes a file into it only for an artifact gh "
+        "returned, and a control run must write one. What speaks for it: "
+        "tests/ops/test_plan_race_shards.py "
+        "`test_fetch_timings_cli_with_an_unusable_out_dir_is_rc2` (main in "
+        "process: rc 2, one line naming --out-dir) and "
+        "`test_a_timings_file_that_cannot_be_written_names_the_flag` (the file "
+        "write, with gh stubbed out).",
 }
-_NO_ROW_CEILING = 6
+_NO_ROW_CEILING = 8
 
 
 def test_every_flag_named_at_a_writer_has_a_row():
@@ -2863,12 +3079,6 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "not a path. A write that fails is held by "
         "tests/ops/test_threshold_recommend.py "
         "(test_generate_observed_map_that_cannot_be_written_is_exit_2).",
-    "lint/check_cluster_identity.py":
-        "`--generate` rewrites the committed "
-        "`tests/rulepacks/cluster_identity_baseline.yaml`; the flag is a switch, "
-        "not a path. A write that fails is held by "
-        "tests/lint/test_check_cluster_identity.py "
-        "(test_generate_that_cannot_write_the_baseline_is_exit_2).",
     # #3981: the four generators that called the atomic writer directly and
     # go through the artifact entry now. None takes a path: each rewrites
     # documents the repository names.
@@ -2978,8 +3188,79 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "includes the tool names; the flag is a switch, not a path. A write that "
         "fails is held by tests/lint/test_check_includes_sync.py "
         "(test_a_stub_that_cannot_be_written_is_rc2_one_line).",
+    # #3981, eleventh batch.
+    "lint/validate_docs_versions.py":
+        "`--fix` rewrites the docs the checks reported; the flag is a switch, "
+        "not a path. A refused target is held by tests/lint/test_validate_docs_versions.py "
+        "(test_a_target_the_artifact_entry_refuses_is_rc2_one_line).",
+    # #3981, twelfth batch.
+    "_lib_exporter_presence.py":
+        "`--write` rewrites the rule packs under `--root`, the repository root it "
+        "reads them from; a bad root fails on that read, before any write. A "
+        "refused pack is held by tests/rulepacks/test_exporter_presence.py "
+        "(test_a_refused_pack_leaves_the_other_stale_packs_alone).",
+    "dx/migrate_ssot_language.py":
+        "`--execute` rewrites the frontmatter and nav links of the pairs its plan "
+        "renamed; `--directory` only narrows the plan. A refused target is held by "
+        "tests/dx/test_migrate_ssot_language.py "
+        "(test_a_refused_target_is_rc2_one_line).",
+    "dx/renovate_fixup.py":
+        "Rewrites fixed repo files (the federation and try-local compose files, "
+        "the portal image mirror); `--dry-run` is a switch. A refused target is "
+        "held by tests/dx/test_renovate_fixup.py "
+        "(test_a_refused_target_is_rc2_one_line).",
+    "dx/scaffold_lint.py":
+        "Writes the new lint, its test and the hook entry at paths derived from "
+        "`--name`, which is a name, not a path. A refused target is held by "
+        "tests/dx/test_scaffold_lint.py "
+        "(test_a_refused_target_writes_nothing_and_is_rc2_one_line).",
+    # #3981, thirteenth batch.
+    "dx/sync_tool_registry.py":
+        "Rewrites the portal hub page and the jsx loader, fixed repo files; its "
+        "flags are switches. A refused target is held by tests/dx/test_sync_tool_registry.py "
+        "(test_no_target_is_written_when_the_hub_is_this_process_stdout).",
+    # #3981, fourteenth batch.
+    "dx/generate_platform_data.py":
+        "Writes docs/assets/platform-data.json and the portal's offline fallback, "
+        "fixed repo files; its flags are switches. A refused target is held by "
+        "tests/dx/test_generate_platform_data.py "
+        "(test_a_refused_fallback_leaves_the_data_file_alone).",
+    # #3981, fifteenth batch.
+    "dx/bump_docs.py":
+        "Rewrites the version and count references its rules name, and the "
+        "CHANGELOG stubs; its flags are versions and switches, not paths. A "
+        "refused target is held by tests/dx/test_bump_docs.py "
+        "(test_init_changelog_writes_neither_when_one_is_refused).",
+    # #3981, sixteenth batch.
+    "dx/bump_playbook_versions.py":
+        "Rewrites the operational playbooks' `verified-at-version`, fixed repo "
+        "files; `--to` is a version. A refused target is held by "
+        "tests/dx/test_bump_playbook_versions.py "
+        "(test_a_refused_playbook_leaves_the_others_alone).",
+    "lint/check_head_blob_hygiene.py":
+        "`--fix` rewrites the working copies of the HEAD blobs it found "
+        "damaged; the flag is a switch. A refused target is held by "
+        "tests/lint/test_check_head_blob_hygiene.py "
+        "(test_fix_refused_target_writes_nothing).",
+    # #3981, seventeenth batch.
+    "dx/gen_agent_adapters.py":
+        "Projects the .agents/ SSOT into the vendor adapter files and AGENTS.md, "
+        "fixed repo files; its flags are switches. A refused target is held by "
+        "tests/dx/test_gen_agent_adapters.py "
+        "(test_an_adapter_that_is_a_fifo_is_rc2_and_nothing_is_written).",
+    # #3981, eighteenth batch: the runner's $GITHUB_OUTPUT / $GITHUB_STEP_SUMMARY,
+    # appended to. The path comes from the environment, not from a flag, so the
+    # refusal names no flag (as dx/paired_trend_watch does for the same file).
+    "../ops/file_race_report.py":
+        "Appends its report to $GITHUB_STEP_SUMMARY. A refused target is held "
+        "by tests/ops/test_nightly_race_issue_policy.py "
+        "(test_an_unwritable_step_summary_is_rc2_one_line).",
+    "dx/check_release_immutable.py":
+        "Appends the publish decision to $GITHUB_OUTPUT. A refused target is held "
+        "by tests/dx/test_check_release_immutable.py "
+        "(test_an_unwritable_github_output_is_rc2_one_line).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 23
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 35
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
@@ -3982,6 +4263,29 @@ class TestOwnWordedRefusal:
 #: could carry them), and calls in the libraries a tool imports. What a
 #: count cannot tell apart is in the module docstring, under NOT SEEN.
 UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
+    # #3981: $GITHUB_OUTPUT (env-named, no flag), and `fetch-timings`, which
+    # has no row (NO_ROW: a control run needs a file gh would have to supply).
+    # Held in process by
+    # tests/ops/test_plan_race_shards.py (test_an_unwritable_github_output_is_rc2_one_line,
+    # test_a_timings_file_that_cannot_be_written_names_the_flag).
+    # #3981, twenty-first batch: the rewrite of an existing `_defaults.yaml`
+    # that lacks the key (the row's control run creates the file). Held by
+    # tests/ops/test_inject_default_key.py
+    # (test_an_existing_file_that_cannot_be_replaced_is_rc2_one_line).
+    ("../ops/inject_default_key.py", "inject", "write_repo_artifact"): 1,
+    # #3981, twenty-second batch: `generate` rewrites the traced workflows and
+    # their trace files, and `record` / `merge` the trace file — paths under
+    # --root, which names a checkout, not an output (flag=None). The row runs
+    # `assert --out`. Held by tests/ops/test_workflow_path_filter.py:
+    # `cmd_generate`'s by test_generate_judges_every_target_before_the_first_write,
+    # `_write_job_record`'s write by test_record_whose_write_is_refused_is_rc2_one_line
+    # (its `ensure_dir` has no refusal test of its own).
+    ("../ops/workflow_path_filter.py", "_write_job_record", "ensure_dir"): 1,
+    ("../ops/workflow_path_filter.py", "_write_job_record", "write_repo_artifact"): 1,
+    ("../ops/workflow_path_filter.py", "cmd_generate", "write_repo_artifact"): 1,
+    ("../ops/plan_race_shards.py", "_write_github_output", "write_operator_output"): 1,
+    ("../ops/plan_race_shards.py", "fetch_timings", "ensure_dir"): 1,
+    ("../ops/plan_race_shards.py", "fetch_timings", "write_repo_artifact"): 1,
     ("ops/migrate_rule.py", "main", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_draft", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_phase2_outputs", "ensure_dir_or_die"): 1,
@@ -4078,9 +4382,6 @@ WRITER_NAMES_USED_AS_VALUES: dict[tuple[str, str], tuple[int, str]] = {
         "surfaces of the threshold registry (fixed repo paths, no flag). The "
         "write is `write_repo_artifact`'s own frame on a stack, so the audit "
         "attributes it when a row runs it; none does today."),
-    ("ops/generate_rule_pack_split.py", "ensure_dir_or_die"): (
-        1, "a truth test (`if ensure_dir_or_die:`) choosing between it and the "
-        "bare `mkdir` of the import fallback, not a write."),
 }
 
 

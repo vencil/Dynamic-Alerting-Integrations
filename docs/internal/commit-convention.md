@@ -251,7 +251,7 @@ Since the freeze this is release wrap-up and corrections to existing entries onl
 - **After rebasing such a change, read `git diff origin/main -- CHANGELOG.md`**: it must show only the lines you meant to change. A bullet the rebase dropped shows up as an unexpected `-` line, a duplicated one as an unexpected `+` line. (With every PR appending to `[Unreleased]` that diff was too noisy to read and needed a dedicated checker; a correction touches a few lines.)
 
 - **An edit at a section boundary can swallow the next `### heading`** (the last bullet under one `###`, right above the next): every entry below then files under the wrong section, and nothing is red. While distilling the assembled fragments into `## [vX.Y.Z]`, list that block's headings afterwards: `awk '/^## \[/{n++} n==2 && /^### /' CHANGELOG.md` (the newest release is the second `## [` heading, after the frozen `[Unreleased]`; keep the `^` anchors, since bullets quote headings mid-line).
-- **Links from `CHANGELOG.md` to anything outside `docs/` use the absolute GitHub URL.** The mkdocs strict gate exempts only `CHANGELOG.md` → `docs/<…>.md` links (`mkdocs_strict_check.sh`); a link to a non-`.md` file under `docs/`, or to `helm/`, `scripts/`, `try-local/`, fails `MkDocs Build Verification`.
+- **Links from `CHANGELOG.md` to anything outside `docs/` use the absolute GitHub URL.** The mkdocs strict gate exempts only `CHANGELOG.md` → `docs/<…>.md` links (`mkdocs_strict_check.sh`); a link to a non-`.md` file under `docs/`, or to `helm/`, `scripts/`, `try-local/`, fails the MkDocs build step of `Documentation Checks`.
 
 ### After a rebase or a merge from `main`
 

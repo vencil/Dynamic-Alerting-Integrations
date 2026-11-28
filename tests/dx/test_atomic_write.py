@@ -554,8 +554,13 @@ def test_nlink_zero_takes_the_atomic_path(mod, target, monkeypatch):
             raise AssertionError("in-place write for st_nlink == 0")
         return real_write_text(self, *a, **k)
 
+    def in_place(*_a, **_k):
+        # #4106: the in-place fallback no longer goes through Path.write_text.
+        raise AssertionError("in-place write for st_nlink == 0")
+
     monkeypatch.setattr(os, "stat", fake_stat)
     monkeypatch.setattr(Path, "write_text", write_text)
+    monkeypatch.setattr(mod, "_write_in_place", in_place)
     ino = real_stat(target).st_ino
     mod.atomic_write_text(target, NEW)
     monkeypatch.undo()
@@ -665,3 +670,48 @@ def test_the_module_is_importable_from_outside_scripts_tools():
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                        encoding="utf-8", cwd=str(_REPO_ROOT / "docs"), timeout=60)
     assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
+
+
+# ---------------------------------------------------------------------------
+# #3981: bytes, written exactly as given
+# ---------------------------------------------------------------------------
+_RAW = b"line one\r\nline two\n\xff\xfe binary tail"
+
+
+def test_bytes_are_written_exactly_as_given(tmp_path):
+    """No encoding and no newline translation: a CRLF line and bytes that
+    are not UTF-8 land unchanged, through the atomic replace."""
+    import _lib_atomic_write
+    target = tmp_path / "f.bin"
+    target.write_bytes(b"old\n")
+    ino = target.stat().st_ino
+    _lib_atomic_write.atomic_write_text(target, _RAW)
+    assert target.read_bytes() == _RAW
+    assert target.stat().st_ino != ino, "the bytes path did not replace the file atomically"
+
+
+def test_bytes_go_out_unchanged_on_the_in_place_fallback(tmp_path):
+    """A hard-linked target is written in place: the bytes are still exact,
+    and every name sees them."""
+    import _lib_atomic_write
+    if not hasattr(os, "link"):
+        pytest.skip("no hard links on this platform")
+    target = tmp_path / "f.bin"
+    target.write_bytes(b"old\n")
+    other = tmp_path / "g.bin"
+    os.link(target, other)
+    _lib_atomic_write.atomic_write_text(target, _RAW)
+    assert target.read_bytes() == _RAW and other.read_bytes() == _RAW
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_write_repo_artifact_takes_bytes_with_the_checkout_mode(tmp_path):
+    """The artifact entry passes bytes through, with the mode a checkout
+    gives (0644, 0755 for an executable file)."""
+    from _lib_output import write_repo_artifact
+    target = tmp_path / "run.sh"
+    target.write_bytes(b"#!/bin/sh\r\n")
+    target.chmod(0o755)
+    write_repo_artifact(target, _RAW)
+    assert target.read_bytes() == _RAW
+    assert target.stat().st_mode & 0o777 == 0o755
