@@ -232,7 +232,7 @@ Full commands, flags & examples → [CLI Reference](docs/cli-reference.en.md) ·
 
 ### Customer Onboarding: Migration Toolkit
 
-Migrates a customer's existing PromRule corpus into this platform's `conf.d/` (per tenant, [`migrate`](docs/cli-reference.en.md#migrate) converts rules into conf.d tenant files, `da-parser` triages portability and `da-guard` validates the tree; bulk import producing `_custom_alerts` recipes is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)), shipping via **three delivery paths — Docker / static binary / air-gapped tar** (all cosign keyless signed + SBOM) covering the full spectrum from internet-connected to isolated finance / government / defense networks.
+Migrates a customer's existing PromRule corpus onto this platform (per tenant, [`migrate`](docs/cli-reference.en.md#migrate) migrates rules verbatim into migrated rules with tenant isolation injected, for the customer's Prometheus to load, and a human promotes them to platform rules or recipes after a shadow comparison; `da-parser` triages portability and `da-guard` validates the tree), shipping via **three delivery paths — Docker / static binary / air-gapped tar** (all cosign keyless signed + SBOM) covering the full spectrum from internet-connected to isolated finance / government / defense networks.
 
 Full installation & signature verification → [Migration Toolkit Installation](docs/migration-toolkit-installation.en.md)
 

@@ -108,3 +108,40 @@ func TestPinListsEachSelectorAsAnInstantSelectorBeforeAndAfter(t *testing.T) {
 		}
 	}
 }
+
+func TestPinRefusesAnotherNamespaceBesideTheTenantPin(t *testing.T) {
+	for _, e := range []string{`x{namespace="db-b"}`, `x{namespace=~"db-.*"}`} {
+		got := pinOne(t, "db-a", nil, e)
+		if got.Conflict == nil {
+			t.Errorf("%s: got %+v, want a conflict", e, got)
+		}
+	}
+	got := pinOne(t, "db-a", nil, `x{namespace="db-a"}`)
+	if got.Expr == nil || *got.Expr != `x{namespace="db-a",tenant="db-a"}` {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestPinRenamesARecordAndJudgesItByTheNameAsWritten(t *testing.T) {
+	req, _ := json.Marshal(pinRequest{Tenant: "db-a", NamespaceForm: []string{"kube_pod_info"},
+		Rename:      map[string]string{"job:x:sum": "migrated:db_a:job:x:sum", "kube_pod_info": "k:y"},
+		Expressions: []string{`job:x:sum > 1 and {__name__="job:x:sum"} and kube_pod_info`}})
+	var stdout, stderr bytes.Buffer
+	if rc := run([]string{"promql-pin", "-"}, bytes.NewReader(req), &stdout, &stderr); rc != exitOK {
+		t.Fatalf("rc %d: %s", rc, stderr.String())
+	}
+	var doc struct {
+		Documents [][]pinAnswer `json:"documents"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	got := doc.Documents[0][0]
+	want := `migrated:db_a:job:x:sum{tenant="db-a"} > 1 and {__name__="migrated:db_a:job:x:sum",tenant="db-a"} and k:y{namespace="db-a",tenant=""}`
+	if got.Expr == nil || *got.Expr != want {
+		t.Fatalf("got %+v\nwant %s", got, want)
+	}
+	if got.Selectors[0] != (pinSelector{`job:x:sum`, `migrated:db_a:job:x:sum{tenant="db-a"}`}) {
+		t.Errorf("selector 0: %+v", got.Selectors[0])
+	}
+}

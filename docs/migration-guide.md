@@ -13,7 +13,7 @@ lang: zh
 >
 > **第一次遷移？** 先讀 [漸進式遷移 Playbook](scenarios/incremental-migration-playbook.md)；多系統同步換（Prom→VM + 規則 + AM）走 [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.md)。
 >
-> **⚠️ 遷移安全保證：** 流程**漸進式且可回退**。`custom_` Prefix 與舊規則完全隔離；Projected Volume `optional: true` 允許隨時卸載任何規則包不影響 Prometheus 運行。
+> **⚠️ 遷移安全保證：** 流程**漸進式且可回退**。`da-tools migrate` 產生的 migrated 規則帶 `component: migrated`，切換前在 Alertmanager 只送到不通知任何人的 shadow receiver；Projected Volume `optional: true` 允許隨時卸載任何規則包不影響 Prometheus 運行。
 >
 > **告警接了自動化動作（webhook）？** 遷移期間的重送／重放／雙跑對**動作層**是 double-execution 風險——先讀 [Actionable 之後 §4–§5](alerting-best-practices.md)（冪等閘與不可逆動作防線）。
 >
@@ -28,7 +28,7 @@ lang: zh
 | 租戶技術窗口 | [你在哪個階段](#你在哪個階段where-are-you)、[§3 產生設定](#3-產生租戶設定da-tools-scaffold)、[§9 維度標籤](#9-維度標籤--多-db-類型支援) | [§7 驗證](#7-遷移後驗證)、[§12 FAQ](#12-faq) |
 | Platform / DevOps | 核心流程 [§1–§7](#核心遷移流程照順序做)（照順序） | 參考帶、進階帶 |
 | 企業 / SRE（大型遷移） | [§2 反向分析](#2-反向分析既有監控da-tools-onboard)、[§13 企業級遷移](#13-企業級遷移--大型租戶1000-條規則) | [Shadow Monitoring SOP](shadow-monitoring-sop.md) |
-| Domain Expert（DBA） | [§8 範例](#8-五種遷移場景範例)、[§9 維度](#9-維度標籤--多-db-類型支援)、[§11 擴展](#11-擴展不支援的-db-類型) | [§4 轉換](#4-轉換既有規則da-tools-migrate) |
+| Domain Expert（DBA） | [§8 範例](#8-五種遷移場景範例)、[§9 維度](#9-維度標籤--多-db-類型支援)、[§11 擴展](#11-擴展不支援的-db-類型) | [§4 遷移規則](#4-遷移既有規則da-tools-migrate) |
 
 > **多人同看**：先共享「你在哪個階段」決策表定位，再各自走自己的帶。本文件分三帶——**核心流程（照順序做）/ 參考（按需查）/ 進階與營運**。
 
@@ -38,8 +38,8 @@ lang: zh
 |----------|----------|------|---------|
 | **全新租戶** — 首次接入 | 互動式產生 tenant config | `da-tools scaffold` | ~5 min |
 | **既有成熟監控體系** — 企業反向分析 | 自動生成遷移計畫 | `da-tools onboard` | ~10 min |
-| **已有傳統 alert rules** — 要遷移 | 自動轉換為三件套 | `da-tools migrate` | ~15 min |
-| **大型租戶 (1000+ 條)** — 企業級遷移 | Triage → Shadow → 切換 | `da-tools migrate --triage` + `da-tools validate` | ~1-2 週 |
+| **已有傳統 alert rules** — 要遷移 | 原樣遷移成 migrated 規則（注入租戶隔離） | `da-tools migrate` | ~15 min |
+| **大型租戶 (1000+ 條)** — 企業級遷移 | 預覽 → Shadow → 切換 | `da-tools migrate --dry-run` → `da-tools migrate` | ~1-2 週 |
 | **3-system 同時換**（換 storage backend Prom→VM **加上** 規則 **加上** AM routing） | 5-Phase invariants-driven model | 走 [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.md) | 13 週估算（真實常 ~27 週） |
 | **Cutover 後規則演化**（`custom_*` → golden、Rule Pack 升版） | Lifecycle pattern，不是一次性事件 | 走 [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.md) | 持續 |
 | **不支援的 DB 類型** — 需擴展 | 手動建立 Recording + Alert Rules | 參見 [§11](#11-擴展不支援的-db-類型) | ~30 min |
@@ -55,7 +55,7 @@ flowchart TD
     Q1 -->|"沒有"| S1["da-tools scaffold<br/>互動式產生配置"]
     Q1 -->|"有"| Q2{"規則數量?"}
     Q2 -->|"< 100 條"| S2["da-tools migrate<br/>--dry-run 預覽"]
-    Q2 -->|"100+ 條"| S3["da-tools migrate<br/>--triage 分類"]
+    Q2 -->|"100+ 條"| S3["da-tools migrate<br/>--dry-run 預覽被拒的規則"]
     S2 --> V["da-tools validate-config<br/>一站式驗證"]
     S3 --> S4["Shadow Monitoring<br/>da-tools validate"]
     S4 --> S5["漸進切換<br/>(數週並行觀察)"]
@@ -100,7 +100,7 @@ tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/
 - 規則檔（`--rule-files <檔或目錄>...`；v2.9.0 映像給目錄選不到檔，改給加引號的 glob <!-- image-caveat: v2.9.0 -->）→ `phase2-rules/migration-plan.csv`（每條告警規則的 `status`：`perfect` / `complex` / `unparseable`）與 `.onboard/conf.d/_defaults.yaml`（平台預設值建議）
 - scrape config（`--scrape-config`）→ `.onboard/`：`scrape-analysis.yaml` 與各 job 的 `<job>-relabel-suggestion.yaml`
 
-完整 flag、輸出條件與結束碼：[`cli-reference.md#onboard`](cli-reference.md#onboard)。`onboard-hints.json` 可餵 `scaffold --from-onboard`；規則轉換用 `migrate`，它直接吃舊規則檔。
+完整 flag、輸出條件與結束碼：[`cli-reference.md#onboard`](cli-reference.md#onboard)。`onboard-hints.json` 可餵 `scaffold --from-onboard`；規則遷移用 `migrate`，它直接吃舊規則檔。
 
 ### 3. 產生租戶設定（da-tools scaffold）
 
@@ -114,25 +114,24 @@ da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /d
 
 注入 ConfigMap 的三種方式（Helm / kubectl / GitOps）：[threshold-exporter README — K8s 部署](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署)。
 
-### 4. 轉換既有規則（da-tools migrate）
+### 4. 遷移既有規則（da-tools migrate）
 
-已有傳統 Prometheus alert rules 的團隊，用自動轉換工具（PromQL 由 Prometheus 自己的 parser 讀成語法樹；它拒收的規則檔以 rc 2 結束，沒有降級路徑）：
+已有傳統 Prometheus alert rules 的團隊，用 `migrate` 把一個租戶的規則**原樣**遷移成 migrated 規則（PromQL 由 Prometheus 自己的 parser 讀成語法樹；它拒收的規則檔以 rc 2 結束，沒有降級路徑）：
 
 ```bash
-da-tools migrate /data/legacy-rules.yml --dry-run            # 預覽
-da-tools migrate /data/legacy-rules.yml --tenant db-a -o /data/output  # 正式轉換
-da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # 大型租戶分桶
+da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run         # 預覽報告
+da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o /data/output  # 正式遷移
 ```
 
-工具自動處理：
+- **原樣保留、注入租戶隔離**：expr 語意、`for`、labels、annotations、alertname 不變；每個 selector 以語法樹注入租戶 matcher（`tenant="db-a"`；kube-state-metrics 有 namespace 的物件是 `namespace="db-a", tenant=""`）。叢集層級的物件（`kube_node_*`）、每個抓取目標都有的序列（`up`）、Prometheus／Alertmanager 自己的序列沒有一種注入只選到一個租戶：那是平台層級的規則，逐條列出、結束碼 2、一個檔都不寫
+- **標記與治理**：每條告警加 `tenant`、`component: migrated` label 與 `owner`、`expiry` annotation，另附到期前 14 天起響的 `MigratedRulesExpiring`；寫之前對自己的輸出跑 custom rule lint，有 ERROR 就不寫
+- **黃金標準**：只讀一個指標、而 `metric-dictionary.yaml` 有黃金標準規則的告警不遷移，報告點名改用平台 Rule Pack
+- **多叢集**：原式子點名身分 label 卻沒有 `da_cluster` 的 `by(...)`／`on(...)` 只在報告標出，不改寫
+- **輸出**：`.migration/migrated/<tenant>/rules.yml`（規則檔）、`.migration/mapping/<tenant>.yaml`（每條規則的 selector 注入前後對照）、`migration-report-<tenant>.txt`。v2.9.0 映像仍是舊的轉換引擎（`custom_` key 與三件套） <!-- image-caveat: v2.9.0 -->
 
-- **三種輸入情境**：`✅ 完美解析` / `⚠️ 複雜表達式 (含警告方塊)` / `🚨 無法解析 (產出 LLM Prompt)`
-- **三件套輸出**：`.migration/conf.d/<tenant>.yaml`（閾值寫在 `tenants.<tenant>` 底下）+ `.migration/platform-recording-rules.yaml` + `.migration/platform-alert-rules.yaml` + `migration-report.txt`，另附 `.migration/conf.d/_defaults.yaml`：它的 `defaults:` 區塊要先合併進 conf.d 根的 `_defaults.yaml`（合併，不要整份覆蓋），exporter 才會發射這些閾值。v2.9.0 映像還沒有 `--tenant` 與 `.migration/conf.d/`，只產出 `tenant-config.yaml`（閾值平鋪在頂層，要自己縮排放進 `tenants.<tenant>`），沒有 defaults 片段 <!-- image-caveat: v2.9.0 -->
-- **Auto-Suppression**：同 metric 的 warning + critical 自動配對，兩條告警帶相同的 `metric_group` label，由 Alertmanager inhibit 壓制 warning 通知（租戶可設 `_severity_dedup: "disable"` 取消）
-- **聚合模式智能猜測**：6 條啟發規則自動猜 `sum` / `max`，帶 ASCII 警告方塊提示確認
-- **逐叢集聚合**：產生的 recording rule 是 `<sum|max> by(tenant, da_cluster) (…)`。在收了多個叢集資料的 Prometheus 上，遷移後的規則逐叢集評估（`sum`／`max` 不再把同一個租戶的幾個叢集合在一起），告警帶 `da_cluster`；序列沒有 `da_cluster` 的單一 Prometheus 上，結果與先前相同。原式子自己的聚合已經丟掉 `tenant` 的規則（`sum(rate(x))`、`sum by(instance) (…)`）不在此列，遷移前後都算不出租戶的值；原式子自己的聚合丟掉 `da_cluster` 的規則（例如 `sum by(tenant) (…)`、`sum without(da_cluster) (…)`）也不在此列：外層的 `by(tenant, da_cluster)` 還原不了它，該規則仍把同一個租戶的幾個叢集合在一起，告警也不帶 `da_cluster`（點名身分 label 而沒有 `da_cluster` 的 `by(...)`／`on(...)`，以及點名 `da_cluster` 的 `without(...)`／`ignoring(...)`，工具會標出來請人確認）。原式子自己寫的 `on(...)`／`by(...)` 照抄；點名身分 label 卻沒有 `da_cluster` 的，在工具解析得了的規則裡會標出來請人確認（解析不了的規則不做這項檢查；見 [`migration-engine.md`](migration-engine.md)）。v2.9.0 映像產生的仍是 `by(tenant)` <!-- image-caveat: v2.9.0 -->
+⛔ 規則檔由**抓取原始指標的那台 Prometheus** 載入（單一 Prometheus，或 federation 架構下的 edge），不掛進平台 Rule Pack 的 projected volume。Alertmanager 把 `component="migrated"` 的告警送到只有名字的 shadow receiver，直到租戶設 `_routing_migrated: active`（[`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)）；影子比對之後，再由人決定提升成平台規則（§8 的三件套）或 recipe。
 
-遷移引擎怎麼讀 PromQL（Prometheus 自己的語法樹，不掃文字）+ 完整啟發規則 + Auto-Suppression 配對邏輯：[`migration-engine.md`](migration-engine.md)。CLI flag 矩陣：[`cli-reference.md#migrate`](cli-reference.md#migrate)。三件套部署位置（ConfigMap 合併 vs 獨立掛載）：[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署)。
+引擎細節（注入方式對照、recording rule 連帶遷移、拒絕條件）：[`migration-engine.md`](migration-engine.md)。CLI flag 與結束碼：[`cli-reference.md#migrate`](cli-reference.md#migrate)。
 
 ### 5. 部署 threshold-exporter
 
@@ -285,7 +284,7 @@ tenants:
 
 ### 10. LLM 輔助手動轉換
 
-當 `da-tools migrate` 遇到無法解析的規則（如 `absent()` / `predict_linear()` 等），會在 `migration-report.txt` 產出可直接交 LLM 的 System Prompt 模板。模板指導 LLM 抽取閾值、產出 Recording Rule（含 `sum` / `max` 選擇理由）、Alert Rule（含 `group_left` + `unless maintenance`），並標記需要平台額外處理的項目。完整 prompt 結構與後處理規則：[`migration-engine.md`](migration-engine.md)。
+`da-tools migrate` 不改寫規則格式，也不產出 LLM prompt。要把 migrated 規則提升成平台規則（§8 的三件套），或處理 `migrate` 拒絕的平台層級規則時，是手動改寫：可以把原規則與 §8 的模板交給 LLM 起草，產物照 §11 的步驟落地，並經 shadow 比對確認行為一致。
 
 ### 11. 擴展不支援的 DB 類型
 
@@ -345,17 +344,15 @@ kubectl logs -n monitoring -l app=threshold-exporter --tail=20
 
 ### 13. 企業級遷移 — 大型租戶（1000+ 條規則）
 
-擁有 1000+ 條規則的大型租戶採三階段策略：**Phase A Triage 分析** (~1 天) → **Phase B Shadow Monitoring** (~1-2 週) → **Phase C 切換與收斂** (~1 天)。
+擁有 1000+ 條規則的大型租戶採三階段策略：**Phase A 預覽** (~1 天) → **Phase B Shadow Monitoring** (~1-2 週) → **Phase C 切換與收斂** (~1 天)。
 
 ```bash
-# Phase A: Triage 分桶（auto / review / skip / use_golden）
-da-tools migrate /data/legacy-rules.yml --triage -o /data/triage_output/
+# Phase A: 預覽（被拒的規則逐條列出、改用黃金標準的告警點名）
+da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run
 
-# Phase B: 部署 shadow 規則 + 持續比對（可包成 K8s Job 跑 1-2 週）
-da-tools migrate /data/legacy-rules.yml --tenant db-a -o /data/migration_output/
-da-tools validate --mapping /data/migration_output/.migration/prefix-mapping.yaml \
-                  --tolerance 0.001 --watch --interval 60 --rounds 1440 \
-                  --auto-detect-convergence --stability-window 5
+# Phase B: 產出 migrated 規則交給 edge／單一 Prometheus 載入，告警先走 shadow receiver
+da-tools migrate /data/legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o /data/migration_output/
+# 影子比對讀 .migration/mapping/db-a.yaml；validate 對它的支援在後續的 #4227
 
 # Phase C: 收斂後一鍵切換
 da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a --dry-run
@@ -363,7 +360,7 @@ da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 da-tools batch-diagnose && da-tools blind-spot --config-dir /data/conf.d
 ```
 
-完整 SOP（shadow route 攔截、`migration_status` label、K8s Job 範例、`shadow-verify all` 替代步驟、收斂判斷、`prefix-mapping.yaml`、Metric Dictionary 黃金標準比對、`backtest` / `config-diff` / `patch-config` 等遷移自動化工具）：[Shadow Monitoring SRE SOP](shadow-monitoring-sop.md) · [漸進式遷移 Playbook](scenarios/incremental-migration-playbook.md)。CLI 詳解：[`cli-reference.md`](cli-reference.md) 對應命令 anchor。
+完整 SOP（shadow route 攔截、`migration_status` label、K8s Job 範例、`shadow-verify all` 替代步驟、收斂判斷、Metric Dictionary 黃金標準比對、`backtest` / `config-diff` / `patch-config` 等遷移自動化工具）：[Shadow Monitoring SRE SOP](shadow-monitoring-sop.md) · [漸進式遷移 Playbook](scenarios/incremental-migration-playbook.md)。CLI 詳解：[`cli-reference.md`](cli-reference.md) 對應命令 anchor。
 
 ### 14. Rule Pack 動態開關
 
@@ -409,7 +406,7 @@ da-tools deprecate mysql_slave_lag mysql_innodb_buffer_pool --execute  # 批次
 | **工具與引擎參考** | |
 | [`migration-toolkit-installation.md`](migration-toolkit-installation.md)（三條交付路徑 + cosign keyless 驗章）| ⭐⭐⭐ |
 | [`cli-reference.md`](./cli-reference.md)（所有 `da-tools` 命令 + flag 矩陣）| ⭐⭐⭐ |
-| [AST 遷移引擎架構](./migration-engine.md)（Prometheus 語法樹 + 啟發規則 + Auto-Suppression）| ⭐⭐ |
+| [AST 遷移引擎架構](./migration-engine.md)（Prometheus 語法樹 + 租戶隔離注入 + 載入點）| ⭐⭐ |
 | [VictoriaMetrics Integration](integration/victoriametrics-integration.md)（VM stack 整合導覽）| ⭐⭐ |
 | **角色快速入門** | |
 | [Tenant 快速入門指南](getting-started/for-tenants.md) | ⭐⭐ |

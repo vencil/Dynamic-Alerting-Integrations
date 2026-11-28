@@ -1,87 +1,90 @@
 #!/usr/bin/env python3
-"""migrate_rule.py — 傳統 Prometheus 警報規則遷移輔助工具（PromQL 由 Prometheus 的語法樹判讀）。
+"""migrate_rule.py — 把一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則（#4226）。
 
-自動將傳統的 PromQL (寫死數值) 轉換為本專案的「動態多租戶」三件套：
-1. 租戶檔                  → migration_output/.migration/conf.d/<tenant>.yaml（tenants: {<tenant>: …}；--tenant）
-2. 平台 Recording Rule      → migration_output/.migration/platform-recording-rules.yaml
-3. 平台動態 Alert Rule      → migration_output/.migration/platform-alert-rules.yaml
-4. 遷移報告                 → migration_output/migration-report.txt
-5. Triage CSV               → migration_output/triage-report.csv
-6. Prefix Mapping           → migration_output/.migration/prefix-mapping.yaml
-7. 根 defaults              → migration_output/.migration/conf.d/_defaults.yaml（合併進 conf.d 根的 _defaults.yaml）
+每條規則的 expr、for、labels、annotations、alertname 都原樣保留，只做三件事：
 
-1 與 7 寫在 `-o/.migration/conf.d/`（`CONFD_DIR`，#3671、#4014）：那是一棵只有這兩個檔的 conf.d，
-可以整棵驗。2、3、6 是 YAML 但不是 conf.d 檔，寫在 `-o/.migration/`（`ARTIFACT_DIR`，
-#3997）：點開頭的目錄，conf.d 的每個讀取端都整棵略過（Go `confdname.IsHidden`），
-所以 `-o` 落在一棵服務中的 conf.d 裡（不論服務的根在哪一層）也不會被當成設定檔讀。
-4、5 不是 YAML，沒有讀取端讀，留在 `-o`。
+1. 租戶隔離：每個 selector 以 Prometheus 自己的語法樹注入租戶 matcher（``da-read
+   promql-pin``，同 prom-label-proxy／Prometheus Operator ``enforcedNamespaceLabel``
+   的做法）。怎麼注入由 ``_lib_metric_sources.pin_form`` 決定：序列帶 tenant 的指標
+   加 ``tenant="<租戶>"``；kube-state-metrics 有 namespace 的物件加
+   ``namespace="<租戶>", tenant=""``；其餘（叢集層級物件、平台自己的序列、每個
+   抓取目標都有的序列、告警自己的序列）沒有一種注入只選到一個租戶，結束碼 2。
+2. 標記：labels 加 ``tenant: <租戶>``、``component: migrated``（靜態值，切換前後
+   不變）；annotations 加 ``owner``、``expiry``（放 label 的話，續期改 expiry 會讓
+   ``for:`` 重新計時）。
+3. 到期伴隨告警：``vector(time()) > <expiry − 14 天的 Unix 秒數>``，不依賴任何
+   指標資料。
 
-1 與 7 是 conf.d 內容，由 Go 寫（ADR-036 §2，#3206）：兩個檔的資料（帶型別的值、
-註解）一次交給 `da-guard write`，文字由 Go 產生、整棵樹判一次，兩個檔同進退；
-被拒、或沒有可用的 da-guard（$DA_GUARD_BINARY / PATH），結束碼 2、一個檔都不寫。
+同一個來源檔裡被遷移的告警讀到的 recording rule 一起遷移（加 ``tenant``），並改名為
+``migrated:<租戶>:<原名>``（租戶的 ``-`` 寫成 ``_``），讀它的 migrated 規則一起改：
+migrated 檔與 legacy 規則載入同一台 Prometheus，同名的話 legacy 告警會讀到 migrated
+record 的序列（多出一條不走影子路由的告警），或兩條規則寫同一組序列。讀到檔裡沒有
+的 record，結束碼 2。
+
+``component: migrated`` 蓋掉序列自己的 ``component``：運算式明寫保留它的（matcher、
+``by``／``on``／``group_left``、``label_replace`` 等寫入）結束碼 2；序列從抓取帶來的
+看不出來，報告提醒（多條只差 component 的序列會變成同一組 label，Prometheus 不評估）。字典（metric-dictionary.yaml）命中的告警平台 rule
+pack 已涵蓋，只在報告裡點名改用黃金標準，不產生 migrated 規則。
+
+任何一條規則被拒，就逐條列出原因、結束碼 2、一個檔都不寫。寫之前，migrate 對
+自己的輸出跑 ``lint_custom_rules``（租戶隔離、owner／expiry 治理；``--policy``
+可換政策），有 ERROR 也一樣結束碼 2、不寫。
+
+輸出（``-o``，預設 migration_output）：
+
+* ``.migration/migrated/<租戶>/rules.yml`` — migrated 規則檔。由客戶抓取原始指標
+  的那台 Prometheus 載入（單一 Prometheus，或 federation 架構下的 edge：只帶
+  namespace 的 kube-state-metrics 序列不會被拉到中央）。``rule_files`` 要讀得到
+  ``*.yml``。
+* ``.migration/mapping/<租戶>.yaml`` — 遷移對照（validate-migration 讀，#4227）：
+  每條規則的 selector 注入前與注入後，以及 (租戶, alertname)。
+* ``migration-report-<租戶>.txt`` — 遷移報告。
+
+點開頭的 ``.migration/`` 是 conf.d 的每個讀取端都整棵略過的目錄（#3997），所以
+``-o`` 落在一棵 conf.d 裡也不會被當成設定檔讀；既有的 ``-o`` 先過共用的 conf.d
+拒絕（#3206、#4014）。
 
 用法:
-  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a                    # 預設檔案輸出
-  python3 migrate_rule.py <legacy_rules.yml> --dry-run                        # 僅顯示報告，不產生檔案
-  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a --interactive      # 遇到不確定時詢問使用者
-  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a -o /custom/path    # 自訂輸出目錄
-  python3 migrate_rule.py <legacy_rules.yml> --triage                         # Triage 模式: 只產出 CSV 分桶報告
-  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a --no-prefix        # 停用 custom_ 前綴 (不建議)
-
-PromQL 的讀法（#4215）：每條運算式都由 Prometheus 自己的 parser 讀成語法樹
-（da-read promql-shape，整份規則檔一次），指標、label matcher、門檻、語義中斷的
-函式都從樹上讀，不掃文字；tenant label 依 selector 在原式中的 byte 位置插入
-（前綴只加在 key 與 record 名稱，不改來源指標名，issue 1818），插入後再讀一次
-確認 Prometheus 接受。
+  python3 migrate_rule.py <rules.yml> --tenant db-a --owner team-db --expiry 2027-03-31
+  python3 migrate_rule.py <rules.yml> --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run
 """
 
 import sys
 import re
 import math
 import os
-import csv
-import io
 import json
 import argparse
+import datetime
+import tempfile
 from pathlib import Path
 
 import yaml
 
 _THIS_DIR = Path(__file__).resolve().parent
 
-# Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
-# Migrated in #489 Phase B (was missing encoding setup → would crash on
-# legacy Windows cp950/cp936 consoles when printing emoji to stdout).
-sys.path.insert(0, str(_THIS_DIR))
-sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
-from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
+from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_python import (  # noqa: E402
     ensure_dir_or_die, output_dir_type, write_operator_output_or_die,
 )
+from _lib_output import OutputWriteError, check_writable_artifact  # noqa: E402  (#4250)
+from _lib_exitcodes import die_caller_error  # noqa: E402
+from _lib_label import safe_label  # noqa: E402
 from _lib_io import exit_on_yaml_file_error, find_metric_dictionary, load_yaml_file  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 import _lib_input  # noqa: E402  (#4040: the rule file is read once, here)
-import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
-import _lib_write_check  # noqa: E402  (the draft conf.d's name and layout check, #4014)
-
-# #1641: every path this tool writes descends from -o/--output-dir, so every
-# writer names that flag; an unusable path is rc=2 + one line, not a
-# traceback at rc=1 (which reads as "your rules have a violation").
-_OUTPUT_FLAG = "-o/--output-dir"
+import _lib_metric_sources  # noqa: E402  (#4226: how each metric is pinned)
+import _lib_write_check  # noqa: E402  (the shared refusal of an existing -o, #3206)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_prompt import prompt_line  # noqa: E402  (#3822: an unreadable stdin is rc 2, named)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 # ADR-006: the one spelling of the cluster label (shipped flat in da-tools).
 from _lib_cluster_identity import CLUSTER_IDENTITY_LABEL  # noqa: E402
 
-#: 產生的 metric 側 recording rule 的分組（ADR-006「多叢集同租戶」契約 4，
-#: #1200）：逐（租戶、叢集）。`da_cluster` 是 Prometheus 的 external label，
-#: 只在各叢集資料相遇的地方才在序列上；單一 Prometheus 的序列沒有它，分組
-#: 等同逐租戶，結果與 `by(tenant)` 相同。閾值側與維護狀態仍是租戶一份
-#: （契約 3），以 `on(tenant) group_left`／`unless on(tenant)` 套到每個叢集。
-METRIC_GROUPING = f"by(tenant, {CLUSTER_IDENTITY_LABEL})"
+# #1641: every path this tool writes descends from -o/--output-dir, so every
+# writer names that flag; an unusable path is rc=2 + one line.
+_OUTPUT_FLAG = "-o/--output-dir"
 
 #: 與 check_cluster_identity.IDENTITY_LABELS 同一組（由測試釘住；da-tools
 #: 映像不帶 lint）：`by(...)`／`on(...)` 點名其中任一個，就是「逐這個東西」，
@@ -168,56 +171,9 @@ def groupings_without_cluster(tree):
 
 def cluster_grouping_note(groupings):
     """一行：原式子的這些分組／配對沒有叢集 label，要人看過（#1200）。"""
-    return (f"原式子的 {'、'.join(groupings)} 不保留 {CLUSTER_IDENTITY_LABEL}：在收了多個叢集的 "
+    return (f"原式子的 {'、'.join(groupings)} 不保留 {CLUSTER_IDENTITY_LABEL}：在持有多個叢集資料的 "
             f"Prometheus 上會配對或合併不同叢集的同名序列（on() 可能 many-to-many）。"
             f"兩邊都帶 {CLUSTER_IDENTITY_LABEL} 才補上，請人工確認；工具不改寫")
-
-
-def _skip_blank(data, i, end):
-    """第一個不是空白、也不在 `#` 註解裡的 byte 位置（PromQL 的註解到行尾）。"""
-    while i < end:
-        c = data[i:i + 1]
-        if c.isspace():
-            i += 1
-        elif c == b"#":
-            nl = data.find(b"\n", i, end)
-            i = end if nl < 0 else nl + 1
-        else:
-            break
-    return i
-
-
-def rewrite_expr_tenant_label(src, lhs, metric_names):
-    """在 *src* 裡 *lhs* 那段（語法樹節點）的每個讀 *metric_names* 的 selector
-    注入 ``tenant=~".+"``，回傳改寫後的 LHS 原文。
-
-    插入位置取 selector 在原式的 byte offset：有 ``{`` 的插在 ``{`` 之後，沒有的
-    在名稱之後補 ``{tenant=~".+"}``，只寫 ``{__name__="x"}`` 的也插在 ``{`` 之後。
-    字串常值、label 值裡出現同一個名字都不會被動到（它們不是 selector）。改寫後
-    再讀一次；Prometheus 不接受即 raise ``InputRefused``——不退回原式，那會讓
-    一條沒有 tenant 限定的 recording rule 靜默出貨。"""
-    data = src.encode("utf-8")
-    base = lhs["start"]
-    inserts = []
-    for node in _selectors(lhs):
-        if _selector_metric(node) not in metric_names:
-            continue
-        start, end = node["start"], node["end"]
-        # 名稱與 `{` 之間、`{` 之後可以有空白與 `#` 註解
-        after = start + len(node["name"].encode("utf-8"))
-        brace = _skip_blank(data, after, end)
-        if data[brace:brace + 1] == b"{":
-            brace += 1
-            empty = data[_skip_blank(data, brace, end):][:1] == b"}"
-            inserts.append((brace, b'tenant=~".+"' + (b"" if empty else b",")))
-        else:
-            inserts.append((after, b'{tenant=~".+"}'))
-    out = data[base:lhs["end"]]
-    for pos, text in sorted(inserts, reverse=True):
-        out = out[:pos - base] + text + out[pos - base:]
-    result = out.decode("utf-8")
-    _lib_consumer_read.promql_shape_each([result], raise_refused=True)
-    return result
 
 
 # ============================================================
@@ -382,45 +338,6 @@ def parse_expr(expr_str, tree=None):
     }
 
 
-# ============================================================
-# Rule 處理核心
-# ============================================================
-
-class MigrationResult:
-    """單條規則的遷移結果。"""
-
-    def __init__(self, alert_name, status, severity="warning"):
-        self.alert_name = alert_name
-        self.status = status  # "perfect" | "complex" | "unparseable"
-        self.severity = severity
-
-        # 三件套內容
-        self.tenant_config = {}       # {metric_key: value}
-        self.recording_rules = []     # list of dict (YAML-ready)
-        self.alert_rules = []         # list of dict (YAML-ready)
-
-        # Auto-suppression 用
-        self.op = None                # 比較運算子 (e.g., ">", "<")
-
-        # 報告附加資訊
-        self.agg_mode = None
-        self.agg_reason = None
-        self.dim_hints = []
-        self.llm_prompt = None
-        self.notes = []
-
-        # v3: Dictionary match
-        self.dict_match = None        # dict entry from metric-dictionary.yaml
-        self.triage_action = None     # "auto" | "review" | "skip" | "use_golden"
-        self.original_expr = ""
-        self.base_metric = None       # 原規則讀的指標名（prefix-mapping 用）
-        self.record_name = None       # 新的 recording rule 名（validate 的新查詢）
-        self.recording_lhs_original = None  # 原規則的 LHS（validate 的舊查詢）
-        self.dropped_label_refs = []  # 改讀 tenant 的 $labels 名
-        # 原式子自己的 on()/by() 點名身分 label 卻沒有 da_cluster 的那幾個
-        # （groupings_without_cluster，#1200）。
-        self.cluster_groupings = []
-
 
 def lookup_dictionary(metric_name, dictionary):
     """在啟發式字典中查找 metric，回傳匹配條目或 None。"""
@@ -429,1032 +346,353 @@ def lookup_dictionary(metric_name, dictionary):
     return dictionary.get(metric_name)
 
 
-def _build_unparseable_result(alert_name, expr, severity, rule, dictionary, tree=None):
-    """處理無法解析的規則，嘗試字典比對並產生 LLM prompt。"""
-    result = MigrationResult(alert_name, "unparseable", severity)
-    result.original_expr = expr
-    result.triage_action = "skip"
-    result.llm_prompt = (
-        f"請將以下傳統 Prometheus Alert 轉換為本專案的動態多租戶架構：\n"
-        f"要求：\n"
-        f"1. 提取閾值並提供 threshold-config.yaml 範例。\n"
-        f"2. 提供包含 sum/max {METRIC_GROUPING} 的 Recording Rule"
-        f"（逐租戶、逐叢集；閾值側維持 max by(tenant)）。\n"
-        f"3. 提供套用 on(tenant) group_left 與 unless on(tenant) maintenance "
-        f"邏輯的 Alert Rule。\n"
-        f"4. 如有維度標籤 (如 queue, db, index)，請用 \"metric{{label=\\\"value\\\"}}\" "
-        f"語法提供範例。\n\n"
-        f"原始規則：\n{yaml.dump([rule], sort_keys=False)}"
-    )
-    # Check dictionary for guidance even on unparseable
-    if tree is None:
-        (tree,) = read_trees([expr])
-    all_metrics = ([] if isinstance(tree, _lib_consumer_read.InputRefused)
-                   else _lib_consumer_read.shape_metric_names(tree))
-    for m in all_metrics:
-        match = lookup_dictionary(m, dictionary)
-        if match and match.get("golden_rule"):
-            result.dict_match = match
-            result.triage_action = "use_golden"
-            result.notes.append(
-                f"字典建議: {m} → 黃金標準 {match['golden_rule']} ({match.get('note', '')})"
-            )
-            break
-    return result
+# ============================================================
+# 原樣遷移（#4226）
+# ============================================================
+
+from _grar_routes import MIGRATED_LABEL, MIGRATED_VALUE  # noqa: E402  (the one spelling)
+
+TENANT_LABEL = _lib_metric_sources.TENANT_LABEL
+
+#: 到期伴隨告警：expiry 前這麼多天起響。
+EXPIRY_WARNING_DAYS = 14
+EXPIRY_GROUP = "migrated-expiry"
+EXPIRY_ALERT = "MigratedRulesExpiring"
+
+#: 點開頭的草稿根（#3997：conf.d 的讀取端整棵略過）。不在
+#: ``_lib_write_check.DRAFT_ROOTS``：那張表是寫 conf.d 草稿的工具的，migrate-rule
+#: 自 #4226 起不寫 conf.d（寫的是規則檔，conf.d 的讀取端不讀，在這底下也不讀）。
+DRAFT_ROOT = ".migration"
+def report_rel(tenant):
+    """遷移報告，相對於 -o：每個租戶一份（同一個 -o 可以放多個租戶的產物）。"""
+    return f"migration-report-{tenant}.txt"
 
 
-def split_threshold_key(key):
-    """把閾值 key 拆成 threshold-exporter 發射的 (component, metric)。
-
-    與 exporter 的 parseMetricKey 同一規則
-    （components/threshold-exporter/app/pkg/config/parse.go）：以第一個 `_`
-    拆開；沒有 `_`、或 `_` 在開頭時 component 為 "default"。`custom_mysql_x` 發射成
-    `user_threshold{component="custom", metric="mysql_x"}`，所以 selector
-    不能寫 `metric="custom_mysql_x"`——那樣永遠選不到（issue 1818）。
-    """
-    idx = key.find("_")
-    if idx <= 0:
-        return "default", key
-    return key[:idx], key[idx + 1:]
+def migrated_record_name(tenant, record):
+    """migrated recording rule 的名稱：``migrated:<租戶>:<原名>``。租戶 id（ADR-035：
+    小寫、數字、``-``）的 ``-`` 寫成 ``_``——id 裡沒有 ``_``，所以一對一。"""
+    return f"migrated:{tenant.replace('-', '_')}:{record}"
+_EXPIRY_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 
 
-def _build_recording_rules(parsed, prefixed_key, severity, agg_mode):
-    """產生 Recording Rules（LHS 注入 tenant label）。
-
-    Returns (recording_rules_list, record_name, threshold_name).
-    """
-    record_name = f"tenant:{prefixed_key}:{agg_mode}"
-    threshold_suffix = "_critical" if severity == "critical" else ""
-    threshold_name = f"tenant:alert_threshold:{prefixed_key}{threshold_suffix}"
-
-    # 依語法樹的 byte offset 改寫 LHS（#4215）
-    # 只注入 tenant label，不改指標名。前綴只用在 key 與 record 名稱上：
-    # 來源指標是客戶既有的 exporter 發的，沒有任何東西會產生
-    # `custom_<指標>` 這個名字的 series，改名後 recording rule 恆為空
-    # （issue 1818）。
-    recording_lhs = parsed['lhs']
-    if parsed['all_metrics']:
-        recording_lhs = rewrite_expr_tenant_label(
-            parsed['expr'], parsed['lhs_tree'], set(parsed['all_metrics']))
-
-    component, metric = split_threshold_key(prefixed_key)
-    rules = [
-        {
-            "record": record_name,
-            "expr": f"{agg_mode} {METRIC_GROUPING} ({recording_lhs})",
-        },
-        {
-            "record": threshold_name,
-            "expr": (f'max by(tenant) (user_threshold'
-                     f'{{component="{component}", metric="{metric}", '
-                     f'severity="{severity}"}})'),
-        },
-    ]
-    return rules, record_name, threshold_name
+def rules_rel(tenant):
+    """migrated 規則檔，相對於 -o：``<草稿根>/migrated/<租戶>/rules.yml``——
+    ``lint_custom_rules`` 掃 ``<草稿根>/migrated`` 時，目錄名就是租戶。"""
+    return f"{DRAFT_ROOT}/migrated/{tenant}/rules.yml"
 
 
-# recording rule 一律 `by(tenant, da_cluster)`（METRIC_GROUPING），告警的
-# $labels 只剩 tenant 與 da_cluster。
-_SURVIVING_LABELS = frozenset({"tenant", CLUSTER_IDENTITY_LABEL})
-_LABEL_REF = re.compile(r'\$labels\.([a-zA-Z_][a-zA-Z0-9_]*)')
-_SIMPLE_LABEL_ACTION = re.compile(
-    r'\{\{-?\s*\$labels\.([a-zA-Z_][a-zA-Z0-9_]*)\s*-?\}\}')
-def static_label_values(lhs):
-    """原式子（語法樹，或讀成語法樹的原文）裡被等值 matcher 定死的 label：
-    {label: value}。
-
-    只在式子只讀一個指標、且每個 selector 都以 `=` 把該 label 釘成同一個值時
-    才算定死：多個指標時另一邊的 series 可能帶別的值；沒寫 matcher 的 selector
-    什麼都沒釘；`!=`／`=~`／`!~`、含反斜線或引號的值也不算（它要原樣代入
-    模板）。
-    """
-    tree = _tree_of(lhs)
-    if len(set(_lib_consumer_read.shape_metric_names(tree))) != 1:
-        return {}
-    per_selector = [
-        {m["name"]: m["value"] for m in node["matchers"]
-         if m["type"] == "=" and m["name"] != "__name__"
-         and "\\" not in m["value"] and '"' not in m["value"]}
-        for node in _selectors(tree)]
-    if not per_selector:
-        return {}
-    common = per_selector[0]
-    return {k: v for k, v in common.items()
-            if all(sel.get(k) == v for sel in per_selector[1:])}
+def mapping_rel(tenant):
+    """遷移對照檔，相對於 -o（不在 migrated/ 之下：那裡的 YAML 都是規則檔）。"""
+    return f"{DRAFT_ROOT}/mapping/{tenant}.yaml"
 
 
-def rewrite_dropped_label_refs(templates, lhs, keep=(), explain=True):
-    """改寫 annotation／label 模板裡、聚合後不存在的 `$labels.X`。
-
-    舊告警的 $labels 是原查詢 series 的 label；遷移後查詢是
-    `<agg> by(tenant, da_cluster) (...)`，只剩 tenant 與 da_cluster，其他引用
-    照抄會渲染成空字串（issue 1818）。現行規則：粒度是「租戶 × 叢集」，
-    實例層級的 label（instance、pod…）不帶回聚合。這與 issue 1818 的 owner
-    裁決一致——那項裁決講的是不把實例層級的 label 帶回聚合、並改寫引用它們
-    的模板；`da_cluster` 不是實例層級的 label，而是同一個租戶在各叢集各算
-    一次（ADR-006，owner 2026-11-24 裁決，#1200），所以 `$labels.da_cluster`
-    照留，其餘照舊：
-    - 被等值 matcher 定死的 label 代入字面值，渲染結果與舊告警相同；
-    - 其他改讀 `$labels.tenant` 並附原 label 名，呼叫端負責警告。
-    `keep` 是不改寫的名字（規則自己的 static label 本來就不在 $labels 裡，
-    舊告警同樣渲染成空，改了反而改變行為）。`explain` 為真時在改寫處附上原
-    label 名；label 值會被拿去路由與去重，不附。
-
-    Returns (rewritten dict, sorted list of rewritten-to-tenant label names).
-    """
-    static = static_label_values(lhs)
-    untouched = _SURVIVING_LABELS | {"alertname"} | set(keep)
-    dropped = set()
-
-    def simple(m):
-        name = m.group(1)
-        if name in untouched:
-            return m.group(0)
-        if name in static:
-            return static[name]
-        dropped.add(name)
-        if not explain:
-            return "{{ $labels.tenant }}"
-        return f"{{{{ $labels.tenant }}}}（原為 {name}，已依租戶聚合）"
-
-    def inner(m):
-        name = m.group(1)
-        if name in untouched:
-            return m.group(0)
-        if name in static:
-            return json.dumps(static[name])  # Go template 的字串常值
-        dropped.add(name)
-        return "$labels.tenant"
-
-    rewritten = {}
-    for k, v in templates.items():
-        if isinstance(v, str):
-            v = _LABEL_REF.sub(inner, _SIMPLE_LABEL_ACTION.sub(simple, v))
-        rewritten[k] = v
-    return rewritten, sorted(dropped)
-
-
-#: The maintenance clause as every generated tenant alert spells it (#3309).
-#: Same text as scripts/tools/dx/generate_rulepack_derived.MAINTENANCE_TAIL
-#: (pinned by a test; the da-tools image ships this module without that one).
-MAINTENANCE_TAIL = 'unless on(tenant)\n(user_state_filter{filter="maintenance"} == 1)'
-
-
-def _build_alert_rule(rule, alert_name, parsed, record_name,
-                      threshold_name, prefix):
-    """產生 Alert Rule（含 labels/annotations 繼承）。
-
-    Returns (alert_rule, 改讀 tenant 的 label 名 list)。
-    """
-    alert_prefix = "Custom" if prefix else ""
-    alert_rule = {
-        "alert": f"{alert_prefix}{alert_name}" if prefix else alert_name,
-        "expr": (
-            f"(\n"
-            f"  {record_name}\n"
-            f"  {parsed['op']} on(tenant) group_left\n"
-            f"  {threshold_name}\n"
-            f")\n"
-            f"{MAINTENANCE_TAIL}"
-        ),
-    }
-    if 'for' in rule:
-        alert_rule['for'] = rule['for']
-    static_keys = set(rule.get('labels', {}))
-    labels, dropped_l = rewrite_dropped_label_refs(
-        dict(rule.get('labels', {})), parsed['lhs_tree'], keep=static_keys, explain=False)
-    if prefix:
-        labels['source'] = 'legacy'
-        labels['migration_status'] = 'shadow'
-    # #3309: the expr above always holds the maintenance clause, so the rule is
-    # `mute` — the label declares that the expr holds the clause, which a
-    # one-shot and a recurring (#3639) maintenance window both act through.
-    labels['maintenance'] = 'mute'
-    if labels:
-        alert_rule['labels'] = labels
-    dropped_a = []
-    if 'annotations' in rule:
-        alert_rule['annotations'], dropped_a = rewrite_dropped_label_refs(
-            dict(rule['annotations']), parsed['lhs_tree'], keep=static_keys)
-    return alert_rule, sorted(set(dropped_l) | set(dropped_a))
-
-
-def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
-                 tree=None):
-    """處理單條傳統 Prometheus 規則，回傳 MigrationResult。
-
-    *tree* 是這條規則運算式的語法樹（``read_trees``，main 整份規則檔一次讀）；
-    省略時讀一次。
-
-    主要步驟：
-    1. 解析表達式 → 無法解析時委派 _build_unparseable_result()
-    2. 字典比對 + prefix/severity 決策 + 聚合模式推斷
-    3. 產生三件套：tenant config / recording rules / alert rule
-    """
-    alert_name = rule.get('alert')
-    if not alert_name:
+def expiry_date(text):
+    """``--expiry``：YYYY-MM-DD、日曆上有的日子、在今天（UTC）之後，否則 None。"""
+    if not isinstance(text, str) or not _EXPIRY_DATE.match(text):
         return None
-
-    expr = rule.get('expr', '')
-    severity = rule.get('labels', {}).get('severity', 'warning')
-    if tree is None:
-        (tree,) = read_trees([expr])
-    parsed = parse_expr(expr, tree)
-
-    # 情境: 無法解析 — 委派子函式
-    if not parsed:
-        return _build_unparseable_result(
-            alert_name, expr, severity, rule, dictionary, tree)
-
-    metric_key = parsed["base_key"]
-
-    # v3: Dictionary lookup
-    dict_match = lookup_dictionary(metric_key, dictionary)
-    has_golden = dict_match and dict_match.get("golden_rule")
-
-    # 決定 metric key (含 prefix 與 severity)
-    if prefix and not has_golden:
-        prefixed_key = f"{prefix}{metric_key}"
-    else:
-        prefixed_key = metric_key
-
-    metric_key_yaml = (f"{prefixed_key}_critical"
-                       if severity == "critical" else prefixed_key)
-
-    # 智能猜測聚合模式
-    agg_mode, agg_reason = guess_aggregation(parsed["base_key"], parsed["lhs_tree"])
-
-    # 互動模式: 複雜表達式時詢問使用者
-    if interactive and parsed["is_complex"]:
-        print(f"\n🔍 Alert: {alert_name}")
-        print(f"   Expr: {expr}")
-        print(f"   🤖 AI 猜測: {agg_mode} ({agg_reason})")
-        if has_golden:
-            print(f"   📖 字典建議: 改用黃金標準 {dict_match['golden_rule']}")
-        choice = prompt_line(
-            "   選擇聚合模式 [s=sum / m=max / Enter=採用猜測]: ",
-            remedy="不帶 --interactive 重跑：複雜表達式改採 AI 猜測的聚合模式，"
-                   "並在輸出中標註待確認。",
-            lang="zh",
-        ).strip().lower()
-        if choice == 's':
-            agg_mode = "sum"
-            agg_reason = "使用者手動選擇"
-        elif choice == 'm':
-            agg_mode = "max"
-            agg_reason = "使用者手動選擇"
-
-    status = "complex" if parsed["is_complex"] else "perfect"
-    result = MigrationResult(alert_name, status, severity)
-    result.op = parsed['op']
-    result.agg_mode = agg_mode
-    result.agg_reason = agg_reason
-    result.original_expr = expr
-    result.dict_match = dict_match
-    result.base_metric = metric_key
-
-    # Triage action
-    if has_golden:
-        result.triage_action = "use_golden"
-        result.notes.append(
-            f"字典建議: {metric_key} → 黃金標準 {dict_match['golden_rule']} "
-            f"(Rule Pack: {dict_match.get('rule_pack', 'unknown')})"
-        )
-    elif status == "perfect":
-        result.triage_action = "auto"
-    else:
-        result.triage_action = "review"
-
-    # 維度標籤提示
-    result.dim_hints = extract_label_matchers(tree)
-
-    # 沒有以 `__name__=` 釘住名稱的 selector（`{__name__=~"…"}`、`{job="a"}`）
-    # 注入不了 tenant：recording rule 會讀到所有租戶的 series，要人看過（#4215）。
-    unnamed = [_node_text(expr, n) for n in _selectors(parsed["lhs_tree"])
-               if _selector_metric(n) is None]
-    if unnamed:
-        if result.triage_action != "use_golden":
-            result.triage_action = "review"
-        result.notes.append(
-            f"selector 沒有固定的指標名（{', '.join(unnamed)}），無法注入 tenant label："
-            "recording rule 會讀到所有租戶，請改寫成具名的 selector")
-
-    # === 產出 1. Tenant Config ===
-    result.tenant_config[metric_key_yaml] = parsed['val']
-
-    # === 產出 2. Recording Rules ===
-    rec_rules, record_name, threshold_name = _build_recording_rules(
-        parsed, prefixed_key, severity, agg_mode)
-    result.recording_rules.extend(rec_rules)
-
-    # === 產出 3. Alert Rule ===
-    alert_rule, dropped = _build_alert_rule(
-        rule, alert_name, parsed, record_name, threshold_name, prefix)
-    result.alert_rules.append(alert_rule)
-    result.dropped_label_refs = dropped
-    if dropped:
-        result.notes.append(
-            f"annotation／label 引用了依租戶聚合後不存在的 label（{', '.join(dropped)}），"
-            f"已改讀 $labels.tenant；通知裡看不到原本是哪一個 {dropped[0]}")
-    result.record_name = record_name
-    result.recording_lhs_original = parsed['lhs']
-    result.cluster_groupings = groupings_without_cluster(parsed['lhs_tree'])
-    if result.cluster_groupings:
-        result.notes.append(cluster_grouping_note(result.cluster_groupings))
-
-    return result
-
-
-# ============================================================
-# Auto-Suppression: Warning ↔ Critical 配對
-# ============================================================
-
-def apply_auto_suppression(results):
-    """配對 warning/critical 規則，為兩者加上 metric_group label。
-
-    v1.2.0 起，Auto-Suppression 從 PromQL 層移至 Alertmanager 層：
-    - Warning 和 Critical 都在 TSDB 留下紀錄（不再用 PromQL unless 消滅 warning）
-    - Alertmanager inhibit_rules 依 tenant + metric_group 配對，壓制 warning 通知
-    - Tenant 可設 _severity_dedup: "disable" 取消壓制，同時收到兩種通知
-
-    修改 results 中 warning + critical MigrationResult 的 alert_rules labels（in-place）。
-    回傳配對成功的數量。
-    """
-    # 建立 base_key → {severity: result} 映射
-    pairs = {}  # base_key → {"warning": result, "critical": result}
-    for r in results:
-        if r.status == "unparseable" or r.triage_action == "use_golden":
-            continue
-        if not r.tenant_config:
-            continue
-
-        # 取出 metric_key_yaml (tenant_config 的第一個 key)
-        metric_key_yaml = list(r.tenant_config.keys())[0]
-
-        # 推導 base_key：critical 去掉 _critical 後綴
-        if r.severity == "critical" and metric_key_yaml.endswith("_critical"):
-            base_key = metric_key_yaml[: -len("_critical")]
-        else:
-            base_key = metric_key_yaml
-
-        if base_key not in pairs:
-            pairs[base_key] = {}
-        pairs[base_key][r.severity] = r
-
-    paired = 0
-    for base_key, sev_map in pairs.items():
-        warn_r = sev_map.get("warning")
-        crit_r = sev_map.get("critical")
-        if not warn_r or not crit_r:
-            continue
-        if not warn_r.alert_rules or len(crit_r.recording_rules) < 2:
-            continue
-
-        # metric_group 就是 base_key 本身（#3692），與規則包孿生配對的命名
-        # 相同（#3658：孿生的 metric_group 是門檻鍵名）。severity dedup 在
-        # 一個租戶內以 metric_group 配對，所以只取最後一段（mysql_replication_lag
-        # 與 redis_replication_lag 都會變成 "lag"）會讓不同規則的 critical
-        # 互相抑制對方的 warning。
-        metric_group = base_key
-
-        # 為 warning 和 critical alert 加上 metric_group label
-        for ar in warn_r.alert_rules:
-            if "labels" not in ar:
-                ar["labels"] = {}
-            ar["labels"]["metric_group"] = metric_group
-
-        for ar in crit_r.alert_rules:
-            if "labels" not in ar:
-                ar["labels"] = {}
-            ar["labels"]["metric_group"] = metric_group
-
-        warn_r.notes.append(
-            f"Severity Dedup: 已配對 critical ({crit_r.alert_name})，"
-            f"metric_group=\"{metric_group}\"。"
-            f"Alertmanager inhibit 預設壓制 warning 通知 "
-            f"(tenant 可設 _severity_dedup: \"disable\" 取消)"
-        )
-        paired += 1
-
-    return paired
-
-
-def _emitting(results):
-    return [r for r in results
-            if r.status != "unparseable" and r.triage_action != "use_golden"
-            and r.tenant_config]
-
-
-def route_unpaired_critical_to_base(results):
-    """只有 critical、沒有同指標 warning 的規則，改讀 base 閾值列（in-place）。
-
-    原本那條規則對所有實例生效。遷移後 warning 層靠根 `_defaults.yaml` 對所有
-    租戶生效，critical 層卻不能放進 defaults（exporter 只在租戶自己設了
-    `<base>_critical` 時才發射 critical 列）。所以只有 critical 的規則若照常
-    讀 `<key>_critical`，遷移後沒有任何租戶會響（issue 1818）。改讀 base 那
-    一列、alert label 仍標 critical，與原規則「全域生效」的語意相同。
-    有 warning 配對的 critical 維持讀 critical 層。
-    回傳改寫的條數。
-    """
-    warning_bases = {k for r in _emitting(results) if r.severity != "critical"
-                     for k in r.tenant_config}
-    routed = 0
-    for r in _emitting(results):
-        if r.severity != "critical":
-            continue
-        key = next(iter(r.tenant_config))
-        if not key.endswith("_critical"):
-            continue
-        base = key[:-len("_critical")]
-        if base in warning_bases:
-            continue
-        old_thr = f"tenant:alert_threshold:{key}"
-        new_thr = f"tenant:alert_threshold:{base}"
-        r.tenant_config = {base: r.tenant_config[key]}
-        for rr in r.recording_rules:
-            if rr["record"] == old_thr:
-                rr["record"] = new_thr
-                rr["expr"] = rr["expr"].replace('severity="critical"', 'severity="warning"')
-        for ar in r.alert_rules:
-            ar["expr"] = ar["expr"].replace(old_thr, new_thr)
-        r.notes.append(
-            f"只有 critical、沒有 warning 的規則：閾值寫在 {base}（base 列），"
-            f"告警仍標 severity=critical。這樣根 _defaults.yaml 才能對所有租戶生效；"
-            f"critical 層（{key}）無法放進 defaults。")
-        routed += 1
-    return routed
-
-
-def detect_threshold_conflicts(results):
-    """同一個閾值 key 被多條規則以不同值設定時，回傳 {key: [(alert, value), ...]}。
-
-    遷移後同一個 key 只能有一個值，讀它的告警都會用這個值。先前是後寫的
-    規則悄悄勝出，租戶檔還寫出重複的 YAML key（issue 1818）。現在一律
-    取第一條規則的值，衝突逐條點名。
-    """
-    seen = {}
-    for r in _emitting(results):
-        for k, v in r.tenant_config.items():
-            seen.setdefault(k, []).append((r.alert_name, v))
-    return {k: entries for k, entries in seen.items()
-            if len({v for _, v in entries}) > 1}
-
-
-# ============================================================
-# v3: Triage Mode — CSV 報告
-# ============================================================
-
-def write_triage_csv(results, output_dir, dictionary):
-    """產出 CSV 分桶報告，供大規模遷移時在 Excel 中批次決策。"""
-    csv_path = str(Path(output_dir) / "triage-report.csv")
-    buf = io.StringIO()
-    # lineterminator='\n' — csv.writer's default is '\r\n'; we pin '\n' so the
-    # output is byte-identical on every host.
-    # ⚠️ HISTORY: this used to compensate for write_text_secure translating
-    # \n → \r\n on Windows (default '\r\n' would have landed as '\r\r\n', i.e.
-    # phantom blank rows under universal-newline reading). The writer (the
-    # operator entry since #3107) pins newline="\n" itself, so NO translation
-    # happens any more and this
-    # file is LF on every platform — previously it was CRLF on Windows and LF
-    # on Linux. Excel parses LF-only CSV fine (BOM below is what it keys on).
-    # Do NOT "restore" the old comment's reasoning: the translation it
-    # describes no longer exists.
-    writer = csv.writer(buf, lineterminator='\n')
-    writer.writerow([
-        "Alert Name",
-        "Triage Action",
-        "Status",
-        "Severity",
-        "Metric Key",
-        "Threshold",
-        "Aggregation",
-        "Aggregation Reason",
-        "Golden Standard Match",
-        "Golden Rule",
-        "Rule Pack",
-        "Dictionary Note",
-        "Dimensions",
-        "Original Expression",
-    ])
-    for r in results:
-        golden_match = r.dict_match.get("maps_to", "") if r.dict_match else ""
-        golden_rule = r.dict_match.get("golden_rule", "") if r.dict_match else ""
-        rule_pack = r.dict_match.get("rule_pack", "") if r.dict_match else ""
-        dict_note = r.dict_match.get("note", "") if r.dict_match else ""
-        metric_keys = ", ".join(r.tenant_config.keys()) if r.tenant_config else ""
-        thresholds = ", ".join(r.tenant_config.values()) if r.tenant_config else ""
-        dims = "; ".join(str(d) for d in r.dim_hints) if r.dim_hints else ""
-
-        writer.writerow([
-            r.alert_name,
-            r.triage_action or "unknown",
-            r.status,
-            r.severity,
-            metric_keys,
-            thresholds,
-            r.agg_mode or "",
-            r.agg_reason or "",
-            golden_match,
-            golden_rule,
-            rule_pack,
-            dict_note,
-            dims,
-            r.original_expr[:200],  # Truncate long exprs
-        ])
-    # CSV with BOM for Excel compatibility
-    write_operator_output_or_die(csv_path, "\ufeff" + buf.getvalue(), flag=_OUTPUT_FLAG)
-    return csv_path
-
-
-def write_prefix_mapping(results, output_dir, prefix):
-    """產出 prefix mapping table，記錄 custom_ 前綴對應黃金標準的關係。"""
-    if not prefix:
-        return None
-
-    mapping = {}
-    for r in results:
-        if r.status == "unparseable":
-            continue
-        for key in r.tenant_config.keys():
-            # `_critical` key 的原指標與 warning 那條相同；從 key 去前綴會得到
-            # 不存在的 `<指標>_critical`。
-            original = r.base_metric or (
-                key.replace(prefix, "", 1) if key.startswith(prefix) else key)
-            entry = {
-                "original_metric": original,
-                "alert_name": r.alert_name,
-                "golden_match": r.dict_match.get("maps_to") if r.dict_match else None,
-                "golden_rule": r.dict_match.get("golden_rule") if r.dict_match else None,
-            }
-            # validate --mapping 的比對組。新值是 recording rule 本身；舊值是原規則的
-            # LHS 以同一種方式逐（租戶、叢集）聚合——rate 類要保留 rate()，聚合要用
-            # 同一個 agg 與同一個分組，否則兩邊量綱、列數或 record 名對不上
-            # （issue 1818、#1200）。改用黃金標準的
-            # 規則不產出 recording rule，沒有新值可比，不寫。
-            if (r.triage_action != "use_golden" and r.record_name
-                    and r.recording_lhs_original and r.agg_mode):
-                entry["old_query"] = (
-                    f"{r.agg_mode} {METRIC_GROUPING} ({r.recording_lhs_original})")
-                entry["new_query"] = r.record_name
-            mapping[key] = entry
-
-    if not mapping:
-        return None
-
-    mapping_path = str(Path(output_dir) / "prefix-mapping.yaml")
-    mapping_content = (
-        "# ============================================================\n"
-        "# Prefix Mapping Table — custom_ 前綴對應關係\n"
-        "# ============================================================\n"
-        "# 用途: 未來收斂至黃金標準時的對照表\n"
-        f"# Prefix: {prefix}\n"
-        "# ============================================================\n\n"
-        + yaml.safe_dump(mapping, default_flow_style=False,
-                         allow_unicode=True, sort_keys=False)
-    )
-    write_operator_output_or_die(mapping_path, mapping_content, flag=_OUTPUT_FLAG)
-    return mapping_path
-
-
-# ============================================================
-# 輸出引擎
-# ============================================================
-
-def _dedup_recording_rules(results):
-    """依 record 名稱去重 recording rules，保留首見順序。
-
-    回傳 [(result, recording_rule_dict), ...]。純函式 (無 IO)，供
-    render_recording_rules 與 render_report 共用——兩者的收斂率必須一致。
-    """
-    seen_records = set()
-    deduplicated_rules = []
-    for r in results:
-        if r.status == "unparseable" or r.triage_action == "use_golden":
-            continue
-        for rr in r.recording_rules:
-            record_name = rr["record"]
-            if record_name in seen_records:
-                continue
-            seen_records.add(record_name)
-            deduplicated_rules.append((r, rr))
-    return deduplicated_rules
-
-
-#: This tool's own dot-directory under `-o` (#3997, #4014:
-#: `_lib_write_check.DRAFT_ROOTS`, where why it is dot-prefixed and one per
-#: tool is said, once): the YAML that is not a conf.d file (rule packs,
-#: prefix mapping) goes here.
-ARTIFACT_DIR = _lib_write_check.DRAFT_ROOTS["migrate_rule"]
-#: The conf.d this tool writes (#3671), under `ARTIFACT_DIR`: a tree of its
-#: own, so its two files are judged as a conf.d root holds them and the
-#: other outputs never share a name with the tenant file.
-CONFD_DIR = _lib_write_check.draft_confd_rel("migrate_rule")
-
-#: The root defaults file of that conf.d: what declares the keys the tenant
-#: file writes — scaffold_tenant writes the same pair.
-DEFAULTS_FILE = "_defaults.yaml"
-
-
-def tenant_file(tenant):
-    """The tenant file of *tenant* under `-o` (#3671): ``<tenant>.yaml``,
-    scaffold_tenant's name."""
-    return f"{tenant}.yaml"
-
-
-def tenant_config_entry(results, tenant):
-    """*tenant* 的租戶檔（`tenant_file`）交給 `da-guard write` 新建的那一項
-    （純函式，無 IO；ADR-036 §2：文字由 Go 產生，#3206 步驟 10c）。
-
-    #3671：key 寫在 `tenants.<tenant>` 底下——租戶檔頂層 `tenants` 以外的
-    key 沒有讀取端讀（共用判決報 unread），寫入時 `da-guard write` 就以共用
-    判決判這兩個檔。每個 key 取第一條規則的值、一律是字串（Go 寫成雙引號）。註解是內容：
-    檔頭（含範例與閾值衝突）是 `head_comment`；每條規則的 `--- From:` 標頭、
-    📖 註記、被略過的重複 key、維度標籤替代語法，依原順序掛在下一個寫出的 key
-    上方（`head`），落在最後一個 key 之後的寫成 `foot_comment`。檔案已存在時
-    整份取代（`replace`：重跑同一個 -o 照舊覆寫）。帶進註解的外部輸入（alert
-    名、severity、註記、key 與值、維度標籤）含註解寫不了的字元時 ValueError、
-    點名欄位。"""
-    field = _lib_confedit.comment_field  # an outside value put into a comment
-    tenant_configs = {}
-    for r in results:
-        if r.status == "unparseable":
-            continue
-        if r.triage_action == "use_golden":
-            continue  # 建議使用黃金標準的不輸出到 tenant config
-        for k, v in r.tenant_config.items():
-            tenant_configs.setdefault(k, v)
-    conflicts = detect_threshold_conflicts(results)
-
-    head = [
-        "============================================================",
-        f"租戶 {tenant} — 合併進 conf.d 的租戶檔（tenants.{tenant}）",
-        "============================================================",
-        f"⚠️ 先把同目錄的 {DEFAULTS_FILE} 合併進 conf.d 根的 _defaults.yaml：沒宣告",
-        "   的 key exporter 不會發射。warning 層的值與 defaults 相同，只有要和預設",
-        "   值不同的租戶才需要寫；<key>_critical 則是要 critical 的租戶都要寫。",
-    ]
-    for k, entries in conflicts.items():
-        listed = ", ".join(f"{a}={v}" for a, v in entries)
-        head.append(f"⚠️ 閾值衝突：{k} 被多條規則設定（{listed}），"
-                    f"一律取第一條的值 {entries[0][1]}；讀它的告警都用這個值。")
-
-    entries = []
-    pending = []  # comment lines waiting for the next key written
-    written = set()
-    for r in results:
-        if r.status == "unparseable" or r.triage_action == "use_golden":
-            continue
-        if pending:
-            pending.append("")  # the blank line between two rules
-        pending.append(f"--- From: {field('the alert name', r.alert_name)} "
-                       f"(severity: {field(f'the severity of {r.alert_name!r}', r.severity)}) ---")
-        for note in r.notes or ():
-            pending.append(f"📖 {field(f'a note of {r.alert_name!r}', note)}")
-        for k, v in r.tenant_config.items():
-            if k in written:
-                # 同一個 key 只能出現一次（重複的 YAML key 會被後者蓋掉，
-                # 嚴格的 loader 則直接拒收）。
-                pending.append(f'{k}: "{v}"  ← 與上方同一個 key，未採用（見檔頭的閾值衝突）')
-                continue
-            written.add(k)
-            entries.append((k, _lib_confedit.str_value(str(v)),
-                            _lib_confedit.comments(head="\n".join(pending))
-                            if pending else None))
-            pending = []
-        if r.dim_hints:
-            pending.append(f"維度標籤替代語法（寫在 tenants.{tenant} 底下）:")
-            for hint in r.dim_hints:
-                label_pairs = ', '.join(f'{lk}="{lv}"' for lk, lv in hint["labels"].items())
-                dim_key = f'{list(r.tenant_config.keys())[0].split("_critical")[0]}{{{label_pairs}}}'
-                pending.append(field(f"a dimension hint of {r.alert_name!r}",
-                                           f'"{dim_key}": "{list(r.tenant_config.values())[0]}"'))
-    content = _lib_confedit.map_value([("tenants", _lib_confedit.map_value(
-        [(tenant, _lib_confedit.map_value(entries))]))])
-    return _lib_confedit.create_entry(
-        tenant_file(tenant), content,
-        head_comment="\n".join(head),
-        foot_comment="\n".join(pending) if pending else None, replace=True)
-
-
-def _go_texts(entries):
-    """The text `da-guard write` writes for each create entry: a dry run in
-    an empty private directory (nothing is written anywhere)."""
-    import tempfile  # noqa: PLC0415
-
-    with tempfile.TemporaryDirectory() as tmp:
-        return [r["content"] for r in _lib_confedit.write_all(tmp, entries, dry_run=True)]
-
-
-def render_tenant_config(results, tenant):
-    """*tenant* 的租戶檔的內容字串：`tenant_config_entry` 經 `da-guard write
-    --dry-run` 產生的文字（Go 的，需要可用的 da-guard）。
-
-    #3832：與它的根 defaults 片段（`defaults_snippet_entry`）同一批 dry run，
-    如同 `write_outputs` 把兩個檔一起寫。沒有根層檔的樹照常由共用判決判，
-    租戶檔單獨一個時，沒有任何一層宣告的 key 被判 unread、dry run 被拒；
-    租戶檔的文字不受同批的檔影響。"""
-    return _go_texts([tenant_config_entry(results, tenant),
-                      defaults_snippet_entry(results)])[0]
-
-
-def _defaults_value(raw):
-    """閾值字串轉成 defaults 可讀的數字（exporter 以 float64 解 defaults）。"""
-    value = float(raw)
-    return int(value) if value.is_integer() else value
-
-
-def defaults_snippet_entry(results):
-    """根 `_defaults.yaml`（`DEFAULTS_FILE`）交給 `da-guard write` 新建的那一項
-    （純函式，無 IO）。
-
-    threshold-exporter 只發射 `_defaults.yaml` 宣告過的 key：租戶檔裡沒宣告
-    的 key 沒有任何一列送出（validate-config 的 `routes` 列報 `unread …
-    (no_row)`）。所以 migrate 產出的
-    key 必須連同一份 defaults 一起交付，否則三件套在 runtime 不會發射任何閾值
-    （issue 1818）。
-
-    只放 base key，值取自原規則：宣告後對所有租戶生效，與原本那條全域規則
-    相同。`<base>_critical` 不能放進 defaults——exporter 會把它當成另一個
-    base 指標發射成 severity="warning"，不是 critical 層；critical 層只在
-    租戶檔自己設了 `<base>_critical`、且 base 在 defaults 裡時才發射
-    （resolveCriticalRows）。所以只有 critical 的規則也要宣告 base key
-    （值同 critical）；migrate 沒有產出讀 base key 的 warning 告警，這列不會
-    觸發任何告警。值是數字（int 或 float，Go 寫成不加引號）；沒有 key 時寫
-    `defaults: {}`。
-    """
-    defaults = defaults_snippet_doc(results)["defaults"]
-    head = "\n".join([
-        "============================================================",
-        "根 defaults — 合併進 conf.d 根 _defaults.yaml 的 defaults: 區塊",
-        "⚠️ 合併，不要整份覆蓋：你的 _defaults.yaml 還有其他 key。",
-        "============================================================",
-        "threshold-exporter 只發射 _defaults.yaml 宣告過的 key。沒宣告時，",
-        "租戶檔的值不發射任何 user_threshold（validate-config 的",
-        "routes 列報 `unread … (no_row)`），上面的告警規則永遠不會響。",
-        "",
-        "值取自原規則的閾值：宣告後 warning 層對所有租戶生效，與原本那條全域",
-        "規則相同。有 warning 配對的 critical 層不能用 defaults 宣告：要 critical",
-        "的租戶，各自把租戶檔裡的 <key>_critical 寫進自己的檔案。",
-        "只有 critical 的舊規則已改讀 base 列，它的值就在這裡，對所有租戶生效。",
-        "⚠️ 值必須是數字：寫 \"disable\" 之類的字串，exporter 會丟掉整個",
-        "   defaults 區塊。要讓某個租戶不響，在該租戶的檔案寫 \"disable\"。",
-        "============================================================",
-    ])
     try:
-        numbers = [(k, _lib_confedit.number_value(v, at=("defaults", k)))
-                   for k, v in defaults.items()]
-    except ValueError as exc:
-        # A threshold with no finite value (`1e999`): named, nothing written.
-        raise ValueError(f"{DEFAULTS_FILE}: {exc}") from None
-    content = _lib_confedit.map_value([("defaults", _lib_confedit.map_value(numbers))])
-    return _lib_confedit.create_entry(DEFAULTS_FILE, content, head_comment=head,
-                                      replace=True)
+        day = datetime.date.fromisoformat(text)
+    except ValueError:
+        return None
+    return day if day > datetime.datetime.now(datetime.timezone.utc).date() else None
 
 
-def render_defaults_snippet(results):
-    """根 `_defaults.yaml` 的內容字串：`defaults_snippet_entry` 經 `da-guard
-    write --dry-run` 產生的文字（Go 的，需要可用的 da-guard）。"""
-    return _go_texts([defaults_snippet_entry(results)])[0]
+def expiry_alert(tenant, owner, expiry):
+    """到期伴隨告警：expiry 前 ``EXPIRY_WARNING_DAYS`` 天（UTC 零時）起響。只讀
+    ``time()``，不讀任何指標：沒有資料也不會誤報或漏報。"""
+    warn_at = datetime.datetime.combine(
+        expiry - datetime.timedelta(days=EXPIRY_WARNING_DAYS), datetime.time(),
+        tzinfo=datetime.timezone.utc)
+    return {
+        "alert": EXPIRY_ALERT,
+        "expr": f"vector(time()) > {int(warn_at.timestamp())}",
+        "labels": {"severity": "warning", TENANT_LABEL: tenant, MIGRATED_LABEL: MIGRATED_VALUE},
+        "annotations": {
+            "summary": (f"Migrated rules of tenant {tenant} expire on {expiry.isoformat()}: "
+                        "promote them to platform rules or renew the expiry"),
+            "owner": owner, "expiry": expiry.isoformat(),
+        },
+    }
 
 
-def defaults_snippet_doc(results):
-    """根 `_defaults.yaml` 寫出的內容 (純函式，無 IO)：``{"defaults": {...}}``，
-    `render_defaults_snippet` 寫的就是這份，寫入前以 parse-tree 讀回比對
-    （ADR-036 §2）。取值規則見 `render_defaults_snippet`。"""
-    defaults = {}
-    critical_bases = {}
-    for r in results:
-        if r.status == "unparseable" or r.triage_action == "use_golden":
+class Plan:
+    """一次遷移的判讀結果：被拒的原因（有任何一條就什麼都不寫）、輸出的
+    groups、對照、報告要點名的東西。"""
+
+    def __init__(self):
+        self.refusals = []        # "<group>/<rule>: <why>"
+        self.groups = []          # 輸出的 rule groups（dict，原 group 的 key 與順序）
+        self.mapping = []         # {"group", "alert"|"record", "selectors": [...]}
+        self.migrated_alerts = []
+        self.migrated_records = []
+        self.golden = []          # (alert, metric, dictionary entry)
+        self.unread_records = []  # 沒有被遷移的告警讀到的 record
+        self.cluster_notes = []   # (rule, groupings)
+        self.lint_warnings = []
+        self.renamed = {}         # legacy record name -> migrated name
+
+
+def _rule_name(rule):
+    return rule.get("alert") or rule.get("record") or "<unnamed>"
+
+
+def _selector_refusal(node, own_records):
+    """一個 selector 為什麼沒有一種注入只選到一個租戶（或 None），及它的指標名
+    與注入方式（"tenant"／"namespace"）。"""
+    metric = _selector_metric(node)
+    if metric is None:
+        return ("it names no metric by equality: which series it reads, and so how they "
+                "name the tenant, is not known"), None, None
+    if metric in own_records:
+        return None, metric, "tenant"
+    if ":" in metric:
+        return (f"it reads recording rule {metric}, which this file does not define: "
+                "migrate the file that defines it together with this one"), metric, None
+    form, why = _lib_metric_sources.pin_form(metric)
+    if form is None:
+        return f"{why} — a platform-level rule, not migrated per tenant", metric, None
+    return None, metric, form
+
+
+def _keeps_migrated_label(tree):
+    """運算式明寫保留（或寫入）``MIGRATED_LABEL`` 的地方，依出現順序：它的值會
+    被 migrated 的靜態 label 蓋掉。"""
+    found = []
+    for node in _lib_consumer_read.shape_nodes(tree):
+        kind = node["kind"]
+        if kind == "selector" and any(m["name"] == MIGRATED_LABEL for m in node["matchers"]):
+            found.append(f"a {MIGRATED_LABEL} matcher")
+        elif kind == "aggregate" and not node["without"] and MIGRATED_LABEL in node["labels"]:
+            found.append(f"by({MIGRATED_LABEL})")
+        elif kind == "aggregate" and node["op"] == "count_values" and \
+                (node.get("param") or {}).get("value") == MIGRATED_LABEL:
+            found.append(f'count_values("{MIGRATED_LABEL}")')
+        elif kind == "binary" and node["matching"]:
+            m = node["matching"]
+            if (m["on"] and MIGRATED_LABEL in m["labels"]) or MIGRATED_LABEL in m["include"]:
+                found.append(f"on/group_*({MIGRATED_LABEL})")
+        elif kind == "call" and node["name"] in ("label_replace", "label_join") and \
+                len(node["args"]) > 1 and (node["args"][1] or {}).get("value") == MIGRATED_LABEL:
+            found.append(f'{node["name"]}(…, "{MIGRATED_LABEL}", …)')
+    return list(dict.fromkeys(found))
+
+
+def plan_migration(groups, tenant, owner, expiry, dictionary=None, *, pin=None):
+    """判讀 *groups*（Prometheus rule loader 讀出的 rule groups）的遷移。
+
+    *pin* 預設 ``_lib_consumer_read.promql_pin``（測試注入）。回傳 ``Plan``；
+    ``plan.refusals`` 非空時其餘欄位不可用。"""
+    pin = pin or _lib_consumer_read.promql_pin
+    plan = Plan()
+    entries = [(group, rule) for group in groups for rule in group.get("rules") or []]
+    trees = read_trees([str(rule.get("expr", "")) for _, rule in entries])
+    own_records = {rule["record"] for _, rule in entries if rule.get("record")}
+    reads = {}   # id(rule) -> metric names its expression reads
+    for (_, rule), tree in zip(entries, trees):
+        reads[id(rule)] = _lib_consumer_read.shape_metric_names(tree)
+
+    # 字典命中：只讀一個原始指標、它在字典裡有黃金標準規則
+    golden_ids = set()
+    for group, rule in entries:
+        if not rule.get("alert"):
             continue
-        for k, v in r.tenant_config.items():
-            if k.endswith("_critical"):
-                critical_bases.setdefault(k[:-len("_critical")], _defaults_value(v))
-            else:
-                # 與租戶檔相同：第一條規則的值勝出（衝突另行點名）
-                defaults.setdefault(k, _defaults_value(v))
-    for base, v in critical_bases.items():
-        defaults.setdefault(base, v)
-    return {"defaults": defaults}
+        metrics = [m for m in reads[id(rule)] if m not in own_records]
+        hit = lookup_dictionary(metrics[0], dictionary) if len(metrics) == 1 else None
+        if isinstance(hit, dict) and hit.get("golden_rule") and len(reads[id(rule)]) == 1:
+            golden_ids.add(id(rule))
+            plan.golden.append((rule["alert"], metrics[0], hit))
 
+    # 被遷移的告警讀到的 record（遞移），同檔一起遷移
+    by_record = {}
+    for group, rule in entries:
+        if rule.get("record"):
+            by_record.setdefault(rule["record"], []).append(rule)
+    needed, todo = set(), [m for g, r in entries if r.get("alert") and id(r) not in golden_ids
+                           for m in reads[id(r)]]
+    while todo:
+        name = todo.pop()
+        if name in by_record and name not in needed:
+            needed.add(name)
+            todo.extend(m for r in by_record[name] for m in reads[id(r)])
+    plan.unread_records = sorted(own_records - needed)
 
-def render_recording_rules(results, prefix="custom_"):
-    """組出 platform-recording-rules.yaml 內容字串 (純函式，無 IO)。"""
-    # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
-    # Deduplication: 追蹤已產出的 recording rule record 名稱
-    deduplicated_rules = _dedup_recording_rules(results)
+    chosen = [(g, r, t) for (g, r), t in zip(entries, trees)
+              if (r.get("alert") and id(r) not in golden_ids) or r.get("record") in needed]
+    names = {r.get("alert") for _, r in entries}
+    if EXPIRY_ALERT in names:
+        plan.refusals.append(f"{EXPIRY_ALERT}: the expiry alert migrate-rule adds has this "
+                             "name; rename the rule")
+    if any(g.get("name") == EXPIRY_GROUP for g in groups):
+        plan.refusals.append(f"group {EXPIRY_GROUP}: the group of the expiry alert migrate-rule "
+                             "adds has this name; rename the group")
 
-    # 計算收斂率
-    total_input = len([r for r in results if r.status != "unparseable"])
-    total_output = len(deduplicated_rules)
+    namespace_form = set()
+    for group, rule, tree in chosen:
+        where = f"{group.get('name', '<unnamed>')}/{_rule_name(rule)}"
+        is_alert = bool(rule.get("alert"))
+        for node in _selectors(tree):
+            why, metric, form = _selector_refusal(node, own_records)
+            if why:
+                plan.refusals.append(f"{where}: selector {_node_text(str(rule['expr']), node)}: "
+                                     f"{why}")
+            elif form == "namespace":
+                namespace_form.add(metric)
+        if is_alert:
+            kept = _keeps_migrated_label(tree)
+            if kept:
+                plan.refusals.append(
+                    f"{where}: the expression keeps {MIGRATED_LABEL} ({', '.join(kept)}); a "
+                    f"migrated alert writes {MIGRATED_LABEL}={MIGRATED_VALUE} over it, so "
+                    "alerts that differ only by it collapse into one labelset Prometheus "
+                    "refuses to evaluate")
+        written = {**(group.get("labels") or {}), **(rule.get("labels") or {})}
+        mine = {TENANT_LABEL: tenant, **({MIGRATED_LABEL: MIGRATED_VALUE} if is_alert else {})}
+        for key, value in mine.items():
+            if key in written and written[key] != value:
+                plan.refusals.append(
+                    f"{where}: label {key} is {json.dumps(str(written[key]))}, not "
+                    f"{json.dumps(value)}: a migrated rule writes {key}={value} itself")
+        if is_alert:
+            for key, value in (("owner", owner), ("expiry", expiry.isoformat())):
+                have = (rule.get("annotations") or {}).get(key)
+                if key in written:
+                    plan.refusals.append(f"{where}: {key} is a label; a migrated alert's "
+                                         f"{key} is an annotation (governance)")
+                elif have is not None and str(have) != value:
+                    plan.refusals.append(
+                        f"{where}: annotation {key} is {json.dumps(str(have))}, not "
+                        f"{json.dumps(value)} (--{key})")
 
-    group_name = f"{prefix}migrated-recording-rules" if prefix else "migrated-recording-rules"
-    buf = io.StringIO()
-    buf.write("# ============================================================\n")
-    buf.write("# Platform Recording Rules — 可直接合併至 Prometheus ConfigMap\n")
-    buf.write("# ============================================================\n")
-    if total_input > 0:
-        compression = round((1 - total_output / max(total_input * 2, 1)) * 100, 1)
-        buf.write(f"# 收斂率: {total_input} 條規則 → {total_output} 條 Recording Rules")
-        buf.write(f" (壓縮 {compression}%)\n")
-    buf.write("# ============================================================\n\n")
-    buf.write("groups:\n")
-    buf.write(f"  - name: {group_name}\n")
-    buf.write("    rules:\n")
-    for r, rr in deduplicated_rules:
-        # 當聚合模式為 AI 猜測 (非使用者手動選擇) 時，插入醒目警告方塊
-        if r.status == "complex" and r.agg_reason != "使用者手動選擇":
-            buf.write("      # ============================================================\n")
-            buf.write("      # 🚨🚨🚨 [AI 智能猜測注意] 🚨🚨🚨\n")
-            buf.write("      # ============================================================\n")
-            buf.write(f"      # 以下 recording rule 的聚合模式為 AI 自動猜測: {r.agg_mode}\n")
-            buf.write(f"      # 猜測原因: {r.agg_reason}\n")
-            buf.write(f"      # 原始 Alert: {r.alert_name}\n")
-            buf.write("      #\n")
-            buf.write("      # ⚠️  請在複製貼上前確認:\n")
-            buf.write(f"      #   - 聚合模式 {r.agg_mode} 是否正確? (sum=叢集總量, max=單點瓶頸)\n")
-            buf.write("      #   - 如不確定，請用 --interactive 模式重新執行\n")
-            buf.write("      # ============================================================\n")
+    plan.renamed = {name: migrated_record_name(tenant, name) for name in sorted(needed)}
+    answers = pin(tenant, [str(r["expr"]) for _, r, _ in chosen], sorted(namespace_form),
+                  rename=plan.renamed)
+    for (group, rule, _), answer in zip(chosen, answers):
+        if "conflict" in answer:
+            plan.refusals.append(f"{group.get('name', '<unnamed>')}/{_rule_name(rule)}: "
+                                 f"selector {answer['conflict']}")
+    if plan.refusals:
+        return plan
+
+    out_groups = {}
+    for (group, rule, tree), answer in zip(chosen, answers):
+        out = out_groups.get(id(group))
+        if out is None:
+            out = {k: v for k, v in group.items() if k != "rules"}
+            out["rules"] = []
+            out_groups[id(group)] = out
+        new = dict(rule)
+        if rule.get("record"):
+            new["record"] = plan.renamed[rule["record"]]
+        new["expr"] = answer["expr"]
+        is_alert = bool(rule.get("alert"))
+        new["labels"] = {**(rule.get("labels") or {}), TENANT_LABEL: tenant,
+                         **({MIGRATED_LABEL: MIGRATED_VALUE} if is_alert else {})}
+        if is_alert:
+            new["annotations"] = {**(rule.get("annotations") or {}),
+                                  "owner": owner, "expiry": expiry.isoformat()}
+            plan.migrated_alerts.append(rule["alert"])
         else:
-            buf.write(f"      # {r.alert_name} | {r.agg_mode} — {r.agg_reason}\n")
-        if r.cluster_groupings and rr["record"] == r.record_name:
-            buf.write(f"      # ⚠️ {cluster_grouping_note(r.cluster_groupings)}\n")
-        buf.write(f"      - record: {rr['record']}\n")
-        expr_text = rr['expr']
-        if "\n" in expr_text or "#" in expr_text or ": " in expr_text:
-            # A multi-line LHS (#4215: it migrates now), a `#` comment or a
-            # `: ` is no YAML plain scalar — write a literal block.
-            buf.write("        expr: |\n")
-            for line in expr_text.strip().split('\n'):
-                buf.write(f"          {line}\n")
-        else:
-            buf.write(f"        expr: {expr_text}\n")
-        buf.write("\n")
-    return buf.getvalue()
+            plan.migrated_records.append(rule["record"])
+        out["rules"].append(new)
+        entry = {"group": group.get("name"),
+                 ("alert" if is_alert else "record"): _rule_name(rule)}
+        if not is_alert:
+            entry["migrated_record"] = new["record"]
+        entry["selectors"] = answer.get("selectors", [])
+        plan.mapping.append(entry)
+        groupings = groupings_without_cluster(tree)
+        if groupings:
+            plan.cluster_notes.append((_rule_name(rule), groupings))
+    plan.groups = [out_groups[id(g)] for g in groups if id(g) in out_groups]
+    if plan.groups:
+        plan.groups.append({"name": EXPIRY_GROUP,
+                            "rules": [expiry_alert(tenant, owner, expiry)]})
+        # only on the migrated side: the alert-set comparison must expect it
+        plan.mapping.append({"group": EXPIRY_GROUP, "alert": EXPIRY_ALERT, "added": True,
+                             "selectors": []})
+    return plan
 
 
-def _yaml_scalar(value):
-    """label 值一律寫成雙引號純量（JSON 字串即合法的 YAML 雙引號純量）。
-
-    ⛔ #3206（ADR-036 §12）：這裡曾以 PyYAML 猜「Prometheus 會不會把這個值讀成
-    字串」來決定要不要加引號——那是在模仿消費者，而且猜錯方向：Prometheus 的
-    rulefmt（yaml v3 解進 map[string]string）把 `true`、`010` 這類純量照原文
-    讀成字串，卻把未加引號的 `null` 讀成空字串，而 PyYAML 的猜測放行了
-    `null`。雙引號純量在每一種 YAML 讀法裡都是原字串，不需要任何讀者的判斷，
-    也與 annotations 的寫法一致。"""
-    return json.dumps(str(value), ensure_ascii=False)
+def render_rules(plan, tenant, source):
+    """migrated 規則檔的文字。"""
+    head = (f"# migrate-rule：租戶 {tenant} 由 {source} 原樣遷移的規則。\n"
+            "# 由抓取原始指標的那台 Prometheus 載入（單一 Prometheus，或 federation 的 edge）。\n"
+            "# expr 是 Prometheus 印出的注入後運算式；要改規則，改來源後重跑 migrate-rule。\n")
+    return head + yaml.safe_dump({"groups": plan.groups}, sort_keys=False,
+                                 allow_unicode=True, width=1000)
 
 
-def render_alert_rules(results, prefix="custom_"):
-    """組出 platform-alert-rules.yaml 內容字串 (純函式，無 IO)。"""
-    # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
-    alert_group_name = f"{prefix}migrated-alert-rules" if prefix else "migrated-alert-rules"
-    buf = io.StringIO()
-    buf.write("# ============================================================\n")
-    buf.write("# Platform Dynamic Alert Rules — 可直接合併至 Prometheus ConfigMap\n")
-    buf.write("# ============================================================\n")
-    buf.write("groups:\n")
-    buf.write(f"  - name: {alert_group_name}\n")
-    buf.write("    rules:\n")
-    for r in results:
-        if r.status == "unparseable" or r.triage_action == "use_golden":
-            continue
-        buf.write(f"      # --- {r.alert_name} ---\n")
-        dropped = getattr(r, "dropped_label_refs", None)
-        if dropped:
-            buf.write(f"      # ⚠️ 原 annotation／label 引用的 {', '.join(dropped)} 在依租戶聚合後"
-                      f"不存在，已改讀 $labels.tenant\n")
-        # Write alert rule with proper indentation
-        for ar in r.alert_rules:
-            buf.write(f"      - alert: {ar['alert']}\n")
-            # Multiline expr — use YAML literal block
-            buf.write("        expr: |\n")
-            for line in ar['expr'].strip().split('\n'):
-                buf.write(f"          {line}\n")
-            if 'for' in ar:
-                buf.write(f"        for: {ar['for']}\n")
-            if 'labels' in ar:
-                buf.write("        labels:\n")
-                for lk, lv in ar['labels'].items():
-                    buf.write(f"          {lk}: {_yaml_scalar(lv)}\n")
-            if 'annotations' in ar:
-                buf.write("        annotations:\n")
-                for ak, av in ar['annotations'].items():
-                    # 雙引號純量要跳脫：annotation 常見 `printf "%.2f"`，
-                    # 直接包一層引號會產出 parse 不了的 YAML。
-                    buf.write(f"          {ak}: {json.dumps(str(av), ensure_ascii=False)}\n")
-        buf.write("\n")
-    return buf.getvalue()
+def render_mapping(plan, tenant):
+    """遷移對照檔的文字（validate-migration 讀，#4227）。"""
+    head = ("# migrate-rule 的遷移對照：每條 migrated 規則的 selector 注入前（legacy）\n"
+            "# 與注入後（pinned），以及 (tenant, alert)。selector 是不帶 range／offset／@ 的\n"
+            "# instant selector，可直接拿去數序列：legacy 有、pinned 沒有的，就是注入選不到。\n")
+    return head + yaml.safe_dump(
+        {"tenant": tenant, "rules_file": rules_rel(tenant), "rules": plan.mapping},
+        sort_keys=False, allow_unicode=True, width=1000)
 
 
-def _buckets(results):
-    """把規則分成互斥的四桶：(perfect, complex, unparseable, golden)。
+def render_report(plan, tenant, owner, expiry):
+    """遷移報告（中文）。"""
+    lines = [f"migrate-rule 遷移報告：租戶 {tenant}", "=" * 60,
+             f"owner：{owner}　expiry：{expiry.isoformat()}"
+             f"（{EXPIRY_WARNING_DAYS} 天前起 {EXPIRY_ALERT} 會響）", "",
+             "載入點：抓取原始指標的那台 Prometheus（單一 Prometheus，或 federation 架構下的 "
+             "edge）。只帶 namespace 的 kube-state-metrics 序列不會被拉到中央，載入中央的話這些"
+             "規則永遠不響。", ""]
+    lines.append(f"已遷移的告警（{len(plan.migrated_alerts)}）：")
+    lines += [f"  - {a}" for a in plan.migrated_alerts] or ["  （無）"]
+    if plan.migrated_records:
+        lines.append(f"一起遷移的 recording rule（{len(plan.migrated_records)}，改名以免與 "
+                     "legacy 的同名 record 互讀）：")
+        lines += [f"  - {r} → {plan.renamed[r]}" for r in plan.migrated_records]
+    if plan.migrated_alerts:
+        lines += ["", f"注意：每條 migrated 告警寫 {MIGRATED_LABEL}={MIGRATED_VALUE}，蓋掉序列自己的 "
+                  f"{MIGRATED_LABEL}。序列本身帶 {MIGRATED_LABEL}（從抓取來）、多條只差它的，"
+                  "會變成同一組 label，Prometheus 不評估這條告警（規則的 health 是 err）。"]
+    if plan.golden:
+        lines += ["", "改用黃金標準（平台 rule pack 已涵蓋，未產生 migrated 規則）："]
+        for alert, metric, hit in plan.golden:
+            lines.append(f"  - {alert}（{metric}）→ {hit.get('golden_rule')}"
+                         f"（rule pack {hit.get('rule_pack', '?')}）")
+            if hit.get("note"):
+                lines.append(f"      {hit['note']}")
+    if plan.unread_records:
+        lines += ["", "未遷移的 recording rule（沒有被遷移的告警讀到）："]
+        lines += [f"  - {r}" for r in plan.unread_records]
+    if plan.cluster_notes:
+        lines += ["", "需人工確認（多叢集）："]
+        for name, groupings in plan.cluster_notes:
+            lines.append(f"  - {name}：{cluster_grouping_note(groupings)}")
+    if plan.lint_warnings:
+        lines += ["", "lint WARN："]
+        lines += [f"  - {w}" for w in plan.lint_warnings]
+    return "\n".join(lines) + "\n"
 
-    改用黃金標準（`triage_action == "use_golden"`）的規則不轉換、不輸出，所以
-    只進 golden 桶，不再同時算在它的解析狀態裡；四桶加總等於規則總數。摘要、
-    報告與 dry-run 都讀這一份，數字才會彼此對得上（issue 3772：先前「成功轉換
-    0 條規則 (✅ 2 完美, ⚠️ 1 已猜測)」——總數扣了黃金標準、分項沒扣）。
-    """
-    golden = [r for r in results if r.triage_action == "use_golden"]
-    rest = [r for r in results if r.triage_action != "use_golden"]
-    return ([r for r in rest if r.status == "perfect"],
-            [r for r in rest if r.status == "complex"],
-            [r for r in rest if r.status == "unparseable"],
-            golden)
 
-
-def render_report(results):
-    """組出 migration-report.txt 內容字串 (純函式，無 IO)。
-
-    收斂率所需的 total_input / total_output 與 render_recording_rules 用同一個
-    _dedup_recording_rules 純函式計算，確保兩份輸出的數字一致。
-    """
-    # --- migration-report.txt ---
-    perfect, complex_rules, unparseable, golden_matches = _buckets(results)
-
-    total_input = len([r for r in results if r.status != "unparseable"])
-    total_output = len(_dedup_recording_rules(results))
-
-    buf = io.StringIO()
-    buf.write("=" * 60 + "\n")
-    buf.write("遷移報告 (Migration Report)\n")
-    buf.write("=" * 60 + "\n\n")
-    buf.write(f"總規則數: {len(results)}\n")
-    buf.write(f"  ✅ 完美解析: {len(perfect)}\n")
-    buf.write(f"  ⚠️  複雜表達式 (已自動猜測): {len(complex_rules)}\n")
-    buf.write(f"  🚨 無法解析 (需 LLM 協助): {len(unparseable)}\n")
-    buf.write(f"  📖 建議使用黃金標準: {len(golden_matches)}\n\n")
-    conflicts = detect_threshold_conflicts(results)
-    if conflicts:
-        buf.write("⚠️ 閾值衝突（同一個 key 被多條規則設不同值，遷移後只能有一個值）:\n")
-        for k, entries in conflicts.items():
-            listed = ", ".join(f"{a}={v}" for a, v in entries)
-            buf.write(f"  - {k}: {listed} → 採用 {entries[0][1]}\n")
-        buf.write("  讀這個 key 的告警都會用採用的值；原本各自不同門檻的告警請改寫成不同的 key。\n\n")
-
-    # 收斂率統計 — 桶互斥，golden 已不在 perfect／complex 裡
-    convertible = len(perfect) + len(complex_rules)
-    if convertible > 0:
-        buf.write("📊 收斂率統計:\n")
-        buf.write(f"  輸入: {len(results)} 條傳統規則\n")
-        buf.write(f"  輸出: {total_output} 條 Recording Rules "
-                  f"+ {convertible} 條 Alert Rules\n")
-        if total_input > 0:
-            compression = round((1 - total_output / max(total_input * 2, 1)) * 100, 1)
-            buf.write(f"  壓縮率: {compression}%\n")
-        buf.write("\n")
-
-    if golden_matches:
-        buf.write("-" * 40 + "\n")
-        buf.write("📖 建議使用黃金標準 — 有 Metric Key 的，請用 scaffold_tenant.py 設定閾值\n")
-        buf.write("-" * 40 + "\n")
-        for r in golden_matches:
-            golden = r.dict_match
-            buf.write(f"  • {r.alert_name}\n")
-            buf.write(f"    → 黃金標準: {golden.get('golden_rule', '?')}\n")
-            # maps_to: null = 固定條件的黃金規則，沒有租戶閾值（issue 1196）
-            key = golden.get("maps_to") or "（無：黃金標準以固定條件判斷，沒有租戶閾值可設）"
-            buf.write(f"    → Metric Key: {key}\n")
-            buf.write(f"    → Rule Pack: {golden.get('rule_pack', '?')}\n")
-            buf.write(f"    → {golden.get('note', '')}\n")
-        buf.write("\n")
-
-    if perfect:
-        buf.write("-" * 40 + "\n")
-        buf.write("✅ 完美解析的規則\n")
-        buf.write("-" * 40 + "\n")
-        for r in perfect:
-            buf.write(f"  • {r.alert_name}: {r.agg_mode} ({r.agg_reason})\n")
-        buf.write("\n")
-
-    if complex_rules:
-        buf.write("-" * 40 + "\n")
-        buf.write("⚠️  複雜表達式 — 已自動猜測聚合模式，建議人工確認\n")
-        buf.write("-" * 40 + "\n")
-        for r in complex_rules:
-            buf.write(f"  • {r.alert_name}: {r.agg_mode} ({r.agg_reason})\n")
-            if r.dim_hints:
-                buf.write(f"    📐 維度標籤偵測: {r.dim_hints}\n")
-            if r.cluster_groupings:
-                buf.write(f"    ⚠️ {cluster_grouping_note(r.cluster_groupings)}\n")
-        buf.write("\n")
-
-    if unparseable:
-        buf.write("-" * 40 + "\n")
-        buf.write("🚨 無法自動解析 — 請將以下 LLM Prompt 交給 Claude 處理\n")
-        buf.write("-" * 40 + "\n")
-        for r in unparseable:
-            buf.write(f"\n### {r.alert_name} ###\n")
-            buf.write(r.llm_prompt)
-            buf.write("\n")
-    return buf.getvalue()
+def lint_output(text, tenant, policy_doc=None, policy_path=None):
+    """對自己的輸出跑 ``lint_custom_rules``（租戶隔離、治理、deny-list），以
+    租戶規則檔的佈局（``<掃描目錄>/<租戶>/rules.yml``）。→ (errors, warnings)，
+    各為一行文字的 list。"""
+    import lint_custom_rules
+    policy = lint_custom_rules.load_policy(policy_doc, policy_path)
+    with tempfile.TemporaryDirectory(prefix="migrate-rule-lint-") as scan:
+        path = os.path.join(scan, tenant, "rules.yml")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+        results, _ = lint_custom_rules.lint_file(path, policy, tenant=tenant)
+    def line(r):
+        return f"{r.rule_name or '<file>'}: {r.message}"
+    return ([line(r) for r in results if r.severity == "ERROR"],
+            [line(r) for r in results if r.severity == "WARN"])
 
 
 def _require_output_tree(output_dir):
-    """寫進 -o 之前（不論寫什麼）：既有的目錄先過共用的 conf.d 拒絕
+    """寫進 -o 之前：既有的目錄先過共用的 conf.d 拒絕
     （`_lib_write_check.require_output_tree`，#3206）；沒有可用的 da-guard
     ⇒ 結束碼 2、一個檔都不寫。"""
     import _lib_parse_tree
-    import _lib_write_check
     try:
         _lib_write_check.require_output_tree(output_dir)
     except _lib_parse_tree.ParseTreeError as exc:
@@ -1464,140 +702,31 @@ def _require_output_tree(output_dir):
         sys.exit(EXIT_CALLER_ERROR)
 
 
-def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, tenant):
-    """將遷移結果寫入分離的 YAML 檔案 (含合法 YAML 結構)。
-
-    序列化邏輯已抽成 render_* 純函式；本函式僅負責路徑組裝與落盤 (thin writer)。
-
-    *tenant*（ADR-035 的租戶 id；不合法就 rc 2、什麼都不寫）是租戶檔的名稱
-    與 `tenants:` 底下的 key（#3671）。
-
-    ADR-036 §2（#3206 步驟 10c）：寫 conf.d 的只有 Go。兩個 conf.d 內容檔
-    （`<tenant>.yaml`、`_defaults.yaml`）一次交給同一次 `da-guard write`，寫進
-    `-o/.migration/conf.d`（`CONFD_DIR`，#3671、#4014；已存在就整份取代）：那棵樹判一次，兩個檔
-    同進退——一個被拒就一個都不寫、結束碼 2，其他檔也不寫。之前先讓既有的
-    `-o` 過共用的 conf.d 拒絕（`_require_output_tree`；點開頭的 `.migration/` 不在其中），且那棵 conf.d 不得有
-    別的租戶檔（另一次 `--tenant` 留下的租戶檔會成為多出來的租戶）。rule pack 與
-    prefix mapping 是 YAML 但不是 conf.d 檔，在批次之後寫進 `-o/.migration/`
-    （`ARTIFACT_DIR`，#3997：點開頭，conf.d 的讀取端不讀）；報表與 CSV 不是 YAML，
-    寫在 `-o`。
-    """
-    if not is_valid_tenant_id(tenant):
-        print(f"ERROR: --tenant {tenant!r} is not a valid tenant id ({tenant_id_rule()[1]}) "
-              "— nothing was written", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-    conf_dir = Path(output_dir) / CONFD_DIR
+def write_outputs(output_dir, tenant, rules_text, mapping_text, report_text):
+    """三個檔：先確認每個目標都寫得進去（``check_writable_artifact``，#4250：
+    目錄、唯讀檔、建不出來的目錄），再寫第一個——不會只寫了規則檔、沒有對照。"""
     _require_output_tree(output_dir)
+    out = Path(output_dir)
+    files = ((rules_rel(tenant), rules_text), (mapping_rel(tenant), mapping_text),
+             (report_rel(tenant), report_text))
+    # -o itself first: a file there (or under a file) is named as -o, not as
+    # the first file under it
+    ensure_dir_or_die(out, flag=_OUTPUT_FLAG)
     try:
-        entries = [tenant_config_entry(results, tenant), defaults_snippet_entry(results)]
-    except ValueError as exc:
-        print(f"ERROR: {exc} — nothing was written", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-    # Before the batch, without creating anything (a refused batch leaves
-    # no directory behind): the draft holds no other run's tenant, and a
-    # `-o/.migration` that is not a directory ends the run with nothing
-    # written, not after the conf.d files are on disk (#3997).
-    refusal = _lib_write_check.refuse_draft_layout(
-        output_dir, "migrate_rule", [e["path"] for e in entries],
-        why="another --tenant's file is another tenant in the tree, #3671")
-    if refusal:
-        print(f"ERROR: {refusal} — nothing was written", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-    artifact_dir = Path(output_dir) / ARTIFACT_DIR
-    _lib_confedit.write_all_or_exit(
-        conf_dir, entries, tool="migrate_rule",
-        make_root=lambda: ensure_dir_or_die(conf_dir, flag=_OUTPUT_FLAG))
-    ensure_dir_or_die(artifact_dir, flag=_OUTPUT_FLAG)
-
-    # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
-    recording_rules_path = str(artifact_dir / "platform-recording-rules.yaml")
-    write_operator_output_or_die(recording_rules_path,
-                                 render_recording_rules(results, prefix), flag=_OUTPUT_FLAG)
-
-    # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
-    alert_rules_path = str(artifact_dir / "platform-alert-rules.yaml")
-    write_operator_output_or_die(alert_rules_path, render_alert_rules(results, prefix),
-                                 flag=_OUTPUT_FLAG)
-
-    # --- migration-report.txt ---
-    report_path = str(Path(output_dir) / "migration-report.txt")
-    write_operator_output_or_die(report_path, render_report(results), flag=_OUTPUT_FLAG)
-
-    # --- v3: Triage CSV ---
-    csv_path = write_triage_csv(results, output_dir, dictionary)
-
-    # --- v3: Prefix Mapping ---
-    mapping_path = write_prefix_mapping(results, artifact_dir, prefix)
-
-    # 桶計數 (回傳值) — 與 render_report 讀同一份 _buckets，四桶互斥。
-    return tuple(len(b) for b in _buckets(results))
+        for rel, _ in files:
+            check_writable_artifact(str(out / rel), flag=_OUTPUT_FLAG, make_dirs=True)
+    except OutputWriteError as exc:
+        die_caller_error(f"ERROR: {safe_label(str(exc))}", reason="output_unwritable")
+    for rel, text in files:
+        ensure_dir_or_die((out / rel).parent, flag=_OUTPUT_FLAG)
+        write_operator_output_or_die(str(out / rel), text, flag=_OUTPUT_FLAG)
 
 
-def print_dry_run(results):
-    """Dry-run 模式: 僅在 STDOUT 輸出報告摘要。"""
-    perfect, complex_rules, unparseable, golden_matches = _buckets(results)
-
-    print(f"\n{'='*60}")
-    print("🔍 Dry-Run 預覽 (不產生檔案)")
-    print(f"{'='*60}\n")
-    print(f"總規則數: {len(results)}")
-    print(f"  ✅ 完美解析: {len(perfect)}")
-    print(f"  ⚠️  複雜表達式 (自動猜測): {len(complex_rules)}")
-    print(f"  🚨 無法解析 (需 LLM): {len(unparseable)}")
-    print(f"  📖 建議使用黃金標準: {len(golden_matches)}\n")
-
-    for r in results:
-        if r.triage_action == "use_golden":
-            golden = r.dict_match
-            print(f"  📖 {r.alert_name}: 建議改用黃金標準 "
-                  f"{golden.get('golden_rule', '?')} (scaffold_tenant.py)")
-        elif r.status == "unparseable":
-            print(f"  🚨 {r.alert_name}: 無法自動解析 (需 LLM 協助)")
-        else:
-            icon = "✅" if r.status == "perfect" else "⚠️"
-            print(f"  {icon} {r.alert_name}: {r.agg_mode} — {r.agg_reason}")
-            for k, v in r.tenant_config.items():
-                print(f"     → {k}: \"{v}\"")
-            if r.dim_hints:
-                print(f"     📐 維度: {r.dim_hints}")
-            if r.cluster_groupings:
-                print(f"     ⚠️ {cluster_grouping_note(r.cluster_groupings)}")
-    print()
-
-
-def print_triage(results):
-    """Triage 模式: 精簡統計 + CSV 路徑指引。"""
-    auto = [r for r in results if r.triage_action == "auto"]
-    review = [r for r in results if r.triage_action == "review"]
-    skip = [r for r in results if r.triage_action == "skip"]
-    golden = [r for r in results if r.triage_action == "use_golden"]
-
-    print(f"\n{'='*60}")
-    print("📊 Triage 分析報告 (大規模遷移前置分析)")
-    print(f"{'='*60}\n")
-    print(f"總規則數: {len(results)}\n")
-    print(f"  ✅ 可自動轉換 (auto):      {len(auto):>4} 條")
-    print(f"  ⚠️  需人工確認 (review):     {len(review):>4} 條")
-    print(f"  🚨 無法轉換 (skip):         {len(skip):>4} 條")
-    print(f"  📖 建議黃金標準 (use_golden): {len(golden):>4} 條\n")
-
-    # 收斂率
-    unique_records = set()
-    for r in results:
-        if r.status != "unparseable":
-            for rr in r.recording_rules:
-                unique_records.add(rr["record"])
-    convertible = len(auto) + len(review)
-    if convertible > 0:
-        print(f"📈 預估收斂率:")
-        print(f"   {convertible} 條可轉換規則 → {len(unique_records)} 條 Recording Rules")
-        compression = round((1 - len(unique_records) / max(convertible * 2, 1)) * 100, 1)
-        print(f"   壓縮率: {compression}%\n")
-
-    if golden:
-        print(f"💡 建議:")
-        print(f"   {len(golden)} 條規則已有黃金標準覆蓋，建議直接用")
-        print(f"   scaffold_tenant.py 設定閾值，不需要轉換。\n")
+def _refuse(lines):
+    for line in lines:
+        print(f"ERROR: {line}", file=sys.stderr)
+    print(f"ERROR: {len(lines)} problem(s) above — nothing was written", file=sys.stderr)
+    sys.exit(EXIT_CALLER_ERROR)
 
 
 # ============================================================
@@ -1606,132 +735,102 @@ def print_triage(results):
 
 @exit_on_yaml_file_error  # #4064: an unreadable metric dictionary → rc 2, named
 def main():
-    """CLI entry point: 傳統 Prometheus 警報規則遷移輔助工具。"""
+    """CLI entry point: 把一個租戶的傳統規則原樣遷移成 migrated 規則。"""
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
-        description="傳統 Prometheus 警報規則遷移輔助工具 — 自動轉換為動態多租戶三件套"
+        description="把一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則：每個 selector "
+                    "注入租戶隔離，加 tenant／component=migrated label 與 owner／expiry "
+                    "annotation，附到期伴隨告警（#4226）"
     )
     # #4040：規則檔由 _lib_input 讀一次；da-read 讀的是那份文字，不再開檔。
     _lib_input.add_input(parser, "input_file", decode=_lib_input.Document("text", str),
-                         help="傳統 Prometheus alert rules YAML 檔案")
+                         help="一個租戶的傳統 Prometheus rules YAML 檔案")
     parser.add_argument("-o", "--output-dir", default="migration_output", type=output_dir_type(),
-                        help="輸出目錄 (預設: migration_output)")
-    parser.add_argument("--tenant",
-                        help="租戶 id：寫出 <tenant>.yaml（tenants.<tenant> 底下）。"
-                             "產生檔案時必填；--triage、--dry-run 不需要")
+                        help="草稿目錄 (預設: migration_output)；不得是服務中的 conf.d")
+    parser.add_argument("--tenant", required=True,
+                        help="租戶 id：每個 selector 釘到它，label tenant 寫它")
+    parser.add_argument("--owner", required=True,
+                        help="負責人：寫進每條告警的 owner annotation")
+    parser.add_argument("--expiry", required=True, metavar="YYYY-MM-DD",
+                        help="到期日（今天之後）：寫進 expiry annotation；"
+                             f"{EXPIRY_WARNING_DAYS} 天前起 {EXPIRY_ALERT} 會響")
     parser.add_argument("--dry-run", action="store_true",
-                        help="僅顯示報告，不產生檔案")
-    parser.add_argument("--interactive", action="store_true",
-                        help="遇到複雜表達式時互動詢問聚合模式")
-    parser.add_argument("--triage", action="store_true",
-                        help="Triage 模式: 只產出 CSV 分桶報告 (適合大規模遷移前置分析)")
-    parser.add_argument("--no-prefix", action="store_true",
-                        help="停用 custom_ 前綴隔離 (不建議: 可能與黃金標準衝突)")
-    parser.add_argument("--prefix", default="custom_",
-                        help="自訂前綴 (預設: custom_)")
+                        help="只印報告，不寫檔")
     parser.add_argument("--no-dictionary", action="store_true",
-                        help="停用啟發式字典比對")
+                        help="停用字典比對（每條告警都遷移，不建議改用黃金標準）")
+    import lint_custom_rules  # the lint's own declaration of its policy document
+    _lib_input.add_input(parser, "--policy", decode=lint_custom_rules.POLICY_DOCUMENT,
+                         help="自我 lint 用的 custom-rule-policy.yaml（預設：內建政策）")
     args = parser.parse_args()
 
-    # 確定 prefix
-    prefix = "" if args.no_prefix else args.prefix
+    if not is_valid_tenant_id(args.tenant):
+        _refuse([f"--tenant {json.dumps(args.tenant)} is not a valid tenant id "
+                 f"({tenant_id_rule()[1]})"])
+    owner = args.owner.strip()
+    if not owner:
+        _refuse(["--owner is empty"])
+    if "{{" in owner:
+        # an annotation value is a template Prometheus expands per alert
+        _refuse(["--owner holds '{{': an annotation is a template, so it would be "
+                 "expanded per alert, not written as given"])
+    expiry = expiry_date(args.expiry)
+    if expiry is None:
+        _refuse([f"--expiry {json.dumps(args.expiry)} is not a calendar date written "
+                 "YYYY-MM-DD after today (UTC)"])
 
-    # 載入字典
+    # the declared inputs first: a policy that cannot be read is refused, named,
+    # before any rule is judged
+    policy_doc = _lib_input.document(args, "policy", lang="en")
     dictionary = {} if args.no_dictionary else load_metric_dictionary()
     if not args.no_dictionary and not dictionary:
         print("[WARN] 找不到 metric-dictionary.yaml（工具同層與上一層都沒有），"
               "本次不做黃金標準比對。", file=sys.stderr)
 
     # #3206（ADR-036 §12）：輸入的規則檔以 Prometheus 的 rule loader 讀
-    # （da-read prometheus-rules）；它拒收的檔、或找不到 da-read，都以
-    # rc 2 結束並說明原因，不改用其他讀法。
-    # 拒收行與本工具其他拒收行同為英文（--output-dir 等），一律以 ERROR: 開頭。
+    # （da-read prometheus-rules）；它拒收的檔、或找不到 da-read，都以 rc 2 結束。
+    source = _lib_input.named(args, "input_file")
     text = _lib_input.document(args, "input_file", lang="en")
     try:
         (rule_file,) = _lib_consumer_read.require_read(
-            _lib_consumer_read.prometheus_rule_text_results(
-                [(_lib_input.named(args, "input_file"), text)]))
+            _lib_consumer_read.prometheus_rule_text_results([(source, text)]))
+        plan = plan_migration(rule_file.groups or [], args.tenant, owner, expiry, dictionary)
     except _lib_consumer_read.ConsumerReadError as e:
-        print(f"ERROR: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+        _refuse([_lib_consumer_read.error_text(e)])
+    if plan.refusals:
+        _refuse(plan.refusals)
 
-    groups = rule_file.groups
-    if not groups:
-        print("No 'groups' found in YAML.")
+    rules_text = render_rules(plan, args.tenant, Path(source).name) if plan.groups else None
+    if rules_text is not None:
+        try:
+            errors, plan.lint_warnings = lint_output(rules_text, args.tenant, policy_doc,
+                                                     args.policy)
+        except _lib_consumer_read.ConsumerReadError as e:
+            _refuse([f"lint of the migrated rules: {_lib_consumer_read.error_text(e)}"])
+        if errors:
+            _refuse([f"lint of the migrated rules: {e}" for e in errors])
+    report = render_report(plan, args.tenant, owner, expiry)
+
+    if args.dry_run:
+        print(report, end="")
         return
-
-    # 處理所有規則：每條告警的運算式一次讀成語法樹（#4215）。rule loader 已讀過
-    # 整份檔，Prometheus 的 parser 不會拒收其中任何一條。
-    alerts = [rule for group in groups for rule in group.get('rules', [])
-              if rule.get('alert')]
-    results = []
-    try:
-        trees = read_trees([str(rule.get('expr', '')) for rule in alerts])
-        for rule, tree in zip(alerts, trees):
-            result = process_rule(
-                rule,
-                interactive=args.interactive,
-                prefix=prefix,
-                dictionary=dictionary,
-                tree=tree,
-            )
-            if result:
-                results.append(result)
-    except _lib_consumer_read.ConsumerReadError as e:
-        print(f"ERROR: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-
-    if not results:
-        print("No alert rules found to process.")
+    if rules_text is None:
+        print(report, end="")
+        print("沒有要遷移的規則（每條告警都改用黃金標準，或檔裡沒有告警）：不寫檔。")
+        stale = [rel for rel in (rules_rel(args.tenant), mapping_rel(args.tenant))
+                 if (Path(args.output_dir) / rel).exists()]
+        if stale:
+            print(f"[WARN] {args.output_dir} still holds an earlier run's "
+                  f"{', '.join(stale)} for tenant {args.tenant}: this run migrated nothing, "
+                  "so they are not this source's migration; remove them", file=sys.stderr)
         return
-
-    # Auto-Suppression: warning ↔ critical 配對
-    n_paired = apply_auto_suppression(results)
-    if n_paired:
-        print(f"[🔗] Auto-Suppression: {n_paired} 組 warning↔critical 配對完成")
-    n_routed = route_unpaired_critical_to_base(results)
-    if n_routed:
-        print(f"[↪] {n_routed} 條只有 critical 的規則改讀 base 閾值列，"
-              "根 _defaults.yaml 才能對所有租戶生效")
-    for k, entries in detect_threshold_conflicts(results).items():
-        listed = ", ".join(f"{a}={v}" for a, v in entries)
-        print(f"⚠️  閾值衝突：{k} 被多條規則設不同值（{listed}），採用第一條的 {entries[0][1]}")
-
-    # 輸出
-    if args.triage:
-        # Triage mode: 只產 CSV + 統計。沒有 conf.d 檔要確認，但 CSV 一樣寫進
-        # -o：既有的目錄先過共用的 conf.d 拒絕（#3206）。
-        _require_output_tree(args.output_dir)
-        ensure_dir_or_die(args.output_dir, flag=_OUTPUT_FLAG)
-        csv_path = write_triage_csv(results, args.output_dir, dictionary)
-        print_triage(results)
-        print(f"📁 CSV 報告已輸出至 {csv_path}")
-        print(f"   請在 Excel/Google Sheets 中開啟，批次決策每條規則的處理方式。\n")
-    elif args.dry_run:
-        print_dry_run(results)
-    else:
-        if not args.tenant:
-            print("ERROR: --tenant is required to write the tenant file "
-                  "(<tenant>.yaml, its keys under tenants.<tenant>; #3671) "
-                  "— nothing was written", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
-        n_perfect, n_complex, n_unparseable, n_golden = write_outputs(
-            results, args.output_dir, prefix, dictionary, tenant=args.tenant
-        )
-        convertible = n_perfect + n_complex
-        print(f"[✓] 成功轉換 {convertible} 條規則 "
-              f"(✅ {n_perfect} 完美, ⚠️ {n_complex} 已猜測)")
-        if n_golden:
-            print(f"[📖] {n_golden} 條建議改用黃金標準 (詳見報告)")
-        if n_unparseable:
-            print(f"[!] {n_unparseable} 條需人工處理 (LLM Prompt 已寫入報告)")
-        print(f"📁 檔案已輸出至 {args.output_dir}/：conf.d 檔在 {args.output_dir}/{CONFD_DIR}/，"
-              f"rule pack 與 prefix mapping 在 {args.output_dir}/{ARTIFACT_DIR}/"
-              "（點開頭的目錄，conf.d 的讀取端不讀）")
-        print(f"⚠️  先把 {DEFAULTS_FILE} 的 defaults: 區塊合併進 conf.d 根的 _defaults.yaml"
-              "（合併，不要整份覆蓋）；沒宣告的 key，threshold-exporter 不會發射閾值。")
-        if prefix:
-            print(f"🏷️  前綴: {prefix} (Prefix Mapping 已輸出)")
+    write_outputs(args.output_dir, args.tenant, rules_text,
+                  render_mapping(plan, args.tenant), report)
+    print(f"[✓] 已遷移 {len(plan.migrated_alerts)} 條告警、{len(plan.migrated_records)} 條 "
+          f"recording rule；{len(plan.golden)} 條改用黃金標準（見報告）")
+    print(f"📁 規則檔 {args.output_dir}/{rules_rel(args.tenant)}、對照 "
+          f"{args.output_dir}/{mapping_rel(args.tenant)}、報告 "
+          f"{args.output_dir}/{report_rel(args.tenant)}")
+    print("⚠️  規則檔交給抓取原始指標的那台 Prometheus 載入（federation 架構下是 edge）。")
 
 
 if __name__ == "__main__":

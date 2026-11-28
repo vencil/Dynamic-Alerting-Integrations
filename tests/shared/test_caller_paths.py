@@ -234,6 +234,10 @@ OPS_SITES = [
      "file_not_accessible"),
     ("lint-custom-rules --policy", "lint_custom_rules.py", ["--policy", "{F}", "{RP}"],
      "--policy", None),
+    ("migrate --policy", "migrate_rule.py",
+     ["{RP}/rule-pack-mariadb.yaml", "--tenant", "t1", "--owner", "team",
+      "--expiry", "2099-12-31", "--policy", "{F}", "-o", "{BOX}/migrate-policy", "--dry-run"],
+     "--policy", None),
     # #3797: file inputs that were `reader` lines and are declared documents now.
     ("explain-keys --assert", "explain_keys.py",
      ["--config-dir", "{CONF}", "--assert", "{F}", "--json"], "--assert", None),
@@ -248,8 +252,9 @@ OPS_SITES = [
      "--from", None),
     ("rule-pack-diff --to", "rule_pack_diff.py",
      ["--from", "{RP}/rule-pack-mariadb.yaml", "--to", "{F}"], "--to", None),
-    ("migrate input_file", "migrate_rule.py", ["{F}", "-o", "{BOX}/migrate-out", "--dry-run"],
-     None, None),
+    ("migrate input_file", "migrate_rule.py",
+     ["{F}", "--tenant", "t1", "--owner", "team", "--expiry", "2099-12-31",
+      "-o", "{BOX}/migrate-out", "--dry-run"], None, None),
     # config-history is not a row: every subcommand creates `.da-history`
     # beside --config-dir first, so a locked parent never reaches its check;
     # test_config_history.py pins that check's message on a missing dir.
@@ -1667,6 +1672,7 @@ JUDGED_DOCUMENTS = {
     "grafana-import --dashboard": ("json", dict, None, (), ()),
     "lint --policy": ("yaml", dict, dict, (), ()),
     "migrate input_file": ("text", str, None, (), ()),
+    "migrate --policy": ("yaml", dict, dict, (), ()),
     "migrate-credentials --policy": ("yaml", dict, None, (), ()),
     "offboard --state": ("text", str, None, (), ()),
     "onboard --alertmanager-config": ("text", str, None, (), ()),

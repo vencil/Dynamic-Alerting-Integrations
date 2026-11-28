@@ -1060,7 +1060,8 @@ def _pin_answer_ok(a) -> bool:
 
 
 def promql_pin(tenant: str, exprs: "list[str]", namespace_form: "list[str]" = (),
-               binary: str | None = None) -> "list[dict]":
+               binary: str | None = None, *, rename: "dict[str, str] | None" = None
+               ) -> "list[dict]":
     """⛔ THE one rewrite that pins a PromQL expression to a tenant (#4226,
     migrate-rule's migrated rules): per expression of *exprs*, ``{"expr":
     <it, every selector pinned>, "selectors": [{"legacy", "pinned"}, …]}``
@@ -1071,10 +1072,13 @@ def promql_pin(tenant: str, exprs: "list[str]", namespace_form: "list[str]" = ()
     series carry no ``tenant`` (``_lib_metric_sources.tenant_presence``
     "without") — gets ``namespace="<t>", tenant=""``, every other one
     ``tenant="<t>"``; a matcher on that label that is not that equality is a
-    conflict, never overwritten. An expression the parser refuses raises
+    conflict, never overwritten. *rename* moves a metric's selectors to
+    another name (the caller's own recording rules; the pin is judged by the
+    name as written). An expression the parser refuses raises
     ``InputRefused``."""
     resolved = da_read_binary(binary)
     data = json.dumps({"tenant": tenant, "namespace_form": sorted(set(namespace_form)),
+                       "rename": dict(rename or {}),
                        "expressions": list(exprs)}).encode("utf-8")
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                ["promql-pin", "-"], data)

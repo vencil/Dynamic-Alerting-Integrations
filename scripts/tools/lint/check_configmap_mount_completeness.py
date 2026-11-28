@@ -44,11 +44,12 @@ MONITOR_DIR = Path(_lib_consumer_read.CONFIGMAP_RULES.directory)
 DEPLOYMENT = MONITOR_DIR / "deployment-prometheus.yaml"
 RULES_VOLUME_NAME = "rules"
 
-# `configmap-rules-custom-*.yaml` are tenant/customer-managed packs (migrate_rule.py
-# exports), NOT platform gold-standard packs — the deployment projected volume is a
-# hand-maintained list of platform packs only; custom packs are mounted/applied by
-# the customer or compiled dynamically (see deployment-prometheus.yaml header note:
-# "大型客戶可…改用 migrate_rule.py 轉出的 自訂規則包"). They are out of scope for the
+# `configmap-rules-custom-*.yaml` are tenant/customer-managed packs (the compiled
+# custom-alerts pack, a customer's own), NOT platform gold-standard packs — the
+# deployment projected volume is a hand-maintained list of platform packs only;
+# custom packs are mounted/applied by the customer or compiled dynamically (ADR-005).
+# migrate-rule's migrated rules are not a ConfigMap of this tree at all: the
+# customer's own Prometheus loads them (#4226). They are out of scope for the
 # "platform forgot to mount a new gold-standard pack" guard this lint enforces.
 # The pack-name prefix: the file name around it is the declaration's (#3471).
 CUSTOMER_MANAGED_PACK_PREFIX = "custom-"

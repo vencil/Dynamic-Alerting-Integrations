@@ -39,7 +39,7 @@ Dynamic Alerting 平台的完整文件導覽。根據你的角色快速找到所
 | [快速入門](getting-started/for-domain-experts.md) | Domain Expert 30 分鐘入門：Rule Pack 概念、Custom 規則治理 |
 | [Rule Pack 文件](rule-packs/README.md) | Rule Pack 目錄 + optional 卸載說明 |
 | [Custom Rule 治理](custom-rule-governance.md) | 三層治理模型、Linting、Schema 驗證、Best Practices |
-| [遷移引擎](migration-engine.md) | AST 遷移引擎架構、跨方言規則轉換、Triage 邏輯 |
+| [遷移引擎](migration-engine.md) | AST 遷移引擎架構：規則原樣保留、語法樹上注入租戶隔離、拒絕條件與載入點 |
 
 ### 👤 Tenant Team（租戶團隊）— SRE、DBA、On-call
 
@@ -85,7 +85,7 @@ Dynamic Alerting 平台的完整文件導覽。根據你的角色快速找到所
 | 系統設計 | [architecture-and-design.md](architecture-and-design.md) | Severity Dedup、Sentinel Alert、告警路由、Per-rule Overrides、Platform Enforced Routing、Regex 維度閾值、排程式閾值、Dynamic Runbook Injection、Recurring Maintenance |
 | 性能分析 | [benchmarks.md](benchmarks.md) | idle、under-load、routing、alertmanager、reload 基準；詳細測試方法論 |
 | 治理與稽核 | [governance-security.md](governance-security.md) | RBAC、稽核日誌、Cardinality Guard、Schema 驗證、Secret 管理、安全最佳實踐 |
-| 遷移引擎 | [migration-engine.md](migration-engine.md) | AST 架構、方言支援、Triage、Dictionary 映射、Prefix 管理、轉換規則 |
+| 遷移引擎 | [migration-engine.md](migration-engine.md) | AST 架構、注入方式對照、recording rule 連帶遷移、Dictionary 黃金標準、自我 lint、輸出與載入點 |
 | 遷移指南 | [migration-guide.md](migration-guide.md) | 逐步遷移說明、檢查清單、前置條件、驗證步驟 |
 | 故障排查 | [troubleshooting.md](troubleshooting.md) | 常見問題、Debug 命令、日誌分析、邊界情況處理 |
 | Shadow Monitoring | [shadow-monitoring-sop.md](shadow-monitoring-sop.md) | Shadow Mode 運營流程、數值對比、自動收斂偵測、SLA 驗證 |

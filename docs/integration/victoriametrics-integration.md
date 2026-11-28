@@ -109,14 +109,14 @@ customer PromRule YAML
     ↓ da-parser import
 ParsedRule JSON（含 dialect / vm_only / prom_portable 標註，分診用）
     ↓ da-tools migrate（逐租戶）
-conf.d 租戶檔 → 客戶自己的 PR
+migrated 規則檔（抓取原始指標那一側載入）→ 客戶自己的 PR
     ↓ da-guard
 Dangling Defaults Guard 檢查（路由交 generate-routes）
     ↓
 conf.d/ 樹（GitOps merge）
 ```
 
-轉換步驟見 [`migrate`](../cli-reference.md#migrate)；產出 `_custom_alerts` recipe 的批次導入見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
+遷移步驟見 [`migrate`](../cli-reference.md#migrate)：規則原樣保留、每個 selector 注入租戶隔離（Prometheus 的 parser 讀，MetricsQL 專有語法會被拒）；conf.d 這一側只管切換（`_routing_migrated`）。
 
 ### 5.2 MetricsQL handling 與 anti-vendor-lock-in
 
@@ -190,7 +190,7 @@ conf.d/ 樹（GitOps merge）
 
 - [ ] 跑 `da-parser import` 對 customer PromRule corpus
 - [ ] 檢查 dialect 分布 + non-portable 比例
-- [ ] 逐租戶跑 [`da-tools migrate`](../cli-reference.md#migrate) 產出 conf.d 租戶檔
+- [ ] 逐租戶跑 [`da-tools migrate`](../cli-reference.md#migrate) 產出 migrated 規則檔
 - [ ] 跑 `da-guard` 過 schema / cardinality / redundant-override 檢查；exit 4（樹上有路由或 domain policy，[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起 da-guard 不判）時再跑 `da-tools generate-routes --config-dir <conf.d> --validate --strict`
 - [ ] 詳情 → [Migration Toolkit Installation](../migration-toolkit-installation.md)
 

@@ -22,7 +22,7 @@ lang: zh
 :   Prometheus 生態系的告警路由與通知元件。本平台使用其 `inhibit_rules` 實現 Severity Dedup，並透過 `config-reloader` sidecar（prometheus-operator 的 prometheus-config-reloader）自動載入配置變更。
 
 **AST 遷移引擎 (AST Migration Engine)**
-:   `migrate_rule.py` 的核心——將傳統 PromQL alert rule 解析為抽象語法樹（AST），自動轉換為 Dynamic Alerting 的 YAML 閾值格式。支援 Triage、Prefix、Dictionary 三種推斷模式。
+:   `migrate_rule.py` 的核心——以 Prometheus 自己的語法樹（AST）讀傳統規則，每條規則原樣保留，只在每個 selector 注入租戶 matcher（`da-read promql-pin`），加上 owner／expiry 治理與到期伴隨告警；字典命中黃金標準的告警不遷移。見 [遷移引擎](migration-engine.md)。
 
 ## B
 

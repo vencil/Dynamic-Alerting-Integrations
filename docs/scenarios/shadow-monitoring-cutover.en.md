@@ -67,7 +67,7 @@ Organizations migrating from legacy alerting systems (vendor-specific rule sets 
 Dynamic Alerting provides an end-to-end migration workflow:
 
 1. **Compliance scanning** (`onboard_platform.py`) — Parse the legacy Alertmanager config and rule files, generate routing snippets and a migration plan
-2. **Rule transformation** (`migrate_rule.py`) — Convert old rules into platform recording / alert rules plus tenant config; the alert rules carry a `migration_status: shadow` label
+2. **Rule migration** (`migrate_rule.py`) — Migrate old rules verbatim into migrated rules (tenant isolation injected into every selector; the alerts carry a `component: migrated` label)
 3. **Parallel validation** (`validate_migration.py`) — Continuously compare new vs old outputs until auto-detecting convergence
 4. **One-click cutover** (`cutover_tenant.py`) — In order: stop the shadow monitor job, delete the old recording rules, remove the shadow label and the Alertmanager intercept, then confirm the tenant's threshold metrics exist
 5. **Rollback** — The tool has no automatic rollback; if cutover fails, restore by hand per [Shadow Monitoring SOP §7.2](../shadow-monitoring-sop.en.md) (`cutover_tenant.py` prints the same pointer when it fails)
@@ -78,7 +78,7 @@ Dynamic Alerting provides an end-to-end migration workflow:
 graph LR
     A["Existing Alerts<br/>(Legacy System)"] -->|Import| B["onboard_platform.py<br/>Reverse-engineer"]
     B -->|Generate| C["migration-plan.csv<br/>Migration plan"]
-    C -->|Reference| D["migrate_rule.py<br/>Transform rules"]
+    C -->|Reference| D["migrate_rule.py<br/>Migrate rules"]
     D -->|Deploy| E["New Rules<br/>migration_status: shadow<br/>(Alertmanager blocks)"]
     A -->|Run in parallel| E
     E -->|Validate| F["validate_migration.py<br/>--watch continuous check"]
@@ -196,31 +196,24 @@ python3 scripts/tools/ops/validate_config.py \
 ### Phase 2: Transformation (Day 0)
 
 ```bash
-# 2.1 Execute rule transformation (input is a legacy Prometheus rule file, one file per run)
+# 2.1 Execute rule migration (input is one tenant's legacy Prometheus rule file, one file per run)
 python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
-  --tenant db-a --output-dir migration_output/
+  --tenant db-a --owner team-db --expiry 2027-03-31 --output-dir migration_output/
 # Output (migration_output/):
-#   - .migration/platform-recording-rules.yaml, .migration/platform-alert-rules.yaml
-#     (new rules; the alert rules carry the migration_status: shadow label)
-#   - .migration/conf.d/_defaults.yaml (merge its defaults: block into the conf.d root _defaults.yaml first,
-#     merging rather than overwriting the whole file; the exporter only emits declared
-#     keys. Values come from the original rules; the warning tier applies to every tenant)
-#   - .migration/conf.d/db-a.yaml (the tenant given by --tenant, thresholds under tenants.db-a. For the
-#     warning tier, only tenants that need a value different from the default;
-#     <key>_critical cannot go in defaults, so every tenant that wants the critical tier
-#     writes it into its own conf.d file; a legacy rule that only had a critical tier is
-#     the exception: it reads the base row, already in _defaults.yaml)
-#   - .migration/prefix-mapping.yaml (comparison pairs for validate_migration in Phase 3)
-#   - migration-report.txt, triage-report.csv (conversion reports)
-# There is no "only these tenants" option; to keep a tenant from getting this alert, set
-# the key to "disable" in that tenant's file.
-# ⚠️ The migrate in the v2.9.0 image does not have these fixes yet (its threshold selector
-#    does not match the labels the exporter emits, its recording rule reads a prefixed
-#    metric name, and it produces no defaults-snippet.yaml); review its output by hand
-#    before deploying.
+#   - .migration/migrated/db-a/rules.yml (rules kept verbatim, tenant isolation injected; alerts
+#     carry the component: migrated label and owner / expiry annotations, plus MigratedRulesExpiring)
+#   - .migration/mapping/db-a.yaml (each rule's selectors before and after injection;
+#     validate_migration support for it comes in #4227)
+#   - migration-report-db-a.txt (migration report)
+# Platform-level rules that select no single tenant (kube_node_*, up) are refused: exit 2,
+# nothing written.
+# ⚠️ The migrate in the v2.9.0 image is still the old conversion engine (platform
+#    recording / alert rules, a tenant conf.d file, prefix-mapping.yaml); on that image
+#    the outputs in this section do not apply.
 
-# 2.2 Deploy the new rules (shadow state): merge both rule files into Prometheus's rule
-#     ConfigMap (environment-specific: ConfigMap or Helm)
+# 2.2 Deploy the new rules (shadow state): hand the rule file to the Prometheus that
+#     scrapes the raw metrics (the edge in a federation setup) to load
+#     (environment-specific: ConfigMap or Helm)
 
 # 2.3 Update Alertmanager to intercept shadow alerts
 kubectl patch configmap alertmanager-config -n monitoring \

@@ -18,7 +18,13 @@ import (
 //
 // Standard input is one JSON object:
 //
-//	{"tenant": "<id>", "namespace_form": ["<metric>", …], "expressions": ["…", …]}
+//	{"tenant": "<id>", "namespace_form": ["<metric>", …], "rename": {"<old>": "<new>", …},
+//	 "expressions": ["…", …]}
+//
+// *rename* (optional) renames the selectors of a metric — the caller's own
+// recording rules, moved to names of their own so the migrated copy and the
+// legacy one do not write or read each other's series. The pin is judged by
+// the name as written.
 //
 // A selector of a metric named in *namespace_form* (one whose series carry no
 // `tenant` label: the caller's `_lib_metric_sources.tenant_presence` decides)
@@ -26,7 +32,9 @@ import (
 // A selector that already matches the label to that value by equality keeps
 // it as it is; one that matches it any other way (another value, a regex, a
 // negation) is a conflict: a pin cannot be added beside it without changing
-// which series it reads. Stdout is
+// which series it reads. A `tenant="<id>"` selector's own `namespace`
+// matcher, if it has one, must be `namespace="<id>"` too (the scrape writes
+// the tenant from the namespace): any other is a conflict, never rewritten. Stdout is
 //
 //	{"documents": [[{"expr": "<pinned>", "selectors": [{"legacy", "pinned"}, …]}
 //	                 | {"conflict": "<selector>: <why>"}, …]]}
@@ -38,9 +46,10 @@ import (
 // expression Prometheus' parser refuses refuses the input (rc 2, the refusal document); standard input that
 // is not that object is the caller's error.
 type pinRequest struct {
-	Tenant        string   `json:"tenant"`
-	NamespaceForm []string `json:"namespace_form"`
-	Expressions   []string `json:"expressions"`
+	Tenant        string            `json:"tenant"`
+	NamespaceForm []string          `json:"namespace_form"`
+	Rename        map[string]string `json:"rename"`
+	Expressions   []string          `json:"expressions"`
 }
 
 type pinAnswer struct {
@@ -114,12 +123,19 @@ func readPromQLPin(req pinRequest) ([]byte, error) {
 			}
 			before := vs.String()
 			legacy := instantSelector(vs, append([]*labels.Matcher(nil), vs.LabelMatchers...))
+			if !nsForm[selectorName(vs)] {
+				if why := namespaceAgrees(vs, req.Tenant); why != "" {
+					conflict = before + ": " + why
+					return nil
+				}
+			}
 			for _, w := range want {
 				if why := pinMatcher(vs, w); why != "" {
 					conflict = before + ": " + why
 					return nil
 				}
 			}
+			renameSelector(vs, req.Rename)
 			s := pinSelector{Legacy: legacy, Pinned: instantSelector(vs, vs.LabelMatchers)}
 			if !seen[s] {
 				seen[s] = true
@@ -168,4 +184,34 @@ func pinMatcher(vs *parser.VectorSelector, w *labels.Matcher) string {
 	}
 	vs.LabelMatchers = append(vs.LabelMatchers, w)
 	return ""
+}
+
+// namespaceAgrees says why *vs*'s own `namespace` matchers disagree with
+// *tenant*, or "": every one must be `namespace="<tenant>"`.
+func namespaceAgrees(vs *parser.VectorSelector, tenant string) string {
+	w := labels.MustNewMatcher(labels.MatchEqual, pinNamespaceLabel, tenant)
+	for _, m := range vs.LabelMatchers {
+		if m.Name == pinNamespaceLabel && !(m.Type == w.Type && m.Value == w.Value) {
+			return fmt.Sprintf("it matches %s, not %s: the tenant's series are its namespace's",
+				m.String(), w.String())
+		}
+	}
+	return ""
+}
+
+// renameSelector moves *vs* to *rename*'s name for its metric, if it has one:
+// its name and its `__name__` equality matcher both.
+func renameSelector(vs *parser.VectorSelector, rename map[string]string) {
+	to, ok := rename[selectorName(vs)]
+	if !ok {
+		return
+	}
+	if vs.Name != "" {
+		vs.Name = to
+	}
+	for i, m := range vs.LabelMatchers {
+		if m.Name == labels.MetricName && m.Type == labels.MatchEqual {
+			vs.LabelMatchers[i] = labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, to)
+		}
+	}
 }

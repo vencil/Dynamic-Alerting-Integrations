@@ -13,47 +13,62 @@ lang: zh
 
 ---
 
-## 架構：讀語法樹，依位置插入
+## 架構：原樣保留，在語法樹上注入
 
 ```mermaid
 flowchart LR
-    A["原始規則檔"] --> B["da-read prometheus-rules<br/>（Prometheus 的 rule loader）"]
-    B --> C["da-read promql-shape<br/>（整份檔一次讀成語法樹）"]
-    C --> D["從樹上讀：門檻、指標、<br/>label matcher、語義中斷函式"]
-    D --> E["rewrite_expr_tenant_label()<br/>依 selector 的 byte 位置注入 tenant"]
-    E --> F["再讀一次確認 Prometheus 接受"]
-    F -->|"✅"| G["輸出改寫後的 PromQL"]
-    F -->|"❌"| H["rc 2，點名該運算式"]
+    A["一個租戶的傳統規則檔"] --> B["da-read prometheus-rules<br/>（Prometheus 的 rule loader）"]
+    B --> C["da-read promql-shape<br/>（每條運算式讀成語法樹）"]
+    C --> D["逐 selector 決定注入方式<br/>（pin_form）"]
+    D -->|"任一條選不出一個租戶"| H["rc 2，逐條列出，不寫檔"]
+    D --> E["da-read promql-pin<br/>在語法樹上注入 matcher"]
+    E --> F["lint_custom_rules<br/>（自我 lint）"]
+    F -->|"ERROR"| H
+    F -->|"✅"| G["migrated 規則檔 + 對照 + 報告"]
 
     style G fill:#c8e6c9,stroke:#2e7d32
     style H fill:#ffcdd2,stroke:#c62828
 ```
 
-運算式只由 Prometheus 自己的 parser 讀（`da-read`，與部署的 Prometheus 同一份程式碼），不掃文字：規則檔先過 rule loader，每條告警的運算式再一次讀成語法樹。門檻是根節點「`LHS <比較> 數字`」的右邊；指標是每個 selector 以 `__name__` 等值 matcher 釘住的名字；多行、含註解、名稱與 `{` 之間有空白的寫法都照樣讀得出來，label 值與字串常值裡的字不會被當成指標或函式。
+`da-tools migrate`（`migrate_rule.py`，[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)）不轉換規則：每條規則的 expr 語意、`for`、labels、annotations、alertname 原樣保留，只做三件事——每個 selector 注入租戶隔離；labels 加 `tenant: <租戶>`、`component: migrated`，annotations 加 `owner`、`expiry`；附一條到期伴隨告警 `MigratedRulesExpiring`（`vector(time()) > <expiry 前 14 天>`，不讀任何指標）。
 
-**為什麼不重新序列化整棵樹？** 依 selector 在原式中的位置插入 `tenant=~".+"`，原式其餘部分（排版、註解、括號）原樣保留；插入後再讀一次，Prometheus 不接受就以 rc 2 結束並點名該運算式，不退回原式——退回原式等於出貨一條沒有租戶限定的 recording rule。
+運算式只由 Prometheus 自己的 parser 讀（`da-read`，與部署的 Prometheus 同一份程式碼），不掃文字。注入也在 Prometheus 的語法樹上做（`da-read promql-pin`），與 prom-label-proxy、Prometheus Operator `enforcedNamespaceLabel` 同一做法；規則檔裡的 expr 是 Prometheus 印出的注入後運算式。
 
-## 核心功能
+## 注入方式
 
-| 功能 | 說明 |
+每個 selector 依它讀的指標決定（`_lib_metric_sources.pin_form`，全平台只有這一份答案）：
+
+| 指標 | 注入 |
 |------|------|
-| `parse_expr()` | 從語法樹切出 LHS、比較運算子與門檻；根節點不是比較、或用到語義中斷函式即判為無法解析 |
-| `extract_label_matchers()` | 每個 selector 以 `=` 釘住的業務維度 label（不含 job / instance / namespace 等） |
-| `rewrite_expr_tenant_label()` | 依位置注入 `tenant=~".+"`：有 `{` 插在 `{` 之後，沒有的在名稱後補上，只寫 `{__name__="x"}` 的也一樣 |
-| `SEMANTIC_BREAK_FUNCS` | 語義不可轉換的函式（`absent()`、`predict_linear()` 等），每個名字都由測試對帳部署的 Prometheus 認得 |
+| 序列帶 `tenant` 的指標（含平台不認得來源的客戶指標） | `tenant="<租戶>"` |
+| kube-state-metrics 有 namespace 的物件（例如 `kube_pod_*`）：以 `namespace` 指名租戶、不帶 `tenant` | `namespace="<租戶>", tenant=""` |
+| 叢集層級的 kube-state-metrics 物件（例如 `kube_node_*`）、Prometheus／Alertmanager 自己的序列、每個抓取目標都有的序列（例如 `up`、`go_*`）、告警自己的序列（`ALERTS`） | 拒絕：沒有一種注入只選到一個租戶，這是平台層級的規則 |
 
-Prometheus 的 parser 拒收的運算式，在讀規則檔那一關就以 rc 2 結束，沒有降級路徑。
+原式子已有的 `tenant`／`namespace` matcher 不是上表那個等值時拒絕；selector 沒有以等值點名指標名時也拒絕（不知道它讀哪些序列）。
 
-## 企業遷移工作流
+## 遷移的範圍
 
-完整遷移路徑整合 AST 引擎、Shadow Monitoring 與 Triage 模式：
+- **recording rule**：被遷移的告警讀到的同檔 recording rule（遞移地）一起遷移，加 `tenant` label，並改名為 `migrated:<租戶>:<原名>`（租戶的 `-` 寫成 `_`），讀它的 migrated 規則一併改寫——migrated 規則檔與 legacy 規則載入同一台 Prometheus，同名的話 legacy 告警會讀到 migrated record 的序列，或兩條規則寫同一組序列；讀到檔裡沒定義的 record 拒絕（要與定義它的檔一起遷移）；沒被讀到的 record 不遷移，報告列出。
+- **黃金標準**：告警只讀一個指標、而該指標在 `metric-dictionary.yaml` 有 `golden_rule` 時，平台 Rule Pack 已涵蓋，不產生 migrated 規則，只在報告的「改用黃金標準」點名（`--no-dictionary` 關掉比對）。
+- **多叢集**：原式子的 `by(...)`／`on(...)` 點名 `tenant`、`instance`、`pod`、`namespace`、`node` 卻沒有 `da_cluster`，或 `without(...)`／`ignoring(...)` 點名 `da_cluster` 時，在報告標出「在持有多個叢集資料的 Prometheus 上」會配對或合併不同叢集的同名序列，請人確認。工具只偵測、不改寫：該不該補 `da_cluster` 取決於配對的兩邊是否都帶這個 label，從語法樹看不出來（[ADR-006](adr/006-tenant-mapping-topologies.md)）。
 
-1. **Triage**：`migrate_rule.py --triage` 產出 CSV 清單，分類每條規則的遷移策略（direct / prefix / skip）
-2. **遷移執行**：AST 引擎注入 tenant label。`custom_` 前綴只加在閾值 key 與 recording rule 名稱上，不改來源指標名：來源 series 是客戶既有 exporter 發的，改名後 recording rule 會是空集合（issue 1818）。產生的 recording rule 是 `<sum|max> by(tenant, da_cluster) (…)`：在收了多個叢集資料的 Prometheus 上逐叢集評估（`sum`／`max` 不再把同一個租戶的幾個叢集合在一起），告警帶 `da_cluster`；序列沒有 `da_cluster` 的單一 Prometheus 上結果與 `by(tenant)` 相同（[ADR-006](adr/006-tenant-mapping-topologies.md)；v2.9.0 映像產生的仍是 `by(tenant)` <!-- image-caveat: v2.9.0 -->）。原式子自己的聚合已經丟掉 `tenant` 的規則（`sum(rate(x))`、`sum by(instance) (…)`）不在此列，遷移前後都算不出租戶的值。原式子自己寫的 `on(...)`／`by(...)` 照抄、不改寫：點名 `tenant`、`instance`、`pod`、`namespace`、`node` 卻沒有 `da_cluster` 的，會在報告、規則檔與租戶檔的註記標出來請人確認，因為在多叢集的 Prometheus 上它會配對或合併不同叢集的同名序列（`on(instance)` 可能 many-to-many），而該不該補 `da_cluster` 取決於配對的兩邊是否都帶這個 label，工具判斷不了。告警改讀這些 recording rule 後 `$labels` 只剩 `tenant` 與 `da_cluster`，所以原 annotation 引用的其他 label 會改寫（`{{ $labels.da_cluster }}` 照留）：原式子以 `=` 釘成單一值的代入該值，其餘改讀 `$labels.tenant` 並在報告列出
-3. **Shadow Monitoring**：`validate_migration.py` 驗證遷移前後的數值一致性（預設容差 `--tolerance 0.001`），新舊兩邊以（租戶、`da_cluster`）配對，只在一邊出現的叢集列為 `mismatch`
-4. **上線**：透過 `scaffold_tenant.py` 產出完整的租戶配置包
+## 拒絕與自我 lint
 
-> **為什麼需要容差？** 遷移前後的 PromQL 查詢結果不可能完全一致，因為存在三個天然誤差來源：(1) **時間窗口偏移**——新舊規則在不同 evaluation cycle 被評估，對 `rate()` / `irate()` 等時間敏感函數會產生取樣偏差；(2) **聚合路徑改變**——從嵌入式 PromQL 改為 recording rule 引用，多一層 evaluation cycle 的時序延遲；(3) **浮點精度**——不同 expression 路徑的浮點運算可能在末位小數產生差異。預設容差 0.001（0.1%）「嚴格到能偵測語義錯誤（漏 label filter、聚合方式錯誤），又寬鬆到容納浮點抖動」。可透過 `--tolerance` 參數調整。
+任何一條規則被拒——選不出一個租戶的 selector、衝突的 matcher、讀到檔外的 record、原規則已寫了不同值的 `tenant`／`component` label、把 `owner`／`expiry` 寫成 label、與旗標不同的 `owner`／`expiry` annotation、含 `{{` 的 `--owner`（annotation 是模板）、運算式明寫保留 `component` 的告警（matcher、`by`／`on`／`group_left`，或 `label_replace`／`label_join`／`count_values` 寫入它：`component: migrated` 會蓋掉它）、與到期伴隨告警同名的 alert 或 group——就逐條列出原因、結束碼 2、一個檔都不寫。沒有降級路徑：退回原式等於出貨一條沒有租戶限定的規則。
+
+寫之前，工具對自己的輸出跑 `lint_custom_rules`（租戶隔離、owner／expiry 治理；`--policy` 可換政策），有 ERROR 一樣結束碼 2、不寫；WARN 列在報告。序列從抓取帶來的 `component` 從運算式看不出來，報告提醒：多條只差 `component` 的序列會變成同一組 label，Prometheus 不評估該告警。
+
+## 輸出與載入點
+
+`-o` 底下（YAML 都在點開頭的 `.migration/`，conf.d 的讀取端整棵略過）：
+
+- `.migration/migrated/<租戶>/rules.yml` — migrated 規則檔。⛔ 由客戶**抓取原始指標的那台 Prometheus** 載入：單一 Prometheus，或 federation 架構下的 edge（只帶 namespace 的 kube-state-metrics 序列不會被拉到中央，載入中央的話這些規則永遠不響）。它不掛進參考 stack 的 projected volume，與 [ADR-005](adr/005-projected-volume-for-rule-packs.md) 的 custom alerts 相同。
+- `.migration/mapping/<租戶>.yaml` — 每條規則的 group、alert 或 record，與 selector 注入前（`legacy`）後（`pinned`）的 instant selector；record 另有 `migrated_record`（改名後的名字），到期伴隨告警帶 `added: true`；`validate-migration` 讀這份檔做影子比對（[#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)）。
+- `migration-report-<租戶>.txt` — 遷移報告（每個租戶一份）。沒有要遷移的規則時只印報告、不寫檔；`-o` 裡還留著該租戶先前的規則檔或對照時印 `[WARN]` 點名它們。
+
+**切換**：`component="migrated"` 的告警在 Alertmanager 先送到只有名字的 shadow receiver，租戶設 `_routing_migrated: active` 才與它的其他告警走同一條路（[`generate-routes`](cli-reference.md#generate-routes)）。影子比對之後，提升成平台規則或 recipe 由人決定。
+
+完整 flag 與結束碼：[`cli-reference.md#migrate`](cli-reference.md#migrate)。
 
 ---
 

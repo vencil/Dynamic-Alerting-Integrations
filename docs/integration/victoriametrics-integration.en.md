@@ -109,14 +109,14 @@ customer PromRule YAML
     ↓ da-parser import
 ParsedRule JSON (with dialect / vm_only / prom_portable annotations, for triage)
     ↓ da-tools migrate (per tenant)
-conf.d tenant files → the customer's own PR
+migrated rule file (loaded on the side that scrapes the raw metrics) → the customer's own PR
     ↓ da-guard
 Dangling Defaults Guard check (routing: generate-routes)
     ↓
 conf.d/ tree (GitOps merge)
 ```
 
-The conversion step is [`migrate`](../cli-reference.en.md#migrate); bulk import producing `_custom_alerts` recipes is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226).
+The migration step is [`migrate`](../cli-reference.en.md#migrate): rules are kept verbatim with tenant isolation injected into every selector (read by Prometheus' parser, so MetricsQL-only syntax is refused); on the conf.d side only the cutover (`_routing_migrated`) lives.
 
 ### 5.2 MetricsQL handling and anti-vendor-lock-in
 
@@ -190,7 +190,7 @@ After finding your path via the §1 decision tree:
 
 - [ ] Run `da-parser import` against the customer PromRule corpus
 - [ ] Check dialect distribution + non-portable ratio
-- [ ] Run [`da-tools migrate`](../cli-reference.en.md#migrate) per tenant to produce conf.d tenant files
+- [ ] Run [`da-tools migrate`](../cli-reference.en.md#migrate) per tenant to produce the migrated rule file
 - [ ] Run `da-guard` through the schema / cardinality / redundant-override checks; on exit 4 (the tree holds routing or domain policy, which da-guard no longer judges since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)) also run `da-tools generate-routes --config-dir <conf.d> --validate --strict`
 - [ ] Details → [Migration Toolkit Installation](../migration-toolkit-installation.en.md)
 

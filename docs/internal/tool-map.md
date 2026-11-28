@@ -49,7 +49,7 @@ lang: zh
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |
 | `migrate_builtin_defaults.py` | migrate-builtin-defaults — remove copies of the platform's built-in thresholds. |
 | `migrate_credentials.py` | find receiver credentials written out in conf.d and |
-| `migrate_rule.py` | 傳統 Prometheus 警報規則遷移輔助工具（PromQL 由 Prometheus 的語法樹判讀）。 |
+| `migrate_rule.py` | 把一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則（#4226）。 |
 | `migrate_to_operator.py` | migrate-to-operator — Migrate ConfigMap-based rules to Operator CRD format. |
 | `notification_tester.py` | Multi-channel notification connectivity testing. |
 | `offboard_tenant.py` | 安全的 Tenant 下架工具。 |
