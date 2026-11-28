@@ -719,7 +719,7 @@ jobs:
         # below carries --retry so a transient upstream blip doesn't flake the required
         # job; steady state is a cache hit (no download at all).
         run: |
-          pip install pytest -c requirements/ci-constraints.txt
+          pip install pytest pytest-xdist -c requirements/ci-constraints.txt
           # VM engine version comes from the single pins SSOT
           # (tests/rulepacks/vm_engine_version) shared with the equivalence
           # anchor (test_vm_backend_parity.py)
@@ -764,7 +764,13 @@ jobs:
         # --durations: the slowest fixtures are printed at the end of the log, so one
         # creeping toward the per-fixture limit (_VMALERT_TIMEOUT_S) is seen before it
         # fails the required check (#4118).
-        run: python -m pytest tests/rulepacks/test_vm_alert_parity.py -v --durations=15 --durations-min=5.0
+        # -n auto --dist worksteal: every fixture is its own vmalert-tool process
+        # and they share nothing but a per-worker translated copy (xlate_dir), so
+        # they run side by side. On a 4-core machine, 110 fixtures took 689 s
+        # serial, 391 s with xdist's default split and 301 s with worksteal: an
+        # idle worker takes queued fixtures from a busy one, so the two heaviest
+        # (~170 s and ~115 s) do not leave the others waiting behind them (#4224).
+        run: python -m pytest tests/rulepacks/test_vm_alert_parity.py -v -n auto --dist worksteal --durations=15 --durations-min=5.0
 
       # pint (ADR-025 supporting check): static analysis of the rule-pack SOURCE.
       # The high-ROI check is alerts/template — it mechanically catches the
