@@ -31,7 +31,7 @@ Portal 的 JSX 工具只有一套 dark mode 機制：`<html>` 上的 `data-theme
 
 具體規則：
 
-1. JSX 不使用 `dark:` 前綴。pre-commit hook `jsx-no-dark-variant` 擋 `tools/portal/src/` 底下 `.jsx` 裡 `dark:` 後面直接接 class 名稱的寫法，CI 的 Lint job 也跑它；註解裡提到 `dark:`（例如記錄某元件已移除 `dark:`）不受影響。
+1. JSX 不使用 `dark:` 前綴。pre-commit hook `jsx-no-dark-variant` 擋 `tools/portal/src/` 底下 `.jsx` 與 `.js` 裡 `dark:` 後面直接接 class 的寫法（包括 `dark:[…]`、`dark:!…` 這類形式），CI 的 Lint job 也跑它；註解裡提到 `dark:`（例如記錄某元件已移除 `dark:`）不受影響。
 2. 顏色寫成引用 token 的 Tailwind arbitrary value（方括號裡直接寫 CSS 值的 class，例如 `bg-[color:var(--da-color-surface)]`）；遷移舊元件時，原本的 `dark:xxx` 直接刪掉，不改寫成別的東西。
 3. 切換主題就是改 `<html data-theme="…">`，元件本身不判斷目前是深色還是淺色。
 4. Tailwind 設定不開 `darkMode`。
@@ -96,7 +96,7 @@ loader 自己的外框（返回連結、主題按鈕、載入動畫）也用 `ht
 ### 已知限制
 
 - **沒有 token 的顏色不會換色。** Tailwind 內建調色盤的 class（例如 `bg-red-500 text-white`）不經過 token，深色主題下仍是同一個顏色。這類 class 目前在 `tools/portal/src/` 的 JSX 裡仍大量存在，例如狀態色、步驟完成色。本決策只解決「有 token 的畫面上兩套機制並存」，不解決「顏色根本沒進 token」；後者另案追蹤。`design-token-usage` lint 只看新增的行，抓 hex 色碼、style 裡的 px 數值、錯誤／警告 token 當前景色與 `slate-*` class，其他調色盤 class 不抓。
-- **hook 只看 `tools/portal/src/` 的 `.jsx`。** 其他地方（例如 `docs/` 底下的 HTML 或 `.js`）寫進 `dark:`，hook 不會擋。目前這些地方也沒有 `dark:` class。
+- **漏過 hook 的 `dark:` 會跟著作業系統，不跟主題按鈕。** loader 不設 Tailwind 的 `darkMode`，Tailwind CDN 的預設是跟作業系統的 `prefers-color-scheme`：使用者選了 Light、作業系統是深色時，一個 `dark:bg-black` 仍會顯示成黑色。hook 只看 `tools/portal/src/` 的 `.jsx` 與 `.js`；其他地方（例如 `docs/` 底下的 HTML）寫進 `dark:` 不會被擋，目前這些地方也沒有 `dark:` class。
 
 ## 考慮過的替代方案
 

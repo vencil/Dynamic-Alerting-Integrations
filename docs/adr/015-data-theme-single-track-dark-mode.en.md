@@ -26,7 +26,7 @@ The portal's JSX tools have exactly one dark mode mechanism: the `data-theme` at
 
 The rules:
 
-1. JSX does not use the `dark:` prefix. The pre-commit hook `jsx-no-dark-variant` blocks `dark:` immediately followed by a class name in the `.jsx` files under `tools/portal/src/`, and CI's Lint job runs it too; comments that mention `dark:` (for example noting that a component removed its `dark:` classes) are not affected.
+1. JSX does not use the `dark:` prefix. The pre-commit hook `jsx-no-dark-variant` blocks `dark:` immediately followed by a class (including forms such as `dark:[…]` and `dark:!…`) in the `.jsx` and `.js` files under `tools/portal/src/`, and CI's Lint job runs it too; comments that mention `dark:` (for example noting that a component removed its `dark:` classes) are not affected.
 2. Colors are written as Tailwind arbitrary values that reference a token (a class with a raw CSS value in square brackets, such as `bg-[color:var(--da-color-surface)]`). When migrating an old component, its `dark:xxx` classes are deleted outright, not rewritten into something else.
 3. Switching the theme means changing `<html data-theme="…">`; components never check whether the current theme is light or dark.
 4. The Tailwind configuration does not enable `darkMode`.
@@ -91,7 +91,7 @@ Why a single track:
 ### Known limitations
 
 - **Colors without a token do not switch.** Tailwind's built-in palette classes (such as `bg-red-500 text-white`) bypass the tokens and keep the same color in the dark theme. Many such classes remain in the JSX under `tools/portal/src/`, e.g. status colors and step-completed colors. This decision only solves "two mechanisms side by side on screens that have tokens", not "colors that never entered the tokens"; the latter is tracked separately. The `design-token-usage` lint looks only at added lines and catches hex color codes, px values in styles, the error/warning tokens used as foreground color, and `slate-*` classes; other palette classes are not caught.
-- **The hook only looks at the `.jsx` files under `tools/portal/src/`.** A `dark:` written anywhere else (for example in the HTML or `.js` under `docs/`) is not blocked by it. None of those places carries a `dark:` class today.
+- **A `dark:` that gets past the hook follows the OS, not the theme button.** The loader leaves Tailwind's `darkMode` unset, and the Tailwind CDN's default follows the OS `prefers-color-scheme`: with Light chosen and a dark OS, a `dark:bg-black` still renders black. The hook only looks at the `.jsx` and `.js` files under `tools/portal/src/`; a `dark:` written anywhere else (for example in the HTML under `docs/`) is not blocked, and none of those places carries a `dark:` class today.
 
 ## Considered Alternatives
 

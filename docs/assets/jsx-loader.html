@@ -56,8 +56,9 @@
 <script>document.write('<scr'+'ipt src="'+window.__DA_VENDOR.tailwind+'"><\/scr'+'ipt>')</script>
 <script>
   // Dark mode is <html data-theme> alone (ADR-015): Tailwind's darkMode is
-  // not configured and the class `dark` is never set, so a `dark:` variant
-  // has nothing to follow (the jsx-no-dark-variant hook keeps them out).
+  // not configured and the class `dark` is never set. Unset, the CDN's
+  // default makes a `dark:` class follow the OS colour scheme, not the
+  // theme toggle — the jsx-no-dark-variant hook keeps them out of the portal.
   // Theme toggle: Light / Dark / System (three-state)
   // Priority: localStorage > System preference > Light
   (function() {

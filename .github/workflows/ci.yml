@@ -274,6 +274,9 @@ jobs:
           # #1200: a key in the registry's retired_keys is named nowhere a
           # reader learns keys from (docs, samples, scripts, portal).
           pre-commit run retired-keys-not-taught --all-files
+          # #4290: ADR-015 rule 1 — no Tailwind `dark:` variant in portal
+          # source (pygrep; no other CI entry point).
+          pre-commit run jsx-no-dark-variant --all-files
           pre-commit run skip-a11y-justification-check --all-files
           # CI-ROI 6C blind-spot fix: these 4 lints' live-dogfood pytest
           # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as
@@ -288,8 +291,6 @@ jobs:
           # diff-only. Same hoisting rationale as design-token-usage above.
           pre-commit run undefined-tokens-check --all-files
           pre-commit run jsx-loader-compat-check --all-files
-          # #4290: ADR-015 rule 1 — no Tailwind `dark:` variant in portal JSX.
-          pre-commit run jsx-no-dark-variant --all-files
           pre-commit run window-x-no-fallback-check --all-files
           pre-commit run dev-rules-enforcement-check --all-files
           pre-commit run portal-audience-enum-check --all-files
