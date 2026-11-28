@@ -8,7 +8,7 @@
 # threshold.
 #
 # FIDELITY CONTRACT (TRK-339 WS4a-1): `for:` / severity / raw-metric selectors below
-# mirror the SHIPPED values verbatim — enforced by
+# mirror the SHIPPED values verbatim (keep_firing_for too) — enforced by
 # tests/rulepacks/test_reference_validation_sync.py against
 # rule-packs/rule-pack-kubernetes.yaml. Every deliberate divergence (shipped alerts
 # not mirrored here, the throttle working-hard floor, the NodeNotReady tenant-
@@ -59,6 +59,8 @@ groups:
       # Shipped scopes node-down to nodes OWNING tenant pods (kube_pod_info and-join);
       # the direct predicate fires on any NotReady node — declared in the ledger (the
       # library injects no kube_pod_info series; ownership is tenant plumbing).
+      # The shipped keep_firing_for is not reproduced either (declared in the
+      # ledger); NodeReadinessFlapping is not mirrored (absent_from_candidate).
       - alert: NodeNotReady
         expr: kube_node_status_condition{condition="Ready", status="true"} == 0
         for: 3m
