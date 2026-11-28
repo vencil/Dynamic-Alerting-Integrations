@@ -88,7 +88,7 @@ groups:
     labels:
       severity: critical
       tenant: demo-tenant
-      component: migrated
+      da_migrated: 'true'
     annotations:
       summary: MySQL instance is down
       owner: team-db
@@ -100,7 +100,6 @@ groups:
     labels:
       severity: warning
       tenant: demo-tenant
-      component: migrated
     annotations:
       summary: 'Migrated rules of tenant demo-tenant expire on 2099-12-31: promote them to platform rules or renew the expiry'
       owner: team-db
