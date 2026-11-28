@@ -725,26 +725,39 @@ class TestAlertmanagerIsReadOnlyWhenGiven:
         assert c["status"] == "skip"
         assert "http://localhost:9093/api/v2/status" in seen
 
-    def test_a_given_alertmanager_without_the_receiver_warns(self, monkeypatch):
-        """#4277: E′'s shadow route is the receiver generate-routes adds; the
-        recipe-era `migration_status` matcher is no longer what is looked for."""
+    @staticmethod
+    def _am(monkeypatch, original):
         def get(url, **_kw):
-            return (({"config": {"original": "route: {matchers: [migration_status=shadow]}"}},
-                     None) if "/api/v2/status" in url else _vector("3"))
+            return (({"config": {"original": original}}, None)
+                    if "/api/v2/status" in url else _vector("3"))
         monkeypatch.setattr(_lib_prometheus, "http_get_json", get)
         with patch("urllib.request.urlopen", side_effect=OSError("fail")):
-            c = {c["check"]: c for c in sv.check_preflight(_args(alertmanager="http://am:9093"))}
-        assert c["alertmanager_shadow_route"]["status"] == "warn"
+            return {c["check"]: c for c in sv.check_preflight(
+                _args(alertmanager="http://am:9093"))}["alertmanager_shadow_route"]
 
-    def test_a_given_alertmanager_with_the_route_passes(self, monkeypatch):
-        def get(url, **_kw):
-            return (({"config": {"original": "receivers: [{name: migrated-alerts-shadow}]"}}, None)
-                    if url == "http://am:9093/api/v2/status" else
-                    (None, "refused") if "/api/v2/status" in url else _vector("3"))
-        monkeypatch.setattr(_lib_prometheus, "http_get_json", get)
-        with patch("urllib.request.urlopen", side_effect=OSError("fail")):
-            c = {c["check"]: c for c in sv.check_preflight(_args(alertmanager="http://am:9093"))}
-        assert c["alertmanager_shadow_route"]["status"] == "pass"
+    _RECEIVERS = "receivers:\n- name: default\n- name: migrated-alerts-shadow\n"
+
+    def test_a_given_alertmanager_with_the_route_passes(self, monkeypatch, da_read_env):
+        c = self._am(monkeypatch, "route:\n  receiver: default\n  routes:\n"
+                                  "  - receiver: migrated-alerts-shadow\n"
+                                  "    matchers: ['da_migrated=\"true\"']\n" + self._RECEIVERS)
+        assert c["status"] == "pass"
+
+    @pytest.mark.parametrize("original", [
+        # #4277: E′'s shadow route is the receiver generate-routes routes to;
+        # the recipe-era `migration_status` matcher is no longer looked for.
+        "route:\n  receiver: default\n  routes:\n  - receiver: default\n"
+        "    matchers: ['migration_status=\"shadow\"']\nreceivers:\n- name: default\n",
+        # CodeRabbit on #4381: the receiver defined, no route sending to it —
+        # a substring of the text used to pass.
+        "route:\n  receiver: default\n" + _RECEIVERS,
+    ], ids=["recipe-era-matcher", "receiver-only-defined"])
+    def test_no_route_to_the_shadow_receiver_warns(self, monkeypatch, da_read_env, original):
+        assert self._am(monkeypatch, original)["status"] == "warn"
+
+    def test_a_config_alertmanager_refuses_is_a_caller_error(self, monkeypatch, da_read_env):
+        c = self._am(monkeypatch, "route: [1]\n")
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
 
 
 @pytest.mark.parametrize("phase", ["runtime", "convergence"])

@@ -120,9 +120,16 @@ class TestLoadMapping:
         with pytest.raises(CallerError, match="tenant（應為合法的租戶 id"):
             vm.load_mapping(_args(path))
 
-    def test_an_alert_named_twice_is_named(self, tmp_path):
+    def test_an_alert_two_groups_define_is_compared_once(self, tmp_path):
+        """CodeRabbit on #4381: Prometheus loads both, migrate-rule maps both;
+        ALERTS is queried by name, so one comparison — not a refusal."""
         doc = _mapping_doc(alerts=("A", "A"))
-        with pytest.raises(CallerError, match=r"rules\[1\]\.alert（應為不重複的 alert"):
+        mapping = vm.load_mapping(_args(_write(tmp_path, doc)))
+        assert mapping.alerts == ("A",) and len(mapping.selectors) == 2
+
+    def test_an_alert_both_compared_and_added_is_named(self, tmp_path):
+        doc = _mapping_doc(alerts=("MigratedRulesExpiring",))
+        with pytest.raises(CallerError, match=r"rules\[1\]\.alert（應為不同時是要比的告警與 added"):
             vm.load_mapping(_args(_write(tmp_path, doc)))
 
     def test_added_on_another_alert_is_named(self, tmp_path):
@@ -371,6 +378,43 @@ class TestRound:
         result = vm.run_round(_mapping(), LEGACY, MIGRATED, 60)
         assert [r["status"] for r in result["rows"] if r["kind"] == "rule"] == [
             "rule_not_loaded"]
+
+    def test_a_rule_that_does_not_evaluate_is_unverifiable(self, fake):
+        """CodeRabbit on #4381: a rule listed but failing writes no ALERTS —
+        its side reads as nothing fired."""
+        groups = _groups("migrated")
+        groups[0]["rules"][0]["lastError"] = "many-to-many matching not allowed"
+        rules = {LEGACY: _groups("legacy"), MIGRATED: groups}
+        fake(counts={(LEGACY, "myapp_queue_depth"): 1, (MIGRATED, _PINNED): 1}, rules=rules)
+        result = vm.run_round(_mapping(), LEGACY, MIGRATED, 60)
+        (row,) = [r for r in result["rows"] if r["kind"] == "rule"]
+        assert row["status"] == "unverifiable" and "many-to-many" in row["labels"]
+        assert vm.round_exit_code(result) == 1 and not vm.is_clean(result)
+
+    def test_a_query_not_answered_leaves_a_row_the_report_holds(self, tmp_path, fake,
+                                                                monkeypatch):
+        """CodeRabbit on #4381: the failed ALERTS query left no row, so a
+        report read alone (`shadow-verify --report-csv`) passed."""
+        prom = fake(counts={(LEGACY, "myapp_queue_depth"): 1, (MIGRATED, _PINNED): 1})
+
+        def seam(p, q):
+            if "ALERTS" in q and 'da_migrated="true"' in q:
+                raise QueryError("HTTP 503")
+            return prom(p, q)
+        monkeypatch.setattr(vm, "query_prometheus", seam)
+        result = vm.run_round(_mapping(), LEGACY, MIGRATED, 60)
+        (row,) = [r for r in result["rows"] if r["kind"] == "alert"]
+        assert row["status"] == "unverifiable" and row["labels"].startswith("查詢失敗")
+        path = vm.write_csv_report(result, str(tmp_path))
+        import shadow_verify as sv
+        records = sv.judge_inputs(sv.build_parser().parse_args(["runtime", "--report-csv", path]),
+                                  ["runtime"])["report_csv"]
+        with __import__("unittest").mock.patch.object(sv, "query_prometheus",
+                                                      return_value=([], None)):
+            checks = {c["check"]: c for c in sv.check_runtime(
+                sv.build_parser().parse_args(["runtime", "--report-csv", path]),
+                {"report_csv": records})}
+        assert checks["csv_unverifiable"]["status"] == "fail"
 
     def test_a_group_evaluated_less_often_than_the_window_is_2(self, fake):
         """審查 Major 2：組的評估間隔 600s、窗口 60s，十輪裡九輪看不到任何 ALERTS

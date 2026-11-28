@@ -102,9 +102,11 @@ def read_mapping(doc: dict, tenant_valid) -> "tuple[MigrationMapping | None, lis
     (a non-empty string), ``list``, ``dict``, ``bool``, ``alert_or_record``
     (exactly one of the two), ``tenant_id`` (*tenant_valid* says no: the
     caller's ADR-035 rule, ``_lib_validation.is_valid_tenant_id``),
-    ``unique`` (an alert named twice), ``added_alert`` (``added`` on an alert
-    other than :data:`ADDED_ALERT`). All of them are named, none skipped
-    (#4210 / #4221: an entry that cannot be read is not compared in silence)."""
+    ``unique`` (an alert both compared and ``added``), ``added_alert``
+    (``added`` on an alert other than :data:`ADDED_ALERT`). All of them are
+    named, none skipped (#4210 / #4221: an entry that cannot be read is not
+    compared in silence). An alert two groups both define (Prometheus loads
+    both) is compared once: ALERTS is queried by its name."""
     problems = []
     tenant = doc.get(MAPPING_TENANT)
     if not _nonempty_str(tenant):
@@ -152,13 +154,14 @@ def read_mapping(doc: dict, tenant_valid) -> "tuple[MigrationMapping | None, lis
                                             pair.get(SELECTOR_PINNED)))
         if is_added is True and name != ADDED_ALERT:
             problems.append((f"{where}.{RULE_ADDED}", "added_alert"))
-        if has_alert and name in alerts + added:
+        if has_alert and name in (alerts if is_added is True else added):
             problems.append((f"{where}.{RULE_ALERT}", "unique"))
         if len(problems) > bad:
             continue
         selectors.extend(entry_pairs)
-        if has_alert:
-            (added if is_added else alerts).append(name)
+        target = added if is_added is True else alerts
+        if has_alert and name not in target:
+            target.append(name)
     if problems:
         return None, problems
     return MigrationMapping(tenant, tuple(alerts), tuple(added), tuple(selectors)), []
@@ -209,9 +212,17 @@ FINDING_STATUSES = (STATUS_MISMATCH,) + SETUP_STATUSES
 BLOCKING_STATUSES = FINDING_STATUSES + (STATUS_UNVERIFIABLE,)
 
 
+class LoadedRule(NamedTuple):
+    """One loaded rule of an alert: its group's evaluation interval
+    (seconds, None when the answer has none) and its ``lastError`` (``""``
+    when it evaluates)."""
+
+    interval: "float | None"
+    error: str
+
+
 def loaded_alert_rules(groups, alerts, *, migrated, tenant, label, value):
-    """``{alert: [interval, ...]}`` — for each of *alerts*, the evaluation
-    interval (seconds, None when the answer has none) of every group of
+    """``{alert: [LoadedRule, ...]}`` — for each of *alerts*, every rule of
     *groups* (``_lib_prometheus.rules_groups``) that loads it: on the
     *migrated* side as a migrated rule of *tenant* (*label* = *value* and
     ``tenant``), otherwise as a rule without that label. An alert loaded
@@ -227,7 +238,7 @@ def loaded_alert_rules(groups, alerts, *, migrated, tenant, label, value):
                 continue
             if migrated and labels.get("tenant") != tenant:
                 continue
-            out[rule["name"]].append(interval)
+            out[rule["name"]].append(LoadedRule(interval, rule.get("lastError") or ""))
     return out
 
 #: How a row's ``Timestamp`` is written (UTC is not stated in the value:

@@ -445,7 +445,9 @@ LIVE.update({
         "prometheus": lambda path, params: (
             "Prometheus Server is Healthy." if path == "/-/healthy" else
             {"config": {"original": "route:\n  receiver: default\n  routes:\n"
-                                    "  - receiver: migrated-alerts-shadow\n"}}
+                                    "  - receiver: migrated-alerts-shadow\n"
+                                    "receivers:\n- name: default\n"
+                                    "- name: migrated-alerts-shadow\n"}}
             if path.endswith("/api/v2/status") else
             _migrated_rules_answer()),
     },

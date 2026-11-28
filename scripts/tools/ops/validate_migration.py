@@ -107,7 +107,8 @@ MAPPING_DOCUMENT = _lib_input.Document("yaml", dict)
 
 _EXPECTED = {"str": "非空字串", "list": "清單", "dict": "映射", "bool": "布林值",
              "alert_or_record": "alert 與 record 恰好其一",
-             "tenant_id": "合法的租戶 id（ADR-035）", "unique": "不重複的 alert",
+             "tenant_id": "合法的租戶 id（ADR-035）",
+             "unique": "不同時是要比的告警與 added 的告警",
              "added_alert": f"只有 {report.ADDED_ALERT} 能標 added"}
 
 
@@ -264,12 +265,17 @@ def rule_rows(mapping, prom, window, side):
                                        value=MIGRATED_VALUE)
     rows = []
     for alert in mapping.alerts:
-        intervals = loaded[alert]
-        slowest = max((i for i in intervals if i is not None), default=None)
-        if not intervals:
+        rules = loaded[alert]
+        slowest = max((r.interval for r in rules if r.interval is not None), default=None)
+        failing = [r.error for r in rules if r.error]
+        if not rules:
             status, labels = report.STATUS_RULE_NOT_LOADED, "（沒有載入）"
         elif slowest is not None and slowest > window:
             status, labels = report.STATUS_WINDOW_TOO_SHORT, f"評估間隔 {slowest:g}s > 窗口 {window:g}s"
+        elif failing:
+            # A rule that does not evaluate writes no ALERTS: its side reads
+            # as "nothing fired" (CodeRabbit on #4381; byo_check's reading).
+            status, labels = report.STATUS_UNVERIFIABLE, f"評估錯誤: {safe_label(failing[0])[:120]}"
         else:
             continue
         rows.append({"kind": report.KIND_RULE, "rule": alert, "tenant": mapping.tenant,
@@ -279,13 +285,25 @@ def rule_rows(mapping, prom, window, side):
     return rows
 
 
+def _unanswered(kind, rule, tenant, labels, side=None):
+    """The row of a query not answered: unverifiable, so a report missing an
+    answer never reads as clean (CodeRabbit on #4381: the CSV is all
+    `shadow-verify --report-csv` reads)."""
+    return {"kind": kind, "rule": rule, "tenant": tenant, CLUSTER_IDENTITY_LABEL: None,
+            "state": "", "labels": f"查詢失敗: {labels}", "legacy": int(side == "legacy"),
+            "migrated": int(side == "migrated"), "status": report.STATUS_UNVERIFIABLE}
+
+
 def run_round(mapping, legacy_prom, migrated_prom, window):
-    """One round: ``{"rows": [...], "query_errors": n}``."""
+    """One round: ``{"rows": [...], "query_errors": n}``. A query not
+    answered counts in ``query_errors`` AND leaves an unverifiable row."""
     rows, query_errors = [], 0
     for prom, side in ((legacy_prom, "legacy"), (migrated_prom, "migrated")):
         found = rule_rows(mapping, prom, window, side)
         if found is None:
             query_errors += 1
+            rows.append(_unanswered(report.KIND_RULE, "*", mapping.tenant,
+                                    f"{side} 端 /api/v1/rules", side))
         else:
             rows.extend(found)
     for pair in mapping.selectors:
@@ -293,6 +311,8 @@ def run_round(mapping, legacy_prom, migrated_prom, window):
         pinned_n = _count(migrated_prom, pair.pinned)
         if legacy_n is None or pinned_n is None:
             query_errors += 1
+            rows.append(_unanswered(report.KIND_SELECTOR, pair.rule, mapping.tenant,
+                                    f"{pair.legacy} → {pair.pinned}"))
             continue
         rows.append({"kind": report.KIND_SELECTOR, "rule": pair.rule,
                      "tenant": mapping.tenant, CLUSTER_IDENTITY_LABEL: None, "state": "",
@@ -304,6 +324,7 @@ def run_round(mapping, legacy_prom, migrated_prom, window):
         migrated_keys = _alert_keys(migrated_prom, alert, window, "migrated", mapping.tenant)
         if legacy_keys is None or migrated_keys is None:
             query_errors += 1
+            rows.append(_unanswered(report.KIND_ALERT, alert, mapping.tenant, "ALERTS"))
             continue
         rows.extend(compare_alerts(alert, mapping.tenant, legacy_keys, migrated_keys))
     return {"rows": rows, "query_errors": query_errors}

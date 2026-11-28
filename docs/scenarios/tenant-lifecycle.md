@@ -431,7 +431,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 | **deprecate_rule.py** | 規則下架 | `rule-name-1 rule-name-2 --config-dir conf.d/ --execute`（不帶 `--config-dir` 會指向 repo 內部路徑） |
 | **onboard_platform.py** | 遷移前掃描 | `--alertmanager-config <am.yml> --rule-files <rules-dir> --output-dir migration_input/`（v2.9.0 映像給目錄選不到檔，改給加引號的 glob） <!-- image-caveat: v2.9.0 --> |
 | **migrate_rule.py** | 規則原樣遷移 | `<legacy-rules.yaml> --tenant <name> --owner <owner> --expiry <YYYY-MM-DD> --output-dir migration_output/` |
-| **validate_migration.py** | 並行驗證（比對 legacy 與 migrated 規則響的告警集合） | `--mapping .migration/mapping/<tenant>.yaml --watch --auto-detect-convergence` |
+| **validate_migration.py** | 並行驗證（比對 legacy 與 migrated 規則響的告警集合） | `--mapping migration_output/.migration/mapping/<tenant>.yaml --watch --auto-detect-convergence` |
 | **cutover_tenant.py** | 遷移切換 | `--tenant <name> --readiness-json file.json --dry-run` |
 
 ## 檢查清單

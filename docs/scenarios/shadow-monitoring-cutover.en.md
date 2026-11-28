@@ -120,7 +120,7 @@ python3 scripts/tools/ops/validate_migration.py \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
   --auto-detect-convergence --stability-window 5
-  # stability-window=5: 5 consecutive clean rounds (every rule loaded, a clean pre-check, no mismatch, nothing unverifiable) → convergence declared
+  # stability-window=5: 5 consecutive clean rounds (every rule loaded, a clean pre-check, no mismatch, nothing unverifiable) → convergence declared; convergence counts rounds, the time covered is rounds × --interval
 ```
 
 Output: `validation_output/cutover-readiness.json` (fields `ready`, `timestamp`, `tenant`, `round_count`, `stability_window`, `clean_rounds`, `last_round`, `recommendation`). `cutover` accepts only a readiness of the same tenant. Use `da-tools shadow-verify convergence --readiness-json <path>` to auto-interpret.
@@ -238,12 +238,12 @@ kubectl rollout restart deployment alertmanager -n monitoring
 What cannot be verified never passes; cutting over then takes `cutover --force`.
 
 ```bash
-# 3.1 Start parallel validation (7 consecutive clean rounds write cutover-readiness.json and stop)
+# 3.1 Start parallel validation (2016 consecutive clean rounds = 2016 × 300 s = 7 days write cutover-readiness.json and stop; convergence counts rounds, the time is rounds × --interval)
 python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
-  --auto-detect-convergence --stability-window 7 \
+  --auto-detect-convergence --stability-window 2016 \
   -o validation_output/
 
 # 3.2 Daily inspection (automated via shadow-verify)
@@ -312,11 +312,11 @@ python3 scripts/tools/ops/cutover_tenant.py \
 # ✅ Cutover completed successfully.
 # If any step fails it prints ❌ Cutover failed at step: <step> with the reason, and points to SOP §7.2 for rollback.
 
-# 5.2 Batch cutover multiple tenants (sequential execution)
+# 5.2 Batch cutover multiple tenants (sequential execution; each tenant with its own readiness: run validate with -o validation_output/<tenant> per tenant, cutover takes only its own tenant's file)
 for tenant in db-a db-b db-c; do
   echo "[INFO] Cutting over $tenant..."
   python3 scripts/tools/ops/cutover_tenant.py \
-    --readiness-json validation_output/cutover-readiness.json \
+    --readiness-json "validation_output/$tenant/cutover-readiness.json" \
     --tenant "$tenant" \
     --prometheus http://localhost:9090
 
@@ -434,14 +434,14 @@ kubectl patch configmap alertmanager-config -n monitoring \
 To accept higher risk and speed up validation:
 
 ```bash
-# Declare convergence at 3 consecutive clean rounds
+# Declare convergence at 288 consecutive clean rounds (288 × 300 s = 1 day)
 python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
-  --watch --interval 300 --rounds 288 \
-  --auto-detect-convergence --stability-window 3
+  --watch --interval 300 --rounds 576 \
+  --auto-detect-convergence --stability-window 288
 
-# Validation period reduces from 14 days to ~1 day (288 rounds × 300 s)
+# The validation period drops from 7 days to 1 day; keep --rounds above --stability-window to leave room to converge
 # Risk: a short observation misses alerts that fire only at business peaks, off-peak or in maintenance windows
 ```
 

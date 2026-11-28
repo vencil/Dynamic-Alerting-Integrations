@@ -83,6 +83,8 @@ python3 scripts/tools/ops/baseline_discovery.py --tenant db-a --duration 1800 --
 
 ## 3. 啟動 Shadow Monitoring
 
+⚠️ 本節的 `ghcr.io/vencil/da-tools:v2.9.0` 映像裡的 validate 還是數值比對，讀不了 `.migration/mapping/<tenant>.yaml`；下一版映像發布前，請從 repo 以 `python3 scripts/tools/ops/validate_migration.py`（參數相同）執行。 <!-- image-caveat: v2.9.0 -->
+
 ### 3.1 本地 port-forward（開發/小型環境）
 
 ```bash
@@ -200,7 +202,8 @@ grep ',mismatch,' validation_output/validation-report.csv | head -20
 # 直接查兩邊在窗口內響過的告警（窗口與 --interval 相同；alertstate 換成 pending 再查一次）
 curl -s http://localhost:9090/api/v1/query --data-urlencode \
   'query=max_over_time(ALERTS{alertname="<告警名>", da_migrated="true", tenant="db-a", alertstate="firing"}[5m])' | python3 -m json.tool
-curl -s http://localhost:9090/api/v1/query --data-urlencode \
+# legacy 那一側查 legacy 規則所在的 Prometheus（給了 --legacy-prometheus 就是那一台）
+curl -s "${LEGACY_PROMETHEUS:-http://localhost:9090}/api/v1/query" --data-urlencode \
   'query=max_over_time(ALERTS{alertname="<告警名>", da_migrated="", alertstate="firing"}[5m])' | python3 -m json.tool
 ```
 
@@ -311,13 +314,13 @@ docker run --rm --network=host \
   ghcr.io/vencil/da-tools:v2.9.0 \
   cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 
-# Step 3: 批次切換多個 tenant（逐一執行）
+# Step 3: 批次切換多個 tenant（逐一執行；每個租戶用自己的 readiness，validate 以 -o validation_output/<租戶> 分別跑）
 for tenant in db-a db-b db-c; do
   docker run --rm --network=host \
     -v $(pwd)/validation_output:/data:ro \
     -e PROMETHEUS_URL=http://localhost:9090 \
     ghcr.io/vencil/da-tools:v2.9.0 \
-    cutover --readiness-json /data/cutover-readiness.json --tenant "$tenant"
+    cutover --readiness-json "/data/$tenant/cutover-readiness.json" --tenant "$tenant"
 done
 ```
 <!-- image-caveat: v2.9.0 — 上方區塊裡「v2.9.0 映像印在 stdout」那段註解 -->

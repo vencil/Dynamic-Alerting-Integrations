@@ -83,6 +83,8 @@ Output includes p50/p90/p95/p99 statistics and threshold suggestions in CSV form
 
 ## 3. Launch Shadow Monitoring
 
+⚠️ The validate in this section's `ghcr.io/vencil/da-tools:v2.9.0` image is still the numeric comparison and cannot read `.migration/mapping/<tenant>.yaml`; until the next image is released, run it from the repo as `python3 scripts/tools/ops/validate_migration.py` (the same arguments). <!-- image-caveat: v2.9.0 -->
+
 ### 3.1 Local Port-Forward (Development/Small Environments)
 
 ```bash
@@ -200,7 +202,8 @@ grep ',mismatch,' validation_output/validation-report.csv | head -20
 # Query what each side fired within the window (the window equals --interval; run again with alertstate pending)
 curl -s http://localhost:9090/api/v1/query --data-urlencode \
   'query=max_over_time(ALERTS{alertname="<alert name>", da_migrated="true", tenant="db-a", alertstate="firing"}[5m])' | python3 -m json.tool
-curl -s http://localhost:9090/api/v1/query --data-urlencode \
+# the legacy side is asked on the Prometheus of the legacy rules (the --legacy-prometheus one, when given)
+curl -s "${LEGACY_PROMETHEUS:-http://localhost:9090}/api/v1/query" --data-urlencode \
   'query=max_over_time(ALERTS{alertname="<alert name>", da_migrated="", alertstate="firing"}[5m])' | python3 -m json.tool
 ```
 
@@ -312,13 +315,13 @@ docker run --rm --network=host \
   ghcr.io/vencil/da-tools:v2.9.0 \
   cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 
-# Step 3: Batch cutover multiple tenants (execute sequentially)
+# Step 3: Batch cutover multiple tenants (execute sequentially; each tenant with its own readiness, validate run with -o validation_output/<tenant> per tenant)
 for tenant in db-a db-b db-c; do
   docker run --rm --network=host \
     -v $(pwd)/validation_output:/data:ro \
     -e PROMETHEUS_URL=http://localhost:9090 \
     ghcr.io/vencil/da-tools:v2.9.0 \
-    cutover --readiness-json /data/cutover-readiness.json --tenant "$tenant"
+    cutover --readiness-json "/data/$tenant/cutover-readiness.json" --tenant "$tenant"
 done
 ```
 <!-- image-caveat: v2.9.0 — the "v2.9.0 image prints this on stdout" comment in the block above -->

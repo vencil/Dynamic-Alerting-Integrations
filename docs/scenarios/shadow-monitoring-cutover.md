@@ -115,7 +115,7 @@ python3 scripts/tools/ops/validate_migration.py \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
   --auto-detect-convergence --stability-window 5
-  # stability-window=5 表示連續 5 輪乾淨（規則都已載入、預檢乾淨、沒有 mismatch、沒有不可驗）即宣告收斂
+  # stability-window=5 表示連續 5 輪乾淨（規則都已載入、預檢乾淨、沒有 mismatch、沒有不可驗）即宣告收斂；收斂看輪數，涵蓋的時間是輪數 × --interval
 ```
 
 輸出：`validation_output/cutover-readiness.json`（欄位為 `ready`、`timestamp`、`tenant`、`round_count`、`stability_window`、`clean_rounds`、`last_round`、`recommendation`）。`cutover` 只收同一個租戶的 readiness。可用 `da-tools shadow-verify convergence --readiness-json <path>` 自動解讀。
@@ -227,12 +227,12 @@ kubectl rollout restart deployment alertmanager -n monitoring
 不可驗一律不放行；要切換只能用 `cutover --force`。
 
 ```bash
-# 3.1 啟動並行驗證（連續 7 輪乾淨就寫 cutover-readiness.json 並停止）
+# 3.1 啟動並行驗證（連續 2016 輪乾淨＝300 秒 × 2016 輪＝7 天，就寫 cutover-readiness.json 並停止；收斂看的是輪數，時間是輪數 × --interval）
 python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
-  --auto-detect-convergence --stability-window 7 \
+  --auto-detect-convergence --stability-window 2016 \
   -o validation_output/
 
 # 3.2 日常巡檢（每日一次，使用 shadow-verify 自動化）
@@ -301,11 +301,11 @@ python3 scripts/tools/ops/cutover_tenant.py \
 # ✅ Cutover completed successfully.
 # 任一步失敗時印出 ❌ Cutover failed at step: <步驟> 與原因，並指向 SOP §7.2 的回退步驟。
 
-# 5.2 批次切換多個 tenant（逐一執行）
+# 5.2 批次切換多個 tenant（逐一執行；每個租戶用自己的 readiness：validate 以 -o validation_output/<租戶> 分別跑，cutover 只收同租戶的檔）
 for tenant in db-a db-b db-c; do
   echo "[INFO] Cutting over $tenant..."
   python3 scripts/tools/ops/cutover_tenant.py \
-    --readiness-json validation_output/cutover-readiness.json \
+    --readiness-json "validation_output/$tenant/cutover-readiness.json" \
     --tenant "$tenant" \
     --prometheus http://localhost:9090
 
@@ -410,14 +410,14 @@ kubectl patch configmap alertmanager-config -n monitoring \
 若組織願意接受更高風險，可加速驗證期：
 
 ```bash
-# 連續 3 輪乾淨即宣告收斂
+# 連續 288 輪（300 秒 × 288 輪＝1 天）乾淨即宣告收斂
 python3 scripts/tools/ops/validate_migration.py \
   --mapping migration_output/.migration/mapping/db-a.yaml \
   --prometheus http://localhost:9090 \
-  --watch --interval 300 --rounds 288 \
-  --auto-detect-convergence --stability-window 3
+  --watch --interval 300 --rounds 576 \
+  --auto-detect-convergence --stability-window 288
 
-# 驗證週期從 14 天降至 ~1 天（288 輪 × 300 秒）
+# 驗證期從 7 天降至 1 天；--rounds 要大於 --stability-window，留出等待收斂的餘裕
 # 風險：觀察期短，沒涵蓋業務高峰、低谷與維護窗口時才會響的告警
 ```
 

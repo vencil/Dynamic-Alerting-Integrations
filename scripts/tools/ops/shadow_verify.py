@@ -44,6 +44,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import probe_health, add_prometheus_arg, prometheus_url, url_type  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035: the mapping's tenant)
+from _lib_consumer_read import ConsumerReadError, alertmanager_config  # noqa: E402  (da-read)
 # #3133: every answer is checked by the lib; a query not answered is a failed
 # check, never a missing one.
 from _lib_prometheus import (  # noqa: E402
@@ -99,6 +100,23 @@ def run_cmd(cmd):
         return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL, timeout=120).strip()
     except subprocess.CalledProcessError:
         return None
+
+
+def routes_to(config_text, receiver):
+    """Whether a route of the Alertmanager config *config_text* — read as
+    Alertmanager loads it (``da-read alertmanager``) — sends to *receiver*.
+    A receiver only defined, no route naming it, is no shadow route
+    (CodeRabbit on #4381: a substring of the text was)."""
+    config = alertmanager_config(config_text)
+    todo = [config.get("route")]
+    while todo:
+        route = todo.pop()
+        if not isinstance(route, dict):
+            continue
+        if route.get("receiver") == receiver:
+            return True
+        todo.extend(route.get("routes") or [])
+    return False
 
 
 def _mapping_check(mapping_doc):
@@ -213,8 +231,11 @@ def check_preflight(args, inputs=None):
                 "detail": f"Alertmanager not reachable: {str(exc)[:60]}",
             })
     else:
-        config_str = am_status["config"]["original"]
-        has_shadow_route = MIGRATED_SHADOW_RECEIVER in config_str
+        try:
+            has_shadow_route = routes_to(am_status["config"]["original"], MIGRATED_SHADOW_RECEIVER)
+        except ConsumerReadError as exc:
+            checks.append(_query_failed("alertmanager_shadow_route", str(exc)))
+            return checks
         checks.append({
             "check": "alertmanager_shadow_route",
             "status": "pass" if has_shadow_route else "warn",

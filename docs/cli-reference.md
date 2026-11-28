@@ -503,11 +503,11 @@ rules:
   selectors: []
 ```
 
-⛔ 數值比對（`--old`／`--new`、`prefix-mapping.yaml`、`--tolerance`）已移除（[#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)）。給 prefix-mapping 時結束碼 `2`，stderr 一行說明要用新版 `migrate-rule` 重產對照。對照裡不是 `migrate-rule` 寫的形狀的地方（欄位型別、`tenant` 不是合法租戶 id、同一條 alert 出現兩次、`added` 標在 `MigratedRulesExpiring` 以外的告警上）全部點名後結束碼 `2`，不比對任何一組；沒有任何有 legacy 對應的告警也是 `2`。
+⛔ 數值比對（`--old`／`--new`、`prefix-mapping.yaml`、`--tolerance`）已移除（[#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)）。給 prefix-mapping 時結束碼 `2`，stderr 一行說明要用新版 `migrate-rule` 重產對照。對照裡不是 `migrate-rule` 寫的形狀的地方（欄位型別、`tenant` 不是合法租戶 id、同一條 alert 既要比又標了 `added`、`added` 標在 `MigratedRulesExpiring` 以外的告警上；兩個 group 定義的同名告警只比一次）全部點名後結束碼 `2`，不比對任何一組；沒有任何有 legacy 對應的告警也是 `2`。
 
 **每一輪做什麼**
 
-1. **規則檢查**：legacy 端要載入不帶 `da_migrated` 的同名告警規則，migrated 端要載入該租戶的 migrated 規則（`/api/v1/rules`）。任一邊沒載入，或所在規則組的評估間隔大於 `--interval`（窗口裡可能沒有任何一次評估），結束碼 `2`。
+1. **規則檢查**：legacy 端要載入不帶 `da_migrated` 的同名告警規則，migrated 端要載入該租戶的 migrated 規則（`/api/v1/rules`）。任一邊沒載入，或所在規則組的評估間隔大於 `--interval`（窗口裡可能沒有任何一次評估），結束碼 `2`；有載入但評估失敗（`lastError` 非空，不寫 ALERTS）→ 不可驗。
 2. **count 預檢**：對照裡每組 selector，`legacy` 在 legacy 端、`pinned` 在 migrated 端各數一次序列。legacy 有、pinned 是 0 → 注入後選不到資料（租戶歸屬的假設錯了，或 `job=`／`instance=` 與平台的抓取設定不一致），結束碼 `2` 並點名；兩邊都是 0 → 不可驗。
 3. **告警集合比對**：兩邊各查 `max_over_time(ALERTS{…}[<interval>])`，即這一輪窗口內響過的序列，firing 與 pending 分開比。比對鍵是（租戶, `da_cluster`, alertname, 狀態）加上序列其餘的 label，去掉 `tenant`、`da_migrated`、`alertstate`。租戶歸屬：migrated 側取規則寫的靜態 `tenant`；legacy 側取告警的 `tenant`，沒有就取 `namespace`，兩者都沒有 → 不可驗。legacy 側其他租戶的告警是注入本來就會收窄的部分，列為 `other_tenant`，不算 mismatch。`added: true` 的告警不比。
 
@@ -530,7 +530,7 @@ rules:
 
 **輸出**
 
-`<output-dir>/validation-report.csv`，欄位固定為 `Kind,Rule,Tenant,State,Labels,Legacy,Migrated,Status,Timestamp`（`shadow-verify --report-csv` 依同一份欄位定義讀，[#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)）。`Kind` 是 `rule`（規則檢查，只列有問題的）、`selector`（預檢，`Legacy`／`Migrated` 是兩邊的序列數）或 `alert`（一條告警序列，`Legacy`／`Migrated` 是 1／0）；`Status` 是 `match`、`mismatch`、`other_tenant`、`unverifiable`、`ok`、`pin_selects_nothing`、`rule_not_loaded`、`window_too_short` 之一。帶 `da_cluster` 的列，`Tenant` 寫成 `<租戶> (da_cluster=<叢集>)`（叢集名裡的 `\`、`(`、`)` 與換行以 `\` 跳脫）。`Timestamp` 為 UTC；摘要另印到 stdout。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
+`<output-dir>/validation-report.csv`，欄位固定為 `Kind,Rule,Tenant,State,Labels,Legacy,Migrated,Status,Timestamp`（`shadow-verify --report-csv` 依同一份欄位定義讀，[#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)）。`Kind` 是 `rule`（規則檢查，只列有問題的）、`selector`（預檢，`Legacy`／`Migrated` 是兩邊的序列數）或 `alert`（一條告警序列，`Legacy`／`Migrated` 是 1／0）；`Status` 是 `match`、`mismatch`、`other_tenant`、`unverifiable`、`ok`、`pin_selects_nothing`、`rule_not_loaded`、`window_too_short` 之一。查詢沒得到回答的地方也留一列 `unverifiable`（`Labels` 以「查詢失敗」開頭），所以單讀這份報告也不會把缺了答案的一輪當成乾淨。帶 `da_cluster` 的列，`Tenant` 寫成 `<租戶> (da_cluster=<叢集>)`（叢集名裡的 `\`、`(`、`)` 與換行以 `\` 跳脫）。`Timestamp` 為 UTC；摘要另印到 stdout。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
 
 `--watch` 搭配 `--auto-detect-convergence` 時，額外在同一目錄寫入 `cutover-readiness.json` 供 `cutover` 使用（`--convergence-output <FILE>` 可改路徑），欄位為 `ready`、`timestamp`、`tenant`、`round_count`、`stability_window`、`clean_rounds`、`last_round`、`recommendation`；`cutover` 只收這個租戶的 readiness。單次模式（無 `--watch`）不會產出這個檔。
 
