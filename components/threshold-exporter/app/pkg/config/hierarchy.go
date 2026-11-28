@@ -453,7 +453,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	blocks := make([]map[string]any, len(chain))
 	spells := layerSpellings{tenant: doc.spell[tenantID]}
 	for i, p := range chain {
-		cd := r.chainBlock(p, defaultsYAML[i])
+		cd := r.chainBlock(p, defaultsYAML[i], i == rootLevel)
 		blocks[i] = cd.block
 		spells.addChain(i, len(chain), cd.spell)
 	}
@@ -578,14 +578,14 @@ func withNotCarried(notServed map[string]NotServedKey, view map[string]any, notC
 // (ParseChainDefaults — the parse foldDefaults folds), once per resolver.
 // The merge has already succeeded over these bytes, so a parse error cannot
 // reach here; a block that is not a mapping is nil, as the merge skips it.
-func (r *effectiveResolver) chainBlock(absPath string, b []byte) ChainDefaults {
+func (r *effectiveResolver) chainBlock(absPath string, b []byte, root bool) ChainDefaults {
 	if cd, ok := r.chainBlocks[absPath]; ok {
 		return cd
 	}
 	if r.chainBlocks == nil {
 		r.chainBlocks = make(map[string]ChainDefaults)
 	}
-	cd := ParseChainDefaults(b)
+	cd := parseChainDefaults(b, root) // #4253: the root's fold reads the root decode's
 	r.chainBlocks[absPath] = cd
 	return cd
 }

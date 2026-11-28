@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -154,5 +155,24 @@ func TestSpellingFold_WhatWasWrittenIsStillTold(t *testing.T) {
 		if !strings.Contains(notices, want) {
 			t.Errorf("notices lack %q:\n%s", want, notices)
 		}
+	}
+}
+
+// #4253: /effective folds the root `_defaults.yaml` by the root's own reading
+// (rootTakesRaw), as /metrics does — `"off"` is a value the root refuses,
+// though a subtree level would take it as its `disable`.
+func TestSpellingFold_EffectiveReadsTheRootAsTheRootDecodeDoes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeMergeTree(t, dir, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: \"off\"\n  " + retiredSpelling + ": 7\n",
+		"tx.yaml":        "tenants:\n  tx:\n    _metadata: {owner: x}\n",
+	})
+	ec, err := ResolveEffective(dir, "tx", fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ec.EffectiveConfig["mysql_threads_running"]; fmt.Sprint(got) != "7" {
+		t.Errorf("/effective mysql_threads_running = %v, want the root's other line, 7 (as /metrics)", got)
 	}
 }

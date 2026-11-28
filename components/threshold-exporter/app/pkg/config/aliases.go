@@ -279,6 +279,25 @@ func normalizeKeysTaking[V any](m map[string]V, takes func(string, V) bool) (map
 	return out, s
 }
 
+// TwinSpelledThresholds is, for one decoded tenant body (DecodeTenantBody),
+// every threshold it writes under both #1231 spellings (#4253) — canonical
+// key → the two spellings as written, the kept line's first. For the
+// tenant-api write gate, which refuses such a pair only where the write
+// puts it there.
+func TwinSpelledThresholds(section map[string]ScheduledValue) map[string][2]string {
+	var out map[string][2]string
+	for k, sv := range section {
+		if sv.fold == nil || sv.fold.folded == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string][2]string{}
+		}
+		out[k] = [2]string{sv.writtenAs(k), sv.fold.folded}
+	}
+	return out
+}
+
 // FoldedLine is the other spelling's line the decode folded away beside sv
 // (#4253) — the same map wrote one threshold twice, and sv is the line kept —
 // with the spelling it was written in; ok false when sv folded none away.
