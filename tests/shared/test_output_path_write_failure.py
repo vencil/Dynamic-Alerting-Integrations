@@ -2179,7 +2179,7 @@ SPAWNS: dict[Key, tuple[str, ...]] = {
     ("ops/generate_alertmanager_routes.py", "--secret-mounts-out"): ("da-crdecode", "da-guard", "da-read"),
     ("ops/generate_alertmanager_routes.py", "-o/--output"): ("da-crdecode", "da-guard", "da-read"),
     ("ops/generate_rule_pack_split.py", "--output-dir"): ("da-read",),
-    ("ops/generate_tenant_mapping_rules.py", "-o/--output"): ("da-guard",),
+    ("ops/generate_tenant_mapping_rules.py", "-o/--output"): ("da-guard", "da-read"),
     ("ops/init_project.py", "-o/--output-dir"): ("da-guard",),
     ("ops/migrate_credentials.py", "--manifests-out"): ("da-guard",),
     ("ops/migrate_rule.py", "-o/--output-dir"): ("da-crdecode", "da-guard", "da-read"),
