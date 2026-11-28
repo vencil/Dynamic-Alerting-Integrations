@@ -87,7 +87,7 @@ groups:
       tenant: db-b
 ```
 
-One rule group per instance, one rule per (entry, metric). `filter` is a comma-separated list of `label=`, `label=~` and `label!=` matchers; anything else goes into the selector as written. Without `--metrics`, every metric of `metric-dictionary.yaml` is used. `--format configmap` wraps the same rules in a ConfigMap named `rules-tenant-mapping` (key `tenant-mapping-rules.yaml`).
+One rule group per instance, one rule per (entry, metric). `filter` is the list of label matchers inside a selector's braces (for example `schema=~"app_a_.*", tablespace="ts_a"`), read by Prometheus' parser, so a comma or a quote inside a value follows PromQL's string rules; a filter the parser cannot read, or one that names `__name__`, makes the tool name the entry and exit with code 2 without producing rules ([#4264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4264)). Without `--metrics`, every metric of `metric-dictionary.yaml` is used. `--format configmap` wraps the same rules in a ConfigMap named `rules-tenant-mapping` (key `tenant-mapping-rules.yaml`).
 
 With `--validate`, the tool checks that every entry's tenant has a tenant file in the config directory. If the directory above holds tenant files for `db-a` and `db-b` only, it prints these three lines, exits with code 1 and produces no rules:
 
@@ -223,7 +223,7 @@ In enterprise environments, the mapping between database instances and tenants i
 - **The platform's rule packs do not read the mapped series.** The generated series are named `tenant_mapped:<original metric>:current`, and no rule in `rule-packs/` reads that name; to alert on them, you write the rules yourself.
 - **The generated rules are not in the Prometheus deployment the platform ships.** The rules projected volume in `k8s/03-monitoring/deployment-prometheus.yaml` has no `rules-tenant-mapping` source, and Prometheus loads only `/etc/prometheus/rules/*.yml`. To use them, add the ConfigMap to that projected volume and project it to a `.yml` file name; once added, changes are reloaded by the config-reloader sidecar without restarting Prometheus ([ADR-005](./005-projected-volume-for-rule-packs.en.md)).
 - **The tenant-existence check has to be wired into your pipeline.** `--validate` checks that every tenant in the mapping has a tenant file in the config directory, but the repository's CI does not run this tool.
-- **No schema validation.** `_instance_mapping.yaml` has no JSON Schema; an entry missing `tenant` or with an empty `filter` is skipped with a WARN and does not fail the tool.
+- **No schema validation.** `_instance_mapping.yaml` has no JSON Schema; an entry missing `tenant` or with an empty `filter` is skipped with a WARN and does not fail the tool; a `filter` that cannot be read exits with code 2 (see above).
 - **Filters require knowing the database's structure.** Whoever writes a filter has to know how schemas/tablespaces map onto the exporter's labels.
 - **No end-to-end validation.** The repository has only unit tests for the generator (`tests/ops/test_generate_tenant_mapping_rules.py`); no test loads the generated rules into Prometheus, and it has not been run against a real multi-schema Oracle environment.
 

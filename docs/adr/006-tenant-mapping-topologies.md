@@ -92,7 +92,7 @@ groups:
       tenant: db-b
 ```
 
-每個實例一個規則群組，每個（條目、指標）一條規則。`filter` 是逗號分隔的 `label=`、`label=~`、`label!=` 比對；其他寫法原樣放進選擇器。省略 `--metrics` 時，用 `metric-dictionary.yaml` 裡的每一個指標。`--format configmap` 把同樣的規則包成名為 `rules-tenant-mapping` 的 ConfigMap（key 是 `tenant-mapping-rules.yaml`）。
+每個實例一個規則群組，每個（條目、指標）一條規則。`filter` 是選擇器大括號裡的那串 label 比對（例如 `schema=~"app_a_.*", tablespace="ts_a"`），由 Prometheus 的 parser 讀，值裡的逗號與引號照 PromQL 字串規則；讀不了、或寫了 `__name__` 的 filter，工具點名該條目並以結束碼 2 結束、不產生規則（[#4264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4264)）。省略 `--metrics` 時，用 `metric-dictionary.yaml` 裡的每一個指標。`--format configmap` 把同樣的規則包成名為 `rules-tenant-mapping` 的 ConfigMap（key 是 `tenant-mapping-rules.yaml`）。
 
 加上 `--validate` 時，檢查每個條目的租戶是否在設定目錄裡有租戶檔。上面的目錄若只有 `db-a`、`db-b` 的租戶檔，輸出下面三行並以結束碼 1 結束、不產生規則：
 
@@ -228,7 +228,7 @@ redis_up{job="tenant-exporters", tenant="db-a", da_cluster="edge-b"}            
 - **平台的規則包不讀映射後的序列。** 產生的序列名稱是 `tenant_mapped:<原指標>:current`，`rule-packs/` 裡沒有任何規則讀這個名字；要對它們告警，得自己寫規則。
 - **產生的規則不在平台附的 Prometheus 部署裡。** `k8s/03-monitoring/deployment-prometheus.yaml` 的規則 projected volume 沒有 `rules-tenant-mapping` 這個來源，Prometheus 只載入 `/etc/prometheus/rules/*.yml`。要用就把這個 ConfigMap 加進那個 projected volume，並投影成 `.yml` 檔名；加進去之後，改動由 config-reloader sidecar 觸發 Prometheus 重新載入，不必重啟（[ADR-005](./005-projected-volume-for-rule-packs.md)）。
 - **租戶存在與否的檢查要自己接進管線。** `--validate` 檢查映射裡的租戶在設定目錄裡有租戶檔，但 repo 的 CI 不跑這支工具。
-- **沒有 schema 驗證。** `_instance_mapping.yaml` 沒有 JSON Schema；缺 `tenant` 或 `filter` 為空的條目以 WARN 略過，不讓工具失敗。
+- **沒有 schema 驗證。** `_instance_mapping.yaml` 沒有 JSON Schema；缺 `tenant` 或 `filter` 為空的條目以 WARN 略過，不讓工具失敗；`filter` 本身讀不了則以結束碼 2 結束（見上）。
 - **filter 要懂底層資料庫的結構。** 寫 filter 的人得知道 schema／tablespace 怎麼對應到 exporter 的 label。
 - **沒有端到端驗證。** repo 內只有產生器的單元測試（`tests/ops/test_generate_tenant_mapping_rules.py`），沒有把產生的規則載進 Prometheus 的測試，也沒有在實際多 schema 的 Oracle 環境跑過。
 
