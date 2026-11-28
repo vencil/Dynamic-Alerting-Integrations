@@ -67,8 +67,11 @@ type ResolvedThresholdExpiry struct {
 	Tenant    string
 	MetricKey string // full conf.d key, e.g. "mysql_connections"
 	Expires   time.Time
-	Reason    string
-	Expired   bool
+	// ExpiresText is the `expires:` as written (#4263: the value may be
+	// one the merge at the instant left out, so readers take it from here).
+	ExpiresText string
+	Reason      string
+	Expired     bool
 }
 
 // silentModeStructured is the intermediate struct for parsing structured _silent_mode YAML.
@@ -299,6 +302,11 @@ type ThresholdConfig struct {
 	// header per note (#3269: ThresholdConfig is held per file and copied on
 	// every merge).
 	notes *fileNotes
+
+	// expiry is what the build decided about `expires:` at its instant
+	// (expiry.go, #4263): nil for a config assembled by hand or one file's
+	// decode, which read `expires:` at resolve time against the root alone.
+	expiry *expiryState
 }
 
 // fileNotes is what one file's decode records, without changing any value

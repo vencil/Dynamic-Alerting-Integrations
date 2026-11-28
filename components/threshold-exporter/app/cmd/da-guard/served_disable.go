@@ -87,11 +87,34 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 ) {
 	perTenant := map[string][]string{}
 	rounds := 0
-	for tenant, overrides := range cfg.Tenants {
-		for k, sv := range overrides {
+	// #4263: every `disable` the tenant's lines hold — the ones served
+	// (DescribedTenant) and the ones written whose `expires:` passed
+	// (WrittenTenant), whatever they gave way to: an expired one's effect,
+	// below, is none.
+	for tenant := range cfg.Tenants {
+		described := cfg.DescribedTenant(tenant)
+		listed := map[string]bool{}
+		for k, sv := range described {
 			if switchedOff(sv) && !registeredReserved(k) {
+				listed[k] = true
 				perTenant[tenant] = append(perTenant[tenant], k)
 			}
+		}
+		// A written one is listed under the spelling its threshold is
+		// described by — its own, or the other one the instant serves: that
+		// is the threshold's keys entry, the one its effect lands on.
+		for k, sv := range cfg.WrittenTenant(tenant) {
+			if !switchedOff(sv) || registeredReserved(k) {
+				continue
+			}
+			if at, ok := describedSpelling(described, k); ok {
+				k = at
+			}
+			if listed[k] {
+				continue
+			}
+			listed[k] = true
+			perTenant[tenant] = append(perTenant[tenant], k)
 		}
 		// #3832: a root `disable` of a built-in key the tenant inherits is
 		// the tenant's `disable` as one a subtree level hands it is; taken
@@ -388,4 +411,19 @@ func familyServed(series map[string][]metricsSeries, key string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// describedSpelling is the spelling under which described holds key's
+// threshold — key itself first — and whether it holds it at all.
+func describedSpelling(described map[string]config.ScheduledValue, key string) (string, bool) {
+	if _, ok := described[key]; ok {
+		return key, true
+	}
+	_, spellings := config.SpellingsOf(key)
+	for _, s := range spellings {
+		if _, ok := described[s]; ok {
+			return s, true
+		}
+	}
+	return "", false
 }

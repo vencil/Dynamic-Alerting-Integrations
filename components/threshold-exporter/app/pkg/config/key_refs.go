@@ -16,6 +16,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -145,7 +146,7 @@ type writtenSections struct {
 // is unreadable is not refused: the report then carries no reference and
 // the files in Load.Unreadable (#2627).
 func KeyRefs(dir string, metrics []string, logger *log.Logger) (KeyRefsReport, error) {
-	_, rep, scan, _, err := loadDirReport(dir, logger)
+	_, rep, scan, _, err := loadDirReport(dir, logger, time.Time{})
 	out := KeyRefsReport{Load: rep, Refs: make(map[string][]KeyRef, len(metrics))}
 	for _, m := range metrics {
 		out.Refs[m] = []KeyRef{}

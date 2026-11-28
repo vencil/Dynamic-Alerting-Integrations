@@ -1,0 +1,110 @@
+# promtool behavioural test for ConfigExpiryRebuildOverdue (#4263). The
+# question the alert answers is "has a threshold `expires:` of the committed
+# config passed more than 5 minutes ago without the merge that follows it
+# committing". It reads one series the exporter exposes:
+#   da_config_valid_until_unixtime_seconds — the committed config's next
+#       `expires:` as unix seconds, set at every commit; 0 = none ahead.
+# Series are scraped every 30s; time() at sample k is k*30.
+#
+# Contract:
+#   1) FIRES once the gauge is more than 300s in the past (plus `for: 1m`)
+#      and the merge has not committed — the gauge did not move;
+#   2) does NOT fire while the instant is ahead, nor within 300s past it;
+#   3) does NOT fire when nothing time-boxed lies ahead (gauge 0);
+#   4) RESOLVES when the merge commits and moves the gauge (to 0 or to the
+#      next `expires:`);
+#   5) one stuck exporter next to a healthy one is alerted once.
+# Run: promtool test rules tests/rulepacks/platform-config-expiry-rebuild-overdue_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-platform.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # 1, 2) The next `expires:` is at 600s; the merge never commits.
+  #       Not at 600s (the instant), not at 900s (exactly 300s past: not
+  #       more), firing by 15m (> 300s past, held 1m).
+  - interval: 30s
+    name: merge-does-not-commit-fires
+    input_series:
+      - series: 'da_config_valid_until_unixtime_seconds{job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '600x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ConfigExpiryRebuildOverdue
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ConfigExpiryRebuildOverdue
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: ConfigExpiryRebuildOverdue
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              job: threshold-exporter
+            exp_annotations: &overdue_annotations
+              summary: "Threshold-exporter has not merged conf.d again since a threshold `expires:` passed — expired thresholds still served"
+              description: |
+                A threshold `expires:` of the committed config passed more than
+                5 minutes ago and the exporter has not committed the merge that
+                follows it, so it keeps serving the answer from before that
+                instant — the expired value included. Nothing else is applied
+                while a reload keeps failing: check ConfigScanFailing and the
+                exporter log ("ERROR: debounced reload failed",
+                "WARN: cannot check config"). With neither, compare the
+                exporter's clock with Prometheus' (the gauge is the exporter's
+                instant, time() is Prometheus'). The alert resolves on the first
+                successful reload, which moves the gauge to the next `expires:`
+                (or 0).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
+
+  # 3) Nothing time-boxed: the gauge is 0 for good.
+  - interval: 30s
+    name: nothing-time-boxed-does-not-fire
+    input_series:
+      - series: 'da_config_valid_until_unixtime_seconds{job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ConfigExpiryRebuildOverdue
+        exp_alerts: []
+
+  # 4) The merge at 600s commits at 630s and moves the gauge to 0: never
+  #    more than 300s past, no alert; a later stuck one resolves when its
+  #    merge finally commits at 1500s (gauge to the next instant, 3000s).
+  - interval: 30s
+    name: committed-merge-moves-the-gauge-and-resolves
+    input_series:
+      - series: 'da_config_valid_until_unixtime_seconds{job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '600x49 3000x20'
+    alert_rule_test:
+      - eval_time: 24m
+        alertname: ConfigExpiryRebuildOverdue
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              job: threshold-exporter
+            exp_annotations: *overdue_annotations
+      - eval_time: 26m
+        alertname: ConfigExpiryRebuildOverdue
+        exp_alerts: []
+
+  # 5) Two exporters, one stuck: one alert (max without instance).
+  - interval: 30s
+    name: one-stuck-replica-alerts-once
+    input_series:
+      - series: 'da_config_valid_until_unixtime_seconds{job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '600x40'
+      - series: 'da_config_valid_until_unixtime_seconds{job="threshold-exporter", instance="10.0.0.10:8080"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: ConfigExpiryRebuildOverdue
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              job: threshold-exporter
+            exp_annotations: *overdue_annotations

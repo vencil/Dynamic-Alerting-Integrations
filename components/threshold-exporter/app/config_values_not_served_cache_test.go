@@ -200,7 +200,7 @@ func TestValuesNotServedCache_MatchesFullRecomputeOverReloads(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("seed %d step %d (%s) at %s:\ncached %v\nfull   %v", seed, i, what, now, got, want)
 			}
-			assertRejectedIsEffective(t, m, c.dir, fmt.Sprintf("seed %d step %d (%s)", seed, i, what))
+			assertRejectedIsEffective(t, m, c.dir, fmt.Sprintf("seed %d step %d (%s)", seed, i, what), now)
 		}
 		resolves += m.rejectedShown.Resolves
 		full += m.valuesNotServedCache.fullPasses
@@ -217,7 +217,7 @@ func TestValuesNotServedCache_MatchesFullRecomputeOverReloads(t *testing.T) {
 // published (config.RejectedShownCache, which re-resolves only the tenants
 // whose files moved) are the ones a cold effective resolve of the tree on
 // disk names — checked only when the commit is of that tree.
-func assertRejectedIsEffective(t *testing.T, m *ConfigManager, dir, step string) {
+func assertRejectedIsEffective(t *testing.T, m *ConfigManager, dir, step string, now time.Time) {
 	t.Helper()
 	scan, err := config.ScanDirTree(dir, nil, nil, log.New(io.Discard, "", 0))
 	if err != nil || scan.Conflict != nil {
@@ -229,7 +229,9 @@ func assertRejectedIsEffective(t *testing.T, m *ConfigManager, dir, step string)
 	if hash != scan.Composite {
 		t.Fatalf("%s: the commit is not of the tree on disk (a reload was missed)", step)
 	}
-	tree, err := config.EffectiveTree(dir, fixedNow)
+	// #4263: the commit answers for the manager's clock; so must the
+	// effective tree it is checked against.
+	tree, err := config.EffectiveTree(dir, now)
 	if err != nil {
 		t.Fatalf("%s: EffectiveTree: %v", step, err)
 	}
@@ -342,8 +344,16 @@ func TestValuesNotServedCache_ClockSetBackUnexpires(t *testing.T) {
 	if got := m.valuesNotServedCache.verdicts(m.GetConfig(), fc.Now()); len(got) != 0 {
 		t.Fatalf("expired value recorded: %v", got)
 	}
+	// #4263: the committed config answers for the instant it was built at;
+	// with the clock set back before the `expires:` it saw pass it no
+	// longer does (ValidAt), and the next tick merges the tree again.
+	fc.Advance(-10 * time.Hour)
+	if m.GetConfig().ValidAt(fc.Now()) {
+		t.Fatalf("the config built after the expiry claims to answer for %v, before it", fc.Now())
+	}
+	m.tickOnce()
 	want := map[string]map[string]string{"tx": {"mysql_connections": "value_unparsed"}}
-	if got := m.valuesNotServedCache.verdicts(m.GetConfig(), cacheStart); !reflect.DeepEqual(got, want) {
+	if got := m.valuesNotServedCache.verdicts(m.GetConfig(), fc.Now()); !reflect.DeepEqual(got, want) {
 		t.Errorf("clock set back before expires: %v, want %v", got, want)
 	}
 }

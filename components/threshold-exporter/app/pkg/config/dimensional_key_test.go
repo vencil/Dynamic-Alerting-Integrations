@@ -182,9 +182,10 @@ func TestWrittenKey(t *testing.T) {
 // #2031: a root `defaults:` dimensional key is the labelled series of a
 // tenant that does not write it, under any spelling the tenant writes; a
 // tenant override of it with a lapsed `expires:` falls back to it, and
-// emits its expiry event, as a base key's does.
+// emits its expiry event, as a base key's does. The lapse is the build's
+// (#4263): the config is the one the exporter builds at now.
 func TestRootDimensionalDefault_IsTheLabelledSeries(t *testing.T) {
-	cfg, err := ParseConfigFile([]byte(`dimensions:
+	parsed, err := ParseConfigFile([]byte(`dimensions:
   pg_connections: [env, r]
 defaults:
   pg_connections: 100
@@ -201,12 +202,13 @@ tenants:
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	cfg, _ := SingleFileAt(parsed, now, discardLogf)
 	got := map[string]float64{}
 	for _, r := range cfg.ResolveAt(now) {
-		if r.Metric != "connections" {
-			t.Errorf("row %+v: metric label is not the base metric", r)
-		}
 		if len(r.CustomLabels) > 0 {
+			if r.Metric != "connections" {
+				t.Errorf("row %+v: metric label is not the base metric", r)
+			}
 			if !reflect.DeepEqual(r.CustomLabels, map[string]string{"env": "prod", "r": "x"}) {
 				t.Errorf("row %+v: labels", r)
 			}
