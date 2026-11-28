@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/vencil/threshold-exporter/pkg/tenantid"
 	"gopkg.in/yaml.v3"
 )
 
@@ -80,26 +81,42 @@ func Render(template []byte, ps []Projection) ([]byte, error) {
 	return out, nil
 }
 
-// dataMaps is the two JSON objects. Tenant ids are DNS labels and the fields
-// a fixed vocabulary, but they are encoded, never pasted.
+// dataMaps is the two JSON objects, encoded, never pasted. A tenant id that
+// breaks the tenant-id rule is refused here too (Compute already leaves such
+// a tenant out): the text lands in a file Vector interpolates `$NAME` in.
 func dataMaps(ps []Projection) (accountMap, visibleMap string, err error) {
 	acct := make(map[string]uint32, len(ps))
 	vis := map[string][]string{}
 	for _, p := range ps {
+		if !tenantid.Valid(p.TenantID) {
+			return "", "", fmt.Errorf("tenant id %q breaks the tenant-id rule", p.TenantID)
+		}
 		acct[p.TenantID] = p.AccountID
 		if p.VisibleFields != nil {
 			vis[p.TenantID] = append([]string{}, *p.VisibleFields...)
 		}
 	}
-	a, err := json.Marshal(acct)
+	a, err := encodeJSON(acct)
 	if err != nil {
 		return "", "", err
 	}
-	v, err := json.Marshal(vis)
+	v, err := encodeJSON(vis)
 	if err != nil {
 		return "", "", err
 	}
-	return string(a), string(v), nil
+	return a, v, nil
+}
+
+// encodeJSON is json.Marshal without the HTML escapes (`\u003c`), which are
+// JSON but not VRL string syntax.
+func encodeJSON(v any) (string, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(b.String(), "\n"), nil
 }
 
 type renderer struct {
@@ -140,6 +157,13 @@ func (r *renderer) walk(n *yaml.Node) error {
 				return err
 			}
 			out = append(out, k, v)
+		}
+		seen := make(map[string]bool, len(out)/2)
+		for i := 0; i < len(out); i += 2 {
+			if seen[out[i].Value] {
+				return fmt.Errorf("template: line %d: key %q twice after filling the per-tenant entries", n.Line, out[i].Value)
+			}
+			seen[out[i].Value] = true
 		}
 		n.Content = out
 	case yaml.SequenceNode:

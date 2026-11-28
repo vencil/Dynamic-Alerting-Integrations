@@ -29,6 +29,7 @@ import (
 	"github.com/vencil/tenant-api/internal/federation/logvis"
 	"github.com/vencil/tenant-api/internal/statestore"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/tenantid"
 )
 
 // FlagKey is the conf.d key that turns a tenant's projection on (registered
@@ -84,6 +85,12 @@ const (
 	// ReasonNoAccount: the flag is on, but the ledger holds no AccountID
 	// for the tenant (it has not been given one yet).
 	ReasonNoAccount = "no_account"
+	// ReasonTenantIDInvalid: the tenant's id breaks the tenant-id rule
+	// (pkg/tenantid). conf.d's loader admits any `tenants:` key, and the id
+	// is written into Vector's config, which interpolates `$NAME` before it
+	// parses anything (VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION), so
+	// such a tenant is never projected.
+	ReasonTenantIDInvalid = "tenant_id_invalid"
 )
 
 // Result is what Compute decided.
@@ -101,8 +108,13 @@ var ErrInput = errors.New("log projection input unusable")
 // backup holds them) with the loaded conf.d config. An unusable ledger or
 // visibility record is an error, never "no projection": a damaged record
 // must not silently drop or widen a tenant's copy.
+//
+// A state without the ledger is an error when some tenant's flag is on: a
+// ledger that is not there is not a ledger without the tenant, and reading it
+// as one would drop every projection (and forget every AccountID the runner
+// has seen) on a read of the wrong store.
 func Compute(state map[string][]byte, c *cfg.ThresholdConfig) (Result, error) {
-	reg := &account.Registry{}
+	var reg *account.Registry
 	if data, ok := state[statestore.KeyAccountRegistry]; ok {
 		r, err := account.Parse(data)
 		if err != nil {
@@ -129,6 +141,14 @@ func Compute(state map[string][]byte, c *cfg.ThresholdConfig) (Result, error) {
 		if !on {
 			continue
 		}
+		if !tenantid.Valid(t) {
+			res.Findings = append(res.Findings, Finding{TenantID: t, Reason: ReasonTenantIDInvalid})
+			continue
+		}
+		if reg == nil {
+			return Result{}, fmt.Errorf("%w: %s is not in the state, and tenant %s turns %s on",
+				ErrInput, statestore.KeyAccountRegistry, t, FlagKey)
+		}
 		id, held := reg.Lookup(t)
 		if !held {
 			res.Findings = append(res.Findings, Finding{TenantID: t, Reason: ReasonNoAccount})
@@ -153,19 +173,25 @@ func Compute(state map[string][]byte, c *cfg.ThresholdConfig) (Result, error) {
 	return res, nil
 }
 
-// AccountChanges lists the tenants of prev whose AccountID differs in next.
-// The ledger never moves an id, so a change means the ledger read is not the
-// ledger: writing it would send a tenant's rows to another partition.
-func AccountChanges(prev, next []Projection) []string {
-	had := make(map[string]uint32, len(prev))
-	for _, p := range prev {
-		had[p.TenantID] = p.AccountID
+// Conflicts lists, for each projection of next, why it contradicts seen
+// (every tenant → AccountID ever written): a tenant whose id moved, or an id
+// written for another tenant before. The ledger never moves or reuses an id,
+// so either means the ledger read is not the ledger, and writing it would
+// send rows into another tenant's partition.
+func Conflicts(seen map[string]uint32, next []Projection) []string {
+	owner := make(map[uint32]string, len(seen))
+	for t, id := range seen {
+		owner[id] = t
 	}
 	var out []string
 	for _, p := range next {
-		if id, ok := had[p.TenantID]; ok && id != p.AccountID {
-			out = append(out, p.TenantID)
+		if id, ok := seen[p.TenantID]; ok && id != p.AccountID {
+			out = append(out, fmt.Sprintf("tenant %s had AccountID %d, now %d", p.TenantID, id, p.AccountID))
+		}
+		if t, ok := owner[p.AccountID]; ok && t != p.TenantID {
+			out = append(out, fmt.Sprintf("AccountID %d belonged to tenant %s, now %s", p.AccountID, t, p.TenantID))
 		}
 	}
+	sort.Strings(out)
 	return out
 }

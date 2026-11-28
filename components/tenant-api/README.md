@@ -583,9 +583,9 @@ docker run -i --rm <部署中的 tenant-api 映像> state show --from - < tenant
 
 - `log-projection render --config-dir DIR --state-from FILE|DIR|- --template FILE [--out FILE]`：讀一次 conf.d 目錄與 state 備份（`--state-from` 收的與 `state show --from` 相同），寫到 `--out` 或 stdout。結束碼：0 已寫出、1 有輸入不能用（不寫任何東西）、2 用法錯誤。
 - `log-projection run --template FILE --out FILE --confd-configmap NAME [--confd-namespace NS]`（或 `--config-dir DIR`），加上 server 的 `--state-*` 旗標：每 `--interval`（預設 30s）讀一次輸入，讓 `--out` 與輸入一致。
-  - 讀不到或不能用的輸入（帳本或可見度紀錄損壞、conf.d 有檔案解析不了）不寫任何東西，上一份照舊生效；只有從未成功、而且還沒有檔案時，才寫出不含任何租戶的樣板（只有平台副本）。
-  - 已投影租戶的 AccountID 若與上一次不同，整次結果拒收：帳本從不改號，改了代表讀到的不是帳本。
-  - `_log_projection` 只認 `enable`、`disable`（與 null）；其他寫法（`Enable`、`true`）不投影，記一筆 `flag_unread`。旗標開著、帳本卻還沒有號碼的租戶記 `no_account`。
+  - 讀不到或不能用的輸入（帳本或可見度紀錄損壞；有租戶開了旗標，state 裡卻沒有帳本；conf.d 有檔案解析不了或讀不了）不寫任何東西，上一份照舊生效；只有從未成功、而且還沒有檔案時，才寫出不含任何租戶的樣板（只有平台副本）。
+  - 寫過的每一組「租戶 → AccountID」記在 `--out` 旁的 `<--out>.accounts`（只增不減、先於設定檔寫入，容器重啟後仍在）。結果裡某租戶的號碼與記錄不同，或某個號碼記錄上屬於別的租戶，整次結果拒收：帳本從不改號也不重發，出現這兩種情形代表讀到的不是帳本。
+  - `_log_projection` 只認 `enable`、`disable`（與 null）；其他寫法（`Enable`、`true`）不投影，記一筆 `flag_unread`。旗標開著、帳本卻還沒有號碼的租戶記 `no_account`；租戶 id 不符租戶 id 規則的（conf.d 的載入器不擋）記 `tenant_id_invalid`，它的 id 不會寫進 Vector 的設定（Vector 會在解析前展開 `$NAME`）。
   - 給了 `--vector-metrics-url` 時，每次寫檔後最多等 `--reload-timeout`（預設 30s）看 Vector 的 `--reload-metric`（預設 `vector_reloaded_total`）有沒有增加。Vector 載入失敗時會繼續跑舊設定，且不記任何失敗 metric，所以計數沒增加是唯一的訊號。
   - Metrics 在 `--metrics-addr`（預設 `:9599`）的 `/metrics`：`da_log_projection_last_success_timestamp_seconds`、`_projected_tenants`、`_unprojected_tenants{reason}`、`_read_failures_total{source}`、`_refused_total{reason}`、`_writes_total`、`_reload_unconfirmed`、`_empty_fallback`。
 

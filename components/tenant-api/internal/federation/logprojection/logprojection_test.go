@@ -158,18 +158,6 @@ func TestCompute_ReadsTheProfileLayer(t *testing.T) {
 	}
 }
 
-func TestCompute_NoLedgerProjectsNobody(t *testing.T) {
-	t.Parallel()
-	c := writeTree(t, map[string]string{"t1.yaml": tenantFile("t1", "enable")})
-	res, err := Compute(map[string][]byte{}, c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.Projections) != 0 || len(res.Findings) != 1 || res.Findings[0].Reason != ReasonNoAccount {
-		t.Errorf("%+v", res)
-	}
-}
-
 func TestCompute_ADamagedRecordIsAnError(t *testing.T) {
 	t.Parallel()
 	c := writeTree(t, map[string]string{"t1.yaml": tenantFile("t1", "enable")})
@@ -205,15 +193,48 @@ func TestCompute_CarriesTheVisibilitySelection(t *testing.T) {
 	}
 }
 
-func TestAccountChanges(t *testing.T) {
+func TestConflicts(t *testing.T) {
 	t.Parallel()
-	prev := []Projection{{TenantID: "t1", AccountID: 1000}, {TenantID: "t2", AccountID: 1001}}
-	next := []Projection{{TenantID: "t1", AccountID: 1000}, {TenantID: "t2", AccountID: 1005}, {TenantID: "t3", AccountID: 1002}}
-	if got := AccountChanges(prev, next); !reflect.DeepEqual(got, []string{"t2"}) {
+	seen := map[string]uint32{"t1": 1000, "t2": 1001}
+	next := []Projection{{TenantID: "t1", AccountID: 1000}, {TenantID: "t2", AccountID: 1005},
+		{TenantID: "t3", AccountID: 1002}, {TenantID: "t4", AccountID: 1000}}
+	want := []string{"AccountID 1000 belonged to tenant t1, now t4", "tenant t2 had AccountID 1001, now 1005"}
+	if got := Conflicts(seen, next); !reflect.DeepEqual(got, want) {
 		t.Errorf("%v", got)
 	}
-	if got := AccountChanges(nil, next); got != nil {
+	if got := Conflicts(nil, next); got != nil {
 		t.Errorf("%v", got)
+	}
+}
+
+// #4212 review: a state without the ledger is not "nobody has an id".
+func TestCompute_AMissingLedgerIsAnErrorWhenAFlagIsOn(t *testing.T) {
+	t.Parallel()
+	on := writeTree(t, map[string]string{"t1.yaml": tenantFile("t1", "enable")})
+	if _, err := Compute(map[string][]byte{}, on); !errors.Is(err, ErrInput) {
+		t.Errorf("err %v", err)
+	}
+	off := writeTree(t, map[string]string{"t1.yaml": tenantFile("t1", "disable")})
+	if res, err := Compute(map[string][]byte{}, off); err != nil || len(res.Projections) != 0 {
+		t.Errorf("%+v %v", res, err)
+	}
+}
+
+// #4212 review: conf.d admits any `tenants:` key; one that breaks the
+// tenant-id rule is never written into Vector's config.
+func TestCompute_AnInvalidTenantIDIsNotProjected(t *testing.T) {
+	t.Parallel()
+	c := writeTree(t, map[string]string{"t1.yaml": "tenants:\n  \"a$HOME\":\n    _log_projection: enable\n"})
+	res, err := Compute(map[string][]byte{"_account_registry.yaml": []byte(
+		"schema_version: v1\nnext_account_id: 1001\nallocations:\n  \"a$HOME\": 1000\n")}, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Projections) != 0 || len(res.Findings) != 1 || res.Findings[0].Reason != ReasonTenantIDInvalid {
+		t.Errorf("%+v", res)
+	}
+	if _, err := Render(template(t), []Projection{{TenantID: "a$HOME", AccountID: 1000}}); err == nil {
+		t.Error("Render took an invalid tenant id")
 	}
 }
 
@@ -271,6 +292,7 @@ func TestRender_RefusesABrokenTemplate(t *testing.T) {
 		"misspelt placeholder":    "a: '__DA_ACCOUNT_MAP__ __DA_ACOUNT_MAP__'\nc___DA_ACCOUNT_ID__: 1\n",
 		"not a mapping":           "- a\n",
 		"alias in a tenant entry": "x: &a {k: v}\na: '__DA_ACCOUNT_MAP__'\nc___DA_ACCOUNT_ID__: *a\n",
+		"key twice after filling": "a: '__DA_ACCOUNT_MAP__'\nc_1000: 1\nc___DA_ACCOUNT_ID__: 1\n",
 	} {
 		if _, err := Render([]byte(tpl), []Projection{{TenantID: "t1", AccountID: 1000}}); err == nil {
 			t.Errorf("%s: rendered", name)
@@ -369,6 +391,40 @@ func TestRunner_RefusesAMovedAccount(t *testing.T) {
 	}
 	if !strings.Contains(read(t, r.Out), `"t1":1000`) {
 		t.Error("the moved account was written")
+	}
+}
+
+// #4212 review: the guard remembers every AccountID it wrote, across a run
+// that read no ledger and across a restart (a new Runner on the same Out).
+func TestRunner_RefusesAMovedAccountAfterAGapAndARestart(t *testing.T) {
+	t.Parallel()
+	in := &fakeInputs{state: map[string][]byte{"_account_registry.yaml": []byte(ledger)},
+		c: writeTree(t, map[string]string{"t1.yaml": tenantFile("t1", "enable")})}
+	r := newRunner(t, in)
+	if err := r.Once(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	in.state = map[string][]byte{}
+	if err := r.Once(context.Background()); err == nil {
+		t.Fatal("a state without the ledger was used")
+	}
+	moved := map[string][]byte{"_account_registry.yaml": []byte("schema_version: v1\nnext_account_id: 1010\nallocations: {t1: 1009}\n")}
+	in.state = moved
+	if err := r.Once(context.Background()); err == nil {
+		t.Fatal("a moved id was written after the gap")
+	}
+	restarted := &Runner{Source: in.source(), Template: template(t), Out: r.Out}
+	if err := restarted.Once(context.Background()); err == nil || !strings.Contains(err.Error(), "had AccountID 1000") {
+		t.Fatalf("after a restart: %v", err)
+	}
+	if !strings.Contains(read(t, r.Out), `"t1":1000`) {
+		t.Error("the moved account was written")
+	}
+	// An id another tenant held is refused too.
+	in.state = map[string][]byte{"_account_registry.yaml": []byte("schema_version: v1\nnext_account_id: 1002\nallocations: {t1: 1001, t2: 1000}\n")}
+	in.c = writeTree(t, map[string]string{"t2.yaml": tenantFile("t2", "enable")})
+	if err := restarted.Once(context.Background()); err == nil || !strings.Contains(err.Error(), "belonged to tenant t1") {
+		t.Fatalf("reused id: %v", err)
 	}
 }
 

@@ -128,15 +128,23 @@ func runLogProjRender(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 }
 
 // loadConfd loads a conf.d directory the exporter's way. A file the loader
-// could not parse fails the load: a tenant whose file is unreadable would
-// otherwise read as "not projected".
+// could not parse or read fails the load: the exporter serves the rest of the
+// tree without it, but here a tenant whose file is lost would read as "not
+// projected" and its copy would stop.
 func loadConfd(dir string) (*cfg.ThresholdConfig, error) {
-	c, parseFailed, err := cfg.LoadDir(dir, nil)
+	c, rep, err := cfg.LoadDirReport(dir, nil)
 	if err != nil {
 		return nil, err
 	}
-	if len(parseFailed) > 0 {
-		return nil, fmt.Errorf("unparseable: %s", strings.Join(parseFailed, ", "))
+	if len(rep.ParseFailed) > 0 {
+		return nil, fmt.Errorf("unparseable: %s", strings.Join(rep.ParseFailed, ", "))
+	}
+	if len(rep.Unreadable) > 0 {
+		parts := make([]string, len(rep.Unreadable))
+		for i, u := range rep.Unreadable {
+			parts[i] = fmt.Sprint(u)
+		}
+		return nil, fmt.Errorf("unreadable: %s", strings.Join(parts, ", "))
 	}
 	return c, nil
 }

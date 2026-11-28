@@ -90,3 +90,19 @@ func TestLoadConfdFiles_RefusesANonFileKey(t *testing.T) {
 		t.Errorf("%v", c.Tenants["t1"])
 	}
 }
+
+// #4212 review: a conf.d file the walk cannot read (a dangling symlink) fails
+// the load; served without it, that tenant would read as not projected.
+func TestLogProjRender_AnUnreadableConfdFileIsAnInputError(t *testing.T) {
+	confd, state, tpl := logProjFixture(t)
+	if err := os.Symlink(filepath.Join(confd, "missing.yaml"), filepath.Join(confd, "t2.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if rc := runLogProjCmd([]string{"render", "--config-dir", confd, "--state-from", state, "--template", tpl}, nil, &out, &errb); rc != 1 {
+		t.Fatalf("rc %d (%s)", rc, errb.String())
+	}
+	if !strings.Contains(errb.String(), "unreadable") {
+		t.Errorf("%s", errb.String())
+	}
+}

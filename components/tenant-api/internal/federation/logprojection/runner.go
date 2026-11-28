@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,9 @@ type Source struct {
 const (
 	SourceState = "state"
 	SourceConfd = "confd"
+	// SourceAccounts: the runner's own record of the AccountIDs it wrote
+	// (AccountsPath) cannot be read.
+	SourceAccounts = "accounts"
 )
 
 // The `reason` label of a refused result.
@@ -42,9 +46,14 @@ const (
 
 // Runner keeps Vector's tenant projection config (Out) equal to what the
 // inputs say, one run at a time. A run that cannot use its inputs, or whose
-// result moves a tenant to another AccountID, writes nothing: the last result
-// stays in force. Only a Runner that never wrote anything, and finds no
-// file, writes the template with no tenant in it (the platform copy only).
+// result contradicts an AccountID it wrote before (Conflicts), writes
+// nothing: the last result stays in force. Only a Runner that never wrote
+// anything, and finds no file, writes the template with no tenant in it (the
+// platform copy only).
+//
+// Every tenant → AccountID it ever wrote is kept in AccountsPath, beside Out,
+// so a restarted container (the emptyDir outlives it) still refuses a moved
+// id; the record only grows, and is written before Out.
 type Runner struct {
 	Source   Source
 	Template []byte
@@ -57,7 +66,7 @@ type Runner struct {
 	Now           func() time.Time
 
 	mu      sync.Mutex
-	last    []Projection
+	seen    map[string]uint32
 	haveRun bool
 	m       metrics
 }
@@ -102,7 +111,36 @@ func (r *Runner) Once(ctx context.Context) error {
 	return err
 }
 
+// AccountsPath is where the runner keeps every tenant → AccountID it wrote:
+// Out with ".accounts" appended, an extension no config reader takes.
+func (r *Runner) AccountsPath() string { return r.Out + ".accounts" }
+
+func (r *Runner) loadSeen() error {
+	if r.seen != nil {
+		return nil
+	}
+	data, err := os.ReadFile(r.AccountsPath())
+	if errors.Is(err, os.ErrNotExist) {
+		r.seen = map[string]uint32{}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	seen := map[string]uint32{}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&seen); err != nil {
+		return fmt.Errorf("%s: %w", r.AccountsPath(), err)
+	}
+	r.seen = seen
+	return nil
+}
+
 func (r *Runner) once(ctx context.Context) error {
+	if err := r.loadSeen(); err != nil {
+		return r.readFailed(SourceAccounts, err)
+	}
 	state, err := r.Source.State(ctx)
 	if err != nil {
 		return r.readFailed(SourceState, err)
@@ -115,10 +153,10 @@ func (r *Runner) once(ctx context.Context) error {
 	if err != nil {
 		return r.readFailed(SourceState, err)
 	}
-	if moved := AccountChanges(r.last, res.Projections); len(moved) > 0 {
+	if bad := Conflicts(r.seen, res.Projections); len(bad) > 0 {
 		r.m.refused[RefusedAccountChanged]++
-		return fmt.Errorf("refused: the AccountID of %s changed since the last result; the ledger never moves an id, so this read is kept out",
-			strings.Join(moved, ","))
+		return fmt.Errorf("refused: %s; the ledger never moves or reuses an id, so this read is kept out",
+			strings.Join(bad, "; "))
 	}
 	out, err := Render(r.Template, res.Projections)
 	if err != nil {
@@ -131,6 +169,9 @@ func (r *Runner) once(ctx context.Context) error {
 	r.m.findings = map[string]int{}
 	for _, f := range res.Findings {
 		r.m.findings[f.Reason]++
+	}
+	if err := r.remember(res.Projections); err != nil {
+		return fmt.Errorf("write %s: %w", r.AccountsPath(), err)
 	}
 	if cur, rerr := os.ReadFile(r.Out); rerr == nil && bytes.Equal(cur, out) {
 		r.success(res.Projections)
@@ -160,8 +201,29 @@ func (r *Runner) readFailed(source string, err error) error {
 	return fmt.Errorf("%s: %w", source, err)
 }
 
+// remember adds ps to the record of every AccountID written, before Out is
+// written: a crash between the two leaves the record ahead, never behind.
+func (r *Runner) remember(ps []Projection) error {
+	grown := false
+	for _, p := range ps {
+		if _, ok := r.seen[p.TenantID]; !ok {
+			r.seen[p.TenantID] = p.AccountID
+			grown = true
+		}
+	}
+	if !grown {
+		if _, err := os.Stat(r.AccountsPath()); err == nil || len(r.seen) == 0 {
+			return nil
+		}
+	}
+	data, err := json.Marshal(r.seen)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(r.AccountsPath(), append(data, '\n'))
+}
+
 func (r *Runner) success(ps []Projection) {
-	r.last = ps
 	r.m.projected = len(ps)
 	r.m.lastSuccess = float64(r.now().UnixNano()) / 1e9
 	r.m.emptyFallback = 0
@@ -271,11 +333,11 @@ func (r *Runner) WriteMetrics(w io.Writer) {
 	gauge("last_success_timestamp_seconds", "Unix time of the last run whose result is in force (0: none yet).", r.m.lastSuccess)
 	gauge("projected_tenants", "Tenants in the result in force.", float64(r.m.projected))
 	fmt.Fprintf(b, "# HELP %sunprojected_tenants Tenants the last usable run did not project although their flag asks for it, by reason.\n# TYPE %sunprojected_tenants gauge\n", metricPrefix, metricPrefix)
-	for _, k := range []string{ReasonFlagUnread, ReasonNoAccount} {
+	for _, k := range []string{ReasonFlagUnread, ReasonNoAccount, ReasonTenantIDInvalid} {
 		fmt.Fprintf(b, "%sunprojected_tenants{reason=%q} %d\n", metricPrefix, k, r.m.findings[k])
 	}
 	counter("read_failures_total", "Runs that could not use an input; the last result stayed in force.", "source",
-		r.m.readFailures, []string{SourceState, SourceConfd})
+		r.m.readFailures, []string{SourceState, SourceConfd, SourceAccounts})
 	counter("refused_total", "Runs whose result was refused; the last result stayed in force.", "reason",
 		r.m.refused, []string{RefusedAccountChanged, RefusedRender})
 	fmt.Fprintf(b, "# HELP %swrites_total Times the config file was replaced.\n# TYPE %swrites_total counter\n%swrites_total %s\n",
