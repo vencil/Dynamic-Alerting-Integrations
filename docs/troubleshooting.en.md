@@ -97,10 +97,10 @@ user_threshold{tenant="db-a", severity="warning"} 30  (from replica-2)
 
 **Threshold vs Data — Aggregation Differences:**
 
-This issue applies only to **threshold recording rules**. A threshold is inherently a configuration value (e.g., "connection limit = 100") — regardless of how many exporter replicas report it, the value is identical. Therefore `max by(tenant)` is the only semantically correct aggregation; there is no scenario where `sum` would be needed. The platform enforces this at two levels:
+This issue applies only to **threshold recording rules**. A threshold is inherently a configuration value (e.g., "connection limit = 100") — regardless of how many exporter replicas report it, the value is identical. Therefore `max by(tenant)` is the only semantically correct aggregation; there is no scenario where `sum` would be needed. The platform enforces this as follows:
 
 1. **Platform Rule Packs**: All threshold recording rules use `max by(tenant)` by design
-2. **`migrate_rule.py` AST engine**: Generated threshold recording rules are hardcoded to `max by(tenant)` — users cannot override this
+2. **`migrate_rule.py`**: generates no threshold recording rule — it migrates legacy rules verbatim, only injecting tenant isolation
 
 On the other hand, **data recording rules** use context-dependent aggregation. For example, `mysql_threads_connected` (current connection count) reports the same value from every replica, so `max` is correct. But `rate(requests_total)` (per-second request volume) from distinct sources may require `sum`. Data recording rule aggregation can be specified via the metric dictionary and is not constrained by the threshold aggregation rule described in this section.
 

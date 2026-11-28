@@ -171,7 +171,7 @@ curl -s http://prometheus:9090/api/v1/alerts | \
 | 階段 | 工作 | 耗時 |
 |------|------|------|
 | 準備 | onboard_platform.py（掃描舊規則） | 2h |
-| 轉換 | migrate_rule.py（生成新規則） | 2h |
+| 遷移 | migrate_rule.py（原樣遷移、注入租戶隔離） | 2h |
 | 驗證 | validate_migration.py（7 天並行監測） | 7d |
 | 切換 | cutover_tenant.py（一鍵切換） | 30m |
 
@@ -430,8 +430,8 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 | **offboard_tenant.py** | 租戶下架 | `<name> --config-dir conf.d/ --state <tenant-api state show 的 JSON>`（預設只做預檢，加 `--execute` 才刪；沒有 `--state`、或用到的紀錄帶 `problem` 時 `--execute` 要另加 `--skip-state-check`；不做歸檔，先自己 `cp`，見 4.1） |
 | **deprecate_rule.py** | 規則下架 | `rule-name-1 rule-name-2 --config-dir conf.d/ --execute`（不帶 `--config-dir` 會指向 repo 內部路徑） |
 | **onboard_platform.py** | 遷移前掃描 | `--alertmanager-config <am.yml> --rule-files <rules-dir> --output-dir migration_input/`（v2.9.0 映像給目錄選不到檔，改給加引號的 glob） <!-- image-caveat: v2.9.0 --> |
-| **migrate_rule.py** | 規則遷移轉換 | `<legacy-rules.yaml> --output-dir migration_output/` |
-| **validate_migration.py** | 並行驗證 | `--mapping prefix-mapping.yaml --watch --auto-detect-convergence` |
+| **migrate_rule.py** | 規則原樣遷移 | `<legacy-rules.yaml> --tenant <name> --owner <owner> --expiry <YYYY-MM-DD> --output-dir migration_output/` |
+| **validate_migration.py** | 並行驗證（讀 migrate 新對照檔 `.migration/mapping/<tenant>.yaml` 的支援在 #4227） | `--mapping prefix-mapping.yaml --watch --auto-detect-convergence` |
 | **cutover_tenant.py** | 遷移切換 | `--tenant <name> --readiness-json file.json --dry-run` |
 
 ## 檢查清單
@@ -455,7 +455,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 ### 遷移租戶開始前
 
 - [ ] onboard_platform.py 掃描完成
-- [ ] migrate_rule.py 轉換完成
+- [ ] migrate_rule.py 遷移完成，規則檔已交給抓取原始指標的 Prometheus（或 edge）載入
 - [ ] validate_migration.py 驗證已啟動
 - [ ] Shadow 規則已部署
 - [ ] Alertmanager shadow route 已配置

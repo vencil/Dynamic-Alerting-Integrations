@@ -414,6 +414,12 @@ REGISTERED: dict[str, dict[str, int]] = {
         "_still_refused os.chmod [scratch]": 1,
         "_still_refused shutil.copytree [scratch]": 1,
     },
+    # #4226: the self-lint writes migrate's own output into a TemporaryDirectory
+    # laid out as <scan>/<tenant>/rules.yml, the layout lint_custom_rules reads.
+    "scripts/tools/ops/migrate_rule.py": {
+        "lint_output open(w) [scratch]": 1,
+        "lint_output os.makedirs [scratch]": 1,
+    },
     "scripts/tools/ops/patch_config.py": {
         "_ConfdView.__init__ open(w) [scratch]": 1,
         "_ConfdView.__init__ os.chmod [scratch]": 1,

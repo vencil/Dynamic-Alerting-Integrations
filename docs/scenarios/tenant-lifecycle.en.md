@@ -172,7 +172,7 @@ For tenants already running on other platforms needing migration to Dynamic Aler
 | Phase | Work | Duration |
 |-------|------|----------|
 | Prep | onboard_platform.py (scan legacy rules) | 2h |
-| Transform | migrate_rule.py (generate new rules) | 2h |
+| Migrate | migrate_rule.py (verbatim migration, tenant isolation injected) | 2h |
 | Validate | validate_migration.py (7 days parallel test) | 7d |
 | Cutover | cutover_tenant.py (one-click switch) | 30m |
 
@@ -431,8 +431,8 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 | **offboard_tenant.py** | Tenant offboarding | `<name> --config-dir conf.d/ --state <tenant-api state show JSON>` (pre-check only by default, `--execute` deletes; without `--state`, or when a record it uses carries a `problem`, `--execute` also needs `--skip-state-check`; no archiving — `cp` first, see 4.1) |
 | **deprecate_rule.py** | Rule offboarding | `rule-name-1 rule-name-2 --config-dir conf.d/ --execute` (without `--config-dir` it points at a path inside the repo) |
 | **onboard_platform.py** | Pre-migration scan | `--alertmanager-config <am.yml> --rule-files <rules-dir> --output-dir migration_input/`(on the v2.9.0 image a directory selects no file: give a quoted glob) <!-- image-caveat: v2.9.0 --> |
-| **migrate_rule.py** | Rule migration transform | `<legacy-rules.yaml> --output-dir migration_output/` |
-| **validate_migration.py** | Parallel migration test | `--mapping prefix-mapping.yaml --watch --auto-detect-convergence` |
+| **migrate_rule.py** | Verbatim rule migration | `<legacy-rules.yaml> --tenant <name> --owner <owner> --expiry <YYYY-MM-DD> --output-dir migration_output/` |
+| **validate_migration.py** | Parallel migration test (support for migrate's new mapping `.migration/mapping/<tenant>.yaml` comes in #4227) | `--mapping prefix-mapping.yaml --watch --auto-detect-convergence` |
 | **cutover_tenant.py** | Migration switch | `--tenant <name> --readiness-json file.json --dry-run` |
 
 ## Checklist
@@ -456,7 +456,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 ### Before Migrating Tenant Starts
 
 - [ ] onboard_platform.py scan complete
-- [ ] migrate_rule.py transform complete
+- [ ] migrate_rule.py migration complete, rule file loaded by the Prometheus that scrapes the raw metrics (or the edge)
 - [ ] validate_migration.py running
 - [ ] Shadow rules deployed
 - [ ] Alertmanager shadow route configured

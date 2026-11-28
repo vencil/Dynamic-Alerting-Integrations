@@ -158,8 +158,8 @@ spec:
         #
         # optional: true — 允許租戶透過 kubectl delete cm 卸載不需要的
         # Rule Pack，Prometheus 不會因缺少 ConfigMap 而 Crash。
-        # 大型客戶可關閉黃金標準，改用 migrate_rule.py 轉出的
-        # 自訂規則包 (configmap-rules-custom-*.yaml)。
+        # 自訂規則包 (configmap-rules-custom-*.yaml) 與 migrate-rule 的
+        # migrated 規則不在這裡掛載：由客戶自己的 Prometheus 載入（ADR-005、#4226）。
         # ============================================================
         - name: rules
           projected:

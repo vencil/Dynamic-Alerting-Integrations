@@ -61,6 +61,7 @@ var selfCheckCases = []selfCheckCase{
 	{"promql-reads", []string{"promql-reads", "-"}, exitOK},
 	{"promql-names", []string{"promql-names", "-"}, exitOK},
 	{"promql-shape", []string{"promql-shape", "-"}, exitOK},
+	{"promql-pin", []string{"promql-pin", "-"}, exitOK},
 	{"prometheus-features", []string{"prometheus-features", "-"}, exitOK},
 }
 
