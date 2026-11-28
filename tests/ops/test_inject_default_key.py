@@ -13,6 +13,7 @@ Coverage focuses on:
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -84,7 +85,7 @@ def test_inject_rejects_non_numeric(mod, tmp_path):
     p = tmp_path / "_defaults.yaml"
     p.write_text("defaults:\n", encoding="utf-8")
     rc = mod.inject(p, "bench_trigger", "X:critical")
-    assert rc == 1
+    assert rc == 2  # #4320: a caller error
     # File untouched
     assert p.read_text(encoding="utf-8") == "defaults:\n"
 
@@ -98,7 +99,7 @@ def test_inject_rejects_what_the_exporter_serves_no_default_for(mod, tmp_path, v
     any of them."""
     p = tmp_path / "_defaults.yaml"
     p.write_text("defaults:\n", encoding="utf-8")
-    assert mod.inject(p, "bench_trigger", value) == 1
+    assert mod.inject(p, "bench_trigger", value) == 2  # #4320
     assert p.read_text(encoding="utf-8") == "defaults:\n"
 
 
@@ -124,15 +125,15 @@ def test_inject_accepts_float_string(mod, tmp_path):
     assert "k: 1.5" in p.read_text(encoding="utf-8")
 
 
-def test_main_usage_error_returns_1(mod, capsys):
+def test_main_usage_error_returns_2(mod, capsys):
     rc = mod.main(["inject_default_key.py"])
-    assert rc == 1
+    assert rc == 2  # #4320: a caller error, not a finding
     assert "usage:" in capsys.readouterr().err
 
 
-def test_main_too_many_args_returns_1(mod, capsys):
+def test_main_too_many_args_returns_2(mod, capsys):
     rc = mod.main(["inject_default_key.py", "a", "b", "c", "d"])
-    assert rc == 1
+    assert rc == 2
 
 
 def test_main_happy_path_returns_0(mod, tmp_path):
@@ -183,7 +184,7 @@ def test_inert_default_shapes_are_refused(mod, tmp_path, key, capsys):
 
     rc = mod.inject(p, key, "90")
 
-    assert rc == 1, f"{key!r} was accepted under `defaults:`"
+    assert rc == 2, f"{key!r} was accepted under `defaults:` (or not rc 2, #4320)"
     # ⛔ The file is UNCHANGED. A refusal that still wrote would be worse than no
     # refusal: the operator reads an error and the inert key ships anyway.
     assert p.read_text(encoding="utf-8") == before
@@ -296,3 +297,19 @@ def test_a_rewritten_file_with_the_owner_execute_bit_is_0755(tmp_path):
     proc = _run_cli(str(target), "bench_trigger", "50", cwd=tmp_path)
     assert proc.returncode == 0, proc.stderr
     assert oct(target.stat().st_mode & 0o777) == oct(0o755)
+
+
+@pytest.mark.parametrize("argv", [
+    [],
+    ["k_dir/_defaults.yaml", "k", "abc"],
+    ["k_dir/_defaults.yaml", "k_critical", "1"],
+])
+def test_a_caller_error_exits_2_from_the_command_line(tmp_path, argv):
+    """#4320: the usage, a value that is not numeric and a key that cannot
+    live under `defaults:` are caller errors — rc 2 through the real exit
+    path (`_lib_exitcodes.run`), and nothing is written."""
+    args = [str(tmp_path / a) if a.endswith(".yaml") else a for a in argv]
+    proc = subprocess.run([sys.executable, str(TOOL_PATH), *args], capture_output=True,
+                          text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 2, (proc.returncode, proc.stderr)
+    assert not (tmp_path / "k_dir").exists()
