@@ -1952,3 +1952,99 @@ def test_the_scan_paths_files_are_judged_as_their_tenants(tmp_path, monkeypatch,
     (tmp_path / "custom" / "stray.yaml").write_text(rule, encoding="utf-8")
     assert _run_main([str(tmp_path / "custom"), "--ci"], monkeypatch) == 1
     assert "sits directly in" in capsys.readouterr().out
+
+
+# ── #4355: da_migrated is migrate-rule's alone ────────────────────
+
+def _migrated_file(tmp_path, labels, group_labels=None, record=False):
+    rule = ({"record": "job:x:sum", "expr": 'sum by (tenant) (x{tenant="t1"})'} if record else
+            {"alert": "A", "expr": 'x{tenant="t1"} > 0',
+             "annotations": {"owner": "o", "expiry": "2099-01-01"}})
+    rule["labels"] = {"tenant": "t1", **labels}
+    group = {"name": "g", "rules": [rule], **({"labels": group_labels} if group_labels else {})}
+    f = tmp_path / "scan" / "t1" / "rules.yml"
+    f.parent.mkdir(parents=True)
+    f.write_text(yaml.safe_dump({"groups": [group]}), encoding="utf-8")
+    return f
+
+
+def _migrated_errors(f, migrated):
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy(),
+                                             tenant="t1", migrated=migrated)
+    return [r.message for r in results
+            if r.severity == "ERROR" and "da_migrated" in r.message]
+
+
+@pytest.mark.parametrize("labels, group_labels", [
+    ({"da_migrated": "true"}, None),
+    ({"da_migrated": "x"}, None),
+    ({"da_migrated": ""}, None),
+    ({}, {"da_migrated": "true"}),
+])
+def test_a_tenant_rule_writing_the_migrated_label_is_an_error(tmp_path, labels, group_labels):
+    """Every platform route but the migrated one and every inhibit source
+    exclude da_migrated: a tenant rule writing it would leave the custom
+    isolation, the sentinel sink and the inhibit sources."""
+    assert _migrated_errors(_migrated_file(tmp_path, labels, group_labels), False)
+
+
+def test_migrate_rules_own_alert_may_write_it_as_true_only(tmp_path):
+    assert _migrated_errors(_migrated_file(tmp_path, {"da_migrated": "true"}), True) == []
+    other = tmp_path / "o"
+    assert _migrated_errors(_migrated_file(other, {"da_migrated": "yes"}), True)
+    rec = tmp_path / "r"
+    assert _migrated_errors(_migrated_file(rec, {"da_migrated": "true"}, record=True), True)
+
+
+def test_a_rule_without_it_is_no_error_either_way(tmp_path):
+    f = _migrated_file(tmp_path, {"component": "custom"})
+    assert _migrated_errors(f, False) == [] and _migrated_errors(f, True) == []
+
+
+def test_the_cli_takes_migrated_and_refuses_it_with_rule_pack_dir(tmp_path):
+    import subprocess
+    f = _migrated_file(tmp_path, {"da_migrated": "true"})
+    scan = str(f.parent.parent)
+    run = [sys.executable, lint_custom_rules.__file__]
+    plain = subprocess.run([*run, scan, "--ci"], capture_output=True, text=True,
+                           encoding="utf-8", timeout=120)
+    assert plain.returncode == 1 and "da_migrated" in plain.stdout, plain.stdout + plain.stderr
+    marked = subprocess.run([*run, scan, "--ci", "--migrated"], capture_output=True, text=True,
+                            encoding="utf-8", timeout=120)
+    assert marked.returncode == 0, marked.stdout + marked.stderr
+    both = subprocess.run([*run, "--rule-pack-dir", scan, "--migrated"], capture_output=True,
+                          text=True, encoding="utf-8", timeout=120)
+    assert both.returncode == 2 and "--migrated" in both.stderr, both.stderr
+
+
+@pytest.mark.parametrize("expr", [
+    'label_replace(x{tenant="t1"}, "da_migrated", "true", "tenant", "t1") > 0',
+    'label_join(x{tenant="t1"}, "da_migrated", ",", "tenant") > 0',
+    'count_values("da_migrated", x{tenant="t1"}) > 0',
+    'x{tenant="t1"} * on(tenant) group_left(da_migrated) y{tenant="t1"} > 0',
+    # the label's name written with a PromQL string escape: the text holds
+    # no `da_migrated`, the parse tree does
+    'label_replace(x{tenant="t1"}, "\\x64a_migrated", "true", "tenant", "t1") > 0',
+])
+@pytest.mark.parametrize("migrated", [False, True])
+def test_an_expression_writing_the_migrated_label_is_an_error(tmp_path, expr, migrated):
+    """CodeRabbit on #4366: a write in the expression reaches the alert as
+    surely as one in labels: (it would land in the shadow receiver, past every
+    platform route and inhibit gate). migrate never writes one, so --migrated
+    does not allow it either."""
+    f = tmp_path / "scan" / "t1" / "rules.yml"
+    f.parent.mkdir(parents=True)
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [{
+        "alert": "A", "expr": expr, "labels": {"tenant": "t1"},
+        "annotations": {"owner": "o", "expiry": "2099-01-01"}}]}]}), encoding="utf-8")
+    assert _migrated_errors(f, migrated), expr
+
+
+def test_an_expression_only_reading_the_migrated_label_is_no_write(tmp_path):
+    f = tmp_path / "scan" / "t1" / "rules.yml"
+    f.parent.mkdir(parents=True)
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [{
+        "alert": "A", "expr": 'label_replace(x{tenant="t1"}, "dst", "$1", "da_migrated", "(.*)") > 0',
+        "labels": {"tenant": "t1"},
+        "annotations": {"owner": "o", "expiry": "2099-01-01"}}]}]}), encoding="utf-8")
+    assert _migrated_errors(f, False) == []

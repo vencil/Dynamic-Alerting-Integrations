@@ -26,14 +26,18 @@ inhibit_rules:
   # behaviour-preserving here (every demo alert carries tenant) and is enforced by
   # the same generator invariant (assert_equal_labels_gated) that guards k8s, plus
   # the Go gate's TestEveryEqualLabelIsGated.
+  #
+  # #4355: every source carries `da_migrated = ""` — a migrated alert
+  # (migrate-rule's copy of a legacy rule, da_migrated="true") never mutes
+  # another alert; the same gate the generator writes on every source.
 
   # Silent Mode (warning): TenantSilentWarning suppresses warning notifications
   # for the same tenant.
-  - source_matchers: ['alertname = "TenantSilentWarning"', 'tenant =~ ".+"']
+  - source_matchers: ['alertname = "TenantSilentWarning"', 'tenant =~ ".+"', 'da_migrated = ""']
     target_matchers: ['severity = "warning"', 'tenant =~ ".+"']
     equal: ['tenant']
   # Silent Mode (critical).
-  - source_matchers: ['alertname = "TenantSilentCritical"', 'tenant =~ ".+"']
+  - source_matchers: ['alertname = "TenantSilentCritical"', 'tenant =~ ".+"', 'da_migrated = ""']
     target_matchers: ['severity = "critical"', 'tenant =~ ".+"']
     equal: ['tenant']
   # Severity Dedup: when a critical fires, suppress the paired warning for the
@@ -62,9 +66,9 @@ inhibit_rules:
   # one of them must not hide another cluster's warning. Alerts that carry
   # da_cluster (every Prometheus sets it under external_labels, ADR-006) pair
   # inside one cluster; alerts that carry none pair as they did before.
-  - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"', 'tenant =~ ".+"', 'da_cluster =~ ".+"']
+  - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"', 'tenant =~ ".+"', 'da_cluster =~ ".+"', 'da_migrated = ""']
     target_matchers: ['severity = "warning"', 'metric_group =~ ".+"', 'tenant =~ ".+"', 'da_cluster =~ ".+"']
     equal: ['tenant', 'metric_group', 'da_cluster']
-  - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"', 'tenant =~ ".+"', 'da_cluster = ""']
+  - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"', 'tenant =~ ".+"', 'da_cluster = ""', 'da_migrated = ""']
     target_matchers: ['severity = "warning"', 'metric_group =~ ".+"', 'tenant =~ ".+"', 'da_cluster = ""']
     equal: ['tenant', 'metric_group']

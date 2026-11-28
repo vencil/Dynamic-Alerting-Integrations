@@ -1961,7 +1961,7 @@ da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir federation-sp
 
 **用途**：GitOps 配置管理；自動產生告警路由與通知接收器。
 
-**migrated 告警的影子與切換（`_routing_migrated`，[#4277](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4277)）**：migrate-rule 寫回的 legacy 規則帶 `component="migrated"`。產生器在平台路由的第 5 條（sentinel sink 之後、enforced NOC 路由之前）放一條路由，把它們送到只有名字、不通知任何人的 `migrated-alerts-shadow`：影子期新舊規則並存，同一件事不能 page 兩次；告警仍看得到（Alertmanager UI、ALERTS series），供影子比對。租戶設定 `_routing_migrated: active`（租戶檔或根目錄平台檔的 `tenants:`）時，這條路由以 `tenant!~` 排除該租戶，它的 migrated 告警就與它的其他告警走同一條路（自己的路由、enforced NOC、root）。不寫或 null 是 `shadow`；`shadow`、`active` 以外的值（`yes`、`Active`、布林、mapping）整棵樹拒收，結束碼 1，finding kind `routing_migrated_invalid`。切換只改 conf.d 再重新產生，規則不動，所以告警的 label set 前後相同。
+**migrated 告警的影子與切換（`_routing_migrated`，[#4277](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4277)）**：migrate-rule 寫回的 legacy 告警帶 `da_migrated="true"`（⚠️ Breaking：以前是 `component="migrated"`，[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）。其他每條平台路由（Watchdog、custom 隔離、synthetic probe、sentinel sink）都帶 `da_migrated=""`，所以名叫 `Watchdog`、或序列自帶 `component=custom`／`sentinel`／`synthetic-probe` 的 migrated 告警不會被它們攔走；產生器寫的 inhibit rule 與 repo 自帶 base 的規則，source 也都帶 `da_migrated=""`，migrated 告警不經它們靜音別的告警；你自己寫在 base 的 inhibit rule 若 source 沒排除，`--strict` 下拒絕、結束碼 1，不帶 `--strict` 時只 WARN、規則照留，仍可能被 migrated 告警觸發。產生器在平台路由的第 5 條（sentinel sink 之後、enforced NOC 路由之前）放一條路由，把它們送到只有名字、不通知任何人的 `migrated-alerts-shadow`：影子期新舊規則並存，同一件事不能 page 兩次；告警仍看得到（Alertmanager UI、ALERTS series），供影子比對。租戶設定 `_routing_migrated: active`（租戶檔或根目錄平台檔的 `tenants:`）時，這條路由以 `tenant!~` 排除該租戶，它的 migrated 告警就與它的其他告警走同一條路（自己的路由、enforced NOC、root）。不寫或 null 是 `shadow`；`shadow`、`active` 以外的值（`yes`、`Active`、布林、mapping）整棵樹拒收，結束碼 1，finding kind `routing_migrated_invalid`。切換只改 conf.d 再重新產生，規則不動，所以告警的 label set 前後相同。
 
 **模式（恰好一個，[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)）**
 
@@ -2310,7 +2310,7 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 
 #### migrate
 
-把一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則：每個 selector 注入租戶隔離，加上 `tenant`／`component: migrated` label 與 `owner`／`expiry` annotation，另附一條到期伴隨告警（[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)）。引擎說明見 [migration-engine.md](migration-engine.md)。
+把一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則：每個 selector 注入租戶隔離，加上 `tenant` label（告警另加 `da_migrated: "true"`）與 `owner`／`expiry` annotation，另附一條到期伴隨告警（[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)）。引擎說明見 [migration-engine.md](migration-engine.md)。
 
 ⚠️ **Breaking**：不再轉換成 `custom_` threshold key、租戶 conf.d 檔、根目錄 `_defaults` 片段、平台 recording／alert rule、prefix mapping 與 triage CSV；`--interactive`、`--triage`、`--prefix`、`--no-prefix` 已移除，`--owner`、`--expiry` 改為必填。⚠️ v2.9.0 映像仍是舊的轉換引擎 <!-- image-caveat: v2.9.0 -->
 
@@ -2353,8 +2353,8 @@ expr 語意、`for`、labels、annotations、alertname 原樣保留，只做三�
     | 叢集層級的 kube-state-metrics 物件（例如 `kube_node_*`）、kube-state-metrics 自己的序列（`kube_state_metrics_*`）、Prometheus／Alertmanager 自己的序列、每個抓取目標都有的序列（例如 `up`、`go_*`）、`ALERTS` | 拒絕：平台層級的規則，不逐租戶遷移 |
 
     原式子已有的 `tenant`／`namespace` matcher 不是上表那個等值、或 selector 沒有以等值點名指標名，也拒絕。
-2. **標記**：labels 加 `tenant: <ID>`、`component: migrated`（靜態值，切換前後不變；recording rule 只加 `tenant`）；annotations 加 `owner`、`expiry`（放 label 的話，續期改 expiry 會讓 `for:` 重新計時）。原規則已寫了不同值的 `tenant`／`component` label、把 `owner`／`expiry` 寫成 label，或 annotation 與旗標不同，拒絕。運算式明寫保留 `component` 的告警（`component` matcher、`by(component)`、`on(component)`／`group_left(component)`，或寫入它的 `label_replace`／`label_join`／`count_values`）也拒絕：`component: migrated` 會蓋掉它；序列從抓取帶來的 `component` 從運算式看不出來，報告提醒（多條只差 `component` 的序列會變成同一組 label，Prometheus 不評估該告警）。
-3. **到期伴隨告警**：group `migrated-expiry` 裡的 `MigratedRulesExpiring`，`vector(time()) > <expiry 前 14 天的 Unix 秒數>`，不讀任何指標。來源檔已有同名的 alert 或 group，拒絕。
+2. **標記**：labels 加 `tenant: <ID>`，告警再加 `da_migrated: "true"`（靜態值，切換前後不變；recording rule 只加 `tenant`）；annotations 加 `owner`、`expiry`（放 label 的話，續期改 expiry 會讓 `for:` 重新計時）。序列自己的 `component` 原樣保留。原規則已寫了不同值的 `tenant`／`da_migrated` label、把 `owner`／`expiry` 寫成 label，或 annotation 與旗標不同，拒絕。運算式明寫保留 `da_migrated` 的告警（`da_migrated` matcher、`by(da_migrated)`、`on(da_migrated)`／`group_left(da_migrated)`，或寫入它的 `label_replace`／`label_join`／`count_values`）也拒絕。⚠️ Breaking（[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）：以前寫的是 `component: migrated`，會蓋掉序列的 `component`；寫了或保留 `component` 的規則以前拒絕，現在照遷移。升級：以新版 `migrate` 對**原本的 legacy 規則檔**重跑（不是對已產出的 migrated 規則檔：它含 `MigratedRulesExpiring`，會被拒），再重跑 `generate-routes`。
+3. **到期伴隨告警**：group `migrated-expiry` 裡的 `MigratedRulesExpiring`，`vector(time()) > <expiry 前 14 天的 Unix 秒數>`，不讀任何指標。它不帶 `da_migrated`，照租戶一般的告警路由，影子期也送得到（[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）。來源檔已有同名的 alert 或 group，拒絕。
 
 被遷移的告警讀到的同檔 recording rule（遞移地）一起遷移，並改名為 `migrated:<租戶>:<原名>`（租戶的 `-` 寫成 `_`，例如 `migrated:db_a:job:redis_queue_length:max`），讀它的 migrated 規則一併改寫：migrated 規則檔與 legacy 規則載入同一台 Prometheus，同名的話 legacy 告警會讀到 migrated record 的序列。讀到檔裡沒定義的 record，拒絕；改名後的名字已是檔裡另一條 record 的，拒絕；migrated record 帶 `tenant`，所以向量對向量的運算（沒有 `on(…)` 排除 tenant）一邊讀它、另一邊不帶 tenant（例如 `job:x:sum / sum(y)`）時兩邊配不上，拒絕並點名那個運算（兩邊都是 migrated record、或 `on()` 不含 tenant 則照常遷移）；沒被讀到的 record 不遷移，只在報告列出。只讀一個指標（每個 selector 都讀它）、而該指標在 `metric-dictionary.yaml` 有黃金標準規則的告警，不產生 migrated 規則，只在報告的「改用黃金標準」點名。原式子點名 `tenant`／`instance`／`pod`／`namespace`／`node` 卻沒有 `da_cluster` 的 `by(...)`／`on(...)`（或點名 `da_cluster` 的 `without(...)`／`ignoring(...)`），只在報告標出「在持有多個叢集資料的 Prometheus 上」會配對或合併不同叢集的序列，請人確認，不改寫。
 
@@ -2368,7 +2368,7 @@ expr 語意、`for`、labels、annotations、alertname 原樣保留，只做三�
 
 YAML 寫在點開頭的 `.migration/`：conf.d 的每個讀取端都整棵略過它（[#3997](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3997)），`-o` 落在一棵 conf.d 裡也不會被讀成設定檔。三個檔先確認都寫得進去才寫第一個。沒有要遷移的規則（每條告警都改用黃金標準，或檔裡沒有告警）時只印報告、不寫檔；`-o` 裡還留著該租戶先前那次的規則檔或對照時，另印一行 `[WARN]` 點名它們（它們不是這份來源的遷移結果，請移除），結束碼仍是 `0`。
 
-**切換**：Alertmanager 裡帶 `component="migrated"` 的告警送到只有名字的 shadow receiver，直到該租戶設定 `_routing_migrated: active`（見 [generate-routes](#generate-routes)，[#4277](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4277)）。
+**切換**：Alertmanager 裡帶 `da_migrated="true"` 的告警送到只有名字的 shadow receiver，直到該租戶設定 `_routing_migrated: active`（見 [generate-routes](#generate-routes)，[#4277](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4277)）。
 
 **範例**
 
@@ -2391,7 +2391,7 @@ da-tools migrate ./legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-
   labels:
     severity: critical
     tenant: db-a
-    component: migrated
+    da_migrated: 'true'
   annotations:
     summary: Redis queue {{ $labels.queue }} is too long
     owner: team-db
@@ -2689,6 +2689,7 @@ da-tools lint --rule-pack-dir <DIR> [options]
 |------|------|--------|
 | `--policy <FILE>` | 政策檔（`custom-rule-policy.yaml`）。只收內建政策的鍵（`denied_functions`、`preserved_labels`、`required_labels`、`isolated_label`、`max_range_duration`、`max_evaluation_interval`、`file_overrides`），其他鍵結束碼 `2`；部署端 policy 的鍵（`allowed_domains` 等）會指向 `generate-routes`／`validate-config --policy`（⚠️ Breaking，[#3797](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3797)）。`file_overrides` 的 entry 寫錯，不論有沒有檔案匹配，結束碼 `2`（⚠️ Breaking，[#3977](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3977)）；頂層的值型別不符（清單寫成字串、時長不是 Prometheus 時長）同樣結束碼 `2`（⚠️ Breaking，[#4061](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4061)；格式見 custom-rule-governance §4.1） | 內建政策 |
 | `--ci` | 有 ERROR 級違規時以結束碼 1 結束；一個檔都沒選到時結束碼 2（見下方） | false |
+| `--migrated` | 掃描路徑放的是 `migrate` 的產出（`.migration/migrated/`）：它的告警可以寫 `da_migrated="true"`。不帶時，寫 `da_migrated` 的規則是 `ERROR`（[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）。不能與 `--rule-pack-dir` 併用 | false |
 | `--rule-pack-dir <DIR>` | 依宣告取 rule-packs 目錄的 rule pack（`_lib_consumer_read.rule_pack_files`：頂層的 `rule-pack-*.yaml`／`*.yml`；旁邊的 `threshold-registry.yaml` 也列在宣告裡；頂層其他 YAML（副檔名不分大小寫）、懸空 symlink 都點名，結束碼 2）。這是「rule-packs 目錄裡哪些是 rule pack」唯一的宣告，`validate-config --rule-packs`、CI 與 repo 內的 lint 都經它，不手寫 `--exclude`。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）不 lint：這份 policy 管的是租戶 pack，平台告警本來就沒有租戶（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）。選到的 pack 讀不到（判定後被刪、權限）⇒ 結束碼 2、一行點名旗標與檔（⚠️ **行為變更**，先前記成一條 ERROR、不帶 `--ci` 時 rc 0；位置參數給的檔仍是一條 ERROR，[#3724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3724)）。取代 `<path...>`，不能與 `--exclude` 併用 | — |
 | `--exclude <GLOB>` | 排除符合的檔（可重複；被排除的檔不讀）。不含 `/` 的樣式比對檔名、任何深度都算（`Chart.yaml`、`*-values.yaml`）；含 `/` 的樣式比對相對於所給目錄的路徑（`recipes/*`；直接給的檔則比對給的路徑）。以 Python `fnmatch.fnmatchcase` 比對：分大小寫，`*` 也跨 `/`。`lint`、`silencer-drift-check`、`onboard` 三者語意相同（共用 `_lib_consumer_read.files_to_read`） | — |
 
@@ -2704,6 +2705,7 @@ WARN 不會升級成 ERROR，也沒有 JSON 輸出（尚未實作）；CI 請用
 - 租戶隔離（`isolated_label`）：位置參數給的規則檔是 `<目錄>/<租戶>/` 那個租戶的，每個 selector 都要以等號寫 `tenant="<租戶>"`，`labels:` 的 tenant 只能是該租戶，不得從別處寫入 tenant；series 不帶 tenant 的指標（kube-state-metrics 等）寫 `tenant="<租戶>"` 也是 `ERROR`，要寫 `namespace="<租戶>", tenant=""`（[#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)）；`--rule-pack-dir` 的平台 pack 不判定（⚠️ Breaking，[#4136](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4136)；判定規則見 [custom-rule-governance §4.1](custom-rule-governance.md#41-deny-list-規則)）
 - range vector 上限（`max_range_duration`）、rule group 的 `interval` 上限（`max_evaluation_interval`）
 - 租戶規則檔的每條 alert 都要有 `owner` 與 `expiry` 兩個 annotation，`expiry` 是 `YYYY-MM-DD` 的日期；缺、空值、寫在 labels 都是 `ERROR`，不拿 expiry 跟今天比（⚠️ Breaking：以前只在缺 label 時出 WARN，[#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)）
+- 不寫 `da_migrated` label：每條平台路由（migrated 影子路由除外）都排除它，產生器寫的與 repo 自帶 base 的每條 inhibit rule，source 也都排除它，寫了它的規則就離開平台路由；只有 `migrate` 的 migrated 告警寫它，值為 `"true"`（`--migrated`）。其他值、寫在 recording rule、或沒帶 `--migrated` 都是 `ERROR`；運算式寫入它（`label_replace`／`label_join`、`count_values`、`group_left`／`group_right` 帶它）不論帶不帶 `--migrated` 都是 `ERROR`（⚠️ Breaking，[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）
 
 **範例**
 

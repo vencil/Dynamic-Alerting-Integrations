@@ -360,7 +360,7 @@ class TestEnforcedRoutingGuardrails:
 
     Synthetic tree（_inject_custom_alert_isolation 注入後）：
       routes[0..3]  Watchdog / custom（含 demo children）/ probe / sentinel
-      routes[4]     migrated 影子（component="migrated"，tenant!~ 已切換的 demo-blue；#4277）
+      routes[4]     migrated 影子（da_migrated="true"，tenant!~ 已切換的 demo-blue；#4277、#4355）
       routes[5]     platform-enforced（severity="critical"，continue:true）
       routes[6..]   tenant="demo-*" 主 route；demo-blue 的 routes 底下掛
                     tenant-demo-blue-override-0（alertname 專屬 override，
@@ -437,13 +437,13 @@ class TestEnforcedRoutingGuardrails:
     def test_a_shadow_tenants_migrated_alert_reaches_no_one(self, enforced_etc):
         """分支：migrated 影子路由（#4277，continue:false）擋在 enforced 之前。
 
-        影子期新舊規則並存：還沒切換的租戶，其 component="migrated" 告警只進
+        影子期新舊規則並存：還沒切換的租戶，其 da_migrated="true" 告警只進
         不通知的 migrated-alerts-shadow——連 critical 也不進 NOC、不進租戶
         channel，否則同一件事會 page 兩次。
         """
         _assert_routed(enforced_etc, {
             "alertname": "LegacyDiskFull",
-            "component": "migrated",
+            "da_migrated": "true",
             "tenant": _DEMO_TENANTS[1],
             "severity": "critical",
         }, "migrated-alerts-shadow")
@@ -453,7 +453,7 @@ class TestEnforcedRoutingGuardrails:
         之後與它的一般告警走同一條路：NOC（critical）＋租戶主 route。"""
         _assert_routed(enforced_etc, {
             "alertname": "LegacyDiskFull",
-            "component": "migrated",
+            "da_migrated": "true",
             "tenant": _DEMO_TENANTS[0],
             "severity": "critical",
         }, f"platform-enforced,tenant-{_DEMO_TENANTS[0]}")

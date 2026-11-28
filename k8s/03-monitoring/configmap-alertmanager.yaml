@@ -39,6 +39,7 @@ data:
         # copy keeps the committed base self-consistent.
         - matchers:
             - alertname="Watchdog"
+            - da_migrated=""
           group_by: ["alertname"]
           group_wait: 0s
           group_interval: 1m
@@ -61,6 +62,7 @@ data:
         # staying a dashboard-only ALERTS series.
         - matchers:
             - component="custom"
+            - da_migrated=""
           group_by: ["tenant", "alertname"]
           group_wait: 30s
           group_interval: 5m
@@ -78,6 +80,7 @@ data:
         # committed base self-consistent.
         - matchers:
             - component="synthetic-probe"
+            - da_migrated=""
           group_by: ["alertname"]
           group_wait: 0s
           group_interval: 1m
@@ -100,12 +103,16 @@ data:
         # keeps the committed base self-consistent.
         - matchers:
             - component="sentinel"
+            - da_migrated=""
           group_by: ["tenant", "alertname"]
           receiver: "sentinel-sinkhole"
           continue: false
         # ── #4277: migrated-alerts shadow (migrate-rule's legacy rules) ──
-        # migrate-rule writes a tenant's legacy rules back unchanged, labelled
-        # component="migrated". While the old rules still run (the shadow
+        # migrate-rule writes a tenant's legacy rules back unchanged, each alert
+        # labelled da_migrated="true" (#4355; the series keep their own
+        # component). Every route above carries da_migrated="" so a migrated
+        # alert named Watchdog or carrying component=custom/sentinel/
+        # synthetic-probe reaches this one, not theirs. While the old rules still run (the shadow
         # period) their alerts must page no one: this route takes them to the
         # name-only migrated-alerts-shadow, AHEAD of the enforced NOC route. A
         # tenant whose conf.d sets `_routing_migrated: active` gets a
@@ -114,7 +121,7 @@ data:
         # regen; this hand-authored copy (every tenant in shadow) keeps the
         # committed base self-consistent.
         - matchers:
-            - component="migrated"
+            - da_migrated="true"
           group_by: ["tenant", "alertname"]
           receiver: "migrated-alerts-shadow"
           continue: false
@@ -227,6 +234,14 @@ data:
       # platform alert carries component. Adding alert_source="" there would be
       # inert noise, and the dedup rule is REGENERATED from conf.d anyway.
       #
+      # ⛔ #4355: every source here carries `da_migrated=""`. A migrated alert
+      # (migrate-rule's copy of a legacy rule, `da_migrated="true"`) keeps the
+      # alertname it was written with — `TenantSilentWarning` included — and
+      # inhibition does not look at routing, so without it a migrated copy
+      # would mute the tenant's real alerts, in the shadow period too.
+      # Enforced on the final config by _grar_validate.
+      # assert_migrated_alerts_mute_nothing (--strict; WARN without).
+      #
       # These two rules survive regeneration, so the matcher below is
       # committed-and-preserved rather than generated: every output mode and
       # --apply share one merge (_grar_render.merge_generated, #1211), which
@@ -241,6 +256,7 @@ data:
       - source_matchers:
           - alertname="TenantSilentWarning"
           - tenant=~".+"
+          - da_migrated=""
         target_matchers:
           - severity="warning"
           - tenant=~".+"
@@ -252,6 +268,7 @@ data:
       - source_matchers:
           - alertname="TenantSilentCritical"
           - tenant=~".+"
+          - da_migrated=""
         target_matchers:
           - severity="critical"
           - tenant=~".+"
@@ -270,6 +287,7 @@ data:
           - alertname="CustomRecipeSilent"
           - tenant=~".+"
           - name=~".+"
+          - da_migrated=""
         target_matchers:
           - component="custom"
           - tenant=~".+"

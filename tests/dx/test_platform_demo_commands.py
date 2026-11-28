@@ -169,3 +169,45 @@ def test_migrate_playback_matches_a_fresh_run(tmp_path):
     hint = f"re-capture {TRANSCRIPTS.name} migrate block from a fresh run:\n{regenerated}"
     assert terminal == fresh_terminal, hint
     assert sample == fresh_sample, hint
+
+
+# ── generate-routes: the displayed file is a fresh run's file ───────────
+#
+# #4355 review: the routes sample kept showing platform routes and inhibit
+# sources without the migrated gate. This replays the session the header
+# describes (scaffold, its two conf.d files copied into conf.d/, then the
+# displayed command) and compares the written alertmanager.yml verbatim.
+# The terminal is not compared: whether Alertmanager's loader (da-read) is
+# found changes its lines.
+
+def _block(phase: str) -> tuple[str, str]:
+    src = TRANSCRIPTS.read_text(encoding="utf-8")
+    m = re.search(
+        rf"^  {phase}: \{{\n    command: '([^']+)',\n    terminal: \[\n.*?\n    \],\n"
+        r"    sample: `((?:[^`\\]|\\.)*)`,\n  \},$",
+        src, flags=re.MULTILINE | re.DOTALL)
+    assert m, f"{phase} block not found in the shape this test reads"
+    return m.group(1), _js_template_value(m.group(2))
+
+
+def test_routes_sample_matches_a_fresh_run(tmp_path):
+    scaffold, _ = _block("scaffold")
+    command, sample = _block("routes")
+    env = {**os.environ, "DA_LANG": "en"}
+    first = shlex.split(scaffold)
+    proc = subprocess.run([sys.executable, entrypoint.__file__, *first[1:]],
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                          encoding="utf-8", timeout=120, cwd=tmp_path, env=env)
+    assert proc.returncode == 0, f"`{scaffold}` rc={proc.returncode}\n{proc.stdout[-1500:]}"
+    out = first[first.index("-o") + 1]
+    (tmp_path / "conf.d").mkdir()
+    for name in ("_defaults.yaml", "demo-tenant.yaml"):
+        shutil.copyfile(tmp_path / out / ".scaffold" / "conf.d" / name, tmp_path / "conf.d" / name)
+    argv = shlex.split(command)
+    proc = subprocess.run([sys.executable, entrypoint.__file__, *argv[1:]],
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                          encoding="utf-8", timeout=120, cwd=tmp_path, env=env)
+    assert proc.returncode == 0, f"`{command}` rc={proc.returncode}\n{proc.stdout[-1500:]}"
+    fresh = (tmp_path / argv[argv.index("-o") + 1]).read_text(encoding="utf-8").rstrip("\n")
+    assert sample == fresh, (f"re-capture {TRANSCRIPTS.name} routes sample from a fresh run:\n"
+                             f"    sample: `{_js_template_body(fresh)}`,")
