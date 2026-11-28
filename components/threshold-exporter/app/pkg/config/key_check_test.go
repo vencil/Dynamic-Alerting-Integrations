@@ -30,14 +30,14 @@ var keyCheckFixtures = map[KeyCheckKind]keyCheckFixture{
 		keys: map[string]string{`canary_metric_a{canary_lbl="CaNaRy-v",version=~"CANARY-re.*"}`: "1"},
 		key:  `canary_metric_a{canary_lbl="CaNaRy-v",version=~"CANARY-re.*"}`, head: "canary_metric_a",
 		message: `WARN: tenant=t-kc: regex version matcher "CANARY-re.*" in key ` +
-			`"canary_metric_a{canary_lbl=\"CaNaRy-v\",version=~\"CANARY-re.*\"}" — ADR-024 Phase 1 ` +
-			`expects an exact version="..." selector`,
+			`"canary_metric_a{canary_lbl=\"CaNaRy-v\",version=~\"CANARY-re.*\"}" — an exact ` +
+			`version="..." selector is expected`,
 	},
 	KeyCheckVersionEmpty: {
 		keys: map[string]string{`canary_metric_b{canary_lbl="CaNaRy-v",version=""}`: "1"},
 		key:  `canary_metric_b{canary_lbl="CaNaRy-v",version=""}`, head: "canary_metric_b",
 		message: `WARN: tenant=t-kc: empty version label in key ` +
-			`"canary_metric_b{canary_lbl=\"CaNaRy-v\",version=\"\"}" (ADR-024 OQ-6 forbids empty — ` +
+			`"canary_metric_b{canary_lbl=\"CaNaRy-v\",version=\"\"}" (empty is forbidden — ` +
 			`it collides with the unversioned baseline)`,
 	},
 	KeyCheckVersionDefault: {
@@ -45,14 +45,14 @@ var keyCheckFixtures = map[KeyCheckKind]keyCheckFixture{
 		key:  `canary_metric_c{canary_lbl="CaNaRy-v",version="default"}`, head: "canary_metric_c",
 		message: `WARN: tenant=t-kc: literal version="default" in key ` +
 			`"canary_metric_c{canary_lbl=\"CaNaRy-v\",version=\"default\"}" is reserved for the ` +
-			`normalize-layer fallback (ADR-024 OQ-6)`,
+			`normalize-layer fallback (ADR-024 §1)`,
 	},
 	KeyCheckVersionCharset: {
 		keys: map[string]string{`canary_metric_d{canary_lbl="x",version="CANARY https://u:PW@hooks.example/x"}`: "1"},
 		key:  `canary_metric_d{canary_lbl="x",version="CANARY https://u:PW@hooks.example/x"}`, head: "canary_metric_d",
 		message: `WARN: tenant=t-kc: version "CANARY https://u:PW@hooks.example/x" in key ` +
 			`"canary_metric_d{canary_lbl=\"x\",version=\"CANARY https://u:PW@hooks.example/x\"}" violates ` +
-			`^[a-z0-9][a-z0-9._-]*$ (ADR-024 OQ-6; pilot-calibratable)`,
+			`^[a-z0-9][a-z0-9._-]*$ (pilot-calibratable)`,
 	},
 	KeyCheckRenamedShadowed: {
 		keys: map[string]string{`mysql_cpu{canary_lbl="CaNaRy-s"}`: "1",

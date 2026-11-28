@@ -42,8 +42,8 @@ _EXPORTER_LABELS = frozenset({"tenant", "severity"})
 # kept by the pack and still be undeclared, so it cannot go stale silently.
 _KEPT_BUT_NOT_SERVED = {
     ("container_cpu_throttle", "version"):
-        "ADR-024 OQ-6 scopes version-aware thresholds to container cpu/memory; "
-        "the throttle rule keeps the Route-2 shape so a later expansion is a "
+        "ADR-024 §2 scopes version-aware thresholds to container cpu/memory; "
+        "the throttle rule keeps the exact-or-fallback shape so a later expansion is a "
         "RULE_PACKS `dimensions` edit + --regen + dropping this entry, not a "
         "rule rewrite (rule-pack-kubernetes.yaml, ADR-024)",
 }

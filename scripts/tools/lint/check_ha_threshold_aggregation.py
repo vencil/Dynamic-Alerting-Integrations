@@ -16,7 +16,7 @@ ADDS the two replicas → the threshold DOUBLES (a `70` becomes `140`) → the
 alert never fires; a `count` counts replicas, not values. `max by(...)`
 collapses the copies back to the single true value. This bug shipped
 silently for ~2 months in 4 packs' source copies (elasticsearch /
-kubernetes / mongodb / redis) — see ADR-024 PR3-pre.
+kubernetes / mongodb / redis).
 
 WHAT THIS CHECKS: every aggregation whose argument still carries the raw
 replica copies of `user_threshold` must use the `max` operator. `sum` is

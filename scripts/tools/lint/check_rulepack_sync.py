@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rule-pack copy drift guard (ADR-024 PR3-pre).
+"""Rule-pack copy drift guard.
 
 Every rule pack lives in TWO committed places that must stay semantically
 identical:

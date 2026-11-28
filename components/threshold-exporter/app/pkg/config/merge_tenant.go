@@ -389,7 +389,7 @@ func platformLayerNotice(file, tenantID, msg string) string {
 // Consolidating these call sites on one merge core is deliberate: a previous
 // copy in the write path did NOT merge defaults, so a tenant-only body validated
 // clean on GET//validate but was rejected at write time — the asymmetry tracked
-// by ADR-024 PR4 / #704.
+// by #704.
 //
 // It is intentionally NOT the full L0..Ln cascade that ResolveEffective walks
 // (that one is parity-pinned to describe_tenant.py for the /effective

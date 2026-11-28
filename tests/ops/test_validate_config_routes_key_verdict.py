@@ -242,7 +242,7 @@ def test_a_rule_naming_a_profile_key_no_tenant_gets_does_not_count(tmp_path):
 
 
 def test_the_exporters_key_checks_are_printed_from_their_fields(tmp_path):
-    """ADR-038 §11: a `version` label the exporter refuses and a retired
+    """ADR-038 §11: a `version` label that fails the exporter's check and a retired
     spelling are the exporter's own checks (da-guard served-values'
     key_checks); this tool judges no key name itself. #3703: the line names
     the metric and the key's stand-in, never the key as written."""

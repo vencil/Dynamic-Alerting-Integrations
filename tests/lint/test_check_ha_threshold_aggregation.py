@@ -12,7 +12,7 @@ Pinned contracts
    aggregation (`sum(rate(mysql_...))`) is never flagged.
 5. **Live dogfood**: every committed rule pack / operator / configmap copy
    already aggregates user_threshold with max (gates a regression of the
-   ADR-024 PR3-pre HA fix).
+   HA double-count fix).
 6. **Reached, not adjacent (#3483)**: the expr is parsed, so an aggregation
    that reaches raw `user_threshold` through a function, parentheses or a
    binary operator is judged like a direct one; a `max` in between collapses

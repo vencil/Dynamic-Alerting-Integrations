@@ -1,9 +1,9 @@
 package config
 
-// version_label_test.go — ADR-024 OQ-6 dimensional `version` label guard.
+// version_label_test.go — the dimensional `version` label guard (ADR-024 §1).
 //
 // validateVersionLabel (surfaced through ValidateTenantKeys) enforces:
-//   - charset: versionLabelPattern (Phase-1 baseline, pilot-calibratable)
+//   - charset: versionLabelPattern (baseline, pilot-calibratable)
 //   - reserved values: empty "" and literal "default" are forbidden
 //   - component scope: only piloted metrics (container cpu/memory) may carry
 //     a version label

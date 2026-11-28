@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tenant metadata reaches alerts through annotations only, never a join (#3483).
 
-The file keeps its historical name (ADR-024 PR3-pre Commit 3 introduced it as the
-left-outer-join enrichment lint); its contract changed with #3483.
+The file keeps its historical name (it was introduced as the left-outer-join
+enrichment lint); its contract changed with #3483.
 
 WHY: tenant metadata (runbook_url, owner, tier — `tenant_metadata_info`, served
 by every threshold-exporter replica) used to be joined into each alert with

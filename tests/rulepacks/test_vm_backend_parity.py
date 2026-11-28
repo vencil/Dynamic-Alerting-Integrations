@@ -81,7 +81,7 @@ _CASES = [
     ("rule-pack-kubernetes-node-health_test.yaml", "NodeNotReady"),
     # version exact-match join + group_left + rate() counter + default fallback (ADR-024)
     ("rule-pack-kubernetes-version-aware_test.yaml", "PodContainerHighCPU"),
-    # per-severity split must NOT cross-fire (no-fire assertion; ADR-024 AC-3)
+    # per-severity split must NOT cross-fire (no-fire assertion; ADR-024 §2)
     ("rule-pack-kubernetes-version-aware_test.yaml", "PodContainerHighCPUCritical"),
 ]
 
