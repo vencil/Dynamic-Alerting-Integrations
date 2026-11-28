@@ -2705,7 +2705,7 @@ WARN 不會升級成 ERROR，也沒有 JSON 輸出（尚未實作）；CI 請用
 - 租戶隔離（`isolated_label`）：位置參數給的規則檔是 `<目錄>/<租戶>/` 那個租戶的，每個 selector 都要以等號寫 `tenant="<租戶>"`，`labels:` 的 tenant 只能是該租戶，不得從別處寫入 tenant；series 不帶 tenant 的指標（kube-state-metrics 等）寫 `tenant="<租戶>"` 也是 `ERROR`，要寫 `namespace="<租戶>", tenant=""`（[#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)）；`--rule-pack-dir` 的平台 pack 不判定（⚠️ Breaking，[#4136](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4136)；判定規則見 [custom-rule-governance §4.1](custom-rule-governance.md#41-deny-list-規則)）
 - range vector 上限（`max_range_duration`）、rule group 的 `interval` 上限（`max_evaluation_interval`）
 - 租戶規則檔的每條 alert 都要有 `owner` 與 `expiry` 兩個 annotation，`expiry` 是 `YYYY-MM-DD` 的日期；缺、空值、寫在 labels 都是 `ERROR`，不拿 expiry 跟今天比（⚠️ Breaking：以前只在缺 label 時出 WARN，[#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)）
-- 不寫 `da_migrated` label：每條平台路由（migrated 影子路由除外）與每條 inhibit rule 的 source 都排除它，寫了它的規則就離開平台路由；只有 `migrate` 的 migrated 告警寫它，值為 `"true"`（`--migrated`）。其他值、寫在 recording rule、或沒帶 `--migrated` 都是 `ERROR`；運算式寫入它（`label_replace`／`label_join`、`count_values`、`group_left`／`group_right` 帶它）不論帶不帶 `--migrated` 都是 `ERROR`（⚠️ Breaking，[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）
+- 不寫 `da_migrated` label：每條平台路由（migrated 影子路由除外）都排除它，產生器寫的與 repo 自帶 base 的每條 inhibit rule，source 也都排除它，寫了它的規則就離開平台路由；只有 `migrate` 的 migrated 告警寫它，值為 `"true"`（`--migrated`）。其他值、寫在 recording rule、或沒帶 `--migrated` 都是 `ERROR`；運算式寫入它（`label_replace`／`label_join`、`count_values`、`group_left`／`group_right` 帶它）不論帶不帶 `--migrated` 都是 `ERROR`（⚠️ Breaking，[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）
 
 **範例**
 
