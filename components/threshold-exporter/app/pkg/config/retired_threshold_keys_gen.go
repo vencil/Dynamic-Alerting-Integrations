@@ -10,6 +10,7 @@ var retiredThresholdKeys = []retiredThresholdKey{
 	{"clickhouse_memory_tracking_bytes", "container_memory", 1320, "ClickHouse's absolute memory bytes alert is retired; container_memory (percent of the container memory limit, shipped at 85) covers it only for a pod in a tenant namespace with a memory limit set and the kubernetes pack on. The unit changed from bytes to a percentage: do not copy the value."},
 	{"db2_deadlock_rate", "db2_deadlocks_per_5m", 1320, "The unit changed from deadlocks per second to deadlocks per 5 minutes (multiply by 300), and 5 per second was never reachable; pick the value from your own baseline, do not copy it."},
 	{"db2_deadlock_rate_critical", "", 1320, "The deadlock alert has no critical tier: db2_deadlocks_per_5m (deadlocks per 5 minutes) is a warning only."},
+	{"jvm_gc_pause", "jvm_gc_time_percent", 4116, "The aggregation changed from the sum over the tenant's JVMs to the busiest JVM, and the unit from s/s to percent of time; re-derive the value from your own baseline, do not multiply it by 100."},
 	{"kafka_active_controllers", "", 3783, "the declared danielqsj/kafka_exporter does not export an active-controller metric, so no rule reads this key"},
 	{"kafka_request_rate", "", 3783, "the declared danielqsj/kafka_exporter does not export a broker request-rate metric, so no rule reads this key"},
 	{"mysql_connections", "mysql_connection_usage_percent", 3778, "The unit changed from an absolute connection count to a percentage of max_connections; convert the value, do not copy it."},

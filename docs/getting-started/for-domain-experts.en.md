@@ -160,7 +160,7 @@ Submit a pull request to the Platform Team for review and integration.
 
 ### Use the metric dictionary
 
-`scripts/tools/metric-dictionary.yaml` maps raw metrics that legacy rules commonly use to the platform's threshold keys. `migrate_rule.py` consults it while converting existing rules: when a raw metric already has a golden-standard alert, the tool suggests setting the threshold instead of emitting a duplicate `custom_` rule. One entry, as an example:
+`scripts/tools/metric-dictionary.yaml` maps raw metrics that legacy rules commonly use to the platform's threshold keys. `migrate_rule.py` consults it while migrating existing rules: an alert that reads a single raw metric that already has a golden-standard alert gets no migrated rule; the report points it at the golden standard (set the threshold instead). One entry, as an example:
 
 ```yaml {.quote src="scripts/tools/metric-dictionary.yaml"}
 mysql_global_status_threads_connected:
@@ -174,7 +174,7 @@ The platform team edits this YAML directly; no code change is needed.
 
 ## Migration Workflow
 
-### Migrate existing rules to a Rule Pack
+### Migrate existing rules
 
 ```bash
 # 1. Reverse-analyze your existing Prometheus rule files
@@ -182,20 +182,16 @@ python3 scripts/tools/ops/onboard_platform.py \
   --rule-files rules/ \
   -o onboard_output/
 
-# 2. Convert the rules (AST + Triage + Prefix + Dictionary)
+# 2. Migrate one tenant's rules verbatim (tenant isolation + owner / expiry + dictionary match)
 python3 scripts/tools/ops/migrate_rule.py rules/alert.yml \
-  --tenant db-a -o migration_output/
+  --tenant db-a --owner team-db --expiry 2027-03-31 -o migration_output/
 
-# 3. Validate the migration (Shadow Monitoring: compare old vs new recording-rule values)
-# ⚠️ Use HTTPS in production
-python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/.migration/prefix-mapping.yaml \
-  --prometheus https://prometheus:9090
+# 3. Shadow comparison: migrated alerts go to the shadow receiver first, alongside the legacy rules
 ```
 
 - **Step 1**: `--rule-files` takes files or directories (one or more; a directory is walked for `*.yaml` / `*.yml`) and expands no glob (The v2.9.0 image still takes the value as one glob and one value only, and a directory selects no file there (a WARN, exit code 1); on that image give a quoted glob (`'rules/*.yaml'`) or a single file <!-- image-caveat: v2.9.0 -->). With rule files only, the output is a rule analysis; `onboard-hints.json` is written only when you also pass `--alertmanager-config` and tenants are found in it.
-- **Step 2**: the output is not a Rule Pack file but a set of platform rules plus tenant config: `.migration/platform-recording-rules.yaml`, `.migration/platform-alert-rules.yaml`, `.migration/conf.d/<tenant>.yaml` (thresholds under `tenants.<tenant>`, the tenant id given by `--tenant`), `.migration/conf.d/_defaults.yaml`, `.migration/prefix-mapping.yaml`, plus two reports, `migration-report.txt` and `triage-report.csv`. `--prefix` is a prefix for threshold keys and recording rule names (default `custom_`); it is not a tenant prefix and does not rename source metrics. Emitting a Rule Pack file directly is not implemented yet. The generated recording rules are `by(tenant, da_cluster)`, like "Part 1" above: on a Prometheus holding several clusters' data, migrated rules are evaluated per cluster (`sum` / `max` no longer merge one tenant's clusters) and alerts carry `da_cluster`; a `by(...)` / `on(...)` the original expression wrote itself goes in as written, and one that names an identity label without `da_cluster` is flagged for a human decision. ⚠️ Merge the `defaults:` block of `.migration/conf.d/_defaults.yaml` into the conf.d root `_defaults.yaml` first (merge, do not overwrite the whole file): the exporter only emits declared keys, so the values in the tenant file have no effect until it is merged. A critical tier paired with a warning cannot go in defaults: each tenant that wants it sets `<key>_critical` in its own file. A legacy rule that only had a critical tier reads the base row instead, so its value is already in the snippet. ⚠️ The migrate in the v2.9.0 image does not have these fixes yet: its threshold selector does not match the `component` / `metric` the exporter emits, its recording rule reads a prefixed metric name and groups `by(tenant)`, and it produces no `defaults-snippet.yaml`. On that version, check the output by hand against "Part 2" above before applying it. <!-- image-caveat: v2.9.0 -->
-- **Step 3**: compares two queries on the same Prometheus. `--mapping` reads the `prefix-mapping.yaml` from step 2; for a single pair use `--old '<old query>' --new '<new query>'`. Comparing two Prometheus servers against each other and choosing the comparison time range are not implemented yet; to keep observing, use `--watch --interval <seconds> --rounds <n>`, and `--auto-detect-convergence` stops automatically once the values converge. The full procedure is in the [Shadow Monitoring SOP](../shadow-monitoring-sop.en.md).
+- **Step 2**: the output is neither a Rule Pack file nor threshold config: the rules are kept as written, a tenant matcher is injected into every selector, and alerts get the `tenant` and `da_migrated: "true"` labels (the series' own `component` is kept), the `owner` and `expiry` annotations, plus the expiry companion alert `MigratedRulesExpiring` (it carries no `da_migrated`, so it arrives in the shadow period too). It writes `.migration/migrated/<tenant>/rules.yml` (loaded by the Prometheus that scrapes the raw metrics: a single Prometheus, or the edge in a federation setup), `.migration/mapping/<tenant>.yaml` (selectors before and after injection) and `migration-report-<tenant>.txt`. Cluster-scoped or platform-own series (`kube_node_*`, `up`) select no single tenant, so the run is refused, exit code 2; a `by(...)` / `on(...)` without `da_cluster` in the original expression is only flagged in the report. Alerts that hit the dictionary are not migrated; the report points them at the golden standard. Details: [CLI Reference — migrate](../cli-reference.en.md#migrate). ⚠️ The migrate in the v2.9.0 image is still the old conversion engine (`custom_` keys, platform recording / alert rules, a tenant conf.d file) <!-- image-caveat: v2.9.0 -->
+- **Step 3**: `validate_migration.py --mapping` reads the `prefix-mapping.yaml` of the earlier migrate; support for the new mapping `.migration/mapping/<tenant>.yaml` comes in the follow-up #4227. Until then, `--old '<old query>' --new '<new query>'` compares one pair, such as a `legacy` / `pinned` selector from the mapping. The full procedure is in the [Shadow Monitoring SOP](../shadow-monitoring-sop.en.md).
 
 ### Backtest threshold changes
 

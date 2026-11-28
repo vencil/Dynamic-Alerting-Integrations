@@ -413,6 +413,7 @@ inhibit_rules:
       - metric_group=~".+"
       - tenant=~".+"
       - da_cluster=~".+"
+      - da_migrated=""          # #4355: a migrated alert is never a source
     target_matchers:
       - severity="warning"
       - metric_group=~".+"
@@ -425,6 +426,7 @@ inhibit_rules:
       - metric_group=~".+"
       - tenant=~".+"
       - da_cluster=""
+      - da_migrated=""          # #4355: a migrated alert is never a source
     target_matchers:
       - severity="warning"
       - metric_group=~".+"
@@ -615,6 +617,7 @@ inhibit_rules:
       - metric_group=~".+"
       - tenant=~".+"
       - da_cluster=~".+"
+      - da_migrated=""          # #4355: a migrated alert is never a source
     target_matchers:
       - severity="warning"
       - metric_group=~".+"
@@ -628,6 +631,7 @@ inhibit_rules:
       - metric_group=~".+"
       - tenant=~".+"
       - da_cluster=""
+      - da_migrated=""          # #4355: a migrated alert is never a source
     target_matchers:
       - severity="warning"
       - metric_group=~".+"
@@ -639,6 +643,7 @@ inhibit_rules:
   # Silent Mode: suppress warning notifications
   - source_matchers:
       - alertname="TenantSilentWarning"
+      - da_migrated=""
     target_matchers:
       - severity="warning"
     equal: ["tenant"]
@@ -646,6 +651,7 @@ inhibit_rules:
   # Silent Mode: suppress critical notifications
   - source_matchers:
       - alertname="TenantSilentCritical"
+      - da_migrated=""
     target_matchers:
       - severity="critical"
     equal: ["tenant"]
@@ -689,7 +695,7 @@ flowchart TD
 The opt-out is TWO global inhibit rules with an exclusion list (the rule count does not grow with the tenant count; [#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899), [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)):
 
 1. `generate_alertmanager_routes.py` scans all tenant YAML files for `_severity_dedup` setting
-2. It generates two rules: source `severity="critical"`, target `severity="warning"`, both sides requiring `metric_group=~".+"` and `tenant=~".+"`; they differ only in how they read the cluster label `da_cluster` (each Prometheus's `external_labels.da_cluster`, [ADR-006](../adr/006-tenant-mapping-topologies.en.md)):
+2. It generates two rules: source `severity="critical"` (with `da_migrated=""` too: a migrated alert migrate writes back is never a source, [#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)), target `severity="warning"`, both sides requiring `metric_group=~".+"` and `tenant=~".+"`; they differ only in how they read the cluster label `da_cluster` (each Prometheus's `external_labels.da_cluster`, [ADR-006](../adr/006-tenant-mapping-topologies.en.md)):
     - both sides carry it (`da_cluster=~".+"`): `equal: ["tenant", "metric_group", "da_cluster"]` — suppression only within one tenant, one `metric_group` and one cluster; when a tenant runs in several clusters, a critical in one does not suppress another cluster's warning
     - neither side carries it (`da_cluster=""`, a Prometheus that has not set the external label): `equal: ["tenant", "metric_group"]` — suppression within one tenant and one `metric_group`, so two clusters that both lack the label still suppress each other
 
@@ -708,7 +714,7 @@ The opt-out is TWO global inhibit rules with an exclusion list (the rule count d
 
 **Pairing Mechanism:** The `metric_group` label in alert rules allows Alertmanager to correctly pair warning/critical (since they have different alertnames). For example, `MariaDBHighConnections` and `MariaDBHighConnectionsCritical` share `metric_group: "mysql_connection_usage_percent"`. The dedup inhibit rule limits `metric_group=~".+"` on both sides, so alerts without a `metric_group` label do not participate in dedup. (The liveness-tier alerts `MariaDBDown`/`MariaDBClusterDown`/`MariaDBNoPrimary` carry `metric_group: mariadb_liveness` as of [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) (MongoDB's alike carry `mongodb_liveness`), so the critical cluster-survival alert auto-inhibits the same tenant's warning instance alert.)
 
-**Group names are one namespace per tenant:** the inhibit compares the tenant and `metric_group`, not the rule pack, so two packs using one value would let a tenant running both have one pack's critical inhibit the other's warning. `check_metric_group_pairs.py` therefore requires that each value belongs to one rule pack, that each group has a critical and a warning member (the inhibit mutes `severity="warning"` only; otherwise it inhibits nothing), and that `slo_` stays the custom-alert compiler's prefix ([#3692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3692)). The groups `migrate_rule` writes are the whole threshold key.
+**Group names are one namespace per tenant:** the inhibit compares the tenant and `metric_group`, not the rule pack, so two packs using one value would let a tenant running both have one pack's critical inhibit the other's warning. `check_metric_group_pairs.py` therefore requires that each value belongs to one rule pack, that each group has a critical and a warning member (the inhibit mutes `severity="warning"` only; otherwise it inhibits nothing), and that `slo_` stays the custom-alert compiler's prefix ([#3692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3692)). `migrate_rule` writes no group name: the original rule's labels are kept as written.
 
 **Tenant Configuration**
 

@@ -67,7 +67,7 @@ const RECORDING_RULES = [
   { pack: 'node', rule: 'da:node_disk_usage:percent', expr: '(1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100', desc: t('磁碟使用率', 'Disk usage percent') },
   { pack: 'node', rule: 'da:node_cpu_usage:percent', expr: '100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)', desc: t('節點 CPU 使用率', 'Node CPU usage percent') },
   { pack: 'node', rule: 'da:node_memory_usage:percent', expr: '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100', desc: t('節點記憶體使用率', 'Node memory usage percent') },
-  { pack: 'jvm', rule: 'da:jvm_gc_pause:seconds', expr: 'rate(jvm_gc_pause_seconds_sum[5m]) / rate(jvm_gc_pause_seconds_count[5m])', desc: t('GC 平均暫停時間', 'GC average pause time') },
+  { pack: 'jvm', rule: 'da:jvm_gc_time:percent', expr: '100 * sum without(action, cause, gc) (rate(jvm_gc_pause_seconds_sum[5m]))', desc: t('GC 時間佔比（單一 JVM，%）', 'GC time, percent of time (one JVM)') },
   { pack: 'jvm', rule: 'da:jvm_heap_usage:percent', expr: 'jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} * 100', desc: t('JVM Heap 使用率', 'JVM Heap usage percent') },
 ];
 

@@ -1,0 +1,1 @@
+{"tenant": "db-a", "namespace_form": ["kube_pod_info"], "expressions": ["rate(x_total{job=\"a\"}[5m] offset 1m) > on(tenant) group_left kube_pod_info", "y{tenant=\"db-b\"}"]}

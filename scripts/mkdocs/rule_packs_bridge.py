@@ -19,7 +19,11 @@ before discovery avoids that entirely.
 and the generators (generate_platform_data / generate_rule_pack_readme / …). Only its
 markdown docs are surfaced as site pages (nav: ``rule-packs/README.md`` +
 ``rule-packs/ALERT-REFERENCE.md``); the rule-pack YAMLs stay data, not pages. The
-transient ``docs/rule-packs/`` copy is gitignored and removed in ``on_post_build``.
+transient ``docs/rule-packs/`` copy is gitignored and removed when the build ends,
+whether it succeeds (``on_post_build``) or fails (``on_build_error``, #4251), and
+cleared before every build (``on_pre_build``) so a copy a killed build left behind is
+never served. The lints that read site pages read ``RULE_PACK_DOCS`` at their source
+(``scripts/tools/_lib_site_pages.py``), never the copy.
 
 This hook runs for every mkdocs invocation (local wrapper, docs-ci, and the raw
 ``mkdocs gh-deploy`` in mkdocs-deploy.yaml), so one mechanism covers all paths.
@@ -30,7 +34,7 @@ from pathlib import Path
 
 # Markdown docs surfaced into the site. ALERT-REFERENCE.en.md is the i18n EN pair
 # of ALERT-REFERENCE.md (docs_structure: suffix); README.md is ZH-only today.
-_RULE_PACK_DOCS = ("README.md", "ALERT-REFERENCE.md", "ALERT-REFERENCE.en.md")
+RULE_PACK_DOCS = ("README.md", "ALERT-REFERENCE.md", "ALERT-REFERENCE.en.md")
 
 
 def _dest_dir(config):
@@ -38,11 +42,18 @@ def _dest_dir(config):
     return repo_root / "docs" / "rule-packs", repo_root / "rule-packs"
 
 
+#: The copy ``on_pre_build`` made this run, for ``on_build_error``.
+_SEEDED = None
+
+
 def on_pre_build(config):
     """Seed docs/rule-packs/ from the repo-root rule-packs/ before file discovery."""
+    global _SEEDED
     dest, src = _dest_dir(config)
+    shutil.rmtree(dest, ignore_errors=True)  # a killed build's copy is never served
     dest.mkdir(parents=True, exist_ok=True)
-    for name in _RULE_PACK_DOCS:
+    _SEEDED = dest
+    for name in RULE_PACK_DOCS:
         s = src / name
         if s.is_file():
             shutil.copy2(s, dest / name)
@@ -52,3 +63,11 @@ def on_post_build(config):
     """Remove the transient copy so the working tree stays clean."""
     dest, _ = _dest_dir(config)
     shutil.rmtree(dest, ignore_errors=True)
+
+
+def on_build_error(error):
+    """Remove the transient copy when the build fails too (#4251): mkdocs runs
+    ``on_post_build`` only for a build that got that far, and hands this event
+    no config, so the copy's path is the one ``on_pre_build`` seeded."""
+    if _SEEDED is not None:
+        shutil.rmtree(_SEEDED, ignore_errors=True)

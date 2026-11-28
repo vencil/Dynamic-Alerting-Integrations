@@ -55,8 +55,10 @@
 </script>
 <script>document.write('<scr'+'ipt src="'+window.__DA_VENDOR.tailwind+'"><\/scr'+'ipt>')</script>
 <script>
-  // Configure Tailwind to use class-based dark mode
-  tailwind.config = { darkMode: 'class' };
+  // Dark mode is <html data-theme> alone (ADR-015): Tailwind's darkMode is
+  // not configured and the class `dark` is never set. Unset, the CDN's
+  // default makes a `dark:` class follow the OS colour scheme, not the
+  // theme toggle — the jsx-no-dark-variant hook keeps them out of the portal.
   // Theme toggle: Light / Dark / System (three-state)
   // Priority: localStorage > System preference > Light
   (function() {
@@ -64,12 +66,7 @@
     try { stored = localStorage.getItem('__da_theme_pref'); } catch(e) {}
     var pref = stored || 'system';
     var isDark = (pref === 'dark') || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-      document.documentElement.setAttribute('data-theme', 'dark');
-    } else {
-      document.documentElement.setAttribute('data-theme', 'light');
-    }
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
     window.__DA_THEME_PREF = pref;
   })();
 </script>
@@ -140,14 +137,14 @@
     transition: background 0.15s, border-color 0.15s;
   }
   .theme-toggle:hover { border-color: #3b82f6; }
-  /* Dark mode overrides when .dark is on html */
-  html.dark body { background: #0f172a; color: #e2e8f0; }
-  html.dark .back-home { color: #94a3b8; background: rgba(15,23,42,0.9); border-color: #334155; }
-  html.dark .back-home:hover { color: #60a5fa; border-color: #60a5fa; }
-  html.dark .theme-toggle { background: rgba(15,23,42,0.9); border-color: #334155; }
-  html.dark .theme-toggle:hover { border-color: #60a5fa; }
-  html.dark #loading .label { color: #94a3b8; }
-  html.dark #loading .spinner { border-color: #334155; border-top-color: #60a5fa; }
+  /* Dark mode overrides: <html data-theme="dark"> (ADR-015) */
+  html[data-theme="dark"] body { background: #0f172a; color: #e2e8f0; }
+  html[data-theme="dark"] .back-home { color: #94a3b8; background: rgba(15,23,42,0.9); border-color: #334155; }
+  html[data-theme="dark"] .back-home:hover { color: #60a5fa; border-color: #60a5fa; }
+  html[data-theme="dark"] .theme-toggle { background: rgba(15,23,42,0.9); border-color: #334155; }
+  html[data-theme="dark"] .theme-toggle:hover { border-color: #60a5fa; }
+  html[data-theme="dark"] #loading .label { color: #94a3b8; }
+  html[data-theme="dark"] #loading .spinner { border-color: #334155; border-top-color: #60a5fa; }
 
   /* ── Flow mode ── */
   .flow-stepper {
@@ -215,7 +212,7 @@
     display: flex; align-items: center; gap: 8px;
   }
   .flow-hint-icon { font-size: 1rem; flex-shrink: 0; }
-  html.dark .flow-hint {
+  html[data-theme="dark"] .flow-hint {
     background: #1e293b; border-color: #334155; color: #93c5fd;
   }
 
@@ -227,7 +224,7 @@
     border-top: 1px solid #e2e8f0;
     backdrop-filter: blur(8px);
   }
-  html.dark .flow-nav {
+  html[data-theme="dark"] .flow-nav {
     background: rgba(15,23,42,0.95); border-color: #334155;
   }
   .flow-nav-label {
@@ -244,8 +241,8 @@
     color: #64748b; background: #f1f5f9; border: 1px solid #e2e8f0;
   }
   .flow-nav-prev:hover { background: #e2e8f0; color: #1e293b; }
-  html.dark .flow-nav-prev { background: #1e293b; border-color: #334155; color: #94a3b8; }
-  html.dark .flow-nav-prev:hover { background: #334155; color: #e2e8f0; }
+  html[data-theme="dark"] .flow-nav-prev { background: #1e293b; border-color: #334155; color: #94a3b8; }
+  html[data-theme="dark"] .flow-nav-prev:hover { background: #334155; color: #e2e8f0; }
   .flow-nav-next {
     color: #fff; background: #3b82f6; border: 1px solid #3b82f6;
   }
@@ -717,7 +714,6 @@ window.__checkFlowGate = function(el) {
 
   function applyTheme(mode) {
     var isDark = (mode === 'dark') || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    document.documentElement.classList.toggle('dark', isDark);
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
     btn.textContent = ICONS[mode];
     btn.title = 'Theme: ' + LABELS[mode] + ' (click to cycle)';

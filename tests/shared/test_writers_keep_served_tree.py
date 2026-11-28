@@ -77,7 +77,6 @@ def _inputs(tmp: Path) -> dict:
 #: tool → (argv without -o, given the input paths). Every phase each tool has
 #: that writes YAML is exercised: a phase left out is a phase not guarded.
 DRAFT_WRITERS = {
-    "ops/migrate_rule.py": lambda i: [i["rules.yml"], "--tenant", _DRAFT_TENANT],
     "ops/onboard_platform.py": lambda i: ["--alertmanager-config", i["am.yml"],
                                           "--rule-files", i["rules.yml"],
                                           "--scrape-config", i["prom.yml"]],
@@ -357,7 +356,6 @@ def test_scaffold_from_onboard_into_the_same_o_keeps_onboards_draft(tmp_path):
 #: tool → (argv for another draft tenant): the second run's own draft.
 _OTHER_TENANT = "draft-b"
 _SECOND_RUN = {
-    "ops/migrate_rule.py": lambda i: [i["rules.yml"], "--tenant", _OTHER_TENANT],
     "ops/onboard_platform.py": lambda i: ["--alertmanager-config", i["am-b.yml"]],
     "ops/scaffold_tenant.py": lambda i: ["--tenant", _OTHER_TENANT, "--db", "mariadb",
                                          "--non-interactive"],

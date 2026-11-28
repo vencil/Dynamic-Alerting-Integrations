@@ -13,9 +13,9 @@ import (
 
 // --- ADR-024 Version-Aware Threshold: dimensional `version` label guard ---
 //
-// versionLabelPattern is the Phase-1 baseline charset for a `version`
-// dimensional label value. It is INTENTIONALLY pilot-calibratable (ADR-024
-// OQ-6): real app.kubernetes.io/version strings observed in the pilot may
+// versionLabelPattern is the baseline charset for a `version` dimensional
+// label value. It is INTENTIONALLY pilot-calibratable: real
+// app.kubernetes.io/version strings observed in the pilot may
 // carry uppercase letters or long Git SHAs, in which case this is widened
 // after observation. Kept lowercase-anchored for now to stay conservative.
 const versionLabelPattern = `^[a-z0-9][a-z0-9._-]*$`
@@ -246,7 +246,8 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 		overflow := 0
 		if limit > 0 && count > limit {
 			overflow = count - limit
-			// ADR-024 AC-7: deterministic truncation. The slice order above
+			// Deterministic truncation (ADR-024 §Consequences: series-cap
+			// truncation must be stable). The slice order above
 			// reflects Go map iteration over Defaults/overrides, which is
 			// randomized per process — so without sorting, an over-cap tenant
 			// would have a DIFFERENT subset truncated on every scrape, making
@@ -1157,7 +1158,7 @@ func (c *ThresholdConfig) appendDimensionalRow(rows []ResolvedThreshold, tenant,
 
 // truncationSortKey produces a deterministic ordering key for one tenant's
 // resolved thresholds, used to make the per-tenant cardinality-cap truncation
-// in ResolveAtWithStats stable across scrapes (ADR-024 AC-7).
+// in ResolveAtWithStats stable across scrapes (ADR-024 §Consequences).
 //
 // Two-tier contract:
 //   - Tier "0" (sorts first → protected, kept under the cap): thresholds with
@@ -1751,7 +1752,7 @@ type KeyValidation struct {
 	Notices []string       // advisory channel: #1231 deprecation notices, ratcheted reserved values; MUST never block a write
 	Values  []ValueFinding // the Errors entries about a reserved or threshold value, for Ratchet (#3227, #3267)
 	// KeyChecks is, one record each, the Errors entries about a dimensional
-	// key's `version` label (ADR-024 OQ-6) and the Notices about a retired
+	// key's `version` label (ADR-024 §1) and the Notices about a retired
 	// key spelling (#1231) — each entry is its record's Message: the two key
 	// checks da-guard served-values hands the CI readers (key_checks), which
 	// no longer judge keys themselves (ADR-038 §11).
@@ -2070,7 +2071,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 				}
 			}
 
-			// ADR-024 OQ-6: a dimensional key's `version` label is a value
+			// A dimensional key's `version` label (ADR-024 §1) is a value
 			// check, judged whatever the base.
 			if shape == shapeDimensional {
 				_, customLabels, regexLabels := parseKeyWithLabels(canonKey)
@@ -2107,9 +2108,9 @@ func unknownProfileProblem(profiles map[string]map[string]ScheduledValue, sv Sch
 // unknownProfileSentence is unknownProfileProblem's problem.
 const unknownProfileSentence = "references a profile that is not defined under the root profiles:"
 
-// validateVersionLabel enforces the ADR-024 OQ-6 rules on a dimensional
-// `version` label found in a tenant key: a documented charset, no reserved
-// values (empty / literal "default"), Phase-1 component scoping, and exact
+// validateVersionLabel enforces the rules on a dimensional `version` label
+// found in a tenant key: a documented charset, no reserved values (empty /
+// literal "default", reserved for the fallback by ADR-024 §1), and exact
 // (non-regex) selectors. key is the key as written, canon its canonical
 // spelling, which custom / regex were parsed from. It returns one KeyCheck
 // per violation, whose Message rides KeyValidation.Errors; the actual
@@ -2135,7 +2136,7 @@ func validateVersionLabel(tenant, key, canon string, custom, regex map[string]st
 	// the hand-written pilot list that used to warn here is gone.
 
 	if hasRegex {
-		// Phase 1 expects exact version="..." selectors; a regex matcher on
+		// An exact version="..." selector is expected; a regex matcher on
 		// version is almost certainly a mistake and defeats per-version join.
 		w = append(w, newKeyCheck(KeyCheckVersionRegex, tenant, key, canon, pattern))
 	}

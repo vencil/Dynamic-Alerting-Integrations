@@ -111,7 +111,7 @@
   "root_defaults_refused": [],
   "root_defaults_reserved": [],
   "builtin_defaults": {
-    "digest": "968ca3d1c003",
+    "digest": "981b5923a866",
     "keys": {
       "container_cpu": {
         "value": 80,
@@ -240,7 +240,7 @@
         "state": "off",
         "configured": 0
       },
-      "jvm_gc_pause": {
+      "jvm_gc_time_percent": {
         "pack": "jvm",
         "state": "off",
         "configured": 0

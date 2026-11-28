@@ -3,6 +3,7 @@ import os
 import sys
 
 import pytest
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "lint"))
 import check_frontmatter_versions as cfv
@@ -212,6 +213,43 @@ class TestScanDocs:
         """空目錄返回空列表"""
         results = cfv.scan_docs(tmp_path)
         assert len(results) == 0
+
+
+class TestBridgedSitePages:
+    """#4251: the rule-pack pages the mkdocs bridge serves are site pages,
+    judged at their source; its transient docs/rule-packs/ copy is not."""
+
+    def _tree(self, tmp_path, source_version, copy_version=None):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.md").write_text("---\nversion: v2.9.0\n---\n", encoding="utf-8")
+        (tmp_path / "rule-packs").mkdir()
+        for name in ("README.md", "ALERT-REFERENCE.md", "ALERT-REFERENCE.en.md"):
+            (tmp_path / "rule-packs" / name).write_text(
+                f"---\nversion: {source_version}\n---\n", encoding="utf-8")
+        if copy_version:
+            (docs / "rule-packs").mkdir()
+            (docs / "rule-packs" / "README.md").write_text(
+                f"---\nversion: {copy_version}\n---\n", encoding="utf-8")
+        return docs
+
+    def test_a_stale_bridged_page_is_an_error(self, tmp_path):
+        docs = self._tree(tmp_path, "v1.12.0")
+        items = cfv.detect_drift(cfv.scan_site_pages(docs), "2.9.0")
+        assert sorted(Path(i.file).name for i in items if i.severity == "error") == [
+            "ALERT-REFERENCE.en.md", "ALERT-REFERENCE.md", "README.md"]
+
+    def test_the_transient_copy_is_not_judged(self, tmp_path):
+        """A copy a failed build left behind is gitignored and not the page."""
+        docs = self._tree(tmp_path, "v2.9.0", copy_version="v1.12.0")
+        scanned = cfv.scan_site_pages(docs)
+        assert not [s for s in scanned if "docs/rule-packs" in Path(s.file_path).as_posix()]
+        assert not [i for i in cfv.detect_drift(scanned, "2.9.0") if i.severity == "error"]
+
+    def test_the_repository_judges_its_bridged_pages(self):
+        names = {Path(s.relative_path).as_posix() for s in cfv.scan_site_pages(cfv.DOCS_DIR)}
+        assert {"rule-packs/README.md", "rule-packs/ALERT-REFERENCE.md",
+                "rule-packs/ALERT-REFERENCE.en.md"} <= names
 
     def test_scan_nonexistent_dir(self, tmp_path):
         """不存在的目錄返回空列表"""

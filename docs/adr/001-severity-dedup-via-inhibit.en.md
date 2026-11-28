@@ -94,6 +94,7 @@ inhibit_rules:
   - metric_group=~".+"
   - tenant=~".+"
   - da_cluster=~".+"
+  - da_migrated=""
   target_matchers:
   - severity="warning"
   - metric_group=~".+"
@@ -109,6 +110,7 @@ inhibit_rules:
   - metric_group=~".+"
   - tenant=~".+"
   - da_cluster=""
+  - da_migrated=""
   target_matchers:
   - severity="warning"
   - metric_group=~".+"
@@ -121,6 +123,8 @@ inhibit_rules:
 ```
 
 How to read it: while a tenant (say `shop`) has a critical alert firing, warning alerts of the same tenant, the same `metric_group` and the same `da_cluster` are not notified (first rule); for alerts without `da_cluster`, warning alerts of the same tenant and the same `metric_group` are not notified (second rule). `batch`'s warnings are not targets of either rule. `tenant!~` is a regular-expression match that Alertmanager anchors to the whole value, so `batch` does not exclude `batch2`. On the alert-rule side, each pair of alerts must carry the same `metric_group`; for example, the Rule Pack's `MariaDBHighConnections` (warning) and `MariaDBHighConnectionsCritical` (critical) both carry `metric_group: "mysql_connection_usage_percent"`.
+
+One exception: the legacy rules `da-tools migrate` moves over as written label their alerts `da_migrated="true"`, and both rules' sources require `da_migrated=""`, so such a critical suppresses no warning (during the migration's shadow period it runs beside the legacy rule's alert and must not suppress in its place). The other direction is unchanged: a critical without that label still suppresses a migrated warning of the same tenant and `metric_group`.
 
 ## Consequences and Known Limitations
 

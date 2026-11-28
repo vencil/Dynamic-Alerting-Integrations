@@ -51,6 +51,7 @@ import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads 
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import shown_file  # noqa: E402  (#3703: conf.d paths into messages)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
+from _lib_validation import re2_fullmatch  # noqa: E402  (#4355: Go regexp, fail closed)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
 from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
 from _lib_validation import (  # noqa: E402  (#1560)
@@ -357,7 +358,8 @@ def is_generated_dedup_rule(rule: object) -> bool:
       per-cluster rule and the one for alerts without a cluster label, #4097)
       for some exclusion list (none: no ``tenant!~`` matcher) — the list is
       read back from the rule's ``tenant!~`` value and the rules rebuilt
-      from it;
+      from it; ``_grar_routes.pre4355_dedup_inhibit_rules(excluded)``, the
+      same two without the migrated source gate (#4355), the same way;
     * ``_grar_routes.pre4097_dedup_inhibit_rule(excluded)``, the one rule
       written before clusters were told apart (#4097), the same way;
     * ``_grar_routes.pre3899_dedup_inhibit_rule(t)``, the per-tenant shape
@@ -371,7 +373,7 @@ def is_generated_dedup_rule(rule: object) -> bool:
     """
     from _grar_routes import (  # noqa: PLC0415  (_grar_routes imports this module)
         build_dedup_inhibit_rules, pre3899_dedup_inhibit_rule,
-        pre4097_dedup_inhibit_rule)
+        pre4097_dedup_inhibit_rule, pre4355_dedup_inhibit_rules)
 
     got = _normalised_rule(rule)
     if got is None:
@@ -386,6 +388,7 @@ def is_generated_dedup_rule(rule: object) -> bool:
         if ("" not in excluded
                 and got in [_normalised_rule(r) for r in (
                     *build_dedup_inhibit_rules(excluded),
+                    *pre4355_dedup_inhibit_rules(excluded),
                     pre4097_dedup_inhibit_rule(excluded))]):
             return True
     pinned = [a[2] for a in src if a[0] == "tenant" and a[1] == "="]
@@ -448,6 +451,64 @@ def assert_equal_labels_gated(inhibit_rules: list[dict] | None) -> None:
         'suppresses unrelated alerts. Fix: gate the label (`<label>=~".+"`) on '
         "source_matchers OR target_matchers (either side satisfies the invariant; "
         "gating both is defence in depth), or remove it from `equal:`.")
+
+
+def _atom_matches(atom: "tuple[str, str, str]", value: str) -> bool:
+    """Whether one ``(name, op, value)`` matcher of ``_side_atoms`` matches a
+    label whose value is *value* (Alertmanager: a regex is anchored). A
+    regex whose meaning in Go Python cannot confirm (``re2_fullmatch``: a
+    POSIX class, RE2-only syntax) is taken to match, either operator — the
+    fail-closed answer for the callers, which ask whether a side CAN match."""
+    _name, op, want = atom
+    if op == "=":
+        return value == want
+    if op == "!=":
+        return value != want
+    hit = re2_fullmatch(want, value)
+    if hit is None:
+        return True
+    return hit if op == "=~" else not hit
+
+
+def find_migrated_sourced_inhibits(
+        inhibit_rules: list[dict] | None) -> list[tuple[int, dict]]:
+    """Return [(index, rule), ...] for every inhibit rule whose SOURCE does not
+    exclude a migrated alert (#4355): no source matcher on ``MIGRATED_LABEL``
+    refuses ``MIGRATED_VALUE``. A migrated alert is the twin of a legacy one
+    the tenant still runs (shadow), or a rule written as the tenant wrote it
+    (after cutover); as a source it would mute the tenant's real alerts —
+    the severity dedup, Silent Mode by alertname — and inhibition does not
+    look at routing. A side that cannot be read counts as not excluding it.
+
+    Empty result = invariant holds.
+    """
+    from _grar_routes import MIGRATED_LABEL, MIGRATED_VALUE  # noqa: PLC0415  (import cycle)
+
+    out: list[tuple[int, dict]] = []
+    for i, rule in enumerate(inhibit_rules or []):
+        atoms = _side_atoms(rule, "source") if isinstance(rule, dict) else None
+        if atoms is None or not any(
+                a[0] == MIGRATED_LABEL and not _atom_matches(a, MIGRATED_VALUE) for a in atoms):
+            out.append((i, rule))
+    return out
+
+
+def assert_migrated_alerts_mute_nothing(inhibit_rules: list[dict] | None) -> None:
+    """Fail-closed guard (#4355): raise ValueError if any inhibit rule's source
+    can match a migrated alert (``find_migrated_sourced_inhibits``). Run on the
+    FINAL merged inhibit set in --strict render paths, as
+    ``assert_equal_labels_gated``; without --strict each is a WARN."""
+    from _grar_routes import MIGRATED_SOURCE_GATE  # noqa: PLC0415  (import cycle)
+
+    offending = find_migrated_sourced_inhibits(inhibit_rules)
+    if not offending:
+        return
+    raise ValueError(
+        "#4355 invariant violated: the source of "
+        f"{', '.join(f'inhibit_rules[{i}]' for i, _r in offending)} does not exclude "
+        "migrated alerts. A migrated alert (migrate-rule's copy of a legacy rule) "
+        "would then mute the tenant's real alerts, in the shadow period too. Fix: "
+        f"add `{MIGRATED_SOURCE_GATE}` to the rule's source_matchers.")
 
 
 def find_watchdog_suppressing_inhibits(inhibit_rules: list[dict] | None) -> list[tuple[int, dict]]:

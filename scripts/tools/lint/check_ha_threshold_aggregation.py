@@ -16,7 +16,7 @@ ADDS the two replicas → the threshold DOUBLES (a `70` becomes `140`) → the
 alert never fires; a `count` counts replicas, not values. `max by(...)`
 collapses the copies back to the single true value. This bug shipped
 silently for ~2 months in 4 packs' source copies (elasticsearch /
-kubernetes / mongodb / redis) — see ADR-024 PR3-pre.
+kubernetes / mongodb / redis).
 
 WHAT THIS CHECKS: every aggregation whose argument still carries the raw
 replica copies of `user_threshold` must use the `max` operator. `sum` is
@@ -92,7 +92,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 from pathlib import Path
 from typing import List, Tuple
@@ -101,6 +100,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_validation import re2_fullmatch  # noqa: E402  (#4355: shared with _grar_validate)
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 try:
@@ -131,12 +131,7 @@ def _repo_root() -> Path:
 def _regex_accepts(pattern: str) -> "bool | None":
     """Whether Prometheus' anchored regex *pattern* matches `user_threshold`,
     or None when Python `re` cannot tell the way RE2 would (see module doc)."""
-    if "[:" in pattern:
-        return None  # POSIX class: Python reads `[[:alpha:]]` as another set
-    try:
-        return re.fullmatch(pattern, _METRIC) is not None
-    except re.error:
-        return None  # RE2-only syntax (`\pL`, ...)
+    return re2_fullmatch(pattern, _METRIC)
 
 
 def _name_matcher_accepts(m: dict) -> bool:

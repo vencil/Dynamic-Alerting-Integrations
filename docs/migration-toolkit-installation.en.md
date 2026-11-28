@@ -21,7 +21,7 @@ Importing a customer's existing Prometheus alerting rule corpus (PromRule CRDs /
 PromRule corpus → da-parser (triage) → da-tools migrate (per tenant) → da-guard validation → conf.d/
 ```
 
-The conversion step is [`migrate`](cli-reference.en.md#migrate); bulk import producing `_custom_alerts` recipes is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226).
+The migration step is [`migrate`](cli-reference.en.md#migrate): rules are kept verbatim with tenant isolation injected, and the rule file it writes is loaded by the Prometheus that scrapes the raw metrics (or the federation edge); on the conf.d side only the cutover (`_routing_migrated`) lives.
 
 The Migration Toolkit packages this pipeline into a customer-runnable bundle that works offline, in air-gapped environments, and with verifiable binary integrity.
 

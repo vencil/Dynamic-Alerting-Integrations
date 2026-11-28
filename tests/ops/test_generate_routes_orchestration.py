@@ -54,7 +54,7 @@ from generate_alertmanager_routes import (
     _parse_config_files,
 )
 from _grar_render import load_base_config_file  # noqa: E402  (#3797: by path)
-from _grar_render import merge_generated, _enforce_equal_labels_gated
+from _grar_render import merge_generated, _enforce_equal_labels_gated, _inject_custom_alert_isolation
 from generate_alertmanager_routes import (
     assert_equal_labels_gated,
     assert_platform_alerts_not_tenant_silenceable,
@@ -1069,19 +1069,20 @@ class TestAssembleConfigmap:
         # sentinel sinkhole (3), and (#4277) the migrated-alerts shadow (4) —
         # all continue:false; the tenant route follows.
         assert len(routes_out) == 6
-        assert routes_out[0]["matchers"] == ['alertname="Watchdog"']
+        # #4355: every platform route but the migrated one excludes migrated alerts
+        assert routes_out[0]["matchers"] == ['alertname="Watchdog"', 'da_migrated=""']
         assert routes_out[0]["receiver"] == "watchdog-heartbeat"
         assert routes_out[0]["continue"] is False
-        assert routes_out[1]["matchers"] == ['component="custom"']
+        assert routes_out[1]["matchers"] == ['component="custom"', 'da_migrated=""']
         assert routes_out[1]["receiver"] == "custom-alerts-firehose"
         assert routes_out[1]["continue"] is False
-        assert routes_out[2]["matchers"] == ['component="synthetic-probe"']
+        assert routes_out[2]["matchers"] == ['component="synthetic-probe"', 'da_migrated=""']
         assert routes_out[2]["receiver"] == "synthetic-receiver"
         assert routes_out[2]["continue"] is False
-        assert routes_out[3]["matchers"] == ['component="sentinel"']
+        assert routes_out[3]["matchers"] == ['component="sentinel"', 'da_migrated=""']
         assert routes_out[3]["receiver"] == "sentinel-sinkhole"
         assert routes_out[3]["continue"] is False
-        assert routes_out[4]["matchers"] == ['component="migrated"']
+        assert routes_out[4]["matchers"] == ['da_migrated="true"']
         assert routes_out[4]["receiver"] == "migrated-alerts-shadow"
         assert routes_out[4]["continue"] is False
         assert routes_out[5]["receiver"] == "tenant-db-a"
@@ -1149,16 +1150,16 @@ class TestCustomAlertIsolationInjection:
         # and pinned: Watchdog 0, custom 1, synthetic-probe 2, sentinel sink 3.
         cm_yaml = assemble_configmap(load_base_config(None), [], [], [])
         routes = self._routes_of(cm_yaml)
-        assert routes[0]["matchers"] == ['alertname="Watchdog"']
+        assert routes[0]["matchers"] == ['alertname="Watchdog"', 'da_migrated=""']
         assert routes[0]["receiver"] == "watchdog-heartbeat"
         assert routes[0]["continue"] is False
-        assert routes[1]["matchers"] == ['component="custom"']
+        assert routes[1]["matchers"] == ['component="custom"', 'da_migrated=""']
         assert routes[1]["receiver"] == "custom-alerts-firehose"
         assert routes[1]["continue"] is False
-        assert routes[2]["matchers"] == ['component="synthetic-probe"']
+        assert routes[2]["matchers"] == ['component="synthetic-probe"', 'da_migrated=""']
         assert routes[2]["receiver"] == "synthetic-receiver"
         assert routes[2]["continue"] is False
-        assert routes[3]["matchers"] == ['component="sentinel"']
+        assert routes[3]["matchers"] == ['component="sentinel"', 'da_migrated=""']
         assert routes[3]["receiver"] == "sentinel-sinkhole"
         assert routes[3]["continue"] is False
 
@@ -1224,8 +1225,8 @@ class TestCustomAlertIsolationInjection:
         merged = merge_generated(
             existing, tenant_routes, [{"name": "tenant-db-a"}], gen_inhibits)
         routes = merged["route"]["routes"]
-        assert routes[0]["matchers"] == ['alertname="Watchdog"']  # watchdog leads
-        assert routes[1]["matchers"] == ['component="custom"']    # custom second
+        assert routes[0]["matchers"] == ['alertname="Watchdog"', 'da_migrated=""']  # watchdog leads
+        assert routes[1]["matchers"] == ['component="custom"', 'da_migrated=""']    # custom second
         assert any(r["receiver"] == "tenant-db-a" for r in routes)  # tenant route kept
         assert {r["name"] for r in merged["receivers"]} >= {
             "default", "custom-alerts-firehose", "watchdog-heartbeat",
@@ -1607,9 +1608,11 @@ class TestWatchdogInhibitImmunity:
         routes = am["route"]["routes"]
         # Drift guard: the hand-authored base route[0] must equal exactly what the
         # generator re-injects, so editing one knob in the base without the other
-        # can't silently diverge.
-        assert routes[0] == _build_watchdog_route()[0][0]
-        assert routes[0]["matchers"] == ['alertname="Watchdog"']
+        # can't silently diverge. #4355: what it re-injects is the builder's route
+        # gated against migrated alerts, so the comparison is with the injection.
+        injected = _inject_custom_alert_isolation([], [])[0]
+        assert routes[0] == injected[0]
+        assert routes[0]["matchers"] == ['alertname="Watchdog"', 'da_migrated=""']
         assert routes[0]["receiver"] == "watchdog-heartbeat"
         assert routes[0]["continue"] is False
         # and the receiver exists with a url_file (no inline plaintext URL)
@@ -1621,14 +1624,15 @@ class TestWatchdogInhibitImmunity:
         # 1), synthetic-probe (index 2), sentinel sinkhole (index 3, #1095) — so a
         # hand-edit to the committed base that forgets the builder (or vice-versa)
         # fails loud here, not silently in prod.
-        assert routes[1] == _build_custom_alert_routes()[0][0]
-        assert routes[1]["matchers"] == ['component="custom"']
-        assert routes[2] == _build_synthetic_probe_route()[0][0]
-        assert routes[2]["matchers"] == ['component="synthetic-probe"']
+        assert routes[1] == injected[1]
+        assert routes[1]["matchers"] == ['component="custom"', 'da_migrated=""']
+        assert routes[2] == injected[2]
+        assert routes[2]["matchers"] == ['component="synthetic-probe"', 'da_migrated=""']
         assert routes[2]["receiver"] == "synthetic-receiver"
         assert routes[2]["continue"] is False
-        assert routes[3] == _build_sentinel_sinkhole_route()[0][0]
-        assert routes[3]["matchers"] == ['component="sentinel"']
+        assert routes[3] == injected[3]
+        assert routes[3]["matchers"] == ['component="sentinel"', 'da_migrated=""']
+        assert routes[4] == injected[4]  # the migrated shadow route (#4277)
         assert routes[3]["receiver"] == "sentinel-sinkhole"
         assert routes[3]["continue"] is False
         # synthetic-receiver / sentinel-sinkhole must be DEFINED in the committed

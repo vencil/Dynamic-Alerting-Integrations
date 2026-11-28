@@ -58,6 +58,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_compat.py",      # v2.8.0 PR #432: cross-platform compat helpers (try_utf8_stdout)
     "_lib_exitcodes.py",   # #452 Track A: canonical 0/1/2 exit-code contract (SSOT)
     "_lib_versions.py",    # platform / da-tools version SSOT readers for doc generators
+    "_lib_site_pages.py",  # the site pages outside docs/: the mkdocs bridge's list (#4251)
     "_lib_yaml.py",        # v2.10.0 ROI r5 W2: minimal CRD YAML serializer (operator_generate + migrate_to_operator)
     "_lib_confd.py",       # #1911: single answer to "what is in a conf.d/" (recursive read + flat-reader guard)
     "_lib_toolcount.py",   # #1511: single answer to "what counts as a Python tool" (lint checker + two dx writers)

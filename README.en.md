@@ -14,7 +14,7 @@ Config-driven multi-tenant alerting platform built on Prometheus `group_left` ve
 > **Managing 100 tenants: from 5,000 hand-written rules → 237 fixed rules.**
 > Tenants write YAML only — no PromQL, and even author their own alerts via parameterized recipes (v2.9.0 **Custom Alerts**). New-tenant **setup** in minutes (for rule-pack-covered metrics), changes in seconds; migrating an existing complex estate (custom exporters / topology metrics) depends on the metric shape — see the [Migration Guide](docs/migration-guide.en.md).
 
-![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-206-red) ![Bilingual](https://img.shields.io/badge/bilingual-101%20pairs-blue)
+![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-205-red) ![Bilingual](https://img.shields.io/badge/bilingual-101%20pairs-blue)
 
 ---
 
@@ -232,7 +232,7 @@ Full commands, flags & examples → [CLI Reference](docs/cli-reference.en.md) ·
 
 ### Customer Onboarding: Migration Toolkit
 
-Migrates a customer's existing PromRule corpus into this platform's `conf.d/` (per tenant, [`migrate`](docs/cli-reference.en.md#migrate) converts rules into conf.d tenant files, `da-parser` triages portability and `da-guard` validates the tree; bulk import producing `_custom_alerts` recipes is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)), shipping via **three delivery paths — Docker / static binary / air-gapped tar** (all cosign keyless signed + SBOM) covering the full spectrum from internet-connected to isolated finance / government / defense networks.
+Migrates a customer's existing PromRule corpus onto this platform (per tenant, [`migrate`](docs/cli-reference.en.md#migrate) migrates rules verbatim into migrated rules with tenant isolation injected, for the customer's Prometheus to load, and a human promotes them to platform rules or recipes after a shadow comparison; `da-parser` triages portability and `da-guard` validates the tree), shipping via **three delivery paths — Docker / static binary / air-gapped tar** (all cosign keyless signed + SBOM) covering the full spectrum from internet-connected to isolated finance / government / defense networks.
 
 Full installation & signature verification → [Migration Toolkit Installation](docs/migration-toolkit-installation.en.md)
 

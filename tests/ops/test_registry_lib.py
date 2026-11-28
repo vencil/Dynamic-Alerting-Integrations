@@ -575,9 +575,27 @@ def test_real_validation_candidates_are_derived():
     (#1200, 2026-11-15): jvm_memory is aggregation_bug (#3976 — Micrometer's
     per-pool limits do not add up to the heap limit), and the three non-`%`
     keys, which D-A does not promote, are unmeasured (#3979 — no source to
-    register). The set is empty: nothing is waiting to be promoted."""
+    register). #4116 replaced the JVM GC key by jvm_gc_time_percent (the
+    busiest JVM's share of time in GC pauses): portable, its consensus sources
+    registered ahead of promotion, not shipped — the one candidate."""
     doc = lib.build_registry_doc()
-    assert lib.validation_candidates(doc) == frozenset()
+    assert lib.validation_candidates(doc) == frozenset({"jvm_gc_time_percent"})
+
+
+def test_the_old_jvm_gc_key_is_retired_not_aliased():
+    """#4116: jvm_gc_pause was the SUM over the tenant's JVMs in s/s; its
+    successor is the busiest JVM in percent. An alias would hand the old
+    number to the new unit, so the old key (and, derived, its critical tier)
+    is retired: every layer that still writes it gets an error naming the
+    replacement."""
+    raw = lib.load_registry()
+    assert raw["retired_keys"]["jvm_gc_pause"]["replaced_by"] == "jvm_gc_time_percent"
+    assert raw["retired_keys"]["jvm_gc_pause"]["tracking"] == 4116
+    old = {"jvm_gc_pause", "jvm_gc_pause_critical"}
+    assert not old & set(raw["keys"])
+    aliases = raw.get("deprecated_aliases") or {}
+    assert not old & (set(aliases) | set(aliases.values()))
+    assert raw["keys"]["jvm_gc_time_percent_critical"]["critical_of"] == "jvm_gc_time_percent"
 
 
 def test_former_candidates_point_at_their_tracking_issue():

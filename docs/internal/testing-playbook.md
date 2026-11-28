@@ -242,7 +242,7 @@ echo "$1" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.s
 - **grep PromQL 特殊字元**：用 `grep -F "max by(tenant)"` 做 literal match
 - **修改輸出格式時**：搜尋所有 `assert_.*contains` 確認同步更新
 - **`set -euo pipefail`**：負載測試輔助腳本不宜用（`kubectl logs` 對 ContainerCreating Pod 返回非零）
-- **migrate_rule.py 分類**：Perfect / Complex / Unparseable
+- **onboard_platform.py 分類**：Perfect / Complex / Unparseable（migrate_rule.py 不分類：規則原樣遷移，被拒的逐條列出）
 
 ### CI 同步守衛
 
@@ -1537,7 +1537,7 @@ if comment_only(src, old):
   而 `ast.Constant.value` 是**解析後**的值。實測對 `tests/shared/_mutation_pilot.py` 的 78 個 anchor
   **全部 78 個誤判為「不在程式碼裡」**，等於這條規則一條都套不上。
 - **「span 碰到 COMMENT token 就擋」** —— 多行程式碼 anchor 夾一行註解是常態。實測 catalog 裡
-  就有一個 `if "{" in key: → if False:` 的 anchor，中間夾著 `# ADR-024 OQ-6: …`；
+  就有一個 `if "{" in key: → if False:` 的 anchor，中間夾著一行 `# …` 註解；
   用這個判準會把它誤擋成註解命中。**要問的是「有沒有實質 token」，不是「有沒有碰到註解」。**
 
 上面的 `comment_only` 對 catalog 78 個 anchor **零誤擋**，而合成的純註解命中確實被擋下。

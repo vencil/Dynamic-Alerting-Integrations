@@ -24,7 +24,7 @@ v2.7.0 奠定的 Scale Foundation I（`conf.d/` 階層 + `_defaults.yaml` 繼承
 
 ### 客戶導入管線 ⚠️ 部分出貨
 
-把客戶既有的 PromRule corpus 導入到本平台 conf.d/ 架構，`da-parser` / `da-guard` codify 為可離線執行的 Go binary，逐租戶轉換走 `da-tools migrate`。v2.8.0 一併出貨的 Profile Builder library 與 Batch PR（`da-batchpr`）從未接通：前者沒有 CLI，後者的兩個必填輸入沒有工具產生。兩者已於 2026-11-22 退役（[#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228)，決策見 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211)）；批次導入預計改由 migrate-rule 產出 `_custom_alerts` recipe（尚未出貨，[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)）。
+把客戶既有的 PromRule corpus 導入到本平台 conf.d/ 架構，`da-parser` / `da-guard` codify 為可離線執行的 Go binary，逐租戶遷移走 `da-tools migrate`。v2.8.0 一併出貨的 Profile Builder library 與 Batch PR（`da-batchpr`）從未接通：前者沒有 CLI，後者的兩個必填輸入沒有工具產生。兩者已於 2026-11-22 退役（[#4228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4228)，決策見 [#4211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4211)）。migrate-rule 改為把規則原樣遷移、只注入租戶隔離（[#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)），規則檔由抓取原始指標的那台 Prometheus 載入；新舊規則的影子比對在 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)，之後提升成平台規則或 `_custom_alerts` recipe 由人決定。
 
 ```
 PromRule corpus → da-parser（分診）→ da-tools migrate（逐租戶）→ da-guard → conf.d/

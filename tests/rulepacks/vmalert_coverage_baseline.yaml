@@ -28,9 +28,6 @@ uncovered:
   rule-pack-jvm.yaml:
   - JVMMemoryPressure
   - JVMMemoryPressureCritical
-  - JVMPerformanceDegraded
-  - JVMThreadPoolExhaustion
-  - JVMThreadPoolExhaustionCritical
   rule-pack-kafka.yaml:
   - KafkaHighConsumerLag
   - KafkaHighConsumerLagCritical

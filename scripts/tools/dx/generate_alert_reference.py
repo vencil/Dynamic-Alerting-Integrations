@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 # summary reads `[tier] {{ $labels.tenant }}: …` — nothing that could pass for a
 # valid Go template (or an HTML tag in the rendered Markdown table).
 from check_leftouterjoin_enrichment import METADATA_ANNOTATIONS  # noqa: E402
+from _lib_versions import read_platform_version  # noqa: E402  (#4251: frontmatter version)
 
 
 def readable(text: str) -> str:
@@ -272,7 +273,7 @@ def generate_markdown_zh(alerts_by_pack: Dict[str, List[Dict]]) -> str:
         'title: "Rule Pack 告警參考指南 (Alert Reference Guide)"',
         "tags: [alerts, reference, rule-packs]",
         "audience: [tenant, sre]",
-        "version: v1.12.0",
+        f"version: {read_platform_version()}",
         "lang: zh",
         "---",
         "# Rule Pack 告警參考指南 (Alert Reference Guide)",
@@ -339,7 +340,7 @@ def generate_markdown_en(alerts_by_pack: Dict[str, List[Dict]]) -> str:
         'title: "Rule Pack Alert Reference Guide"',
         "tags: [alerts, reference, rule-packs]",
         "audience: [tenant, sre]",
-        "version: v1.12.0",
+        f"version: {read_platform_version()}",
         "lang: en",
         "---",
         "# Rule Pack Alert Reference Guide",

@@ -183,7 +183,7 @@ def render(input_dir: Path, warmup_sec_override: int | None = None) -> tuple[str
     lines.append("")
     lines.append(f"- **Target**: `{cfg['target_url']}`")
     lines.append(f"- **Duration**: {cfg['duration_min']} min "
-                 f"({'completed' if cfg['ended_at_utc'] else 'incomplete'})")
+                 f"({'incomplete' if cfg.get('interrupted') or not cfg['ended_at_utc'] else 'completed'})")
     lines.append(f"- **Reload interval**: {cfg['reload_interval_sec']}s "
                  f"({cfg.get('reload_count', 0)} reloads triggered)")
     lines.append(f"- **Metric polls**: {cfg['metrics_poll_sec']}s "

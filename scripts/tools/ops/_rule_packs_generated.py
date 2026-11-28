@@ -636,22 +636,22 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                                     'desc': 'Unacknowledged '
                                                                             'messages critical',
                                                                     'metric_class': 'saturation'}}},
- 'jvm': {'display': 'JVM (jmx_exporter / Micrometer)',
-         'exporter': 'prometheus/jmx_exporter or Spring Boot Actuator',
+ 'jvm': {'display': 'JVM (Micrometer / client_java / jmx_exporter)',
+         'exporter': 'Micrometer (Spring Boot Actuator), prometheus/client_java or '
+                     'prometheus/jmx_exporter',
          'default_on': False,
          'rule_pack_file': 'rule-packs/rule-pack-jvm.yaml',
          'presence': ['jvm_memory_used_bytes', 'jvm_memory_bytes_used'],
          'metric_prefixes': ['jvm_'],
          'undeclared_notice': False,
-         'thresholds': {'jvm_gc_pause': {'value': 0.5,
-                                         'unit': 's/s',
-                                         'desc': 'GC pause warning: seconds of GC pause accrued '
-                                                 'per second (rate over 5m of '
-                                                 'jvm_gc_pause_seconds_sum, summed over the '
-                                                 "tenant's JVMs); for one JVM 0.5 = half of every "
-                                                 'second spent paused, and ten JVMs at 5% each '
-                                                 'read 0.5 too. Not seconds per 5 minutes (#4032)',
-                                         'metric_class': 'latency'},
+         'thresholds': {'jvm_gc_time_percent': {'value': 10,
+                                                'unit': '% of time',
+                                                'desc': 'GC time warning: % of wall-clock time the '
+                                                        'busiest JVM of the tenant (per cluster) '
+                                                        'spends in GC pauses, averaged over 5m '
+                                                        '(#4116). Per JVM, never summed over JVMs: '
+                                                        'ten JVMs at 7.5% each read 7.5',
+                                                'metric_class': 'latency'},
                         'jvm_memory': {'value': 80,
                                        'unit': '%',
                                        'desc': 'Heap memory warning: the whole heap as % of its '
@@ -662,11 +662,13 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                         'unit': 'count',
                                         'desc': 'Active thread count warning',
                                         'metric_class': 'saturation'},
-                        'jvm_gc_pause_critical': {'value': 1.0,
-                                                  'unit': 's/s',
-                                                  'desc': 'GC pause critical: seconds of GC pause '
-                                                          'accrued per second (see jvm_gc_pause)',
-                                                  'metric_class': 'latency'},
+                        'jvm_gc_time_percent_critical': {'value': 25,
+                                                         'unit': '% of time',
+                                                         'desc': 'GC time critical: % of '
+                                                                 'wall-clock time the busiest JVM '
+                                                                 'spends in GC pauses (see '
+                                                                 'jvm_gc_time_percent)',
+                                                         'metric_class': 'latency'},
                         'jvm_memory_critical': {'value': 95,
                                                 'unit': '%',
                                                 'desc': 'Heap memory critical',

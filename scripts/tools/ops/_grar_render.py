@@ -65,7 +65,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
-    _build_migrated_alert_routes, MIGRATED_SHADOW_RECEIVER,
+    _build_migrated_alert_routes, MIGRATED_SHADOW_RECEIVER, MIGRATED_LABEL, MIGRATED_VALUE,
     _build_sentinel_sinkhole_route)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#3276)
@@ -83,9 +83,11 @@ from _grar_validate import (  # noqa: E402
     assert_watchdog_inhibit_immunity,
     assert_platform_alerts_not_tenant_silenceable,
     assert_equal_labels_gated,
+    assert_migrated_alerts_mute_nothing,
     assert_tenant_inhibits_verifiable,
     blocking_generation_errors,
     find_tenant_silenceable_platform_inhibits,
+    find_migrated_sourced_inhibits,
     find_ungated_equal_label_inhibits,
     find_watchdog_suppressing_inhibits,
     is_generated_dedup_rule,
@@ -110,6 +112,23 @@ def _enforce_equal_labels_gated(inhibit_rules: list[dict] | None, strict: bool) 
             'may silently suppress unrelated alerts (#1132). Gate `<label>=~".+"` on '
             "source_matchers OR target_matchers (either side suffices; both = defence "
             "in depth), or drop it from equal:.",
+            file=sys.stderr)
+
+
+def _enforce_migrated_alerts_mute_nothing(inhibit_rules: list[dict] | None,
+                                          strict: bool) -> None:
+    """Apply the #4355 invariant (no inhibit source matches a migrated alert)
+    to a merged inhibit set, as ``_enforce_equal_labels_gated``: strict →
+    raise; otherwise a WARN per offending rule (a BYO base's own rule)."""
+    if strict:
+        assert_migrated_alerts_mute_nothing(inhibit_rules)
+        return
+    for i, _r in find_migrated_sourced_inhibits(inhibit_rules):
+        print(
+            f"  WARN: inhibit_rules[{i}]: its source does not exclude migrated alerts "
+            f'({MIGRATED_LABEL}="{MIGRATED_VALUE}"), so a migrated copy of a legacy rule '
+            "can mute the tenant's real alerts (#4355). Add "
+            f'`{MIGRATED_LABEL}=""` to its source_matchers.',
             file=sys.stderr)
 
 
@@ -200,7 +219,12 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict], *,
         return 'component="sentinel"' in r.get("matchers", [])
 
     def _is_migrated(r: dict) -> bool:
-        return 'component="migrated"' in r.get("matchers", [])
+        # #4355: the platform's own route, known as the platform builds it —
+        # by its receiver, which an older output's route (`component=
+        # "migrated"`) has too. Not by the matcher: a `_routing_enforced.match`
+        # holding `da_migrated="true"` puts it on the enforced route, which
+        # must be kept.
+        return r.get("receiver") == MIGRATED_SHADOW_RECEIVER
 
     # #4277: the migrated-alerts shadow route, built from *migrated_active*
     # (the tenants whose `_routing_migrated` is `active`; none: every tenant
@@ -218,8 +242,17 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict], *,
     # Order is load-bearing + pinned for determinism: Watchdog (0) → Custom (1) →
     # synthetic-probe (2) → sentinel sink (3), all ahead of the enforced NOC
     # match-all. The four matchers are mutually exclusive so none shadows another.
-    out_routes = wd_routes + cust_routes + probe_routes + sent_routes + mig_routes + rest
-    assert len(out_routes) - len(rest) == PLATFORM_ROUTE_COUNT
+    platform = wd_routes + cust_routes + probe_routes + sent_routes + mig_routes
+    assert len(platform) == PLATFORM_ROUTE_COUNT
+    # #4355: a migrated alert keeps the series' labels (`component`, an
+    # alertname like `Watchdog`), so every platform route but its own
+    # excludes it — those it would match it reaches the migrated route, or
+    # after cutover the tenant's routing. Every one of them, not a list.
+    gate = f'{MIGRATED_LABEL}=""'
+    for route in platform:
+        if not _is_migrated(route) and gate not in route["matchers"]:
+            route["matchers"] = [*route["matchers"], gate]
+    out_routes = platform + rest
 
     have = {r["name"] for r in (receivers or [])}
     add_recv = [r for r in (wd_receivers + cust_receivers + probe_receivers
@@ -957,6 +990,9 @@ def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
     # #1132: every equal-label must be presence-gated on some side (strict →
     # fail, else → warn), the base's hand-written rules included.
     _enforce_equal_labels_gated(merged["inhibit_rules"], strict)
+    # #4355: no inhibit source may match a migrated alert (strict → fail,
+    # else → warn), the base's hand-written rules included.
+    _enforce_migrated_alerts_mute_nothing(merged["inhibit_rules"], strict)
     # #1533: with a degraded probe set the silencing check above cannot vouch
     # for a tenant-triggered BASE rule — refuse (rc 2). Last, so any verdict
     # that does not depend on the probe set (rc 1) is reported first. This

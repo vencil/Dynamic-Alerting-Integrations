@@ -2,7 +2,7 @@ package main
 
 // ADR-038 §11: served-values hands the CI readers, per tenant, the two key
 // checks they print and no longer judge themselves — ValidateTenantKeys'
-// records on a `version` label (ADR-024 OQ-6) and on a retired spelling
+// records on a `version` label (ADR-024 §1) and on a retired spelling
 // (#1231) — and nothing else of that judgement (whether a key is read is the
 // shared key verdict's). #3703: as structured records whose only fields
 // carrying the author's text are key and head. Tenant ids are fixture names

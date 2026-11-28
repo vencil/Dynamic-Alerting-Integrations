@@ -13,7 +13,7 @@ lang: en
 >
 > **First time migrating?** Start with the [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md); multi-system simultaneous swaps (Prom→VM + rules + AM) follow the [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.en.md).
 >
-> **⚠️ Migration Safety Guarantee:** The flow is **incremental and rollback-friendly**. The `custom_` prefix isolates new rules from legacy ones; Projected Volume's `optional: true` lets you unmount any rule pack at any time without affecting Prometheus.
+> **⚠️ Migration Safety Guarantee:** The flow is **incremental and rollback-friendly**. Migrated alerts written by `da-tools migrate` carry `da_migrated: "true"` and, until cutover, go only to a shadow receiver in Alertmanager that notifies no one; Projected Volume's `optional: true` lets you unmount any rule pack at any time without affecting Prometheus.
 >
 > **Alerts wired to automation (webhooks)?** Re-sends, replays, and dual-running during migration are double-execution risks for the **action layer** — read [Beyond Actionable §4–§5](alerting-best-practices.en.md) (idempotency gates and irreversible-action defenses) first.
 >
@@ -28,7 +28,7 @@ lang: en
 | Tenant tech lead | [Where Are You?](#where-are-you-你在哪個階段), [§3 Generate config](#3-generate-tenant-config-da-tools-scaffold), [§9 Dimensional labels](#9-dimensional-labels--multi-db-type-support) | [§7 Verification](#7-post-migration-verification), [§12 FAQ](#12-faq) |
 | Platform / DevOps | Core flow [§1–§7](#core-migration-flow-in-order) (in order) | Reference band, Advanced band |
 | Enterprise / SRE (large migration) | [§2 Reverse analysis](#2-reverse-analyze-existing-monitoring-da-tools-onboard), [§13 Enterprise migration](#13-enterprise-grade-migration--large-tenant-1000-rules) | [Shadow Monitoring SOP](shadow-monitoring-sop.en.md) |
-| Domain Expert (DBA) | [§8 Examples](#8-five-migration-scenario-examples), [§9 Dimensional](#9-dimensional-labels--multi-db-type-support), [§11 Extending](#11-extending-unsupported-db-types) | [§4 Convert](#4-convert-existing-rules-da-tools-migrate) |
+| Domain Expert (DBA) | [§8 Examples](#8-five-migration-scenario-examples), [§9 Dimensional](#9-dimensional-labels--multi-db-type-support), [§11 Extending](#11-extending-unsupported-db-types) | [§4 Migrate rules](#4-migrate-existing-rules-da-tools-migrate) |
 
 > **Reading together**: locate yourself via the "Where Are You?" decision table, then each reader follows their own band. This doc has three bands — **Core Migration Flow (in order) / Reference (consult as needed) / Advanced & Operations**.
 
@@ -38,8 +38,8 @@ lang: en
 |---------------|------------------|---------------------------|----------------|
 | **Brand-new tenant** — first onboarding | Interactive tenant-config generation | `da-tools scaffold` | ~5 min |
 | **Existing mature monitoring** — enterprise reverse analysis | Auto-generate migration plan | `da-tools onboard` | ~10 min |
-| **Have legacy alert rules** — need to migrate | Auto-convert to the three-piece set | `da-tools migrate` | ~15 min |
-| **Large tenant (1000+ rules)** — enterprise migration | Triage → Shadow → switchover | `da-tools migrate --triage` + `da-tools validate` | ~1-2 weeks |
+| **Have legacy alert rules** — need to migrate | Migrate verbatim into migrated rules (tenant isolation injected) | `da-tools migrate` | ~15 min |
+| **Large tenant (1000+ rules)** — enterprise migration | Preview → Shadow → switchover | `da-tools migrate --dry-run` → `da-tools migrate` | ~1-2 weeks |
 | **3-system simultaneous swap** (storage backend Prom→VM **plus** rules **plus** AM routing) | 5-Phase invariants-driven model | Follow the [Multi-System Migration Playbook](scenarios/multi-system-migration-playbook.en.md) | 13-week estimate (typically ~27 weeks in practice) |
 | **Post-cutover rule evolution** (`custom_*` → golden, Rule Pack upgrades) | Lifecycle pattern, not a one-time event | Follow the [Staged Adoption Lifecycle](scenarios/staged-adoption-guide.en.md) | Ongoing |
 | **Unsupported DB type** — need extension | Manually create Recording + Alert Rules | See [§11](#11-extending-unsupported-db-types) | ~30 min |
@@ -55,7 +55,7 @@ flowchart TD
     Q1 -->|"None"| S1["da-tools scaffold<br/>Interactive config generation"]
     Q1 -->|"Yes"| Q2{"Rule count?"}
     Q2 -->|"< 100"| S2["da-tools migrate<br/>--dry-run preview"]
-    Q2 -->|"100+"| S3["da-tools migrate<br/>--triage classify"]
+    Q2 -->|"100+"| S3["da-tools migrate<br/>--dry-run preview refusals"]
     S2 --> V["da-tools validate-config<br/>One-stop validation"]
     S3 --> S4["Shadow Monitoring<br/>da-tools validate"]
     S4 --> S5["Gradual switchover<br/>(weeks of parallel observation)"]
@@ -100,7 +100,7 @@ For enterprises with mature monitoring stacks, `da-tools onboard` **reverse-anal
 - Rule files (`--rule-files <file-or-dir>...`; on the v2.9.0 image a directory selects no file, so give a quoted glob <!-- image-caveat: v2.9.0 -->) → `phase2-rules/migration-plan.csv` (per alert rule `status`: `perfect` / `complex` / `unparseable`) and `.onboard/conf.d/_defaults.yaml` (suggested platform defaults)
 - Scrape config (`--scrape-config`) → `.onboard/`: `scrape-analysis.yaml` and a `<job>-relabel-suggestion.yaml` per job
 
-Full flags, output conditions and exit codes: [`cli-reference.md#onboard`](cli-reference.md#onboard). `onboard-hints.json` feeds `scaffold --from-onboard`; rule conversion is `migrate`, which reads the old rule files directly.
+Full flags, output conditions and exit codes: [`cli-reference.md#onboard`](cli-reference.md#onboard). `onboard-hints.json` feeds `scaffold --from-onboard`; rule migration is `migrate`, which reads the old rule files directly.
 
 ### 3. Generate Tenant Config (da-tools scaffold)
 
@@ -114,25 +114,32 @@ Outputs: `.scaffold/conf.d/_defaults.yaml` + `.scaffold/conf.d/<tenant>.yaml` + 
 
 The three ConfigMap injection paths (Helm / kubectl / GitOps): [threshold-exporter README — K8s Deployment](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
 
-### 4. Convert Existing Rules (da-tools migrate)
+### 4. Migrate Existing Rules (da-tools migrate)
 
-Teams with legacy Prometheus alert rules use the auto-conversion tool (PromQL is read into Prometheus' own parse tree; a rule file its parser refuses ends the run with rc 2 — there is no fallback):
+Teams with legacy Prometheus alert rules use `migrate` to move one tenant's rules **verbatim** into migrated rules (PromQL is read into Prometheus' own parse tree; a rule file its parser refuses ends the run with rc 2 — there is no fallback):
+
+⚠️ The v2.9.0 image still ships the old conversion engine (`custom_` keys and the three-piece set); until the next da-tools image is released, run the new engine from a repo checkout. It needs three Go binaries: `da-read` (`promql-pin` pins the selectors), `da-guard` (judges the output directory before writing) and `da-crdecode` (lints its own output); `make da-read-build da-guard-build da-crdecode-build` builds them into `.build/`, and environment variables point the tool at them (every example below runs this way, from the repo root) <!-- image-caveat: v2.9.0 -->
 
 ```bash
-da-tools migrate /data/legacy-rules.yml --dry-run            # Preview
-da-tools migrate /data/legacy-rules.yml --tenant db-a -o /data/output  # Production conversion
-da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # Large-tenant bucketing
+make da-read-build da-guard-build da-crdecode-build
+export DA_READ_BINARY="$PWD/.build/da-read" DA_GUARD_BINARY="$PWD/.build/da-guard" \
+       DA_CRDECODE_BINARY="$PWD/.build/da-crdecode"
 ```
 
-The tool automatically handles:
+```bash
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run         # Preview the report
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o output  # Migrate
+```
 
-- **Three input scenarios**: `✅ clean parse` / `⚠️ complex expression (with warning box)` / `🚨 unparseable (emits LLM Prompt)`
-- **Three-piece output**: `.migration/conf.d/<tenant>.yaml` (thresholds under `tenants.<tenant>`) + `.migration/platform-recording-rules.yaml` + `.migration/platform-alert-rules.yaml` + `migration-report.txt`, plus `.migration/conf.d/_defaults.yaml`, whose `defaults:` block must be merged into the conf.d root `_defaults.yaml` (merge, do not overwrite the whole file) before the exporter emits these thresholds. The v2.9.0 image has neither `--tenant` nor `.migration/conf.d/`: it writes only `tenant-config.yaml` (thresholds flat at the top level, to indent under `tenants.<tenant>` yourself) and no defaults fragment <!-- image-caveat: v2.9.0 -->
-- **Auto-Suppression**: warning + critical pairs for the same metric are auto-matched; both alerts carry the same `metric_group` label, and Alertmanager inhibit suppresses the warning notification (a tenant can set `_severity_dedup: "disable"` to opt out)
-- **Aggregation-mode heuristic**: 6 heuristic rules guess `sum` / `max` automatically and emit an ASCII warning box asking the user to confirm
-- **Per-cluster aggregation**: the generated recording rule is `<sum|max> by(tenant, da_cluster) (…)`. On a Prometheus holding several clusters' data, migrated rules are evaluated per cluster (`sum` / `max` no longer merge one tenant's clusters) and alerts carry `da_cluster`; on a single Prometheus whose series have no `da_cluster`, the result is what it was; this does not cover a rule whose own aggregation already drops `tenant` (`sum(rate(x))`, `sum by(instance) (…)`), which yields no per-tenant value before or after migration. Nor does it cover a rule whose own aggregation drops `da_cluster` (for example `sum by(tenant) (…)` or `sum without(da_cluster) (…)`): the outer `by(tenant, da_cluster)` cannot bring the label back, so that rule still merges one tenant's clusters and its alert carries no `da_cluster` (the tool flags, for a human decision, a `by(...)` / `on(...)` that names an identity label without `da_cluster` and a `without(...)` / `ignoring(...)` that names `da_cluster`). A `by(...)` / `on(...)` the original expression wrote itself goes in as written; one that names an identity label without `da_cluster` is flagged, in rules the tool can parse (a rule it cannot parse is not checked for this), for a human decision (see [`migration-engine.en.md`](migration-engine.en.md)). The v2.9.0 image still generates `by(tenant)` <!-- image-caveat: v2.9.0 -->
+- **Kept as written, tenant isolation injected**: the expr semantics, `for`, labels, annotations and alertname do not change; a tenant matcher is injected into every selector on the parse tree (`tenant="db-a"`; for kube-state-metrics series of a namespaced object and cAdvisor's / the kubelet's infrastructure series, `namespace="db-a", tenant=""`). Cluster-scoped objects (`kube_node_*`), series every scrape target yields (`up`) and Prometheus' / Alertmanager's own series have no injection that selects one tenant: those are platform-level rules, listed one by one, exit 2, nothing written
+- **Marking and governance**: every alert gets the `tenant` and `da_migrated: "true"` labels and the `owner` and `expiry` annotations (the series' own `component` is kept; ⚠️ Breaking, it used to be `component: migrated`, [#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)), plus `MigratedRulesExpiring`, which fires from 14 days before the expiry (it carries no `da_migrated`, so it routes as the tenant's other alerts and arrives in the shadow period too); before writing, the tool runs the custom rule lint on its own output and writes nothing on an ERROR
+- **Golden standard**: an alert that reads a single metric for which `metric-dictionary.yaml` has a golden rule is not migrated; the report points it at the platform Rule Pack
+- **Multi-cluster**: a `by(...)` / `on(...)` in the original expression that names an identity label without `da_cluster` is only flagged in the report, never rewritten
+- **Output**: `.migration/migrated/<tenant>/rules.yml` (the rule file), `.migration/mapping/<tenant>.yaml` (each rule's selectors before and after injection), `migration-report-<tenant>.txt`
 
-How the migration engine reads PromQL (Prometheus' own parse tree, never the text) + the full heuristic rule set + Auto-Suppression pairing logic: [`migration-engine.en.md`](migration-engine.en.md). CLI flag matrix: [`cli-reference.md#migrate`](cli-reference.md#migrate). Three-piece-set deployment locations (ConfigMap merge vs independent mount): [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
+⛔ The rule file is loaded by **the Prometheus that scrapes the raw metrics** (a single Prometheus, or the edge in a federation setup), not mounted in the platform Rule Packs' projected volume. Alertmanager sends `da_migrated="true"` alerts to a name-only shadow receiver until the tenant sets `_routing_migrated: active` ([`cli-reference.md#generate-routes`](cli-reference.md#generate-routes)); the other platform routes exclude it, and so does the source of every inhibit rule the generator writes or the repo's own base ships, so a migrated alert is not taken by a platform route and mutes nothing through those rules (an inhibit rule you wrote in your own base without the gate is refused under `--strict`, exit code 1; without `--strict` it is kept after a WARN and can still mute); after the shadow comparison a human decides whether to promote them to platform rules (the three-piece set of §8) or recipes.
+
+Engine details (the injection table, recording rules migrated along, refusals): [`migration-engine.en.md`](migration-engine.en.md). CLI flags and exit codes: [`cli-reference.md#migrate`](cli-reference.md#migrate).
 
 ### 5. Deploy threshold-exporter
 
@@ -285,7 +292,7 @@ tenants:
 
 ### 10. LLM-Assisted Manual Conversion
 
-When `da-tools migrate` hits an unparseable rule (e.g. `absent()` / `predict_linear()`), `migration-report.txt` emits a System Prompt template you can hand straight to an LLM. The template guides the LLM to extract thresholds, produce a Recording Rule (with `sum` / `max` rationale), produce an Alert Rule (with `group_left` + `unless maintenance`), and flag items that need platform-side handling. Full prompt structure and post-processing rules: [`migration-engine.en.md`](migration-engine.en.md).
+`da-tools migrate` does not rewrite the rule format and emits no LLM prompt. Promoting migrated rules to platform rules (the three-piece set of §8), or handling the platform-level rules `migrate` refuses, is a manual rewrite: you can hand the original rule and the §8 template to an LLM for a draft, land the result through the steps of §11, and confirm the behaviour matches with a shadow comparison.
 
 ### 11. Extending Unsupported DB Types
 
@@ -311,7 +318,7 @@ Supported DB types (with a Rule Pack): only add the default in `_defaults.yaml` 
 
 **Q: Can the old and new alerts coexist during the migration window?**
 
-Yes. New-architecture alerts use different alertname values and don't collide. Recommended: deploy the new alerts first, observe, confirm behavioral equivalence, then remove the old rules.
+Yes. `migrate` keeps the alertname, so old and new alerts share it and are told apart by label: migrated alerts carry `da_migrated: "true"` and go to a name-only shadow receiver until the tenant sets `_routing_migrated: active`, so nothing is notified twice; the recording rules they read are renamed `migrated:<tenant>:<original name>` and never read the old rules' series. Recommended: deploy the migrated rules first, observe, confirm behavioral equivalence, then remove the old rules.
 
 **Q: Can dimension keys be set under defaults?**
 
@@ -345,25 +352,26 @@ kubectl logs -n monitoring -l app=threshold-exporter --tail=20
 
 ### 13. Enterprise-Grade Migration — Large Tenant (1000+ rules)
 
-Large tenants with 1000+ rules adopt a three-phase strategy: **Phase A Triage Analysis** (~1 day) → **Phase B Shadow Monitoring** (~1-2 weeks) → **Phase C Switchover & Convergence** (~1 day).
+Large tenants with 1000+ rules adopt a three-phase strategy: **Phase A Preview** (~1 day) → **Phase B Shadow Monitoring** (~1-2 weeks) → **Phase C Switchover & Convergence** (~1 day).
 
 ```bash
-# Phase A: Triage bucketing (auto / review / skip / use_golden)
-da-tools migrate /data/legacy-rules.yml --triage -o /data/triage_output/
+# Run the new engine from the repo root; build da-read / da-guard / da-crdecode and set the variables as in §4 first
+# Phase A: preview (refused rules listed one by one, golden-standard alerts named)
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 --dry-run
 
-# Phase B: deploy shadow rules + continuous comparison (often wrapped as a K8s Job running 1-2 weeks)
-da-tools migrate /data/legacy-rules.yml --tenant db-a -o /data/migration_output/
-da-tools validate --mapping /data/migration_output/.migration/prefix-mapping.yaml \
-                  --tolerance 0.001 --watch --interval 60 --rounds 1440 \
-                  --auto-detect-convergence --stability-window 5
+# Phase B: write the migrated rules for the edge / single Prometheus to load; alerts go to the shadow receiver first
+python3 scripts/tools/ops/migrate_rule.py legacy-rules.yml --tenant db-a --owner team-db --expiry 2027-03-31 -o migration_output/
+# The shadow comparison reads .migration/mapping/db-a.yaml; validate support for it comes in the follow-up #4227
 
-# Phase C: one-command cutover after convergence
+# Phase C: cutover after convergence
+# ⚠️ cutover does not set _routing_migrated: set `_routing_migrated: active` in the tenant's conf.d file,
+#    re-run generate-routes and apply the Alertmanager config, or migrated alerts notify no one
 da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a --dry-run
 da-tools cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 da-tools batch-diagnose && da-tools blind-spot --config-dir /data/conf.d
 ```
 
-Full SOP (shadow route interception, `migration_status` label, K8s Job sample, the `shadow-verify all` shortcut, convergence detection, `prefix-mapping.yaml`, Metric Dictionary golden-standard match, plus `backtest` / `config-diff` / `patch-config` and other automation tools): [Shadow Monitoring SRE SOP](shadow-monitoring-sop.en.md) · [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md). CLI deep dive: [`cli-reference.md`](cli-reference.md) under the matching command anchor.
+Full SOP (shadow route interception, `migration_status` label, K8s Job sample, the `shadow-verify all` shortcut, convergence detection, Metric Dictionary golden-standard match, plus `backtest` / `config-diff` / `patch-config` and other automation tools): [Shadow Monitoring SRE SOP](shadow-monitoring-sop.en.md) · [Incremental Migration Playbook](scenarios/incremental-migration-playbook.en.md). CLI deep dive: [`cli-reference.md`](cli-reference.md) under the matching command anchor.
 
 ### 14. Rule Pack Dynamic Toggle
 
@@ -409,7 +417,7 @@ Offboarding effects: threshold-exporter clears thresholds on next reload (30s) �
 | **Tool & Engine Reference** | |
 | [`migration-toolkit-installation.md`](migration-toolkit-installation.en.md) (three delivery paths + cosign keyless verification) | ⭐⭐⭐ |
 | [`cli-reference.md`](./cli-reference.md) (all `da-tools` commands + flag matrix) | ⭐⭐⭐ |
-| [AST Migration Engine Architecture](./migration-engine.en.md) (Prometheus' parse tree + heuristics + Auto-Suppression) | ⭐⭐ |
+| [AST Migration Engine Architecture](./migration-engine.en.md) (Prometheus' parse tree + tenant-isolation injection + load point) | ⭐⭐ |
 | [VictoriaMetrics Integration](integration/victoriametrics-integration.en.md) (VM stack integration walkthrough) | ⭐⭐ |
 | **Role Quick Starts** | |
 | [Tenant Quick Start](getting-started/for-tenants.en.md) | ⭐⭐ |

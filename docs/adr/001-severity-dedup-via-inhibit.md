@@ -100,6 +100,7 @@ inhibit_rules:
   - metric_group=~".+"
   - tenant=~".+"
   - da_cluster=~".+"
+  - da_migrated=""
   target_matchers:
   - severity="warning"
   - metric_group=~".+"
@@ -115,6 +116,7 @@ inhibit_rules:
   - metric_group=~".+"
   - tenant=~".+"
   - da_cluster=""
+  - da_migrated=""
   target_matchers:
   - severity="warning"
   - metric_group=~".+"
@@ -127,6 +129,8 @@ inhibit_rules:
 ```
 
 讀法：某個租戶（例如 `shop`）有 critical 告警正在觸發時，同一個租戶、同一個 `metric_group`、同一個 `da_cluster` 的 warning 告警不送通知（第一條）；告警不帶 `da_cluster` 時，同一個租戶、同一個 `metric_group` 的 warning 不送通知（第二條）。`batch` 的 warning 不是這兩條規則的目標。`tenant!~` 是正規表示式比對，Alertmanager 會錨定整個值，所以 `batch` 不會排除 `batch2`。告警規則這一側要讓成對的告警帶相同的 `metric_group`，例如 Rule Pack 裡的 `MariaDBHighConnections`（warning）與 `MariaDBHighConnectionsCritical`（critical）都帶 `metric_group: "mysql_connection_usage_percent"`。
+
+例外：`da-tools migrate` 原樣遷移的舊規則，告警帶 `da_migrated="true"`；兩條規則的 source 都要求 `da_migrated=""`，所以這種 critical 不抑制任何 warning（遷移影子期它與舊規則的告警並存，不能讓它代替舊規則去抑制）。反方向不變：沒帶這個標記的 critical，仍會抑制同租戶、同 `metric_group` 的 migrated warning。
 
 ## 後果與已知限制
 

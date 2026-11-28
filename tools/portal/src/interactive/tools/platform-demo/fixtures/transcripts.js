@@ -21,9 +21,11 @@ purpose: |
 
   When a CLI flag or message changes, re-run and re-capture — do not
   hand-edit the output. Guards in tests/dx/test_platform_demo_commands.py:
-  argv accepted by each tool's own argparse (every phase), and migrate's
+  argv accepted by each tool's own argparse (every phase), migrate's
   terminal + sample equal a fresh run of its command (the error message
-  of that test prints the regenerated block).
+  of that test prints the regenerated block), and generate-routes'
+  sample equals a fresh run of scaffold + its command (its terminal is
+  captured with da-read on PATH, not compared).
 
   Public API:
     DEMO_TRANSCRIPTS   { [phaseId]: { command, terminal[], sample? } }
@@ -67,57 +69,43 @@ tenants:
       repeat_interval: 4h`,
   },
   migrate: {
-    command: 'da-tools migrate legacy_rules.yaml --tenant demo-tenant --no-dictionary -o migration_output',
+    command: 'da-tools migrate legacy_rules.yaml --tenant demo-tenant --owner team-db --expiry 2099-12-31 -o migration_output',
     terminal: [
-      '$ da-tools migrate legacy_rules.yaml --tenant demo-tenant --no-dictionary -o migration_output',
+      '$ da-tools migrate legacy_rules.yaml --tenant demo-tenant --owner team-db --expiry 2099-12-31 -o migration_output',
       '',
-      '[🔗] Auto-Suppression: 1 組 warning↔critical 配對完成',
-      '[✓] 成功轉換 3 條規則 (✅ 2 完美, ⚠️ 1 已猜測)',
-      '[!] 1 條需人工處理 (LLM Prompt 已寫入報告)',
-      '📁 檔案已輸出至 migration_output/：conf.d 檔在 migration_output/.migration/conf.d/，rule pack 與 prefix mapping 在 migration_output/.migration/（點開頭的目錄，conf.d 的讀取端不讀）',
-      '⚠️  先把 _defaults.yaml 的 defaults: 區塊合併進 conf.d 根的 _defaults.yaml（合併，不要整份覆蓋）；沒宣告的 key，threshold-exporter 不會發射閾值。',
-      '🏷️  前綴: custom_ (Prefix Mapping 已輸出)',
+      '[✓] 已遷移 1 條告警、0 條 recording rule；3 條改用黃金標準（見報告）',
+      '📁 規則檔 migration_output/.migration/migrated/demo-tenant/rules.yml、對照 migration_output/.migration/mapping/demo-tenant.yaml、報告 migration_output/migration-report-demo-tenant.txt',
+      '⚠️  規則檔交給抓取原始指標的那台 Prometheus 載入（federation 架構下是 edge）。',
     ],
-    sample: `# ── migration_output/.migration/conf.d/demo-tenant.yaml ──
-# ============================================================
-# 租戶 demo-tenant — 合併進 conf.d 的租戶檔（tenants.demo-tenant）
-# ============================================================
-# ⚠️ 先把同目錄的 _defaults.yaml 合併進 conf.d 根的 _defaults.yaml：沒宣告
-#    的 key exporter 不會發射。warning 層的值與 defaults 相同，只有要和預設
-#    值不同的租戶才需要寫；<key>_critical 則是要 critical 的租戶都要寫。
-
-tenants:
-  demo-tenant:
-    # --- From: MySQLTooManyConnections (severity: warning) ---
-    # 📖 annotation／label 引用了依租戶聚合後不存在的 label（instance），已改讀 $labels.tenant；通知裡看不到原本是哪一個 instance
-    # 📖 Severity Dedup: 已配對 critical (MySQLTooManyConnectionsCritical)，metric_group="custom_mysql_global_status_threads_connected"。Alertmanager inhibit 預設壓制 warning 通知 (tenant 可設 _severity_dedup: "disable" 取消)
-    custom_mysql_global_status_threads_connected: "150"
-    # --- From: MySQLHighSlowQueries (severity: warning) ---
-    # 📖 annotation／label 引用了依租戶聚合後不存在的 label（instance），已改讀 $labels.tenant；通知裡看不到原本是哪一個 instance
-    custom_mysql_global_status_slow_queries: "0.5"
-    # --- From: MySQLTooManyConnectionsCritical (severity: critical) ---
-    # 📖 annotation／label 引用了依租戶聚合後不存在的 label（instance），已改讀 $labels.tenant；通知裡看不到原本是哪一個 instance
-    custom_mysql_global_status_threads_connected_critical: "200"
-# ── migration_output/.migration/conf.d/_defaults.yaml ──
-# ============================================================
-# 根 defaults — 合併進 conf.d 根 _defaults.yaml 的 defaults: 區塊
-# ⚠️ 合併，不要整份覆蓋：你的 _defaults.yaml 還有其他 key。
-# ============================================================
-# threshold-exporter 只發射 _defaults.yaml 宣告過的 key。沒宣告時，
-# 租戶檔的值不發射任何 user_threshold（validate-config 的
-# routes 列報 \`unread … (no_row)\`），上面的告警規則永遠不會響。
-#
-# 值取自原規則的閾值：宣告後 warning 層對所有租戶生效，與原本那條全域
-# 規則相同。有 warning 配對的 critical 層不能用 defaults 宣告：要 critical
-# 的租戶，各自把租戶檔裡的 <key>_critical 寫進自己的檔案。
-# 只有 critical 的舊規則已改讀 base 列，它的值就在這裡，對所有租戶生效。
-# ⚠️ 值必須是數字：寫 "disable" 之類的字串，exporter 會丟掉整個
-#    defaults 區塊。要讓某個租戶不響，在該租戶的檔案寫 "disable"。
-# ============================================================
-
-defaults:
-  custom_mysql_global_status_threads_connected: 150
-  custom_mysql_global_status_slow_queries: 0.5`,
+    sample: `# ── migration_output/.migration/migrated/demo-tenant/rules.yml ──
+# migrate-rule：租戶 demo-tenant 由 legacy_rules.yaml 原樣遷移的規則。
+# 由抓取原始指標的那台 Prometheus 載入（單一 Prometheus，或 federation 的 edge）。
+# expr 是 Prometheus 印出的注入後運算式；要改規則，改來源後重跑 migrate-rule。
+groups:
+- name: mysql-alerts-legacy
+  rules:
+  - alert: MySQLDown
+    expr: absent(mysql_up{tenant="demo-tenant"}) == 1
+    for: 1m
+    labels:
+      severity: critical
+      tenant: demo-tenant
+      da_migrated: 'true'
+    annotations:
+      summary: MySQL instance is down
+      owner: team-db
+      expiry: '2099-12-31'
+- name: migrated-expiry
+  rules:
+  - alert: MigratedRulesExpiring
+    expr: vector(time()) > 4101148800
+    labels:
+      severity: warning
+      tenant: demo-tenant
+    annotations:
+      summary: 'Migrated rules of tenant demo-tenant expire on 2099-12-31: promote them to platform rules or renew the expiry'
+      owner: team-db
+      expiry: '2099-12-31'`,
   },
   validate: {
     command: 'da-tools validate-config --config-dir conf.d/',
@@ -160,7 +148,7 @@ defaults:
       'Config files: 2 read, 0 skipped',
       'Found 1 tenant(s) with routing config: demo-tenant',
       'Found 1 tenant(s) for severity dedup: demo-tenant',
-      'NOTICE: amtool not found on PATH; generated Alertmanager config was NOT validated by Alertmanager',
+      'Alertmanager\'s config loader (da-read) accepted the alertmanager.yml',
       'WARN: the root route\'s receiver \'default\' has no integration (no non-empty *_configs) — every alert no child route matches, including the platform\'s own self-monitoring alerts, ends there and notifies no one. Not an error; to deliver platform alerts see docs/integration/byo-alertmanager-integration.en.md §11 "Delivering Platform Self-Monitoring Alerts".',
       'WARN: the built-in base\'s (no --base-config: it is unwired by design, so --strict does not escalate this) \'watchdog-heartbeat\' receiver has no integration (no non-empty *_configs) — the always-firing Watchdog heartbeat reaches no external dead-man\'s switch, so a dead alerting pipeline goes unnoticed. Wire it to one: see docs/integration/alerting-plane-self-liveness.en.md.',
       'Written to alertmanager.yml (1 routes, 1 receivers, 2 inhibit rules)',
@@ -180,6 +168,7 @@ route:
   routes:
   - matchers:
     - alertname="Watchdog"
+    - da_migrated=""
     group_by:
     - alertname
     group_wait: 0s
@@ -189,6 +178,7 @@ route:
     continue: false
   - matchers:
     - component="custom"
+    - da_migrated=""
     group_by:
     - tenant
     - alertname
@@ -202,6 +192,7 @@ route:
       receiver: tenant-demo-tenant
   - matchers:
     - component="synthetic-probe"
+    - da_migrated=""
     group_by:
     - alertname
     group_wait: 0s
@@ -211,10 +202,18 @@ route:
     continue: false
   - matchers:
     - component="sentinel"
+    - da_migrated=""
     group_by:
     - tenant
     - alertname
     receiver: sentinel-sinkhole
+    continue: false
+  - matchers:
+    - da_migrated="true"
+    group_by:
+    - tenant
+    - alertname
+    receiver: migrated-alerts-shadow
     continue: false
   - matchers:
     - tenant="demo-tenant"
@@ -234,12 +233,14 @@ receivers:
 - name: custom-alerts-firehose
 - name: synthetic-receiver
 - name: sentinel-sinkhole
+- name: migrated-alerts-shadow
 inhibit_rules:
 - source_matchers:
   - severity="critical"
   - metric_group=~".+"
   - tenant=~".+"
   - da_cluster=~".+"
+  - da_migrated=""
   target_matchers:
   - severity="warning"
   - metric_group=~".+"
@@ -254,6 +255,7 @@ inhibit_rules:
   - metric_group=~".+"
   - tenant=~".+"
   - da_cluster=""
+  - da_migrated=""
   target_matchers:
   - severity="warning"
   - metric_group=~".+"

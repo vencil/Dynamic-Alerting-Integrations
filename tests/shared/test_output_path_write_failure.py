@@ -71,11 +71,12 @@ THE TWO CLASSES (#3107) — ``Row.cls``
 Every row says which kind of path its flag names. One rule (#3982, owner
 2026-11-18), stated here and nowhere else:
 
-* ``artifact`` — the tool reads the output back (measured: the control run,
-  then the same command again, its ``--check``, and the row's ``readers``,
-  under the audit hook logging reads), or its default is a file the repo
-  tracks, or another program loads it whole (``EXTERNAL_READERS``, the one
-  part no test can measure: only the owner adds to it, with the reason).
+* ``artifact`` — the output is read back (measured: the control run, then
+  the same command again, its ``--check``, and the row's ``readers`` — other
+  commands of the tool, or another repo tool named with its argv — under the
+  audit hook logging reads), or its default is a file the repo tracks, or a
+  program OUTSIDE the repo loads it whole (``EXTERNAL_READERS``, the one part
+  no test can measure: only the owner adds to it, with the reason).
   Written by atomic replace (``_lib_output.write_repo_artifact``): a failed run
   leaves the old file whole.
 * ``operator`` — everything else: the output only a person or a pipe reads.
@@ -83,7 +84,7 @@ Every row says which kind of path its flag names. One rule (#3982, owner
   ``open_operator_output``). An append is always operator.
 
 ``test_the_class_follows_the_read_back`` holds both directions: an operator
-flag the tool reads back, and an artifact flag that neither the read-back
+flag that is read back, and an artifact flag that neither the read-back
 nor ``EXTERNAL_READERS`` explains, are faults. The rule replaced one that
 asked for a tracked default and so needed five owner exceptions; every one
 of them reads its output back or is on ``EXTERNAL_READERS``.
@@ -519,6 +520,16 @@ def _trufflehog_ndjson(tmp: Path) -> str:
     return str(p)
 
 
+def _soak_diff_reader(c: "Ctx", out: Path) -> "Reader":
+    """`render_soak_diff --input-dir`, the reader of a `run_chaos_soak`
+    output directory (`make soak-readiness` runs it next): it loads
+    `run-config.json` and `metrics-timeseries.csv` whole. Its report goes
+    to the row's temporary directory, not into the soak directory."""
+    return Reader("dx/render_soak_diff.py",
+                  ["--input-dir", str(out), "--output", str(c.tmp / "soak-report.md"),
+                   "--warmup-sec", "0"])
+
+
 def _soak_config_dir(tmp: Path) -> str:
     """`--config-dir` for `dx/run_chaos_soak`: a throw-away conf.d.
 
@@ -606,6 +617,16 @@ class Ctx:
 
 
 @dataclass(frozen=True)
+class Reader:
+    """A read-back run by ANOTHER repo tool (#3981, owner 2026-11-28): the
+    program that loads the output, named with its argv, so the read is
+    measured under the audit hook instead of written down on
+    EXTERNAL_READERS. *tool* is relative to scripts/tools, like Row.tool."""
+    tool: str
+    argv: list[str]
+
+
+@dataclass(frozen=True)
 class Row:
     tool: str                                   # relative to scripts/tools
     flag: str                                   # must appear in stderr verbatim
@@ -683,10 +704,12 @@ class Row:
     # named so the cases are strict xfails instead of a missing row: when the
     # tool is fixed they pass, the xfail turns red, and this comes off.
     known_defect: str | None = None
-    # The tool's OTHER commands that read this output back, as argv for the
-    # same tool (#3982 read-back rule): the control run and its rerun cannot
-    # reach them (`config_history`'s `show` / `diff` read the snapshots).
-    readers: Callable[[Ctx, Path], list[list[str]]] | None = None
+    # The runs that read this output back (#3982 read-back rule) that the
+    # control run and its rerun cannot reach: a plain argv is another command
+    # of the SAME tool (`config_history`'s `show` / `diff` read the
+    # snapshots); a `Reader` is another repo tool that loads it (#3981:
+    # `render_soak_diff --input-dir` reads `run_chaos_soak`'s directory).
+    readers: Callable[[Ctx, Path], list["list[str] | Reader"]] | None = None
 
     @property
     def id(self) -> str:
@@ -783,29 +806,32 @@ ROWS: list[Row] = [
                       "--warmup-sec", "0"],
       reach="hand-built soak output dir (run-config.json + flat timeseries CSV)",
       out_name="soak-report.md"),
-    # Four rows, four sinks. `run_chaos_soak` writes three artefacts under
-    # `--output-dir` and the run stops at the first failure, so one row would
-    # only ever prove the `mkdir`. `--duration-min 0` makes the poll loop a
-    # no-op (the `finally` still runs and still writes both files) and
-    # `--reload-interval-sec 9999` keeps the chaos from touching the fixture
-    # conf.d. All three artefact sinks were measured individually reachable.
-    R("dx/run_chaos_soak.py", "--output-dir", "dir", "operator",
+    # Three rows. `run_chaos_soak` writes two artefacts under `--output-dir`,
+    # both judged before the soak starts (#3981): a blocked one stops the run
+    # at that judgement, so one row would only ever prove the `mkdir`. `--duration-min 0` makes the
+    # poll loop a no-op (the `finally` still runs and still writes both
+    # files) and `--reload-interval-sec 9999` keeps the chaos from touching
+    # the fixture conf.d. Artifact (#3981, owner 2026-11-28):
+    # `render_soak_diff --input-dir` loads both, measured by the `Reader`.
+    R("dx/run_chaos_soak.py", "--output-dir", "dir", "artifact",
       lambda c, out: ["--target-url", c.stub + "/soak",
                       "--config-dir", _soak_config_dir(c.tmp),
                       "--duration-min", "0", "--reload-interval-sec", "9999",
                       "--output-dir", str(out)],
       reach="the shared stub's /soak personality (Go-runtime /metrics body); "
             "the first-probe check is what a wrong stub would fail on",
+      readers=lambda c, out: [_soak_diff_reader(c, out)],
       shapes=("parent_is_file", "target_is_file")),
-    *[R("dx/run_chaos_soak.py", "--output-dir", "dir", "operator",
+    *[R("dx/run_chaos_soak.py", "--output-dir", "dir", "artifact",
         lambda c, out: ["--target-url", c.stub + "/soak",
                         "--config-dir", _soak_config_dir(c.tmp),
                         "--duration-min", "0", "--reload-interval-sec", "9999",
                         "--output-dir", str(out)],
-        reach=f"same; {_artefact} is blocked so the run dies at that sink",
+        reach=f"same; {_artefact} is blocked, so the pre-soak judgement refuses it",
+        readers=lambda c, out: [_soak_diff_reader(c, out)],
         shapes=("artifact_is_dir",),
         artifact=_artefact, variant=_artefact)
-      for _artefact in ("metrics-timeseries.csv", "summary.txt", "run-config.json")],
+      for _artefact in ("metrics-timeseries.csv", "run-config.json")],
     # A non-default `prefix`. This tool funnels every error through
     # `_emit_error`, which stamps a de-identified error CODE — a documented
     # `--redact` contract (the SME triages by code without a re-run, and under
@@ -835,7 +861,9 @@ ROWS: list[Row] = [
                       _subprocess_scan_root(c.tmp)],
       reach="a temp scan root with one flagged subprocess call",
       out_name="subprocess-encoding-baseline.json"),
-    R("lint/trufflehog_to_sarif.py", "--output", "file", "operator",
+    # Artifact (#3981, owner 2026-11-28): upload-sarif loads it whole — a
+    # reader outside the repo, so EXTERNAL_READERS. 0600: it lists findings.
+    R("lint/trufflehog_to_sarif.py", "--output", "file", "artifact",
       lambda c, out: ["--input", _trufflehog_ndjson(c.tmp), "--output", str(out)],
       reach="a one-finding NDJSON transcript; no trufflehog binary is needed, "
             "the tool only converts",
@@ -1070,14 +1098,14 @@ ROWS: list[Row] = [
       shapes=("artifact_is_dir",), artifact=".pre-commit-config.da.yaml",
       variant="force", writer="python+da-guard"),
     R("ops/migrate_rule.py", "-o/--output-dir", "dir", "operator",
-      lambda c, out: [_legacy_rules(c.tmp), "--tenant", "t1", "-o", str(out)],
-      reach="tmp legacy Prometheus rules file",
-      # The conf.d files in it are `da-guard write`'s; the rest is Python's.
-      # #3107: `artifact_is_dir` reaches one of the five writes after the
-      # mkdirs — the report. All five calls are driven one by one, in
-      # process, by tests/ops/test_migrate_rule_outputs.py.
+      lambda c, out: [_legacy_rules(c.tmp), "--tenant", "t1", "--owner", "team",
+                      "--expiry", "2099-12-31", "--no-dictionary", "-o", str(out)],
+      reach="tmp legacy Prometheus rules file (--no-dictionary: the alert is migrated, "
+            "not named golden)",
+      # #4226: three files, all Python's (no conf.d). #3107: `artifact_is_dir`
+      # reaches the report, judged with the other two before the first write.
       shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
-      artifact="migration-report.txt", writer="python+da-guard"),
+      artifact="migration-report-t1.txt", writer="python"),
     R("ops/migrate_to_operator.py", "--output-dir", "dir", "operator",
       lambda c, out: ["--source-dir", str(_jsc.K8S_MONITORING), "--output-dir", str(out)],
       reach="in-repo k8s/03-monitoring",
@@ -1164,6 +1192,19 @@ ROWS: list[Row] = [
       out_name="race-raw-m.jsonl", variant="merge",
       readers=lambda c, out: [["timings", "--input", str(out),
                                "--output", str(out.parent / "timings-read.json")]],
+      shapes=("parent_is_file", "target_is_dir")),
+    # #3981 (owner 2026-11-28): the nightly race leg's fragment. Artifact:
+    # `file_race_report --frags-dir` loads `frag-<module>.json` whole (the
+    # `Reader`; the row's env sets DO_FILE=false and DRY_RUN=1, so whatever
+    # the caller's environment holds, it files nothing and starts no gh).
+    R("../ops/parse_go_test_json.py", "--output", "file", "artifact",
+      lambda c, out: ["--module", "m", "--input", str(_empty_file(c.tmp)),
+                      "--output", str(out), "--go-exit-code", "0"],
+      reach="an empty `go test -json` stream; offline",
+      out_name="frag-m.json",
+      env=lambda c: {"DO_FILE": "false", "DRY_RUN": "1"},
+      readers=lambda c, out: [Reader("../ops/file_race_report.py",
+                                     ["--frags-dir", str(out.parent), "--expected-modules", "m"])],
       shapes=("parent_is_file", "target_is_dir")),
     # A conf.d file: a repo artifact (#3535); the rerun reads it back.
     R("../ops/inject_default_key.py", "PATH", "file", "artifact",
@@ -2110,15 +2151,25 @@ Key = tuple[str, str]
 RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
 }
 
-#: THE CLASS RULE, MECHANICAL HALF (#3982, owner 2026-11-18). A flag is an
-#: artifact iff (a) the tool reads its output back — measured by
-#: `test_the_class_follows_the_read_back`: the control run, then the same
-#: command again, its `--check`, and the row's `readers`, under the audit
-#: hook logging reads; or (b) its default is a file the repo tracks; or (c)
-#: another program loads it whole (EXTERNAL_READERS: the half no test can
-#: measure, so only the owner adds to it, and the reason is kept here).
-#: Otherwise operator. Both directions are faults: an operator flag the tool
-#: reads back, and an artifact flag (a) and (c) do not explain.
+#: THE CLASS RULE, MECHANICAL HALF (#3982, owner 2026-11-18; #3981, owner
+#: 2026-11-28). A flag is an artifact iff (a) its output is read back —
+#: measured by `test_the_class_follows_the_read_back`: the control run, then
+#: the same command again, its `--check`, and the row's `readers` (the
+#: tool's other commands, or another REPO tool named as a `Reader`), under
+#: the audit hook logging reads; or (b) its default is a file the repo
+#: tracks; or (c) a program OUTSIDE the repo loads it whole
+#: (EXTERNAL_READERS: the half no test can measure, so only the owner adds
+#: to it, and the reason is kept here). A reader that is a repo tool is
+#: never (c): name it on the row and the read is measured.
+#: Otherwise operator. Both directions are faults: an operator flag that is
+#: read back, and an artifact flag (a) and (c) do not explain.
+#: ⚠️ What (a) cannot see: a repo tool that loads the output and that no
+#: row names as a reader (#3981: `run_chaos_soak --output-dir` sat on the
+#: operator side while `render_soak_diff --input-dir` read it). Nothing
+#: here enumerates "every tool that reads every flag"; a row names its
+#: readers, and the next time EXTERNAL_READERS needs a row the trade-off of
+#: one atomic entry for every output (classes by mode only) is weighed again
+#: (owner 2026-11-28).
 #: ⚠️ (b) has no list here: every row whose default is tracked
 #: (generate_adr_index / generate_planning_index --target) also reads it
 #: back, so an entry would explain nothing (a)
@@ -2130,6 +2181,9 @@ EXTERNAL_READERS: dict[Key, str] = {
         "Alertmanager loads it as its configuration (owner 2026-11-15)",
     ("../ops/configmap_assemble.py", "--output"):
         "kubectl applies it as the ConfigMap manifest (owner 2026-10-24)",
+    ("lint/trufflehog_to_sarif.py", "--output"):
+        "github/codeql-action/upload-sarif uploads it whole to Code Scanning "
+        "(secret-scan.yml; owner 2026-11-28)",
 }
 
 
@@ -2179,10 +2233,10 @@ SPAWNS: dict[Key, tuple[str, ...]] = {
     ("ops/generate_alertmanager_routes.py", "--secret-mounts-out"): ("da-crdecode", "da-guard", "da-read"),
     ("ops/generate_alertmanager_routes.py", "-o/--output"): ("da-crdecode", "da-guard", "da-read"),
     ("ops/generate_rule_pack_split.py", "--output-dir"): ("da-read",),
-    ("ops/generate_tenant_mapping_rules.py", "-o/--output"): ("da-guard",),
+    ("ops/generate_tenant_mapping_rules.py", "-o/--output"): ("da-guard", "da-read"),
     ("ops/init_project.py", "-o/--output-dir"): ("da-guard",),
     ("ops/migrate_credentials.py", "--manifests-out"): ("da-guard",),
-    ("ops/migrate_rule.py", "-o/--output-dir"): ("da-guard", "da-read"),
+    ("ops/migrate_rule.py", "-o/--output-dir"): ("da-crdecode", "da-guard", "da-read"),
     ("ops/migrate_to_operator.py", "--output-dir"): ("da-crdecode", "da-guard", "da-read"),
     ("ops/onboard_platform.py", "-o/--output-dir"): ("da-crdecode", "da-read"),
     ("ops/operator_generate.py", "--output-dir"): ("da-read",),
@@ -2343,15 +2397,19 @@ def _read_back(row: Row, tmp: Path, stub: str) -> tuple[list[str], list[str]]:
     """(files of the control run's output that a later run read, the runs
     made). The control run first; then, under the hook logging reads under
     `good/`: the same argv again, its `--check` where the tool has one, and
-    the row's `readers`. The argv is the control run's own — a row's `build`
-    makes its fixtures, so it is not called again."""
+    the row's `readers` — each run by the tool it names (a `Reader` names
+    another repo tool; a plain argv is the row's own). The argv is the
+    control run's own — a row's `build` makes its fixtures, so it is not
+    called again."""
     proc, out, _audit_, made = _control_run(row, tmp, stub)
     argv = list(proc.args[2:])
-    runs = [argv]
+    runs = [Reader(row.tool, argv)]
     if '"--check"' in (TOOLS_DIR / row.tool).read_text(encoding="utf-8") and "--check" not in argv:
-        runs.append([*argv, "--check"])
+        runs.append(Reader(row.tool, [*argv, "--check"]))
+    named_from = len(runs)
     if row.readers is not None:
-        runs.extend(row.readers(Ctx(tmp, stub), out))
+        runs.extend(r if isinstance(r, Reader) else Reader(row.tool, r)
+                    for r in row.readers(Ctx(tmp, stub), out))
     ctx = Ctx(tmp, stub)
     env = _tool_env()
     if row.env is not None:
@@ -2364,23 +2422,29 @@ def _read_back(row: Row, tmp: Path, stub: str) -> tuple[list[str], list[str]]:
         made_abs.add(os.path.realpath(out))
     read: set[str] = set()
     measured: list[str] = []
-    for i, run in enumerate(runs):
+    for i, reader in enumerate(runs):
+        run = reader.argv
         log = tmp / f"read-audit-{i}.jsonl"
         run_env = {**env, **_audit_env(log, tmp), "DA_WRITE_AUDIT_READS": str(out.parent)}
-        done = subprocess.run([sys.executable, str(TOOLS_DIR / row.tool), *run],
+        done = subprocess.run([sys.executable, str(TOOLS_DIR / reader.tool), *run],
                               capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=TIMEOUT_S, env=run_env,
                               cwd=proc.run_cwd)
         # A run argparse refused measured nothing (an added `--check` the
-        # tool's flags exclude): it is not counted.
+        # tool's flags exclude): it is not counted. A reader the ROW names is
+        # not guessed, so its refusal is a stale argv, not "no reads".
         if done.returncode == 2 and "usage:" in done.stderr:
+            assert i < named_from, (f"{row.id}: argparse refused the reader "
+                                    f"{reader.tool} {' '.join(run)!r}: {done.stderr[-300:]}")
             continue
-        measured.append(" ".join(run))
+        measured.append(" ".join(run) if reader.tool == row.tool
+                        else f"{reader.tool} {' '.join(run)}")
         # A measurement that did not happen is not "no reads" (CodeRabbit):
-        # the hook must have loaded, and must not have failed.
+        # the hook must have loaded — in the process of the tool that ran,
+        # the reader's own for a `Reader` — and must not have failed.
         events = _read_audit_log(log)
-        assert events is not None and _tool_loaded(events, TOOLS_DIR / row.tool), (
-            f"{row.id}: the audit hook did not load in the tool's process for the "
+        assert events is not None and _tool_loaded(events, TOOLS_DIR / reader.tool), (
+            f"{row.id}: the audit hook did not load in {reader.tool}'s process for the "
             f"rerun {' '.join(run)!r}")
         failed = [e for e in events if e.get("ev") == "hook-error"]
         assert not failed, f"{row.id}: the audit hook failed in the rerun: {failed[:3]}"
@@ -4286,7 +4350,6 @@ UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
     ("../ops/plan_race_shards.py", "_write_github_output", "write_operator_output"): 1,
     ("../ops/plan_race_shards.py", "fetch_timings", "ensure_dir"): 1,
     ("../ops/plan_race_shards.py", "fetch_timings", "write_repo_artifact"): 1,
-    ("ops/migrate_rule.py", "main", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_draft", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_phase2_outputs", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_phase3_outputs", "ensure_dir_or_die"): 1,
@@ -4378,7 +4441,7 @@ WRITER_NAMES_USED_AS_VALUES: dict[tuple[str, str], tuple[int, str]] = {
         1, "a string in LF_PINNING_WRAPPERS: the lint's own list of writers that "
            "pin LF, a name it looks for in other files and never calls."),
     ("ops/_registry_lib.py", "write_repo_artifact"): (
-        8, "handed to `_write_or_stop` as its `write` argument for the generated "
+        2, "handed to `_write_or_stop` as its `write` argument for the generated "
         "surfaces of the threshold registry (fixed repo paths, no flag). The "
         "write is `write_repo_artifact`'s own frame on a stack, so the audit "
         "attributes it when a row runs it; none does today."),

@@ -97,6 +97,7 @@ from check_doc_datools_cmds import (  # noqa: E402
     pin_capability_doc_files,
 )
 from validate_docs_versions import count_rule_packs  # noqa: E402
+import _lib_site_pages  # noqa: E402  (#4251: the site pages outside docs/)
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -839,6 +840,25 @@ def _build_platform_rules():
             # bumped; the flag costs nothing here and keeps the invariant
             # "every docs glob carries it" mechanical instead of case-by-case.
             "skip_released_changelog": True,
+        })
+
+    # The site pages the mkdocs bridge serves from the repo root's rule-packs/
+    # (#4251): site pages like docs/**, outside the glob above, so their front
+    # matter sat at v1.12.0 for every release. One rule per page, from the
+    # bridge's own list; their generators write the same value.
+    try:
+        pages = _lib_site_pages.bridged_pages(REPO_ROOT)
+    except (OSError, ImportError, ValueError):
+        # The list itself is unreadable: one rule on the bridge file, so the
+        # run reports it (MISSING, or DEAD on a bridge with no version line)
+        # instead of bumping none of these pages in silence.
+        pages = [_lib_site_pages.BRIDGE]
+    for page in pages:
+        rules.append({
+            "file": page.relative_to(REPO_ROOT).as_posix(),
+            "desc": f"front matter version: in {page.relative_to(REPO_ROOT).as_posix()} (a bridged site page)",
+            "pattern": r"(?<=\n)version:\s*v[0-9]+\.[0-9]+[^\n]*(?=\n)",
+            "replacement": lambda v: f"version: v{v}",
         })
 
     # Doc header blockquote pattern: `> **vX.Y.Z |` (common in doc headers)

@@ -141,15 +141,19 @@ Next steps:
   },
   'migrate': {
     label: 'migrate',
-    description: t('將傳統 Prometheus 規則轉換為動態格式', 'Convert traditional Prometheus rules to dynamic format'),
+    description: t('把一個租戶的傳統 Prometheus 規則原樣遷移成 migrated 規則（注入租戶隔離）', 'Migrate one tenant\'s legacy Prometheus rules verbatim into migrated rules (tenant isolation injected)'),
     category: t('文件系統工具', 'Filesystem Tools'),
     args: [
       { name: 'input', label: t('輸入規則文件', 'Input Rules File'), required: true, placeholder: '/path/to/rules.yaml' }
     ],
     flags: [
+      { name: '--tenant', label: t('租戶 ID', 'Tenant ID'), required: true, placeholder: 'e.g., db-a' },
+      { name: '--owner', label: t('負責人', 'Owner'), required: true, placeholder: 'e.g., team-db' },
+      { name: '--expiry', label: t('到期日', 'Expiry Date'), required: true, placeholder: 'YYYY-MM-DD' },
       { name: '--output-dir', label: t('輸出目錄', 'Output Directory'), required: false, placeholder: '/tmp/migrated' },
       { name: '--dry-run', label: t('試運行', 'Dry Run'), required: false, type: 'checkbox' },
-      { name: '--triage', label: t('分類模式', 'Triage Mode'), required: false, type: 'checkbox' }
+      { name: '--no-dictionary', label: t('停用字典比對', 'Disable Dictionary'), required: false, type: 'checkbox' },
+      { name: '--policy', label: t('自我 lint 政策', 'Self-Lint Policy'), required: false, placeholder: 'custom-rule-policy.yaml' }
     ]
   },
   'validate-config': {

@@ -138,7 +138,7 @@ def key_check_lines(verdict: TreeVerdict) -> "list[tuple[str, tv.KeyCheck]]":
 def key_check_line(tenant: str, c: "tv.KeyCheck") -> str:
     """The one line a report prints for key check *c* of *tenant* (#3703):
     a constant sentence around the record's fields — the level (WARN for a
-    `version` label the exporter refuses, NOTICE for a retired spelling), the
+    `version` label that fails the exporter's check, NOTICE for a retired spelling), the
     tenant, the kind, the metric name, the key and the replacing metric name
     each through `shown_key` (a key with labels is never name-like, so it is
     its stand-in), and Go's constant `reason`. Nothing the author wrote is

@@ -14,20 +14,22 @@ metadata:
     rule-pack: jvm
 data:
   jvm-recording.yml: "groups:\n- name: jvm-normalization\n  interval: 15s\n  rules:\n\
-    \  - record: tenant:jvm_gc_pause:rate5m\n    expr: \"sum by(tenant, da_cluster)\
-    \ (\\n  rate(jvm_gc_pause_seconds_sum[5m])\\n)\\n\"\n  - record: tenant:jvm_memory_used:percent\n\
-    \    expr: \"max by(tenant, da_cluster) (\\n  label_replace(\\n    100 * sum without(id)\
+    \  - record: tenant:jvm_gc_time:percent\n    expr: \"100 * max by(tenant, da_cluster)\
+    \ (\\n  sum without(action, cause, gc) (rate(jvm_gc_pause_seconds_sum[5m]))\\\
+    n  or\\n  sum without(action, cause, gc) (rate(jvm_gc_collection_seconds_sum{gc!~\\\
+    \".*Cycles\\\"}[5m]))\\n)\\n\"\n  - record: tenant:jvm_memory_used:percent\n \
+    \   expr: \"max by(tenant, da_cluster) (\\n  label_replace(\\n    100 * sum without(id)\
     \ (jvm_memory_used_bytes{area=\\\"heap\\\"})\\n      / sum without(id) (jvm_memory_max_bytes{area=\\\
     \"heap\\\", id!~\\\"ZGC Young Generation|Shenandoah Young Gen\\\"} > 0),\\n  \
     \  \\\"mem_source\\\", \\\"current\\\", \\\"\\\", \\\"\\\")\\n  or\\n  label_replace(\\\
     n    100 * jvm_memory_bytes_used{area=\\\"heap\\\"}\\n      / (jvm_memory_bytes_max{area=\\\
     \"heap\\\"} > 0),\\n    \\\"mem_source\\\", \\\"legacy\\\", \\\"\\\", \\\"\\\"\
     )\\n)\\n\"\n  - record: tenant:jvm_threads:current\n    expr: \"max by(tenant,\
-    \ da_cluster) (\\n  jvm_threads_current\\n)\\n\"\n- name: jvm-threshold-normalization\n\
-    \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:jvm_gc_pause\n\
-    \    expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_pause\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:jvm_gc_pause_critical\n\
-    \    expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_pause\"\
+    \ da_cluster) (\\n  jvm_threads_live_threads or jvm_threads_current\\n)\\n\"\n\
+    - name: jvm-threshold-normalization\n  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:jvm_gc_time_percent\n\
+    \    expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_time_percent\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:jvm_gc_time_percent_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_time_percent\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:jvm_memory\n   \
     \ expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"memory\", severity=\"\
     warning\"})\n  - record: tenant:alert_threshold:jvm_memory_critical\n    expr:\
@@ -38,45 +40,47 @@ data:
     \ (user_threshold{component=\"jvm\", metric=\"threads\", severity=\"critical\"\
     })\n"
   jvm-alert.yml: "groups:\n- name: jvm-alerts\n  rules:\n  - alert: JVMHighGCPause\n\
-    \    expr: \"(\\n  tenant:jvm_gc_pause:rate5m\\n  > on(tenant) group_left\\n \
-    \ tenant:alert_threshold:jvm_gc_pause\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
+    \    expr: \"(\\n  tenant:jvm_gc_time:percent\\n  > on(tenant) group_left\\n \
+    \ tenant:alert_threshold:jvm_gc_time_percent\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n      maintenance: mute\n\
-    \      metric_group: jvm_gc_pause\n      severity: warning\n      tenant: '{{\
-    \ $labels.tenant }}'\n    annotations:\n      description: GC pause {{ $value\
-    \ | printf \"%.3f\" }} s/s (seconds paused per second, all JVMs of the tenant)\
-    \ exceeds threshold\n      description_zh: GC pause {{ $value | printf \"%.3f\"\
-    \ }} 秒/秒（每秒暫停的秒數，租戶所有 JVM 加總）超出閾值\n      owner: '{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
-    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
-    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: GC pause elevated — JVM tuning review'\n\
-    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}：GC pause 升高 — JVM 調優審查'\n      runbook_url: '{{ with query\
-    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: JVMHighGCPause\
-    \ on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 上 JVM GC pause\
-    \ 過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: JVMHighGCPauseCritical\n    expr: \"(\\n  tenant:jvm_gc_pause:rate5m\\\
-    n  > on(tenant) group_left\\n  tenant:alert_threshold:jvm_gc_pause_critical\\\
-    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 3m\n    labels:\n      maintenance: mute\n      metric_group: jvm_gc_pause\n\
-    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: GC pause {{ $value | printf \"%.3f\" }} s/s (seconds paused\
-    \ per second, all JVMs of the tenant) exceeds critical threshold\n      description_zh:\
-    \ GC pause {{ $value | printf \"%.3f\" }} 秒/秒（每秒暫停的秒數，租戶所有 JVM 加總）超出嚴重閾值\n   \
-    \   owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \      metric_group: jvm_gc_time_percent\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: GC time {{ $value\
+    \ | printf \"%.1f\" }}% of time (GC pauses on the busiest JVM of the tenant in\
+    \ this cluster, 5m average) exceeds threshold\n      description_zh: GC 時間佔比 {{\
+    \ $value | printf \"%.1f\" }}%（租戶在此叢集最忙的 JVM 花在 GC 暫停的時間，5 分鐘平均）超出閾值\n      owner:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
     \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: critical GC pause — application performance impacted'\n      platform_summary_zh:\
+    \ }}: GC time elevated on the busiest JVM — JVM tuning review'\n      platform_summary_zh:\
     \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}：嚴重 GC pause — 應用程式效能受影響'\n      runbook_url: '{{ with query (printf `topk(1,\
+    \ }}：最忙的 JVM GC 時間佔比升高 — JVM 調優審查'\n      runbook_url: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: JVMHighGCPause\
+    \ on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 上 JVM GC 時間佔比過高'\n\
+    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: JVMHighGCPauseCritical\n    expr: \"(\\n  tenant:jvm_gc_time:percent\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:jvm_gc_time_percent_critical\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 3m\n    labels:\n      maintenance: mute\n      metric_group: jvm_gc_time_percent\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: GC time {{ $value | printf \"%.1f\" }}% of time (GC pauses\
+    \ on the busiest JVM of the tenant in this cluster, 5m average) exceeds critical\
+    \ threshold\n      description_zh: GC 時間佔比 {{ $value | printf \"%.1f\" }}%（租戶在此叢集最忙的\
+    \ JVM 花在 GC 暫停的時間，5 分鐘平均）超出嚴重閾值\n      owner: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
+    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: critical GC time on the busiest\
+    \ JVM — application performance impacted'\n      platform_summary_zh: '[{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：最忙的\
+    \ JVM GC 時間佔比嚴重 — 應用程式效能受影響'\n      runbook_url: '{{ with query (printf `topk(1,\
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
     \ }}{{ end }}{{ end }}'\n      summary: JVMHighGCPauseCritical on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 上 JVM GC pause 嚴重過高'\n      tier:\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 上 JVM GC 時間佔比嚴重過高'\n      tier:\
     \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: JVMMemoryPressure\n\
     \    expr: \"(\\n  tenant:jvm_memory_used:percent\\n  > on(tenant) group_left\\\
@@ -155,26 +159,6 @@ data:
     \ }}{{ end }}{{ end }}'\n      summary: JVMThreadPoolExhaustionCritical on {{\
     \ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 上 JVM thread pool\
     \ 嚴重耗盡'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: JVMPerformanceDegraded\n    expr: \"(\\n  tenant:jvm_gc_pause:rate5m\
-    \ > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause\\n  and on(tenant,\
-    \ da_cluster)\\n  tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory\\\
-    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: critical\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Both\
-    \ GC pause and memory exceed thresholds — JVM performance degraded\n      description_zh:\
-    \ GC pause 和記憶體皆超出閾值 — JVM 效能降級\n      owner: '{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
-    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
-    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: multi-signal JVM degradation — escalate'\n\
-    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}：多訊號 JVM 降級 — 需升級處理'\n      runbook_url: '{{ with query\
-    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: JVMPerformanceDegraded\
-    \ on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 上 JVM 效能降級'\n\
-    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     - name: jvm-unset-thresholds\n  rules:\n  - alert: JVMThresholdNotConfigured\n\
     \    expr: \"(\\n  max without(instance, pod) (user_threshold_unset{pack=\\\"\

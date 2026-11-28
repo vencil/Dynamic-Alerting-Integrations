@@ -1,6 +1,6 @@
 package main
 
-// `da-guard write` (ADR-036 §2 "One writer", step 10): per
+// `da-guard write` (ADR-036 §2 "Go is the only writer", step 10): per
 // op, the file is the original with only the edit — every other node and
 // comment byte for byte; every refusal writes nothing and leaves no
 // temporary file; emit keeps the caller's order.

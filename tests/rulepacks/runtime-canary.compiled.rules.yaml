@@ -3,7 +3,7 @@
 # GENERATED from _custom_alerts declarations by
 # scripts/tools/dx/compile_custom_alerts.py — DO NOT EDIT.
 # Run `bash scripts/ops/with_da_guard.sh python3 scripts/tools/dx/compile_custom_alerts.py --config-dir tests/rulepacks/runtime-canary-recipe --out tests/rulepacks/runtime-canary.compiled.rules.yaml` after editing recipes/conf.d.
-# Rule count = SHAPE count (vectorized, not per-tenant; ADR-024 §2b).
+# Rule count = SHAPE count (vectorized, not per-tenant; ADR-024 §4).
 # ============================================================
 groups:
 - name: custom-alerts-normalization

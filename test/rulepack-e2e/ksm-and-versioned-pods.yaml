@@ -1,4 +1,4 @@
-# ADR-024 PR3b kind e2e — kube-state-metrics + version-labelled pods.
+# ADR-024 §2 kind e2e (deployment prerequisite) — kube-state-metrics + version-labelled pods.
 # Purpose: validate against a REAL cluster the one thing promtool cannot —
 # that real kube-state-metrics emits `kube_pod_labels{label_app_kubernetes_io_version="vN"}`
 # (the EXACT sanitised label name the (0a) relabel in rule-pack-kubernetes.yaml

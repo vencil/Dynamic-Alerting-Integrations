@@ -14,7 +14,7 @@ Config-driven 多租戶告警平台，基於 Prometheus `group_left` 向量匹�
 > **100 租戶的監控管理：從 5,000 條手寫規則 → 237 條固定規則。**
 > 租戶只寫 YAML、不碰 PromQL —— 連自訂告警都用參數化 recipe 自助產出（v2.9.0 **Custom Alerts**）。新租戶**設定**分鐘級（rule-pack 已涵蓋的指標）、變更秒級生效；遷移既有複雜告警（自訂 exporter / 拓樸指標）視形態而定，見[遷移指南](docs/migration-guide.md)。
 
-![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-206-red) ![Bilingual](https://img.shields.io/badge/bilingual-101%20pairs-blue)
+![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-205-red) ![Bilingual](https://img.shields.io/badge/bilingual-101%20pairs-blue)
 
 ---
 
@@ -219,13 +219,13 @@ O(M) 複雜度（`group_left` 向量匹配）· 各 Rule Pack 以 Projected Volu
 
 ### 工具鏈（da-tools CLI）
 
-涵蓋租戶**生命週期**（scaffold / onboard / migrate-rule / cutover / offboard）、**日常運維**（diagnose / patch-config / explain-route）、**品質治理**（validate-config / alert-quality / Policy-as-Code）、與**客戶導入管線**（da-parser 分診 → [`migrate`](docs/cli-reference.md#migrate) 逐租戶轉換 → da-guard）。全部封裝在 `ghcr.io/vencil/da-tools` 容器。
+涵蓋租戶**生命週期**（scaffold / onboard / migrate-rule / cutover / offboard）、**日常運維**（diagnose / patch-config / explain-route）、**品質治理**（validate-config / alert-quality / Policy-as-Code）、與**客戶導入管線**（da-parser 分診 → [`migrate`](docs/cli-reference.md#migrate) 逐租戶遷移 → da-guard）。全部封裝在 `ghcr.io/vencil/da-tools` 容器。
 
 完整命令、旗標與範例 → [CLI 參考](docs/cli-reference.md) · [速查表](docs/cheat-sheet.md) · [互動工具索引](docs/interactive-tools.md)
 
 ### 客戶導入：Migration Toolkit
 
-把客戶現有 PromRule corpus 導入本平台 `conf.d/`（逐租戶用 [`migrate`](docs/cli-reference.md#migrate) 轉成 conf.d 租戶檔，`da-parser` 做可攜性分診、`da-guard` 驗樹；產出 `_custom_alerts` recipe 的批次導入見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)），並以 **Docker / static binary / air-gapped tar 三條交付路徑**（皆 cosign keyless 簽 + SBOM）覆蓋從外網到金融/政府/軍工封閉網路的全光譜環境。
+把客戶現有 PromRule corpus 導入本平台（逐租戶用 [`migrate`](docs/cli-reference.md#migrate) 把規則原樣遷移成注入租戶隔離的 migrated 規則、交給客戶的 Prometheus 載入，影子比對後再由人提升成平台規則或 recipe；`da-parser` 做可攜性分診、`da-guard` 驗樹），並以 **Docker / static binary / air-gapped tar 三條交付路徑**（皆 cosign keyless 簽 + SBOM）覆蓋從外網到金融/政府/軍工封閉網路的全光譜環境。
 
 完整安裝與簽章驗證 → [Migration Toolkit Installation](docs/migration-toolkit-installation.md)
 

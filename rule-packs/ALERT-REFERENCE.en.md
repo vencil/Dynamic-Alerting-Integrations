@@ -2,7 +2,7 @@
 title: "Rule Pack Alert Reference Guide"
 tags: [alerts, reference, rule-packs]
 audience: [tenant, sre]
-version: v1.12.0
+version: v2.9.0
 lang: en
 ---
 # Rule Pack Alert Reference Guide
@@ -74,13 +74,12 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 
 | Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|---|
-| JVMHighGCPause | warning | muted | [tier] {{ $labels.tenant }}: GC pause elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_gc_pause:rate5m |
-| JVMHighGCPauseCritical | critical | muted | [tier] {{ $labels.tenant }}: critical GC pause  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_gc_pause:rate5m |
+| JVMHighGCPause | warning | muted | [tier] {{ $labels.tenant }}: GC time elevated on the busiest JVM  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_gc_time:percent |
+| JVMHighGCPauseCritical | critical | muted | [tier] {{ $labels.tenant }}: critical GC time on the busiest JVM  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_gc_time:percent |
 | JVMMemoryPressure | warning | muted | [tier] {{ $labels.tenant }}: heap memory pressure  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_memory_used:percent |
 | JVMMemoryPressureCritical | critical | muted | [tier] {{ $labels.tenant }}: critical heap pressure  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_memory_used:percent |
 | JVMThreadPoolExhaustion | warning | muted | [tier] {{ $labels.tenant }}: thread pool saturation  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_threads:current |
 | JVMThreadPoolExhaustionCritical | critical | muted | [tier] {{ $labels.tenant }}: critical thread exhaustion  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_threads:current |
-| JVMPerformanceDegraded | critical | muted | [tier] {{ $labels.tenant }}: multi-signal JVM degradation  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_gc_pause:rate5m |
 | JVMThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires | Write a threshold for the key in the tenant config to arm it; the root need not declare it first (#4163). Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---

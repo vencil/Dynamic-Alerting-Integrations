@@ -10,7 +10,7 @@ Pinned contracts
    label only (pods=[app.kubernetes.io/managed-by]) is flagged — this is the
    exact gap the runtime sentinel cannot see.
 4. **Live dogfood**: the committed k8s/ KSM Deployment allowlists the version
-   label (gates a regression of the ADR-024 PR3b deployment fix).
+   label (gates a regression of the ADR-024 §2 deployment prerequisite).
 5. **Readers decide (#3426)**: a KSM Deployment is what kubectl's reading of
    k8s/ holds, not what the text mentions; a file that reading refuses is
    named at rc 2, never passed over.

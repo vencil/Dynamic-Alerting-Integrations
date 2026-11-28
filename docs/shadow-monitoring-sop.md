@@ -11,6 +11,7 @@ lang: zh
 
 > **受眾**: SRE / Platform Engineer / DevOps
 > **前提**: 已完成 `da-tools migrate` 轉換，新舊 Recording Rule 同時在 Prometheus 運行
+> **注意**: 現在的 `da-tools migrate` 把規則原樣遷移（告警帶 `da_migrated: "true"`），遷移對照改為 `.migration/mapping/<tenant>.yaml`；本 SOP 的 `prefix-mapping.yaml` 與 `migration_status: shadow` 屬於舊版 migrate，`validate` 讀新對照的支援在後續的 [#4227](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4227)
 > **工具**: `da-tools validate`（`--watch` 持續模式 / 單次模式）、`da-tools diagnose`（健康檢查）
 
 ---
@@ -19,7 +20,7 @@ lang: zh
 
 Shadow Monitoring 是遷移流程的**並行驗證階段**：新規則（`custom_` prefix）與舊規則同時運行，透過 `da-tools validate` 持續比對數值輸出，確認行為等價後再切換。
 
-`migrate_rule.py` 產出的 Alert Rule 自動帶有 `migration_status: shadow` label，Alertmanager 據此攔截通知以避免誤報。
+舊版 `migrate_rule.py` 產出的 Alert Rule 自動帶有 `migration_status: shadow` label，Alertmanager 據此攔截通知以避免誤報。
 
 本 SOP 涵蓋：前置準備 → 啟動 → 日常巡檢 → 異常處理 → 收斂判定 → 退出。
 
@@ -52,7 +53,7 @@ da-tools shadow-verify preflight \
 
 ### 2.3 Alertmanager Interception Configuration
 
-`migrate_rule.py` 產出的規則已自帶 `migration_status: shadow` label，Alertmanager 必須攔截以避免誤報：
+舊版 `migrate_rule.py` 產出的規則已自帶 `migration_status: shadow` label，Alertmanager 必須攔截以避免誤報：
 
 ```yaml
 # alertmanager.yml — 新增 route

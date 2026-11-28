@@ -181,6 +181,32 @@ class TestParseFilterToMatchers:
     def test_empty(self):
         assert parse_filter_to_matchers('') == []
 
+    # #4264: read by Prometheus' parser, not split on commas.
+    def test_a_comma_inside_a_value_stays_in_the_value(self):
+        assert parse_filter_to_matchers('schema=~"a,b", env="prod"') == ['schema=~"a,b"', 'env="prod"']
+
+    def test_escapes_round_trip(self):
+        assert parse_filter_to_matchers(r'schema=~"a\\.b", t="x\"y"') == [r'schema=~"a\\.b"', r't="x\"y"']
+
+    def test_a_utf8_label_name_stays_quoted(self):
+        assert parse_filter_to_matchers('"my.label"="x"') == ['"my.label"="x"']
+
+    def test_filters_are_read_in_one_batch(self, monkeypatch):
+        import generate_tenant_mapping_rules as G
+        calls = []
+        real = G._lib_consumer_read.promql_shape_each
+        monkeypatch.setattr(G._lib_consumer_read, "promql_shape_each",
+                            lambda exprs, *a, **k: calls.append(len(exprs)) or real(exprs, *a, **k))
+        got = G.parse_filters(['a="1"', '', 'b=~"2"', 'bad="'])
+        assert calls == [3]
+        assert got[:3] == [['a="1"'], [], ['b=~"2"']] and isinstance(got[3], G.FilterRefused)
+
+    @pytest.mark.parametrize("bad", ['schema=~"unterminated', 'schema app', '__name__="x"', 'a="b"}[5m'])
+    def test_a_filter_the_parser_cannot_read_is_refused(self, bad):
+        from generate_tenant_mapping_rules import FilterRefused
+        with pytest.raises(FilterRefused):
+            parse_filter_to_matchers(bad)
+
 
 # ===========================================================================
 # Rule generation tests

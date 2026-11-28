@@ -1,0 +1,80 @@
+# go-build-cache.yaml — the ONE writer of the Go build cache that every job
+# building this repo's Go binaries restores (.github/actions/go-build-cache;
+# its header says why setup-go's own cache went stale and what the key hashes).
+#
+# On every push to main: restore the newest entry, build the four binaries the
+# CI jobs build (the Makefile's *-build targets, i.e. scripts/ops/go_build.sh
+# with the flags every builder uses), save under this tree's key, and delete
+# every older entry, so the repository holds one ~1.2 GB entry instead of one
+# per Go change (the cache quota is 10 GB, evicted least-recently-used).
+# A PR never saves: it restores main's entry and recompiles only what it
+# changed. tests/ops/test_go_build_cache.py holds the shape.
+name: Go build cache
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The newest main tree is the only one worth saving: a newer push supersedes
+# a run still building an older tree.
+concurrency:
+  group: go-build-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  warm:
+    name: Warm the Go build cache
+    # A manual run may pick any branch, and `push.branches` does not stop it:
+    # on a feature branch it would save an entry only that branch can restore,
+    # which the cleanup below (it lists main's entries) never deletes.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # `gh cache delete` of the superseded entries.
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go and restore the newest entry
+        id: go
+        uses: ./.github/actions/go-build-cache
+
+      - name: Build the binaries the CI jobs build
+        if: steps.go.outputs.cache-hit != 'true'
+        run: make da-guard-build da-read-build da-crdecode-build tenant-api-build
+
+      - name: Save under this tree's key
+        if: steps.go.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.go.outputs.paths }}
+          key: ${{ steps.go.outputs.key }}
+
+      - name: Delete the superseded entries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: ${{ steps.go.outputs.key }}
+        run: |
+          set -euo pipefail
+          gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/main \
+            --key go-build- --limit 100 --json key --jq '.[].key' > keys.txt
+          # Only once this tree's entry is listed: a save that did not land
+          # must not leave the PRs with nothing to restore.
+          if ! grep -qxF "$KEEP" keys.txt; then
+            echo "::warning::$KEEP is not in the cache list; keeping every entry"
+            exit 0
+          fi
+          while read -r key; do
+            if [ -n "$key" ] && [ "$key" != "$KEEP" ]; then
+              echo "delete $key"
+              gh cache delete --repo "$GITHUB_REPOSITORY" "$key"
+            fi
+          done < keys.txt

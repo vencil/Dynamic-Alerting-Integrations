@@ -55,6 +55,7 @@ route:
 # ...
     - matchers:
         - alertname="Watchdog"
+        - da_migrated=""
       group_by: ["alertname"]
       group_wait: 0s
       group_interval: 1m
@@ -153,7 +154,7 @@ Alertmanager 沒有「免於抑制」的設定。`severity: none` 只讓 `Watchd
 
 - **規則靜態檢查（pint）**：CI 以 pint 的 `alerts/template` 檢查規則來源，攔「聚合砍掉了告警模板用到的標籤，告警因此永遠不觸發」這類錯誤；`Watchdog` 所在的平台 rule pack 也在範圍內。設定在 `.pint.hcl`。
 - **後端相容性**：`tests/rulepacks/test_vm_alert_parity.py` 在每個 PR 把所有 promtool 測試資料跑過 `vmalert-tool unittest`（VictoriaMetrics 的 MetricsQL 引擎）；未登記在 `tests/rulepacks/vm_deviation_catalog.yaml` 的差異會讓檢查失敗。`tests/rulepacks/test_vm_backend_parity.py` 在 VictoriaMetrics 版本釘選變更時，對真實的 vmsingle 驗證兩者等價；`tests/rulepacks/test_vm_replay_staleness.py` 每晚以 `vmalert -replay` 量測資料中斷（staleness）時的時序差異。
-- **合成探測的對接面**：帶 `component="synthetic-probe"` 的告警一定落到 `synthetic-receiver`、`continue: false`，客戶可以用自己現有的探測器驗證端到端投遞，測試告警不會呼叫到人（見[合成探測對接](../integration/synthetic-probe-interop.md)）。
+- **合成探測的對接面**：帶 `component="synthetic-probe"`、沒帶 `da_migrated` 的告警一定落到 `synthetic-receiver`、`continue: false`，客戶可以用自己現有的探測器驗證端到端投遞，測試告警不會呼叫到人（見[合成探測對接](../integration/synthetic-probe-interop.md)）。`da-tools migrate` 原樣遷移的舊規則告警帶 `da_migrated="true"`，這條路由排除它：影子期它進不通知任何人的影子 receiver，租戶切換之後照該租戶的路由（含 NOC）送出，就算它帶 `component="synthetic-probe"` 也一樣。
 
 ## 考慮過的替代方案
 

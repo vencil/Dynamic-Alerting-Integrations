@@ -55,7 +55,7 @@ PACK_META = {
     "clickhouse": ("ClickHouse", "built-in /metrics"),
     "kafka": ("Kafka", "kafka_exporter"),
     "rabbitmq": ("RabbitMQ", "rabbitmq_exporter"),
-    "jvm": ("JVM", "jmx_exporter"),
+    "jvm": ("JVM", "Micrometer / client_java / jmx_exporter"),
     "nginx": ("Nginx", "nginx-prometheus-exporter"),
     # liveness 先前不在此表，exporter 欄位因此 fallback 成 pack 名 "liveness"。
     # #1267 把這張表搬進 architecture-and-design 後它會被讀者看到，故補上。

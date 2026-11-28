@@ -248,22 +248,9 @@ def pack_rules(rule_pack: Path) -> tuple[set[str], set[str], list[str], list[dic
     return raw, records, exprs, trees
 
 
-# A PromQL string: "..." or '...' with Go escapes, or `...` raw. Three disjoint
-# alternatives and no backreference: a body branch that could also take a
-# backslash overlaps the escape branch, and a run of backslashes then backtracks
-# exponentially (CodeQL py/redos).
-_STR = r"""(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|`([^`]*)`)"""
-# A `query` label matcher, and a label_replace that writes `query`.
-_QUERY_MATCHER = re.compile(r"\bquery\s*(=~|!~|!=|=)\s*" + _STR)
-# label_replace(v, dst, replacement, src, regex): `query` must be the DESTINATION,
-# so the four string arguments are matched up to the closing parenthesis — a
-# `query` source label is not a write.
-_QUERY_SET = re.compile(r"label_replace\s*\(.*?,\s*[\"'`]query[\"'`]\s*,\s*" + _STR
-                        + r"\s*,\s*" + _STR + r"\s*,\s*" + _STR + r"\s*\)", re.S)
-# A selector of a query-exporter built-in that carries one series per query. The
-# label block skips quoted strings, so a `}` inside a regex does not end it.
-_BUILTIN_SELECTOR = re.compile(
-    r"\b(query_timestamp|query_interval)\s*\{((?:[^{}\"'`]|" + _STR + r")*)\}")
+# The query-exporter built-ins that carry one series per query (#4264: read
+# as selectors on the tree, never off the text).
+_BUILTINS = ("query_timestamp", "query_interval")
 
 
 def interval_seconds(value: object) -> float:
@@ -297,67 +284,46 @@ def timeout_seconds(value: object) -> float:
         return float("nan")
 
 
-_GO_SIMPLE = {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
-              "v": "\v", "\\": "\\", "'": "'", '"': '"'}
+def _shape_trees(texts: "list[str]") -> "list[dict]":
+    """Prometheus' tree of each text; one its parser refuses raises
+    ``_lib_consumer_read.InputRefused`` naming it."""
+    return _lib_consumer_read.promql_shape_each(list(texts), raise_refused=True)
 
 
-def _unescape(value: str) -> str:
-    """A PromQL double/single-quoted string's value, decoded by Go's rules: \\x
-    and octal escapes are BYTES, \\u / \\U are code points, any other character is
-    itself (UTF-8); the bytes are decoded as UTF-8 at the end. Python's
-    unicode_escape is not this — it reads non-ASCII as Latin-1 (café -> cafÃ©)."""
-    out = bytearray()
-    i, n = 0, len(value)
-    while i < n:
-        c = value[i]
-        if c != "\\" or i + 1 == n:
-            out += c.encode("utf-8")
-            i += 1
-            continue
-        e = value[i + 1]
-        if e in _GO_SIMPLE:
-            out += _GO_SIMPLE[e].encode("utf-8")
-            i += 2
-        elif e == "x" and re.fullmatch(r"[0-9a-fA-F]{2}", value[i + 2:i + 4]):
-            out.append(int(value[i + 2:i + 4], 16))
-            i += 4
-        elif e in "uU":
-            width = 4 if e == "u" else 8
-            digits = value[i + 2:i + 2 + width]
-            if not re.fullmatch(r"[0-9a-fA-F]{%d}" % width, digits):
-                out += e.encode("utf-8")
-                i += 2
-                continue
-            out += chr(int(digits, 16)).encode("utf-8")
-            i += 2 + width
-        elif re.fullmatch(r"[0-7]{3}", value[i + 1:i + 4]):
-            out.append(int(value[i + 1:i + 4], 8) & 0xFF)
-            i += 4
-        else:  # not a Go escape (Prometheus would reject it); keep the character
-            out += e.encode("utf-8")
-            i += 2
-    return out.decode("utf-8", errors="replace")
-
-
-def _str_value(groups: tuple[str, str, str]) -> str:
-    dq, sq, raw = groups
-    return _unescape(dq or sq) if (dq or sq) else raw
-
-
-def _query_matchers(text: str) -> list[tuple[str, str]]:
-    """(operator, value) of every `query` matcher in *text*; a label_replace that
-    writes `query` counts as `=` its replacement."""
-    out = [(m.group(1), _str_value(m.groups()[1:4])) for m in _QUERY_MATCHER.finditer(text)]
-    out += [("=", _str_value(m.groups()[0:3])) for m in _QUERY_SET.finditer(text)]
+def _tree_query_matchers(tree: dict) -> list[tuple[str, str]]:
+    """(operator, value) of every `query` matcher of *tree*; a label_replace
+    that writes `query` (its destination argument) counts as `=` its
+    replacement."""
+    out: list[tuple[str, str]] = []
+    for node in _lib_consumer_read.shape_nodes(tree):
+        if node["kind"] == "selector":
+            out += [(m["type"], m["value"]) for m in node["matchers"] if m["name"] == "query"]
+        elif node["kind"] == "call" and node["name"] == "label_replace" and len(node["args"]) == 5:
+            dst, repl = node["args"][1], node["args"][2]
+            if dst.get("kind") == "string" and dst["value"] == "query" and repl.get("kind") == "string":
+                out.append(("=", repl["value"]))
     return out
 
 
-def selected_queries(block: str, queries: set[str]) -> set[str]:
-    """The queries of the file that every `query` matcher in one selector's label
-    block selects (all of =, !=, =~, !~ apply, as in PromQL). Only this runtime
+def _query_matchers(text: str) -> list[tuple[str, str]]:
+    """`_tree_query_matchers` of one PromQL text, read here."""
+    return _tree_query_matchers(_shape_trees([text])[0])
+
+
+def _builtin_selections(tree: dict) -> "list[tuple[str, list[tuple[str, str]]]]":
+    """(built-in, its `query` matchers) for every selector of a
+    query-exporter built-in in *tree*."""
+    return [(node["name"], [(m["type"], m["value"]) for m in node["matchers"] if m["name"] == "query"])
+            for node in _lib_consumer_read.shape_nodes(tree)
+            if node["kind"] == "selector" and node["name"] in _BUILTINS]
+
+
+def selected_queries(matchers: "list[tuple[str, str]]", queries: set[str]) -> set[str]:
+    """The queries of the file that every `query` matcher of one selector
+    selects (all of =, !=, =~, !~ apply, as in PromQL). Only this runtime
     expansion reads the negative matchers; query_label_findings checks = and =~."""
     keep = set(queries)
-    for op, value in _query_matchers(block):
+    for op, value in matchers:
         try:
             rx = re.compile(f"^(?:{value})$")
         except re.error:
@@ -378,8 +344,8 @@ def query_label_findings(texts: list[str], queries: set[str], where: str) -> lis
     query of the file. A regex that is a plain alternation of names is checked name
     by name, so one existing alternative cannot cover a stale one."""
     out = []
-    for text in texts:
-        for op, value in _query_matchers(text):
+    for tree in _shape_trees(texts):
+        for op, value in _tree_query_matchers(tree):
             if op == "=":
                 if value not in queries:
                     out.append(f"{where} matches query=\"{value}\", which the file does not define")
@@ -564,10 +530,9 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
     # against the file's queries, must have its own series.
     names = set(doc.get("queries") or {})
     wanted: set[tuple[str, str]] = set()
-    for text in exprs + _presence_selectors(pack):
-        for m in _BUILTIN_SELECTOR.finditer(text):
-            metric, block = m.group(1), m.group(2)
-            wanted |= {(metric, q) for q in selected_queries(block, names)}
+    for tree in _shape_trees(exprs + _presence_selectors(pack)):
+        for metric, matchers in _builtin_selections(tree):
+            wanted |= {(metric, q) for q in selected_queries(matchers, names)}
     have = {(n, lb.get("query")) for n, lb, _v in samples}
     for metric, q in sorted(wanted - have):
         out.append(f"{metric}{{query=\"{q}\"}} is read by the pack but not served")

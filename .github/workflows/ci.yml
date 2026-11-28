@@ -102,19 +102,13 @@ jobs:
       # this step the hook fails by name (go is not on PATH), never passes.
       # ADR-036 §12: `admin-config-schema-check`'s wrapper
       # (scripts/ops/with_admin_config_tools.sh) builds .build/tenant-api and
-      # .build/da-crdecode the same way, so the tenant-api module is cached too.
+      # .build/da-crdecode the same way.
       # #3206: a hook that reads a prometheus.yml builds .build/da-read
-      # (scripts/ops/with_da_read.sh) from its own module, so its go.sum
-      # keys the cache as well.
+      # (scripts/ops/with_da_read.sh) from its own module.
+      # The build cache all of them compile against is main's, restored by the
+      # go-build-cache action (its header says why not setup-go's cache).
       - name: Set up Go (da-guard / tenant-api / da-crdecode / da-read for the lint hooks)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/tenant-api/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
 
       # #3206: `image-pin-capability-check` renders every chart that pins
       # da-tools (`helm template`, the render path); without helm it exits 2.
@@ -280,6 +274,9 @@ jobs:
           # #1200: a key in the registry's retired_keys is named nowhere a
           # reader learns keys from (docs, samples, scripts, portal).
           pre-commit run retired-keys-not-taught --all-files
+          # #4290: ADR-015 rule 1 — no Tailwind `dark:` variant in portal
+          # source (pygrep; no other CI entry point).
+          pre-commit run jsx-no-dark-variant --all-files
           pre-commit run skip-a11y-justification-check --all-files
           # CI-ROI 6C blind-spot fix: these 4 lints' live-dogfood pytest
           # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as
@@ -514,15 +511,7 @@ jobs:
       # `make da-guard-build`, which needs go. Without this step the gate fails
       # by name (go is not on PATH), never passes.
       - name: Set up Go (da-guard for the RETIRE-ordering gate; da-read / da-crdecode)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          # tenant-api's too: the error-contract gate below builds it (#3202).
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/tenant-api/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
 
       # #3206 (ADR-036 §12): the rule files these steps read are read the way
       # Prometheus' rule loader reads them (`da-read prometheus-rules`) and
@@ -730,7 +719,7 @@ jobs:
         # below carries --retry so a transient upstream blip doesn't flake the required
         # job; steady state is a cache hit (no download at all).
         run: |
-          pip install pytest -c requirements/ci-constraints.txt
+          pip install pytest pytest-xdist -c requirements/ci-constraints.txt
           # VM engine version comes from the single pins SSOT
           # (tests/rulepacks/vm_engine_version) shared with the equivalence
           # anchor (test_vm_backend_parity.py)
@@ -775,7 +764,13 @@ jobs:
         # --durations: the slowest fixtures are printed at the end of the log, so one
         # creeping toward the per-fixture limit (_VMALERT_TIMEOUT_S) is seen before it
         # fails the required check (#4118).
-        run: python -m pytest tests/rulepacks/test_vm_alert_parity.py -v --durations=15 --durations-min=5.0
+        # -n auto --dist worksteal: every fixture is its own vmalert-tool process
+        # and they share nothing but a per-worker translated copy (xlate_dir), so
+        # they run side by side. On a 4-core machine, 110 fixtures took 689 s
+        # serial, 391 s with xdist's default split and 301 s with worksteal: an
+        # idle worker takes queued fixtures from a busy one, so the two heaviest
+        # (~170 s and ~115 s) do not leave the others waiting behind them (#4224).
+        run: python -m pytest tests/rulepacks/test_vm_alert_parity.py -v -n auto --dist worksteal --durations=15 --durations-min=5.0
 
       # pint (ADR-025 supporting check): static analysis of the rule-pack SOURCE.
       # The high-ROI check is alerts/template — it mechanically catches the
@@ -817,24 +812,24 @@ jobs:
       - name: Lint Prometheus rules (pint — alerts/template label-flow gate)
         run: python3 scripts/tools/lint/check_pint.py --ci
 
-      # ADR-024 PR3-pre Commit 4: the configmap↔source copy is now a HARD gate.
+      # The configmap↔source copy is a HARD gate.
       # The DEPLOYED configmaps (k8s/03-monitoring/configmap-rules-*.yaml, the
       # production source of truth via ADR-005 projected volume) must never drift
       # from rule-packs/ source again — that ~2-month silent drift is exactly what
       # caused the onboarding-vacuum bug (#709). Edit a rule pack → run
       # `make rulepack-configmaps` (or generate_rulepack_configmaps.py) → commit
       # both. The pre-commit `rulepack-configmap-drift` hook catches this locally.
-      - name: "Rule-pack configmap drift (HARD gate — ADR-024 Commit 4)"
+      - name: "Rule-pack configmap drift (HARD gate)"
         run: python scripts/tools/dx/generate_rulepack_configmaps.py --check
 
-      # ADR-024 PR3-pre: rule-packs/ ↔ configmap copies must match
+      # rule-packs/ ↔ configmap copies must match
       # semantically. The third copy (committed operator-manifests/
       # PrometheusRule CRDs) is gone (#3427) — it drifted on the `release`
       # selector label, which this content comparison never saw. The CRDs are
       # generated on demand; what operator-generate writes is pinned by
       # tests/ops/test_operator_generate_rule_copies.py (Python Tests). The
       # pre-commit `rulepack-3copy-drift` hook catches drift locally.
-      - name: "Rule-pack copy sync (HARD gate — ADR-024 PR3-pre)"
+      - name: "Rule-pack copy sync (HARD gate)"
         run: python scripts/tools/lint/check_rulepack_sync.py --ci
 
       # #3206 (ADR-036 §12): the manifests are read through da-crdecode
@@ -964,13 +959,7 @@ jobs:
         run: pip install pyyaml query-exporter -c requirements/ci-constraints.txt
 
       - name: Set up Go (da-read / da-crdecode)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
 
       # ⛔ One command, nothing around it (see the Oracle step in Lint Rule Packs).
       # The comparison reads the rule pack the way Prometheus does (da-read).
@@ -1065,11 +1054,7 @@ jobs:
       # the manifests through da-crdecode (kubectl's reading); without it the
       # step fails by name (rc 2), never degrades to a PyYAML reading.
       - name: Set up Go (da-crdecode for the L4 PSS rule)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+        uses: ./.github/actions/go-build-cache
 
       - name: Run Container SAST Layer 4 (raw k8s manifests)
         # Real layer (NOT a stub): k8s/ holds real raw manifests. kube-linter
@@ -1247,16 +1232,7 @@ jobs:
       # VIBE_REQUIRE_GO above). Version from the module's own go.mod, the same
       # way guard-defaults-impact.yml / release.yaml do.
       - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          # #3206: tests/conftest.py also builds da-read (components/da-read,
-          # Alertmanager's dependency tree) once per session; its go.sum in the
-          # key keeps those modules and their build cache warm.
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
 
       # Vector CLI — same rationale as setup-Helm above. The ADR-021 #609
       # projection AC behavior gate (tests/shared/test_vector_projection_vrl.py
@@ -1282,7 +1258,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/vibe-ci-downloads
-          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.61.0-actionlint-1.7.12
+          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.62.0-actionlint-1.7.12
 
       # ⛔ VECTOR_VERSION must equal the version the chart actually DEPLOYS
       # (helm/vector values.yaml `image.tag` + Chart.yaml `appVersion`) and the
@@ -1294,9 +1270,9 @@ jobs:
       # bump them together (version + SHA-256 + the cache key above).
       - name: Install Vector
         run: |
-          VECTOR_VERSION=0.61.0
-          # Pinned SHA-256 of vector-0.61.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
-          VECTOR_SHA256=84a27c3ad6b772fdb05bb76ea01a31498bfc8f5e71f32cc78a0d96841f1aa827
+          VECTOR_VERSION=0.62.0
+          # Pinned SHA-256 of vector-0.62.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
+          VECTOR_SHA256=e9d9cb3ee12288544c813453d0548524ab2bcc8f7e81b601f5e9d378fa6ac2f6
           DL="$HOME/.cache/vibe-ci-downloads"
           mkdir -p "$DL"
           if [ ! -f "$DL/vector-${VECTOR_VERSION}.tgz" ]; then
@@ -2295,13 +2271,7 @@ jobs:
       # exported, so both steps below (and validate_all's platform_data inside
       # `make lint-docs`) use the same binary; a failed build fails the job.
       - name: Set up Go (da-guard; da-read / da-crdecode)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: |
-            components/threshold-exporter/app/go.sum
-            components/da-read/go.sum
+        uses: ./.github/actions/go-build-cache
 
       # #3206: platform_data and byo_rulepack_table read Helm / k8s files
       # through da-crdecode; built here once like da-guard.
@@ -2383,6 +2353,12 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
+
+      # The pytest session builds da-guard / da-read / da-crdecode
+      # (VIBE_TEST_GO_BINARIES above): the go.mod's Go, against main's build
+      # cache, not the runner image's Go on a cold cache.
+      - name: Set up Go
+        uses: ./.github/actions/go-build-cache
 
       # The runner is self-contained — it builds its own venv and runs
       # every Python step (render-extract, keygen, pytest) inside it.

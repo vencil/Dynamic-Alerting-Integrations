@@ -18,19 +18,19 @@ Revised 2026-05-13: the JSX source moved to `tools/portal/src/`.
 
 Revised 2026-11-24: rewritten to describe current behavior; the decision is unchanged.
 
+Revised 2026-11-28: the loader now sets only `data-theme`, and rule 1 is enforced by a pre-commit hook ([#4290](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4290)).
+
 ## Decision
 
 The portal's JSX tools have exactly one dark mode mechanism: the `data-theme` attribute on `<html>`. All light/dark color switching is done by the tokens (CSS variables) in `docs/assets/design-tokens.css`. **JSX does not use Tailwind's `dark:` variant** (for example `dark:bg-slate-900`).
 
 The rules:
 
-1. JSX does not use the `dark:` prefix (meant to be enforced by a pre-commit lint; not implemented).
+1. JSX does not use the `dark:` prefix. The pre-commit hook `jsx-no-dark-variant` blocks `dark:` immediately followed by a class (including forms such as `dark:[…]` and `dark:!…`) in the `.jsx` and `.js` files under `tools/portal/src/`, and CI's Lint job runs it too. It matches characters and does not tell code from comments: a comment that writes out a full `dark:` class (for example `// removed dark:bg-black`) is blocked too; only `dark:` not directly followed by a class (for example "removed its `dark:` classes") is not hit.
 2. Colors are written as Tailwind arbitrary values that reference a token (a class with a raw CSS value in square brackets, such as `bg-[color:var(--da-color-surface)]`). When migrating an old component, its `dark:xxx` classes are deleted outright, not rewritten into something else.
 3. Switching the theme means changing `<html data-theme="…">`; components never check whether the current theme is light or dark.
 4. The Tailwind configuration does not enable `darkMode`.
 5. When switching themes, the loader sets only `data-theme` and does not add the class `dark`.
-
-The current loader does not yet meet rules 4 and 5; see "Known limitations".
 
 ### Example: one class, recolored by `data-theme`
 
@@ -54,7 +54,13 @@ That token has a light and a dark value in `design-tokens.css`; the dark value s
 
 Result: with `<html data-theme="light">` the card's background is `#ffffff`; with `<html data-theme="dark">` it is `#1e293b`. The JSX does not change at all, and no second class is needed.
 
-The theme is set by `docs/assets/jsx-loader.html`: the user cycles between Light / Dark / System, the choice is stored in `localStorage` under `__da_theme_pref`, and when nothing is stored the OS `prefers-color-scheme` setting is followed.
+The theme is set by `docs/assets/jsx-loader.html`: the user cycles between Light / Dark / System, the choice is stored in `localStorage` under `__da_theme_pref`, and when nothing is stored the OS `prefers-color-scheme` setting is followed. The loader sets only this one attribute when switching:
+
+```js {.quote src="docs/assets/jsx-loader.html"}
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+```
+
+The loader's own chrome (back link, theme button, loading spinner) is also recolored by `html[data-theme="dark"]` selectors, not by the class `dark`.
 
 ## Background
 
@@ -85,21 +91,7 @@ Why a single track:
 ### Known limitations
 
 - **Colors without a token do not switch.** Tailwind's built-in palette classes (such as `bg-red-500 text-white`) bypass the tokens and keep the same color in the dark theme. Many such classes remain in the JSX under `tools/portal/src/`, e.g. status colors and step-completed colors. This decision only solves "two mechanisms side by side on screens that have tokens", not "colors that never entered the tokens"; the latter is tracked separately. The `design-token-usage` lint looks only at added lines and catches hex color codes, px values in styles, the error/warning tokens used as foreground color, and `slate-*` classes; other palette classes are not caught.
-- **The loader does not yet meet rules 4 and 5.** The current `jsx-loader.html` sets `tailwind.config = { darkMode: 'class' }` and, when switching to dark, adds both the class `dark` and `data-theme="dark"`, because the loader's own chrome (back link, theme button, loading spinner) is styled with `html.dark` selectors.
-
-  ```html {.quote src="docs/assets/jsx-loader.html"}
-      document.documentElement.classList.toggle('dark', isDark);
-      document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-  ```
-
-  This has no effect on the JSX tools, since the JSX contains no `dark:` variants. It does mean that if someone writes `dark:` into JSX again, it will take effect on screen and the problem will not show.
-- **Nothing enforces "no `dark:`".** No lint blocks `dark:`; review is the only guard. To check the current state, run from the repo root:
-
-  ```bash
-  grep -rnE '\bdark:[a-z]' tools/portal/src --include='*.jsx'
-  ```
-
-  It should print nothing. Comments that mention `dark:` (e.g. noting that a component removed its `dark:` classes) do not count as violations; the pattern above only matches `dark:` immediately followed by a class name.
+- **A `dark:` that gets past the hook follows the OS, not the theme button.** The loader leaves Tailwind's `darkMode` unset, and the Tailwind CDN's default follows the OS `prefers-color-scheme`: with Light chosen and a dark OS, a `dark:bg-black` still renders black. The hook only looks at the `.jsx` and `.js` files under `tools/portal/src/`; a `dark:` written anywhere else (for example in the HTML under `docs/`) is not blocked, and none of those places carries a `dark:` class today.
 
 ## Considered Alternatives
 

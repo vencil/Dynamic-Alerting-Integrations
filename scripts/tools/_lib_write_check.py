@@ -84,7 +84,6 @@ def require_output_tree(root: "str | os.PathLike[str]", *,
 #: runs every draft writer inside a served tree (asking Go which tenants it
 #: serves) and all of them into one -o (no draft replaced by another tool).
 DRAFT_ROOTS = {
-    "migrate_rule": ".migration",
     "onboard_platform": ".onboard",
     "scaffold_tenant": ".scaffold",
 }

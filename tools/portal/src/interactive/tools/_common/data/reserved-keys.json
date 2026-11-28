@@ -3,6 +3,7 @@
   "reserved_keys": [
     "_custom_alerts",
     "_expected_exporters",
+    "_log_projection",
     "_metadata",
     "_namespaces",
     "_profile",

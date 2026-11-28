@@ -2,7 +2,7 @@ package config
 
 // Key checks (ADR-038 §11): the two checks on a tenant's keys as written
 // that the CI readers print and no longer judge themselves — a dimensional
-// key's `version` label (ADR-024 OQ-6) and a key in a retired spelling
+// key's `version` label (ADR-024 §1) and a key in a retired spelling
 // (#1231). One record per finding (KeyCheck), from which both of its
 // renderings come:
 //
@@ -74,14 +74,14 @@ func (k KeyCheckKind) IsRenamed() bool {
 // pattern, the ADR and issue numbers). KeyCheck.Reason panics on a kind
 // missing here; TestKeyCheckEveryKind holds the two lists together.
 var keyCheckReasons = map[KeyCheckKind]string{
-	KeyCheckVersionRegex: "a regex matcher on the `version` label: ADR-024 Phase 1 expects an exact " +
-		`version="..." selector`,
-	KeyCheckVersionEmpty: "an empty `version` label: ADR-024 OQ-6 forbids it — it collides with the " +
+	KeyCheckVersionRegex: "a regex matcher on the `version` label: an exact " +
+		`version="..." selector is expected`,
+	KeyCheckVersionEmpty: "an empty `version` label: forbidden — it collides with the " +
 		"unversioned baseline",
 	KeyCheckVersionDefault: "the literal `version` label \"default\" is reserved for the normalize-layer " +
-		"fallback (ADR-024 OQ-6)",
+		"fallback (ADR-024 §1)",
 	KeyCheckVersionCharset: "the `version` label violates " + versionLabelPattern +
-		" (ADR-024 OQ-6; pilot-calibratable)",
+		" (pilot-calibratable)",
 	KeyCheckRenamedShadowed: "a retired spelling (#1231), ignored because its replacement is also " +
 		"set: remove it",
 	KeyCheckRenamedCriticalDimensional: "a retired spelling (#1231), but a `_critical` tier takes no " +
@@ -142,20 +142,20 @@ func (c KeyCheck) Message() string {
 	switch c.Kind {
 	case KeyCheckVersionRegex:
 		return fmt.Sprintf(
-			"WARN: tenant=%s: regex version matcher %q in key %q — ADR-024 "+
-				"Phase 1 expects an exact version=\"...\" selector", c.Tenant, c.label, c.judged)
+			"WARN: tenant=%s: regex version matcher %q in key %q — "+
+				"an exact version=\"...\" selector is expected", c.Tenant, c.label, c.judged)
 	case KeyCheckVersionEmpty:
 		return fmt.Sprintf(
-			"WARN: tenant=%s: empty version label in key %q (ADR-024 OQ-6 "+
-				"forbids empty — it collides with the unversioned baseline)", c.Tenant, c.judged)
+			"WARN: tenant=%s: empty version label in key %q (empty is "+
+				"forbidden — it collides with the unversioned baseline)", c.Tenant, c.judged)
 	case KeyCheckVersionDefault:
 		return fmt.Sprintf(
 			"WARN: tenant=%s: literal version=\"default\" in key %q is reserved "+
-				"for the normalize-layer fallback (ADR-024 OQ-6)", c.Tenant, c.judged)
+				"for the normalize-layer fallback (ADR-024 §1)", c.Tenant, c.judged)
 	case KeyCheckVersionCharset:
 		return fmt.Sprintf(
 			"WARN: tenant=%s: version %q in key %q violates %s "+
-				"(ADR-024 OQ-6; pilot-calibratable)", c.Tenant, c.label, c.judged, versionLabelPattern)
+				"(pilot-calibratable)", c.Tenant, c.label, c.judged, versionLabelPattern)
 	case KeyCheckRenamedOverRefused:
 		return fmt.Sprintf(
 			"NOTICE: tenant=%s: %q has no value this layer takes, so the deprecated %q beside it is served — fix %q and remove %q (#1231 rename)",

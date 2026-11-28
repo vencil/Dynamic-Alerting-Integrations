@@ -579,6 +579,7 @@ inhibit_rules:
       - metric_group=~".+"
       - tenant=~".+"
       - da_cluster=~".+"
+      - da_migrated=""          # #4355：migrated 告警不當 source
     target_matchers:
       - severity="warning"
       - metric_group=~".+"
@@ -592,6 +593,7 @@ inhibit_rules:
       - metric_group=~".+"
       - tenant=~".+"
       - da_cluster=""
+      - da_migrated=""          # #4355：migrated 告警不當 source
     target_matchers:
       - severity="warning"
       - metric_group=~".+"
@@ -603,6 +605,7 @@ inhibit_rules:
   # Silent Mode: 壓制 warning 通知
   - source_matchers:
       - alertname="TenantSilentWarning"
+      - da_migrated=""
     target_matchers:
       - severity="warning"
     equal: ["tenant"]
@@ -610,6 +613,7 @@ inhibit_rules:
   # Silent Mode: 壓制 critical 通知
   - source_matchers:
       - alertname="TenantSilentCritical"
+      - da_migrated=""
     target_matchers:
       - severity="critical"
     equal: ["tenant"]
@@ -651,7 +655,7 @@ flowchart TD
 可選化以**兩條**全域 inhibit rule 加排除清單實現（規則數不隨租戶數成長；[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)、[#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)）：
 
 1. `generate_alertmanager_routes.py` 掃描所有 tenant YAML 的 `_severity_dedup` 設定
-2. 產出兩條規則：source `severity="critical"`、target `severity="warning"`，兩側都要求 `metric_group=~".+"` 與 `tenant=~".+"`，差別只在怎麼讀叢集標籤 `da_cluster`（每個 Prometheus 的 `external_labels.da_cluster`，[ADR-006](../adr/006-tenant-mapping-topologies.md)）：
+2. 產出兩條規則：source `severity="critical"`（另帶 `da_migrated=""`：migrate 寫回的 migrated 告警不當 source，[#4355](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4355)）、target `severity="warning"`，兩側都要求 `metric_group=~".+"` 與 `tenant=~".+"`，差別只在怎麼讀叢集標籤 `da_cluster`（每個 Prometheus 的 `external_labels.da_cluster`，[ADR-006](../adr/006-tenant-mapping-topologies.md)）：
     - 兩側都帶（`da_cluster=~".+"`）：`equal: ["tenant", "metric_group", "da_cluster"]`——同租戶、同 `metric_group`、同叢集才抑制；租戶跑在多個叢集時，一個叢集的 critical 不抑制另一個叢集的 warning
     - 兩側都不帶（`da_cluster=""`，Prometheus 沒設這個 external label）：`equal: ["tenant", "metric_group"]`——同租戶、同 `metric_group` 就抑制，所以兩個都沒設標籤的叢集仍會互相抑制
 
@@ -670,7 +674,7 @@ flowchart TD
 
 **配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "mysql_connection_usage_percent"`。dedup inhibit rule 兩側都限定 `metric_group=~".+"`，故無 `metric_group` label 的 alert 不參與 dedup。（存活分級告警 `MariaDBDown`／`MariaDBClusterDown`／`MariaDBNoPrimary` 自 [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) 起帶 `metric_group: mariadb_liveness`（MongoDB 的同類告警帶 `mongodb_liveness`），使 critical 叢集存活告警自動抑制同租戶的 warning instance 告警。）
 
-**群組名在一個租戶內是同一個命名空間**：inhibit 比對租戶與 `metric_group`，不比對規則包，所以兩個規則包若用同一個值，同時使用兩包的租戶會被另一包的 critical 抑制 warning。`check_metric_group_pairs.py` 因此要求：每個值只屬於一個規則包；每個群組同時有 critical 與 warning 成員（inhibit 只抑制 `severity="warning"`，否則不抑制任何東西）；`slo_` 開頭保留給 custom alert 編譯器（[#3692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3692)）。`migrate_rule` 產生的群組名是完整的門檻鍵名。
+**群組名在一個租戶內是同一個命名空間**：inhibit 比對租戶與 `metric_group`，不比對規則包，所以兩個規則包若用同一個值，同時使用兩包的租戶會被另一包的 critical 抑制 warning。`check_metric_group_pairs.py` 因此要求：每個值只屬於一個規則包；每個群組同時有 critical 與 warning 成員（inhibit 只抑制 `severity="warning"`，否則不抑制任何東西）；`slo_` 開頭保留給 custom alert 編譯器（[#3692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3692)）。`migrate_rule` 不產生群組名：原規則的 labels 原樣保留。
 
 **Tenant 配置**
 
