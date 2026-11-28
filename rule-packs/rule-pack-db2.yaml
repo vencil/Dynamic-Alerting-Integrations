@@ -86,6 +86,7 @@
 #   1. bufferpool_hit_ratio 尺度是 0–1，由本 pack 從兩個讀取 counter 的 rate 算出；
 #      門檻若寫成百分數（95 而非 0.95），`< 95` 永遠成立 → 一直響。
 #   2. deadlocks_per_5m 比的是 increase() ＝**過去 5 分鐘的次數**，不是每秒值。
+#      （retired-key-mention: db2_deadlock_rate）
 #      舊 key db2_deadlock_rate 比每秒值，已退役（#1320）：換算是乘 300，但舊的
 #      建議值本來就到不了，請依 baseline 重新取值。
 #

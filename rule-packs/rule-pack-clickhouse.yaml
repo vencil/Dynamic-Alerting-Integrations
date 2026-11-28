@@ -263,6 +263,7 @@ groups:
       # Only where container_memory reads: the kubernetes pack on, the pod in a
       # tenant (db-*) namespace and a container memory limit set — a limitless
       # ClickHouse pod has no memory alert.
+      # (retired-key-mention: clickhouse_memory_tracking_bytes)
       # clickhouse_memory_tracking_bytes is in the registry's retired_keys.
       # --- Failed Queries (fixed threshold, no user override) ---
       - alert: ClickHouseHighFailedQueryRate

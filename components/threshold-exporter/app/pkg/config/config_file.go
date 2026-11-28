@@ -243,7 +243,7 @@ func dropNullShadowingSpellings(defaults map[string]float64, data []byte) {
 // ⛔ WHY THE GENERIC DECODE (#3063). The typed decode is not the strictest
 // reader of a tenant file. ScheduledValue's scalar branch keeps the scalar's
 // text and never resolves its tag, and a top-level key ThresholdConfig has no
-// field for is skipped unread, so `mysql_connections: !!int zzleak42` — an
+// field for is skipped unread, so `mysql_connection_usage_percent: !!int zzleak42` — an
 // explicit tag the text does not satisfy — decoded fine here while every
 // other reader of the same bytes refused it: the merge plane's
 // decodeTenantFile (merged_hash, /effective, da-guard), customalerts.Extract
