@@ -13,7 +13,7 @@
 ⛔ **「文件漏收進 nav」的閘門在 `mkdocs.yml`，不在這裡**：`validation.nav.omitted_files`
 （檔案在、nav 沒列）與 `validation.nav.not_found`（nav 列了、檔案不在）兩個方向都由
 mkdocs 自己在 build 時判定，經 `scripts/tools/lint/mkdocs_strict_check.sh` 轉成 rc，
-pre-push 與 CI 的 `MkDocs Build Verification` 共用同一支（#1903）。
+pre-push 與 CI 的 `Documentation Checks` 共用同一支（#1903）。
 
 ⚠️ 曾經有一個 `--check` 旗標宣稱在守這件事，但它比對的兩個集合**從來不在同一個座標
 系**：nav 條目相對於 `docs_dir`（`adr/001-….md`），掃描結果相對於 repo root
