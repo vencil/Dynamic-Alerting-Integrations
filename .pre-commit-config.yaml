@@ -2218,6 +2218,28 @@ repos:
       - id: actionlint
         args: [-shellcheck=, -pyflakes=]
 
+  # --- GHA security audit (zizmor; #3756 ③c, owner 2026-11-28) ---
+  # Official OSS engine through its upstream pre-commit hook, no Vibe wrapper
+  # (iac-lint-baseline "existing open-source engine first"). Which audits run
+  # is .github/zizmor.yml: three on, the rest off, zero findings at adoption.
+  # --offline: no GitHub API (the online audits need a token and the network,
+  # and would differ between a laptop and CI). --persona=regular: zizmor's
+  # minimal-false-positive set. --no-ignores: an inline `# zizmor: ignore[...]`
+  # comment would silence a finding with nothing to review it — a finding is
+  # fixed, or the audit is turned off in .github/zizmor.yml, in the open.
+  # --no-progress: the upstream hook's own arg, restated because `args:`
+  # replaces it.
+  # CI gate: ci.yml Lint job runs it BY NAME, as for actionlint.
+  # Pin: this `rev` only (tests/shared/test_zizmor_pin.py).
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.32.0
+    hooks:
+      - id: zizmor
+        args: [--no-progress, --offline, --persona=regular, --no-ignores, --config, .github/zizmor.yml]
+        # The vendored yaml.v3 copy carries upstream's own workflows; GitHub
+        # never runs them (they are not under this repository's .github/).
+        exclude: ^components/threshold-exporter/app/third_party/yaml\.v3/
+
   # --- Shell lint: ShellCheck, SC2006 class ------------------------------------
   # Hybrid policy (lint-policy / iac-lint-baseline): official OSS engine, no Vibe
   # wrapper. Covers the SHELL-SCRIPT face — every tracked `*.sh` plus

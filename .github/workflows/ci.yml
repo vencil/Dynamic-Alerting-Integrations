@@ -21,6 +21,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# #3756 ③c (zizmor excessive-permissions): without a top-level block every
+# job that sets none gets the repository's default token scopes. Read-only;
+# a job that needs more says so itself.
+permissions:
+  contents: read
+
 jobs:
   # No job in this workflow is path-gated (#3756). Until then a `detect-changes`
   # job ran dorny/paths-filter and the test legs carried `if:` on its outputs,
@@ -429,6 +435,9 @@ jobs:
           # for the job; no setup-go step needed). shellcheck/pyflakes are
           # pinned OFF in .pre-commit-config.yaml args for host/CI parity.
           pre-commit run actionlint --all-files
+          # GHA security audit (zizmor; #3756 ③c): the hook and the audits it
+          # runs are .pre-commit-config.yaml and .github/zizmor.yml.
+          pre-commit run zizmor --all-files
           # Shell lint (ShellCheck; SC2006 plus the SC10xx codes and --norc that
           # keep it fail-closed — see .pre-commit-config.yaml for which silences
           # each one covers). Auto-stage in the config, so contributors also get

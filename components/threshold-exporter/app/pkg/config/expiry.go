@@ -29,6 +29,7 @@ package config
 // exporter does on the first scrape past it.
 
 import (
+	"strings"
 	"time"
 )
 
@@ -83,11 +84,15 @@ func (c *ThresholdConfig) ValidAt(t time.Time) bool {
 // is still written (#4263). Where both name one threshold the served one is
 // described; both spellings stay when both are served. Tenants[tenant]
 // itself when the build decided nothing away. One tenant at a time: O(its
-// keys).
+// keys). Keyed as the tenant wrote its lines (TenantAsWritten, #4253).
 func (c *ThresholdConfig) DescribedTenant(tenant string) map[string]ScheduledValue {
 	if c == nil {
 		return nil
 	}
+	return TenantAsWritten(c.describedTenant(tenant))
+}
+
+func (c *ThresholdConfig) describedTenant(tenant string) map[string]ScheduledValue {
 	served := c.Tenants[tenant]
 	if c.expiry == nil || c.expiry.written == nil {
 		return served
@@ -132,15 +137,16 @@ func (c *ThresholdConfig) GaveWay(tenant, key string) bool {
 
 // WrittenTenant is tenant's merged map of the whole tree as written, before
 // `expires:` was decided: every time-boxed value in place, expired or not
-// (#4263). Tenants[tenant] when the build decided nothing away.
+// (#4263). Tenants[tenant] when the build decided nothing away. Keyed as the
+// tenant wrote its lines (TenantAsWritten, #4253).
 func (c *ThresholdConfig) WrittenTenant(tenant string) map[string]ScheduledValue {
 	if c == nil {
 		return nil
 	}
 	if c.expiry == nil || c.expiry.written == nil {
-		return c.Tenants[tenant]
+		return TenantAsWritten(c.Tenants[tenant])
 	}
-	return c.expiry.written[tenant]
+	return TenantAsWritten(c.expiry.written[tenant])
 }
 
 // ValidUntil is the first `expires:` of the tree after the instant the
@@ -233,6 +239,16 @@ func filterPartials(configs map[string]ThresholdConfig, keep expiryKeep) map[str
 	return out
 }
 
+// lapseOf is the line the layer writes in sv's place once sv's `expires:`
+// passes: the other spelling's line sv was folded over (valueFold.other),
+// when its reader serves it (tenantValueServes); and whether there is one.
+func lapseOf(key string, sv ScheduledValue) (ScheduledValue, bool) {
+	if sv.fold == nil || sv.fold.other == nil || !tenantValueServes(key, *sv.fold.other) {
+		return ScheduledValue{}, false
+	}
+	return *sv.fold.other, true
+}
+
 // bodiesHoldTimed is whether any threshold value of bodies (not a `_` key)
 // carries an `expires:`.
 func bodiesHoldTimed(bodies map[string]map[string]ScheduledValue) bool {
@@ -259,6 +275,20 @@ func filterBodies(bodies map[string]map[string]ScheduledValue, keep expiryKeep) 
 			// A `_` key is no threshold: it never lapses (eachTimed skips
 			// it, the readers ignore its `expires:`), so it is never cut.
 			if baseRowsSkipKey(k) || keep(sv) {
+				continue
+			}
+			// #4253: a line folded over another spelling's gives way to it
+			// (lapseOf) — the other line is what the layer writes with this
+			// one deleted.
+			lapse, hasLapse := lapseOf(k, sv)
+			if hasLapse && keep(lapse) {
+				if kept == nil {
+					kept = make(map[string]ScheduledValue, len(body))
+					for k2, v2 := range body {
+						kept[k2] = v2
+					}
+				}
+				kept[k] = lapse
 				continue
 			}
 			if kept == nil {
@@ -341,7 +371,7 @@ func filterLevels(parsed map[string]map[string]any, keep expiryKeep) map[string]
 func servable(view *ThresholdConfig, tenant, key string, canonDefaults map[string]float64) bool {
 	canon, _ := canonicalKeyFor(key)
 	if held, ok := heldAcrossSpellings(view.Tenants[tenant], canon); ok {
-		if isThresholdShaped(view.Tenants[tenant][held]) {
+		if tenantValueServes(canon, view.Tenants[tenant][held]) {
 			return true
 		}
 		// A dimensional key's resolver takes the tenant's own value over the
@@ -352,6 +382,26 @@ func servable(view *ThresholdConfig, tenant, key string, canonDefaults map[strin
 		}
 	}
 	return lapsesToRoot(canon, canonDefaults)
+}
+
+// tenantValueServes reports whether a tenant layer's value sv for key
+// (canonical) is one its reader serves: threshold-shaped, and for a
+// `<base>_critical` key a value the critical reader takes — its whole text a
+// number (or its `disable`), never `7:critical` (resolveCriticalRows reads
+// it with parseThresholdNumber). A schedule is judged by its shape.
+func tenantValueServes(key string, sv ScheduledValue) bool {
+	if !isThresholdShaped(sv) {
+		return false
+	}
+	if _, critical := criticalRowBase(key); !critical || len(sv.Overrides) > 0 {
+		return true
+	}
+	text := strings.TrimSpace(sv.Default)
+	if off, _ := thresholdRowDisabled(text); off {
+		return true
+	}
+	_, ok := parseThresholdNumber(text)
+	return ok
 }
 
 // lapsesToRoot reports whether, with no value of the tenant's for key
@@ -390,6 +440,8 @@ func heldAcrossSpellings(m map[string]ScheduledValue, key string) (string, bool)
 //
 // The events are the expired values that gave way — the one each tenant got
 // in the whole tree — and the time-boxed values now serves that can give way.
+// An event names the line as the tenant wrote it (#4253: the decode holds a
+// #1231 retired spelling under the canonical key).
 // ⚠️ Of several expired values stacked over one key, only the one the tenant
 // got names its expiry: the ones under it never served.
 func decideExpiry(at time.Time, full, now, untimed *ThresholdConfig, last, next time.Time) {
@@ -412,7 +464,7 @@ func decideExpiry(at time.Time, full, now, untimed *ThresholdConfig, last, next 
 			}
 			st.honoured[tenant][canon] = true // it gave way (a write check reads the value as written)
 			st.events = append(st.events, ResolvedThresholdExpiry{
-				Tenant: tenant, MetricKey: key, Expires: t, ExpiresText: sv.Expiry.Expires, Reason: sv.Expiry.Reason, Expired: true,
+				Tenant: tenant, MetricKey: sv.writtenAs(key), Expires: t, ExpiresText: sv.Expiry.Expires, Reason: sv.Expiry.Reason, Expired: true,
 			})
 		})
 	}
@@ -425,7 +477,7 @@ func decideExpiry(at time.Time, full, now, untimed *ThresholdConfig, last, next 
 			st.honoured[tenant][canon] = honoured
 			if honoured && t.After(at) {
 				st.events = append(st.events, ResolvedThresholdExpiry{
-					Tenant: tenant, MetricKey: key, Expires: t, ExpiresText: sv.Expiry.Expires, Reason: sv.Expiry.Reason,
+					Tenant: tenant, MetricKey: sv.writtenAs(key), Expires: t, ExpiresText: sv.Expiry.Expires, Reason: sv.Expiry.Reason,
 				})
 			}
 		})

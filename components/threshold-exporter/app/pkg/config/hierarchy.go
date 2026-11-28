@@ -131,6 +131,13 @@ type EffectiveConfig struct {
 	// inherited defaults at the same path. Not serialized — guard-only.
 	TenantOverridesRaw map[string]any `json:"-"`
 
+	// tenantTwins: the keys of TenantOverridesRaw the tenant's own block
+	// writes twice — under both #1231 spellings, which the decode folds into
+	// one (#4253), or two label spellings of one dimensional key (#2031).
+	// Deleting the kept line serves the other one, which no inherited value
+	// can stand for (JudgeableTenantOverrides).
+	tenantTwins map[string][]string
+
 	// MergedDefaults is the defaults chain merged together for this
 	// tenant's directory, BEFORE the tenant override is applied — with the
 	// root platform files' values for this tenant (#2019) merged over it,
@@ -446,7 +453,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	blocks := make([]map[string]any, len(chain))
 	spells := layerSpellings{tenant: doc.spell[tenantID]}
 	for i, p := range chain {
-		cd := r.chainBlock(p, defaultsYAML[i])
+		cd := r.chainBlock(p, defaultsYAML[i], i == rootLevel)
 		blocks[i] = cd.block
 		spells.addChain(i, len(chain), cd.spell)
 	}
@@ -471,6 +478,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		EffectiveConfig:    view,
 		MergedConfig:       parts.merged,
 		TenantOverridesRaw: parts.tenantRaw,
+		tenantTwins:        tenantDups(doc.spell[tenantID]),
 		MergedDefaults:     parts.mergedDefaults,
 		BoundProfile:       parts.profile,
 	}
@@ -570,14 +578,14 @@ func withNotCarried(notServed map[string]NotServedKey, view map[string]any, notC
 // (ParseChainDefaults — the parse foldDefaults folds), once per resolver.
 // The merge has already succeeded over these bytes, so a parse error cannot
 // reach here; a block that is not a mapping is nil, as the merge skips it.
-func (r *effectiveResolver) chainBlock(absPath string, b []byte) ChainDefaults {
+func (r *effectiveResolver) chainBlock(absPath string, b []byte, root bool) ChainDefaults {
 	if cd, ok := r.chainBlocks[absPath]; ok {
 		return cd
 	}
 	if r.chainBlocks == nil {
 		r.chainBlocks = make(map[string]ChainDefaults)
 	}
-	cd := ParseChainDefaults(b)
+	cd := parseChainDefaults(b, root) // #4253: the root's fold reads the root decode's
 	r.chainBlocks[absPath] = cd
 	return cd
 }
@@ -708,6 +716,10 @@ func computeEffectiveConfigDocAt(
 	parsed := buf[:0]
 	merged := make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
+		// The merge — merged_hash's input — decodes every level alike, as
+		// every path that hashes it does (ComputeMergedHash, the exporter's
+		// cold hash), which knows no root level; the view reads the root by
+		// the root decode (chainBlock, #4253).
 		pd := ParseChainDefaults(defBytes)
 		if merged, err = foldDefaults(merged, i, pd); err != nil {
 			return effectiveParts{}, err
@@ -859,15 +871,7 @@ func refusedRootThresholds(block map[string]any) map[string]bool {
 		if baseRowsSkipKey(k) || v == nil {
 			continue
 		}
-		refused := false
-		switch x := v.(type) {
-		case string:
-			_, ok := thresholdTextNumber(x)
-			refused = !ok && !RootDisableText(k, x)
-		case float64:
-			refused = !finiteThreshold(x)
-		}
-		if refused {
+		if rootRefusesRaw(k, v) {
 			if out == nil {
 				out = map[string]bool{}
 			}
@@ -875,6 +879,20 @@ func refusedRootThresholds(block map[string]any) map[string]bool {
 		}
 	}
 	return out
+}
+
+// rootRefusesRaw reports whether the root decode refuses raw — one
+// `defaults:` value of the root `_defaults.yaml`, as the walker holds it —
+// for key k: readRootDefault's verdict, read off the raw value.
+func rootRefusesRaw(k string, v any) bool {
+	switch x := v.(type) {
+	case string:
+		_, ok := thresholdTextNumber(x)
+		return !ok && !RootDisableText(k, x)
+	case float64:
+		return !finiteThreshold(x)
+	}
+	return false
 }
 
 // noteTenantMapOnlyWriters records the tenantMapOnlyKey keys, and the keys
@@ -1052,7 +1070,14 @@ type ChainDefaults struct {
 //
 // parse-tree's verdict first (ADR-036 step 6, #3206; parse_verdict.go): a file
 // it refuses keeps the *UnreadableFileError as that syntax error is kept.
-func ParseChainDefaults(b []byte) ChainDefaults {
+func ParseChainDefaults(b []byte) ChainDefaults { return parseChainDefaults(b, false) }
+
+// ParseRootChainDefaults is ParseChainDefaults for the conf.d root's own
+// `_defaults.yaml`: its #1231 fold takes the lines the root decode takes
+// (rootTakesRaw), as the typed root decode does (foldRootSpellings, #4253).
+func ParseRootChainDefaults(b []byte) ChainDefaults { return parseChainDefaults(b, true) }
+
+func parseChainDefaults(b []byte, root bool) ChainDefaults {
 	if err := judgeConfFile(b); err != nil {
 		return ChainDefaults{err: err}
 	}
@@ -1068,7 +1093,11 @@ func ParseChainDefaults(b []byte) ChainDefaults {
 	}
 	block := extractDefaultsBlock(normalizeYAMLToJSON(raw))
 	withThresholdLeaves(block, defaultsBlockNode(&doc)) // #3250, #3361
-	block, spell := normalizeKeys(block)
+	takes := levelTakes
+	if root {
+		takes = rootTakesRaw
+	}
+	block, spell := normalizeKeysTaking(block, takes) // #2031, #4253
 	return ChainDefaults{block: block, spell: spell}
 }
 
@@ -1167,11 +1196,13 @@ func ParseTenantDoc(b []byte) *TenantDoc {
 				if !ok {
 					continue
 				}
-				nb, s := normalizeKeys(b)
+				// Re-keyed even with nothing to record: a lone retired
+				// spelling is folded too (#4253).
+				nb, s := normalizeKeysTaking(b, levelTakes) // #2031, #4253
+				block[tid] = nb
 				if s == nil {
 					continue
 				}
-				block[tid] = nb
 				if d.spell == nil {
 					d.spell = make(map[string]*keySpellings)
 				}

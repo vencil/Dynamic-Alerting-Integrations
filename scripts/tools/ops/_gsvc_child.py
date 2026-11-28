@@ -46,6 +46,7 @@ exits 0 only after the end frame is written.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -75,6 +76,10 @@ import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 import _lib_tool_fault  # noqa: E402
 from _lib_validation import shown_file  # noqa: E402  (#3961: the author's paths into a message)
+# #3981: every write under the job directory is a runtime class write.
+from _lib_output import (  # noqa: E402
+    OutputWriteError, make_runtime_dir, open_runtime_file, write_runtime_file,
+)
 from _gsvc_proto import (  # noqa: E402
     ValidateRequest, entry_frame, frame, path_problem,
 )
@@ -233,9 +238,7 @@ def read_tree(job: ChildJob) -> list[tuple[str, str, str, bytes]]:
     contents: dict[str, bytes] = {}
     if blobs:
         ids_file = os.path.join(job.job_dir, "blob-ids")
-        with open(ids_file, "wb") as fh:
-            fh.write(b"".join(oid.encode("ascii") + b"\n" for oid in blobs))
-        os.chmod(ids_file, 0o600)
+        write_runtime_file(ids_file, b"".join(oid.encode("ascii") + b"\n" for oid in blobs))
         with open(ids_file, "rb") as fh:
             data = _git(job, "cat-file", "--batch", stdin=fh)
         pos = 0
@@ -269,7 +272,7 @@ def _parent_dir(root: str, rel: str, err: type) -> str:
         try:
             st = os.lstat(cur)
         except FileNotFoundError:
-            os.mkdir(cur, 0o700)
+            make_runtime_dir(cur, exist_ok=False)
             continue
         if not stat.S_ISDIR(st.st_mode):
             raise err(f"{shown_file(rel)}: '{shown_file(part)}' in its path is not a directory in the base tree")
@@ -277,19 +280,17 @@ def _parent_dir(root: str, rel: str, err: type) -> str:
 
 
 def _write_file(root: str, rel: str, content: bytes, err: type) -> None:
+    """*content* at *rel* below *root*, through the runtime file entry
+    (#3981: what is there is unlinked, the file made anew 0600, never
+    through a symlink); a directory there is *err*, as it always was."""
     parent = _parent_dir(root, rel, err)
     target = os.path.join(parent, rel.split("/")[-1])
     try:
-        st = os.lstat(target)
-    except FileNotFoundError:
-        st = None
-    if st is not None:
-        if stat.S_ISDIR(st.st_mode):
-            raise err(f"{shown_file(rel)}: is a directory in the base tree")
-        os.unlink(target)
-    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(content)
+        write_runtime_file(target, content)
+    except OutputWriteError as exc:
+        if exc.errno == errno.EISDIR:
+            raise err(f"{shown_file(rel)}: is a directory in the base tree") from exc
+        raise
 
 
 REGULAR_MODES = ("100644", "100755")
@@ -313,7 +314,7 @@ def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> dict[str,
     run for every component of every such entry — #3206, no name rule here);
     raises `_lib_parse_tree.ParseTreeError` when da-guard cannot answer."""
     if tree:
-        os.makedirs(root, mode=0o700, exist_ok=True)
+        make_runtime_dir(root, parents=True)
     others: list[tuple[str, str]] = []
     for mode, _oid, rel, content in tree:
         if path_problem(rel) is not None:
@@ -333,7 +334,7 @@ def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> dict[str,
     for rel, _mode in not_text:
         target = os.path.join(_parent_dir(root, rel, GitReadError), rel.split("/")[-1])
         if not os.path.lexists(target):
-            os.mkdir(target, 0o700)
+            make_runtime_dir(target, exist_ok=False)
     parts = sorted({part for rel, _m in others for part in rel.split("/")})
     classes = _lib_parse_tree.classify_names(parts) if parts else {}
     irregular: dict[str, str] = {}
@@ -370,7 +371,7 @@ def apply_writes(root: str, request: ValidateRequest,
         irregular = {}
     files: list[dict] = []
     if request.writes:
-        os.makedirs(root, mode=0o700, exist_ok=True)
+        make_runtime_dir(root, parents=True)
     for w in request.writes:
         parts = w.path.split("/")
         for i in range(1, len(parts)):
@@ -783,8 +784,7 @@ def run_child(job: ChildJob, result_fd: int) -> None:
         null = os.open(os.devnull, os.O_RDONLY)
         os.dup2(null, 0)
         for fd, name in ((1, "stdout"), (2, "stderr")):
-            out = os.open(os.path.join(job.job_dir, name),
-                          os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            out = open_runtime_file(os.path.join(job.job_dir, name))
             os.dup2(out, fd)
             os.close(out)
         stream = _Stream(result_fd, job.max_transfer)

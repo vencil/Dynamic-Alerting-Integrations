@@ -275,6 +275,42 @@ class TestExtractRulePackMetrics:
         with pytest.raises(_lib_consumer_read.SourcesUnlisted):
             mod.rule_pack_alert_names()
 
+    def test_alert_names_are_the_rule_loaders(self, tmp_path, monkeypatch):
+        """#4357: the names were a regex over the pack's text — a flow-mapping
+        rule was missed, a quoted name kept its quotes, and `- alert:` text in
+        a block scalar was taken for an alert. They are what Prometheus' rule
+        loader reads."""
+        rule_packs = tmp_path / "rule-packs"
+        rule_packs.mkdir()
+        _write(rule_packs / "rule-pack-db.yaml",
+            "groups:\n- name: g\n  rules:\n  - {alert: Flow, expr: up == 0}\n"
+            "  - alert: \"Quoted\"\n    expr: up == 0\n    annotations:\n"
+            "      description: |\n        - alert: InBlockScalar\n")
+        monkeypatch.setattr(mod, "RULE_PACKS_DIR", rule_packs)
+        assert mod.rule_pack_alert_names() == {"Flow", "Quoted"}
+
+    def test_alert_names_refuse_a_pack_the_loader_refuses(self, tmp_path, monkeypatch, capsys):
+        """#4357 / #3445: a pack the rule loader refuses is no source of
+        names — rc 2, the pack named, never a partial set."""
+        import _lib_consumer_read
+        rule_packs = tmp_path / "rule-packs"
+        rule_packs.mkdir()
+        _write(rule_packs / "rule-pack-db.yaml",
+            "groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up ==\n")
+        monkeypatch.setattr(mod, "RULE_PACKS_DIR", rule_packs)
+        with pytest.raises(_lib_consumer_read.RuleFilesRefused) as exc:
+            mod.rule_pack_alert_names()
+        assert [Path(r.path).name for r in exc.value.refused] == ["rule-pack-db.yaml"]
+        dictionary = tmp_path / "metric-dictionary.yaml"
+        dictionary.write_text("{}\n", encoding="utf-8")
+        monkeypatch.setattr(mod, "METRIC_DICT", dictionary)
+        monkeypatch.setattr(mod, "K8S_RULES_DIR", tmp_path / "no-k8s")
+        monkeypatch.setattr(sys, "argv", ["check_metric_dictionary.py", "--ci"])
+        with pytest.raises(SystemExit) as code:
+            mod.main()
+        assert code.value.code == 2
+        assert "rule-pack-db.yaml" in capsys.readouterr().err
+
     def test_k8s_non_configmap_yaml_skipped(self, tmp_path):
         # Property: a configmap-rules-*.yaml that isn't kind=ConfigMap is skipped.
         k8s = tmp_path / "k8s"

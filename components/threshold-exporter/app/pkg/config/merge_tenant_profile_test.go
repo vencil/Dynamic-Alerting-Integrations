@@ -348,16 +348,18 @@ func TestMergeTenantProfileNoticeWitnesses(t *testing.T) {
 			want: nil,
 		},
 		{
-			// M3: both spellings in the profile, in different files; the
-			// canonical one wins (canonicalView), so its file is named.
-			name: "M3 the canonical spelling's file is named",
+			// M3: both spellings in the profile, in different files. The
+			// decode folds each into the canonical key (#4253), so the two
+			// lines are one key in two files: the later file's line is the
+			// profile's, whatever its spelling, and its file is named.
+			name: "M3 the later file's line is named, whatever its spelling",
 			files: map[string]string{
 				"_defaults.yaml": "defaults:\n  mysql_threads_running: 70\n",
 				"_a.yaml":        "profiles:\n  strict:\n    mysql_threads_running:\n      default: \"1\"\n      expires: bad-a\n",
 				"_b.yaml":        "profiles:\n  strict:\n    mysql_cpu: \"2\"\n",
 			},
 			body: "tenants:\n  tx:\n    _profile: strict\n",
-			want: []string{`NOTICE: platform file _a.yaml, profile "strict" (elected by tenant tx via _profile): invalid ` + "`expires:`" + ` "bad-a" on "mysql_threads_running" (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert` + tail},
+			want: []string{`NOTICE: platform file _b.yaml, profile "strict" (elected by tenant tx via _profile): key "mysql_cpu" was renamed to "mysql_threads_running" (#1231) — the old name still resolves during the 2-release transition window; please update this override to "mysql_threads_running"` + tail},
 		},
 		{
 			// M4 (the stripped prefix) and M6 (a padded name elects the

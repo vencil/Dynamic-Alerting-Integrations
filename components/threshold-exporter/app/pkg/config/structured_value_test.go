@@ -88,8 +88,10 @@ func TestStructured_ScheduledValueSizeUnchanged(t *testing.T) {
 	if strconv.IntSize != 64 {
 		t.Skip("the pinned size is the 64-bit layout")
 	}
-	if got := unsafe.Sizeof(ScheduledValue{}); got != 56 {
-		t.Errorf("unsafe.Sizeof(ScheduledValue{}) = %d, want 56", got)
+	// 64 since #4253: the fold record's pointer (valueFold), nil on every
+	// line but a retired spelling's.
+	if got := unsafe.Sizeof(ScheduledValue{}); got != 64 {
+		t.Errorf("unsafe.Sizeof(ScheduledValue{}) = %d, want 64", got)
 	}
 }
 
