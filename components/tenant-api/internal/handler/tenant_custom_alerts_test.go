@@ -49,6 +49,33 @@ func readBody(resp *http.Response) (string, error) {
 	return string(b), err
 }
 
+// snapshotFile reads path before the request, so a refusal test compares the
+// file against what was really on disk, not against a fixture constant.
+func snapshotFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s before the request: %v", path, err)
+	}
+	return b
+}
+
+// assertFileUnchanged fails unless path still holds exactly before. A refused
+// write must leave the tenant file byte-identical: checking only that a key is
+// absent passes a handler that answers 400 but empties or rewrites the file
+// anyway (#4371).
+func assertFileUnchanged(t *testing.T, path string, before []byte) {
+	t.Helper()
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s after the refused write: %v", path, err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Errorf("refused write changed %s:\n--- before (%d bytes)\n%s\n--- after (%d bytes)\n%s",
+			filepath.Base(path), len(before), before, len(after), after)
+	}
+}
+
 func TestPutCustomAlerts_AddPreservesComments(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults})
@@ -112,12 +139,15 @@ func TestPutCustomAlerts_BaseHashMismatch409(t *testing.T) {
 	dir := setupConfigDir(t, map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults})
 	initGitRepo(t, dir)
 	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+	path := filepath.Join(dir, "db-a.yaml")
+	before := snapshotFile(t, path)
 
 	body := `{"base_hash":"deadbeefdeadbeef","custom_alerts":[{"recipe":"threshold","name":"q","metric":"m","threshold":"1","window":"5m"}]}`
 	resp := putCustomAlerts(t, deps, "db-a", body, "alice@example.com", []string{"dba"})
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 on base_hash mismatch", resp.StatusCode)
 	}
+	assertFileUnchanged(t, path, before)
 }
 
 func TestPutCustomAlerts_MatchingBaseHashSucceeds(t *testing.T) {
@@ -169,6 +199,8 @@ func TestPutCustomAlerts_PreExistingPoisonLocatable(t *testing.T) {
 	initGitRepo(t, dir)
 	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
 	h := cfg.ComputeSourceHash([]byte(poisoned))
+	path := filepath.Join(dir, "db-a.yaml")
+	before := snapshotFile(t, path)
 
 	// client adds a VALID recipe but resends the array incl the bad legacy one
 	body := `{"base_hash":"` + h + `","custom_alerts":[` +
@@ -182,6 +214,7 @@ func TestPutCustomAlerts_PreExistingPoisonLocatable(t *testing.T) {
 	if !strings.Contains(b, "legacy_bad") && !strings.Contains(b, "a:b:c") {
 		t.Errorf("400 violations must locate the offending pre-existing recipe; body: %s", b)
 	}
+	assertFileUnchanged(t, path, before)
 }
 
 func TestPutCustomAlerts_InvalidRecipe400WithViolations(t *testing.T) {
@@ -189,6 +222,9 @@ func TestPutCustomAlerts_InvalidRecipe400WithViolations(t *testing.T) {
 	dir := setupConfigDir(t, map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults})
 	initGitRepo(t, dir)
 	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+
+	path := filepath.Join(dir, "db-a.yaml")
+	before := snapshotFile(t, path)
 
 	// bad metric (colon → recording-rule reference, rejected by the validator)
 	h := cfg.ComputeSourceHash([]byte(caTenantYAML))
@@ -202,11 +238,8 @@ func TestPutCustomAlerts_InvalidRecipe400WithViolations(t *testing.T) {
 	if !strings.Contains(b, "violations") {
 		t.Errorf("400 must carry structured violations (Reef 4); body: %s", b)
 	}
-	// the bad recipe must NOT have been written
-	out, _ := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
-	if strings.Contains(string(out), "a:b:c") {
-		t.Errorf("invalid recipe must not be committed:\n%s", out)
-	}
+	// the bad recipe must NOT have been written — nor anything else
+	assertFileUnchanged(t, path, before)
 }
 
 func TestPutCustomAlerts_NotFound404(t *testing.T) {
@@ -232,11 +265,15 @@ func TestPutCustomAlerts_AbsentFieldRejected(t *testing.T) {
 	initGitRepo(t, dir)
 	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
 
+	path := filepath.Join(dir, "db-a.yaml")
+	before := snapshotFile(t, path)
+
 	h := cfg.ComputeSourceHash([]byte(caTenantYAML))
 	resp := putCustomAlerts(t, deps, "db-a", `{"base_hash":"`+h+`"}`, "alice@example.com", []string{"dba"})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 when custom_alerts is absent (must not silently delete)", resp.StatusCode)
 	}
+	assertFileUnchanged(t, path, before)
 }
 
 func TestPutCustomAlerts_MissingBaseHashRejected(t *testing.T) {
@@ -246,22 +283,29 @@ func TestPutCustomAlerts_MissingBaseHashRejected(t *testing.T) {
 	initGitRepo(t, dir)
 	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
 
+	path := filepath.Join(dir, "db-a.yaml")
+	before := snapshotFile(t, path)
+
 	resp := putCustomAlerts(t, deps, "db-a", `{"custom_alerts":[]}`, "alice@example.com", []string{"dba"})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 when base_hash is missing", resp.StatusCode)
 	}
+	assertFileUnchanged(t, path, before)
 }
 
 func TestPutCustomAlerts_PRMode501(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults})
 	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC), WriteMode: WriteModePR}
+	path := filepath.Join(dir, "db-a.yaml")
+	before := snapshotFile(t, path)
 
 	body := `{"custom_alerts":[{"recipe":"threshold","name":"q","metric":"m","threshold":"1","window":"5m"}]}`
 	resp := putCustomAlerts(t, deps, "db-a", body, "alice@example.com", []string{"dba"})
 	if resp.StatusCode != http.StatusNotImplemented {
 		t.Fatalf("status = %d, want 501 in PR write-back mode", resp.StatusCode)
 	}
+	assertFileUnchanged(t, path, before)
 }
 
 // #1017: a JSON-number quantile must be rejected 400 BEFORE the merge — a bare
@@ -273,6 +317,8 @@ func TestPutCustomAlerts_NumberQuantileRejected400(t *testing.T) {
 	dir := setupConfigDir(t, map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults})
 	initGitRepo(t, dir)
 	deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+	path := filepath.Join(dir, "db-a.yaml")
+	before := snapshotFile(t, path)
 
 	h := cfg.ComputeSourceHash([]byte(caTenantYAML))
 	body := `{"base_hash":"` + h + `","custom_alerts":[{"recipe":"p99_latency","name":"p99_slow",` +
@@ -287,10 +333,7 @@ func TestPutCustomAlerts_NumberQuantileRejected400(t *testing.T) {
 		t.Errorf("400 must carry a locatable quantile violation; body: %s", b)
 	}
 	// nothing must have been written
-	out, _ := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
-	if strings.Contains(string(out), "_custom_alerts") {
-		t.Errorf("rejected write must not touch the file:\n%s", out)
-	}
+	assertFileUnchanged(t, path, before)
 }
 
 // #1017 companion: the happy path — a STRING quantile is accepted and lands in
@@ -332,6 +375,8 @@ func TestPutCustomAlerts_UnloadableSelectorValueRejected400(t *testing.T) {
 			dir := setupConfigDir(t, map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults})
 			initGitRepo(t, dir)
 			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+			path := filepath.Join(dir, "db-a.yaml")
+			before := snapshotFile(t, path)
 
 			h := cfg.ComputeSourceHash([]byte(caTenantYAML))
 			body := `{"base_hash":"` + h + `","custom_alerts":[{"recipe":"rate","name":"r",` +
@@ -344,10 +389,7 @@ func TestPutCustomAlerts_UnloadableSelectorValueRejected400(t *testing.T) {
 			if !strings.Contains(b, c.want) || !strings.Contains(b, "_custom_alerts[0]") {
 				t.Errorf("400 must carry a locatable %q violation; body: %s", c.want, b)
 			}
-			out, _ := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
-			if strings.Contains(string(out), "_custom_alerts") {
-				t.Errorf("rejected write must not touch the file:\n%s", out)
-			}
+			assertFileUnchanged(t, path, before)
 		})
 	}
 }
