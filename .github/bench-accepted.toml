@@ -67,3 +67,10 @@ benches = ["BenchmarkMergeParsedPlatform_1000_Cached"]
 metric = "sec/op"
 max_delta_pct = 15
 reason = "寫入檢查的合併也墊內建層（#3832），多 11 個鍵；根層讀不讀得了改用已快取的解碼，不再每次重解"
+
+# #4253：ScheduledValue 帶解碼收斂退役拼寫的紀錄（56→64 B）；allocs/op 不變。
+[[accepted]]
+benches = ["BenchmarkMergePartialConfigs_1000"]
+metric = "B/op"
+max_delta_pct = 10
+reason = "ScheduledValue 新增 fold 紀錄（56→64 B），解碼收斂 #1231 拼寫後輸出要照原寫法、過期要改送另一行（#4253）；放旁表會讓合併與過期各自重建拼寫"
