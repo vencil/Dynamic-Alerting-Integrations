@@ -171,7 +171,7 @@
       },
       "key": "oracle_wait_time_rate{version=\"bad!!\"}",
       "verdict": "refuse",
-      "why": "the base must be declared-and-not-valued so this actually exercises the new dimensional branch; ADR-024 OQ-6 validation has to run there too, or the branch becomes a way to smuggle version labels past the guard"
+      "why": "the base must be declared-and-not-valued so this actually exercises the new dimensional branch; the `version` label validation has to run there too, or the branch becomes a way to smuggle version labels past the guard"
     },
     {
       "name": "bad version label on a valued base",

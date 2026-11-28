@@ -2195,7 +2195,7 @@ func nonFiniteWrites(tenantID string, tcfg cfg.ThresholdConfig, carried []byte) 
 //     sees an empty Defaults map and flags EVERY metric key as "unknown key
 //     not in defaults", blocking the write — even though GET /{id}, GET
 //     /{id}/effective and POST /{id}/validate all merge defaults and accept
-//     the same body (ADR-024 PR4 / #704 write-vs-read asymmetry). It also
+//     the same body (#704 write-vs-read asymmetry). It also
 //     makes ADR-024 version declarations (e.g. container_cpu{version="v2"})
 //     pass without the tenant having to inline `defaults:` into the body.
 //     The merge also carries the root platform files' `tenants:` entries for

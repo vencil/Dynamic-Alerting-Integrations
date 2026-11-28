@@ -846,8 +846,8 @@ func TestPutTenant_InvalidYAML(t *testing.T) {
 	}
 }
 
-// TestValidateAndWrite_AgreeOnTenantOnlyMetricBody locks the ADR-024 PR4 / #704
-// invariant where the bug actually lived: the dry-run validate handler and the
+// TestValidateAndWrite_AgreeOnTenantOnlyMetricBody locks the #704 invariant
+// where the bug actually lived: the dry-run validate handler and the
 // real write path must reach the SAME verdict for the same tenant-only metric
 // body (the real conf.d/{id}.yaml shape). They previously DIVERGED — POST
 // /{id}/validate merged _defaults.yaml and said "valid", but Writer.Write's

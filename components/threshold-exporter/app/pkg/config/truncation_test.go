@@ -1,6 +1,6 @@
 package config
 
-// truncation_test.go — deterministic cardinality-cap truncation (ADR-024 AC-7).
+// truncation_test.go — deterministic cardinality-cap truncation (ADR-024 §Consequences).
 //
 // The per-tenant cardinality cap in ResolveAtWithStats truncates a tenant's
 // resolved-threshold slice when it exceeds max_metrics_per_tenant. The slice

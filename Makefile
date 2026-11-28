@@ -990,7 +990,7 @@ renovate-fixup: $(DA_CRDECODE_PREREQ) ## 在 Renovate「third-party container im
 	@$(DA_CRDECODE_ENV) python3 ./scripts/tools/dx/renovate_fixup.py
 
 .PHONY: rulepack-configmaps
-rulepack-configmaps: $(DA_READ_PREREQ) ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
+rulepack-configmaps: $(DA_READ_PREREQ) ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml
 	@$(DA_READ_ENV) python3 ./scripts/tools/dx/generate_rulepack_configmaps.py
 
 .PHONY: crd-schemas

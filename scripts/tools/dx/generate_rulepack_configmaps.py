@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate k8s/03-monitoring/configmap-rules-<pack>.yaml from rule-packs/.
 
-ADR-024 PR3-pre-2: makes the live-deploy ConfigMap copies a BUILD ARTIFACT
+Makes the live-deploy ConfigMap copies a BUILD ARTIFACT
 of the canonical `rule-packs/` source, ending the manual 3-way sync that let
 a ~2-month drift ship silently (configmaps missing metadata enrichment /
 bilingual / tenant-label; see #423 PR3-pre).

@@ -56,7 +56,7 @@ type PutTenantResponse struct {
 // additionalProperties:false (#705). Validation merges the on-disk
 // _defaults.yaml so a tenant-only body's metric keys resolve against the
 // inherited defaults — identical to GET /{id} and POST /{id}/validate
-// (ADR-024 PR4 / #704). Writes to configDir/{id}.yaml and commits to git.
+// (#704). Writes to configDir/{id}.yaml and commits to git.
 //
 // #2903 (ADR-036 §4): routing and domain policy are judged by the route
 // generator container alone — the tree with this body written is judged

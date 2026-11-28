@@ -232,7 +232,7 @@ def _render(groups: List[dict], regenerate: str = "make custom-alerts-compile",
         "# GENERATED from _custom_alerts declarations by\n"
         "# scripts/tools/dx/compile_custom_alerts.py — DO NOT EDIT.\n"
         f"# Run `{regenerate}` after editing recipes/conf.d.\n"
-        "# Rule count = SHAPE count (vectorized, not per-tenant; ADR-024 §2b).\n"
+        "# Rule count = SHAPE count (vectorized, not per-tenant; ADR-024 §4).\n"
         "# ============================================================\n"
     )
     body = yaml.dump(

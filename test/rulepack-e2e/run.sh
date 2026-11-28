@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ADR-024 PR3b kind e2e — reproduces the (0a) version-injection prerequisite proof.
+# ADR-024 §2 kind e2e (deployment prerequisite) — reproduces the (0a) version-injection prerequisite proof.
 #
 # What it proves (the one thing promtool's synthetic kube_pod_labels CANNOT):
 #   1. DEFAULT kube-state-metrics emits ZERO kube_pod_labels samples → the rule

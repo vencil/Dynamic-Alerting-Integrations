@@ -12,7 +12,7 @@ import (
 )
 
 // TestMergeTenantWithRootDefaults_PopulatesDefaults verifies the consolidation
-// behind the GET / validate / write-boundary parity (ADR-024 PR4 / #704): a
+// behind the GET / validate / write-boundary parity (#704): a
 // tenant-only body merged against a root _defaults.yaml yields a config whose
 // Defaults are populated, so ValidateTenantKeys recognises plain metric keys
 // instead of flagging them "unknown key not in defaults".

@@ -13,8 +13,8 @@ package fedpolicy
 // purely to reuse the same triple-bounded Prometheus-metadata querying
 // discipline (timeout + io.LimitReader + `limit=`) and the same
 // `--federation-prometheus-url` backend. It is NOT part of the federation
-// 2-tier policy; it is a stateless proxy (ADR-024 §3 "Dumb Pipes, Smart
-// Endpoints").
+// 2-tier policy; it is a stateless proxy (ADR-024 §3, metric
+// autocomplete).
 //
 // Query design (mirrors admission.go's safety rules):
 //

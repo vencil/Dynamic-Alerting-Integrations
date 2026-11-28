@@ -225,6 +225,100 @@ def test_main_json_report_carries_the_ci_status(monkeypatch):
                         "reason": "no heading of the ADR has this number or name"}]
 
 
+# #4293: what a reference names inside its section — a quoted name, an
+# item number — and ADR-024's retired codes.
+ADR_036 = """# ADR-036
+
+## 決策
+
+### 2. 解析結果 JSON
+
+**寫 conf.d 檔：Go 是唯一的寫者。** Python 工具只決定「改什麼」。
+
+### 3. 運作方式
+
+1. 一
+2. 二
+
+- 不是第三項
+#### 3.1 細節
+
+3. 子節的第三項
+"""
+
+
+@pytest.fixture()
+def sections(tmp_path: Path):
+    (tmp_path / "docs" / "adr").mkdir(parents=True)
+    (tmp_path / "docs" / "adr" / "036-example.md").write_text(ADR_036, encoding="utf-8")
+    (tmp_path / "docs" / "adr" / "036-example.en.md").write_text(
+        "# ADR-036\n\n### 2. The JSON\n\n**Go is the only writer.**\n", encoding="utf-8"
+    )
+    return lint.load_adrs(tmp_path), lint.load_sections(tmp_path)
+
+
+def _reasons(sections, line: str) -> list[str]:
+    adrs, secs = sections
+    return [f.reason for f in lint.scan_text("x.go", line, adrs, secs)]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '// ADR-036 §2 "寫 conf.d 檔：Go 是唯一的寫者"',
+        "// ADR-036 §2 「Go 是唯一的寫者」",  # a phrase of the section
+        '// (ADR-036 §2 "Go is the only writer", step 10)',  # the other language's file
+        '// ADR-036 §2 "寫conf.d檔"',  # spaces are not compared
+        "// ADR-036 §3 item 2",
+        "// ADR-036 §3 第 3 項",  # an item of a subsection counts for the section
+        "// ADR-036 §2 is the JSON",  # nothing named inside the section
+    ],
+)
+# adr-check: ADR-027/9.8a
+def test_names_inside_the_section_pass(sections, line):
+    assert _reasons(sections, line) == []
+
+
+@pytest.mark.parametrize(
+    "line, want",
+    [
+        ('// ADR-036 §2 "寫 conf.d：Go 是唯一的寫者"', 'the quoted name "寫 conf.d：Go 是唯一的寫者" is not in §2'),
+        ('// ADR-036 §3 "Go 是唯一的寫者"', 'the quoted name "Go 是唯一的寫者" is not in §3'),
+        ("// ADR-036 §3 item 4", "§3 has no item 4"),
+        ("// ADR-036 §2 item 1", "§2 has no item 1"),
+    ],
+)
+# adr-check: ADR-027/9.8a
+def test_names_not_inside_the_section_fail(sections, line, want):
+    assert _reasons(sections, line) == [want]
+
+
+def test_a_missing_section_is_one_finding_not_two(sections):
+    assert _reasons(sections, '// ADR-036 §9 "Go 是唯一的寫者"') == [
+        "no heading of the ADR has this number or name"
+    ]
+
+
+@pytest.mark.parametrize(
+    "line, code",
+    [
+        ("// ADR-024 OQ-6 forbids it", "OQ-6"),
+        ("# (ADR-024 PR3b)", "PR3b"),
+        ("ADR-024 AC-7: the cap", "AC-7"),
+        ("ADR-024 Phase 1 expects", "Phase 1"),
+        ("ADR-024 §3 Reef 1", "§3 Reef 1"),
+    ],
+)
+# adr-check: ADR-027/9.8b
+def test_adr_024_retired_codes_fail(adrs, line, code):
+    assert _sections(adrs, line) == [code]
+
+
+def test_a_section_number_with_a_letter_is_one_token(adrs):
+    # ``§2b`` was read as ``§2`` and passed; ADR-024's example has no ``2b``.
+    assert _sections(adrs, "// ADR-024 §2b slot") == ["2b"]
+
+
 # adr-check: ADR-027/9.8a
 def test_the_repository_is_clean():
     assert lint.find_findings() == []
