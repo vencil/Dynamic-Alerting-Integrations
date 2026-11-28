@@ -73,7 +73,8 @@ PORTAL_REL = "tools/portal/src/interactive/tools/_common/data/reserved-keys.json
 WHOLE_FILE_TARGETS = frozenset({GO_REL, PORTAL_REL})
 
 LAYERS = ("tenant", "platform_tenants", "profile", "subtree_defaults", "platform_top")
-READERS = ("exporter", "generator", "custom_alert_compiler", "policy_engine", "annotation")
+READERS = ("exporter", "generator", "custom_alert_compiler", "policy_engine", "annotation",
+           "log_projection")
 #: The layers that end up in a tenant's own config: a key read in one of them
 #: is a reserved TENANT key.
 TENANT_LAYERS = frozenset({"tenant", "platform_tenants", "profile"})

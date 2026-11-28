@@ -56,6 +56,10 @@
     "_expected_exporters": {
       "description": "The exporters the tenant runs: a list of entries, each an exporter kind (a rule pack that has a presence metric) or `kind@cluster`. Served as tenant_expected_exporter{tenant, pack} for a kind alone (an exporter of that kind answering in any cluster is enough) and tenant_expected_exporter{tenant, pack, expected_cluster} for `kind@cluster` (one must answer in that cluster); declaring turns TenantExporterAbsent on for it."
     },
+    "_log_projection": {
+      "enum": ["enable", "disable", null],
+      "description": "Whether Vector copies the tenant's own platform logs into its log partition (ADR-021): `enable`, or `disable` (the default). Only a tenant that also holds an AccountID in tenant-api's ledger is projected."
+    },
     "_routing_defaults": {
       "$ref": "tenant-config.schema.json#/definitions/routingDefaults",
       "title": "Default routing inherited by all tenants under this directory",
