@@ -334,7 +334,7 @@ func keepReservedBodies(typed map[string]map[string]ScheduledValue, raw map[stri
 			if !mappingReservedKeys[k] || !hasDefaultKey(v) {
 				continue // not a reserved mapping the structured branch took
 			}
-			out, err := yaml.Marshal(v)
+			out, err := marshalStable(v) // #4370: a block it re-reads, as parse.go's
 			if err != nil {
 				continue // not reachable for a mapping decoded from YAML
 			}
