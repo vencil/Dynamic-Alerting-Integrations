@@ -18,9 +18,9 @@ data:
     \ * max by(tenant, da_cluster) (pg_stat_activity_count)\n\n      / on(tenant,\
     \ da_cluster)\n\n      clamp_min(max by(tenant, da_cluster) (pg_settings_max_connections),\
     \ 1)\n\n      '\n  - record: tenant:pg_replication_lag:max\n    expr: \"max by(tenant,\
-    \ da_cluster) (\\n  pg_replication_lag_seconds or ignoring(server) pg_replication_lag\\\
-    n)\\n\"\n  - record: tenant:pg_deadlocks:increase5m\n    expr: sum by(tenant,\
-    \ da_cluster) (increase(pg_stat_database_deadlocks[5m]))\n  - record: tenant:pg_rollback_ratio:rate5m\n\
+    \ da_cluster) (\\n  pg_replication_lag_seconds or pg_replication_lag\\n)\\n\"\n\
+    \  - record: tenant:pg_deadlocks:increase5m\n    expr: sum by(tenant, da_cluster)\
+    \ (increase(pg_stat_database_deadlocks[5m]))\n  - record: tenant:pg_rollback_ratio:rate5m\n\
     \    expr: \"sum by(tenant, da_cluster) (rate(pg_stat_database_xact_rollback[5m]))\\\
     n/ on(tenant, da_cluster)\\nclamp_min(\\n  sum by(tenant, da_cluster) (rate(pg_stat_database_xact_commit[5m]))\\\
     n  + sum by(tenant, da_cluster) (rate(pg_stat_database_xact_rollback[5m])),\\\

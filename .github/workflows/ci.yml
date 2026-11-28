@@ -988,11 +988,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-    # Not measured on a hosted runner, and the docker path of the script has
-    # not run anywhere before this job's first run. Without docker (PostgreSQL
-    # 16.15 and the exporter's release binary on a 4-core container) the
-    # capture and the check take 5-10 s; here the two images are pulled first.
-    # The script exits 2 by name when a pull fails 3 times.
+    # The whole job took 76 s on its first run (PR #4363, 2026-11-28), the two
+    # image pulls included. The script exits 2 by name when a pull fails 3 times.
     timeout-minutes: 15
     steps:
       - name: Checkout code

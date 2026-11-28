@@ -20,9 +20,11 @@ Pinned contracts
 4. Infrastructure failing — no docker, an image that cannot be pulled, a
    server that never becomes ready, an exporter that never reports the server
    up — is exit 2 with a message naming it, never exit 1 (a finding).
-5. The static half (no `--pack`) is a pre-commit hook that fires on the
-   registry, the drivers and the checker: without it a pack added with
-   neither `exporters:` nor a ledger row is caught only by pytest.
+5. The static half (no `--pack`) is a pre-commit hook that runs on every
+   commit (`always_run`: pre-commit matches `files:` against added and
+   changed files only, so a deleted driver would not trigger it): without it
+   a pack added with neither `exporters:` nor a ledger row is caught only by
+   pytest.
 
 3–4 run the real script and the real driver with `docker` / `curl` / `sleep`
 and the checker's python replaced by recorders.
@@ -266,7 +268,4 @@ def test_the_static_half_is_a_pre_commit_hook() -> None:
     hook = hooks[0]
     assert "--pack" not in hook["entry"] and "--ci" in hook["entry"].split()
     assert hook.get("pass_filenames") is False and "stages" not in hook
-    import re
-    for path in ("rule-packs/threshold-registry.yaml", "scripts/ops/exporter_capture/postgresql.sh",
-                 "scripts/tools/lint/check_exporter_capture.py", "scripts/tools/ops/_registry_lib.py"):
-        assert re.search(hook["files"], path), path
+    assert hook.get("always_run") is True and "files" not in hook

@@ -200,8 +200,10 @@ def plan_lines(doc: dict, pack: str) -> list[str]:
 
 # ── captures ────────────────────────────────────────────────────────────────
 
-_LABEL_TEXT = r'[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*"(?:[^"\\\n]|\\[\\"n])*"'
-_LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"((?:[^"\\\n]|\\[\\"n])*)"')
+# A label value takes any backslash escape, as Prometheus' text lexer does;
+# only \\ \" \n are unescaped (the rest stay as written, as there).
+_LABEL_TEXT = r'[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*"(?:[^"\\\n]|\\[^\n])*"'
+_LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"((?:[^"\\\n]|\\[^\n])*)"')
 #: A sample line of the text format, whole: name, an optional label block that
 #: holds only `name="value"` pairs (a trailing comma allowed), a value and an
 #: optional integer timestamp.
@@ -209,9 +211,12 @@ _SAMPLE = re.compile(
     r"([a-zA-Z_:][a-zA-Z0-9_:]*)"
     rf"(\{{\s*(?:{_LABEL_TEXT}\s*(?:,\s*{_LABEL_TEXT}\s*)*,?\s*)?\}})?"
     r"[ \t]+(\S+)(?:[ \t]+-?\d+)?[ \t]*$")
-#: The values the text format takes: a float (Go's ParseFloat spelling, no
-#: `_`), NaN, +Inf, -Inf.
-_VALUE = re.compile(r"[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|[iI]nf|NaN)")
+#: The values Prometheus' text parser takes (strconv.ParseFloat): decimal
+#: floats with an optional exponent, and NaN / Inf / Infinity in any case,
+#: signed. (ParseFloat's hexadecimal and `_`-separated forms are refused: no
+#: exporter writes them.)
+_VALUE = re.compile(r"[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|inf(?:inity)?|nan)",
+                    re.IGNORECASE)
 _UNESCAPE = {"\\\\": "\\", '\\"': '"', "\\n": "\n"}
 
 def parse_exposition(text: str) -> "list[tuple[str, dict[str, str], float]]":

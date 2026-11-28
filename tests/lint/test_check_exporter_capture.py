@@ -142,15 +142,29 @@ def test_every_state_of_a_multi_state_entry_names_its_identity() -> None:
                for p in registry_lib.exporters_problems(_doc(postgresql={"exporters": [stray]})))
 
 
-@pytest.mark.parametrize("field", ["flags", "digest", "states", "server"])
-def test_an_entry_missing_a_field_is_a_schema_message_not_a_crash(field) -> None:
-    """The header is rendered from the doc after the schema ran; a field the
-    schema reports missing must not turn the run into a KeyError (exit 2) that
-    hides every message."""
-    entry = DOC["packs"]["postgresql"]["exporters"][0]
-    doc = _doc(postgresql={"exporters": [{k: v for k, v in entry.items() if k != field}]})
+_ENTRY = DOC["packs"]["postgresql"]["exporters"][0]
+
+
+@pytest.mark.parametrize("exporters", [
+    *([{k: v for k, v in _ENTRY.items() if k != field}]
+      for field in ("flags", "digest", "states", "server", "name")),
+    [{**_ENTRY, "identity": [{"metric": "pg_replication_is_replica", "value": 0}]}],
+    [{**_ENTRY, "identity": {"replica": {"metric": "pg_x", "value": "1"}}}],
+    [{**_ENTRY, "flags": [1]}],
+    [{**_ENTRY, "states": [["primary"], "replica"]}],
+    [{**_ENTRY, "server": {"image": "postgres", "tag": "16"}}],
+    ["not an entry"],
+    True,
+], ids=lambda e: repr(e)[:40])
+def test_a_malformed_entry_is_a_schema_message_not_a_crash(exporters) -> None:
+    """Everything derived from `exporters:` runs after the schema in the same
+    pass; a shape the schema reports must not turn the run into an exception
+    (exit 2) that hides every message."""
+    doc = _doc(postgresql={"exporters": exporters})
     assert registry_lib.validate_registry(doc)
     assert registry_lib.render_exporter_capture_lines(doc, "postgresql") == []
+    registry_lib.exporters_problems(doc)
+    registry_lib.pack_exporters(doc)
     for spec in registry_lib.surface_specs(doc):
         assert spec["id"]
 
@@ -174,12 +188,16 @@ def test_parse_exposition_reads_names_labels_and_escapes() -> None:
             'c_bucket{le="+Inf"} 3\n\n')
     assert cec.parse_exposition(text) == [
         ("a", {}, 1.0), ("b", {"l": "v", "m": 'q"uo\\te\nnl'}, 2.5), ("c_bucket", {"le": "+Inf"}, 3.0)]
+    # an escape other than backslash, quote and newline is kept as written,
+    # as Prometheus keeps it
+    assert cec.parse_exposition('t{a="x\\ty"} 1\n') == [("t", {"a": "x\\ty"}, 1.0)]
     assert cec.series_text("b", {"m": 'q"uo\\te\nnl', "l": "v"}) == 'b{l="v",m="q\\"uo\\\\te\\nnl"}'
     with pytest.raises(cec.CannotRun):
         cec.parse_exposition("<html>not a scrape</html>\n")
 
 
 @pytest.mark.parametrize("line", ["x NaN", "x +Inf", "x -Inf", "x 1e-3", "x .5", 'x{a="1",} 2',
+                                  "x nan", "x Infinity", "x -INF", 'x{a="\\t"} 1',
                                   'x{ a = "1" , b="" } 2 1700000000000', "x{} 0"])
 def test_parse_exposition_takes_every_value_and_label_spelling_of_the_format(line) -> None:
     assert len(cec.parse_exposition(line + "\n")) == 1
@@ -353,7 +371,7 @@ def test_reading_only_the_old_lag_name_is_a_finding(tmp_path, da_read_env) -> No
     """The pack before #4354: the pinned exporter serves no pg_replication_lag."""
     pack = ROOT / DOC["packs"]["postgresql"]["rule_pack_file"]
     text = pack.read_text(encoding="utf-8")
-    new = "pg_replication_lag_seconds or ignoring(server) pg_replication_lag\n"
+    new = "pg_replication_lag_seconds or pg_replication_lag\n"
     assert text.count(new) == 1
     old = tmp_path / pack.name
     old.write_text(text.replace(new, "pg_replication_lag\n"), encoding="utf-8")

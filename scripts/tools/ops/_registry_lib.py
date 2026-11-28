@@ -1240,7 +1240,39 @@ def pack_exporters(doc: dict) -> "dict[str, list[dict]]":
     captured. Only the packs that carry the field."""
     return {str(name): list(meta["exporters"])
             for name, meta in (doc.get("packs") or {}).items()
-            if isinstance(meta, dict) and meta.get("exporters")}
+            if isinstance(meta, dict) and isinstance(meta.get("exporters"), list)
+            and meta["exporters"]}
+
+
+def _is_str_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _well_formed_exporter(entry) -> bool:
+    """*entry* has every field the derivations read, of the type they read it
+    as — the schema's shape, asked here so that a malformed registry yields
+    the schema's message instead of a crash that replaces every message of
+    the run."""
+    if not isinstance(entry, dict):
+        return False
+    server, identity = entry.get("server"), entry.get("identity", {})
+    return (all(isinstance(entry.get(k), str) for k in ("name", "image", "tag", "digest"))
+            and _is_str_list(entry.get("flags")) and _is_str_list(entry.get("states"))
+            and isinstance(server, dict)
+            and all(isinstance(server.get(k), str) for k in ("image", "tag", "digest"))
+            and isinstance(identity, dict)
+            and all(isinstance(v, dict) and isinstance(v.get("metric"), str)
+                    and isinstance(v.get("value"), (int, float)) and not isinstance(v.get("value"), bool)
+                    for v in identity.values()))
+
+
+def well_formed_exporters(meta) -> "list[dict] | None":
+    """A pack's `exporters:` entries when every one is well formed, else None
+    (the schema reports what is wrong; nothing is derived from it)."""
+    exporters = meta.get("exporters") if isinstance(meta, dict) else None
+    if not isinstance(exporters, list) or not all(_well_formed_exporter(e) for e in exporters):
+        return None
+    return exporters
 
 
 def exporter_text(exporters: "list[dict]") -> str:
@@ -1273,13 +1305,11 @@ def exporters_problems(doc: dict) -> list[str]:
                 "no capture for a name to be left out of")
         if not exporters:
             continue
-        try:
-            want = exporter_text(exporters)
-        except (KeyError, TypeError):
-            continue   # the schema names a malformed entry
+        exporters = well_formed_exporters(meta)
+        if exporters is None:
+            continue   # the schema names the malformed entry
+        want = exporter_text(exporters)
         for i, e in enumerate(exporters):
-            if not isinstance(e, dict) or not isinstance(e.get("states"), list):
-                continue   # the schema names a malformed entry
             ident = set(e.get("identity") or {})
             if ident - set(e["states"]):
                 problems.append(
@@ -1952,17 +1982,6 @@ _CRITICAL_SECTION_LINES = (
 )
 
 
-def _well_formed_exporter(entry) -> bool:
-    """*entry* has every field the header renders, of the type it renders."""
-    if not isinstance(entry, dict):
-        return False
-    server = entry.get("server")
-    return (all(isinstance(entry.get(k), str) for k in ("name", "image", "tag", "digest"))
-            and isinstance(entry.get("flags"), list) and isinstance(entry.get("states"), list)
-            and isinstance(server, dict)
-            and all(isinstance(server.get(k), str) for k in ("image", "tag")))
-
-
 def render_exporter_capture_lines(doc: dict, pack_name: str) -> list[str]:
     """The pack-header lines that tell a reader which real exporter the pack's
     raw metrics are checked against (#3833): per `exporters:` entry its name,
@@ -1972,7 +1991,7 @@ def render_exporter_capture_lines(doc: dict, pack_name: str) -> list[str]:
     meta = (doc.get("packs") or {}).get(pack_name) or {}
     # An entry the schema refuses is not rendered: the schema's message is the
     # finding, and a KeyError here would replace every message of the run.
-    exporters = [e for e in meta.get("exporters") or [] if _well_formed_exporter(e)]
+    exporters = well_formed_exporters(meta)
     if not exporters:
         return []
     lines = [
