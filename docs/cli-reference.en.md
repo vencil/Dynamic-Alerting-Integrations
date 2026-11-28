@@ -3162,7 +3162,7 @@ If none resolves, prints install hints (download from `tools/v*` release / `sh s
 | Finding kind | Severity | Trigger |
 |---|---|---|
 | `missing_required` | error | a dotted path listed in `--required-fields` is absent from the tenant's effective config, or present with a null value (a null on a threshold key is not an opt-out; write `disable` to stop alerting); one finding per tenant and field, Field naming the path |
-| `redundant_override` | warn | a tenant override equals the defaults value it inherits; remove the override and rely on inheritance. A value inherited from a refused subtree defaults key is not reported |
+| `redundant_override` | warn | deleting the tenant's line changes nothing; remove it and rely on inheritance. A threshold key: the threshold rows the exporter serves stay the same from now on without the line, and no other finding owns the line. A reserved key: only one the reserved-key registry names the exporter as the one reader of (in the tenant file, the platform entry and the profile) with a shape that is no mapping or list, written as a scalar equal to the inherited one, with no other finding owning the line (today `_silent_mode` and `_state_*`). A value inherited from a refused subtree defaults key is not reported |
 | `cardinality_exceeded` | error | the tenant's predicted row count (see `--cardinality-limit`) exceeds the per-tenant limit; or, within the limit, exceeds the exporter's own `max_metrics_per_tenant` (the exporter would silently truncate) |
 | `cardinality_warning` | warn | the tenant's predicted row count is within the limit but above the warn tier (limit × `--cardinality-warn-ratio`); the message gives the share of the limit and the rows left |
 

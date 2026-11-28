@@ -174,10 +174,10 @@ func TestCheckRedundantOverrides_NoOpWhenInputsMissing(t *testing.T) {
 func TestCheckRedundantOverrides_FlagsScalarDuplicate(t *testing.T) {
 	t.Parallel()
 	got := checkRedundantOverrides(CheckInput{
-		NewDefaults: map[string]any{"_thresholds": map[string]any{"_cpu": 0.9}},
+		NewDefaults: map[string]any{"_silent_mode": "warning"},
 		TenantOverrides: map[string]map[string]any{
-			"redundant":  {"_thresholds": map[string]any{"_cpu": 0.9}},
-			"meaningful": {"_thresholds": map[string]any{"_cpu": 0.95}},
+			"redundant":  {"_silent_mode": "warning"},
+			"meaningful": {"_silent_mode": "critical"},
 		},
 	})
 	if len(got) != 1 {
@@ -196,30 +196,55 @@ func TestCheckRedundantOverrides_FlagsScalarDuplicate(t *testing.T) {
 
 func TestCheckRedundantOverrides_SkipsStructuredValues(t *testing.T) {
 	t.Parallel()
-	// Maps and slices must NOT compare as redundant in PR-1 even
-	// when their contents look identical — this is the documented
-	// false-positive guardrail.
+	// A reserved mapping or list is never judged, nor a leaf nested under
+	// one (#4331): it can carry an `expires:`, a weekday window or a field
+	// another reader reads, which an equal-looking value does not show.
 	got := checkRedundantOverrides(CheckInput{
 		NewDefaults: map[string]any{
-			"_receivers": []any{"email", "slack"},
-			"_labels":    map[string]any{"team": "x"},
+			"_expected_exporters": []any{"mysql"},
+			"_metadata":           map[string]any{"owner": "x"},
+			"_silent_mode":        "warning",
 		},
 		TenantOverrides: map[string]map[string]any{
 			"t1": {
-				"_receivers": []any{"email", "slack"},
-				"_labels":    map[string]any{"team": "x"},
+				"_expected_exporters": []any{"mysql"},
+				"_metadata":           map[string]any{"owner": "x"},
+				"_silent_mode":        "warning",
 			},
 		},
 	})
-	// `_receivers` is a leaf (slice), `_labels.team` is a scalar leaf.
-	// _labels.team='x' is the same in both → ONE finding for _labels.team.
-	// _receivers is structured → NOT flagged. (Reserved `_` keys: the leaf
-	// comparison is theirs alone since #4330.)
-	if len(got) != 1 {
-		t.Fatalf("got %d findings, want 1 (_labels.team only)", len(got))
+	if len(got) != 1 || got[0].Field != "_silent_mode" {
+		t.Fatalf("findings %+v, want only _silent_mode (no mapping, list or nested leaf)", got)
 	}
-	if got[0].Field != "_labels.team" {
-		t.Errorf("field = %q, want _labels.team", got[0].Field)
+}
+
+// #4331: a reserved key is judged by its value only where the registry
+// names the exporter as its one reader, in every layer it can be inherited
+// from (config.RedundancyJudgedByValue).
+func TestCheckRedundantOverrides_ReservedKeysTheRegistryLetsBeJudged(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		key   string
+		value any
+		want  bool
+	}{
+		{"_silent_mode", "warning", true},
+		{"_state_maintenance", "enable", true},
+		// The route generator reads it too.
+		{"_severity_dedup", "enable", false},
+		{"_routing_profile", "p1", false},
+		// The exporter does not read it in a profile.
+		{"_profile", "gold", false},
+		// Nothing reads it (the key verdict reports it).
+		{"_myth", "x", false},
+	} {
+		got := checkRedundantOverrides(CheckInput{
+			NewDefaults:     map[string]any{tc.key: tc.value},
+			TenantOverrides: map[string]map[string]any{"t1": {tc.key: tc.value}},
+		})
+		if (len(got) == 1) != tc.want || len(got) > 1 {
+			t.Errorf("%s: findings %+v, want redundant=%v", tc.key, got, tc.want)
+		}
 	}
 }
 
@@ -247,12 +272,12 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_PerTenantMaps(t *testing.T)
 	// not its own. PR-1's single NewDefaults map can't distinguish.
 	got := checkRedundantOverrides(CheckInput{
 		TenantOverrides: map[string]map[string]any{
-			"t-db":  {"_cpu": 80},
-			"t-web": {"_cpu": 80},
+			"t-db":  {"_silent_mode": "warning"},
+			"t-web": {"_silent_mode": "warning"},
 		},
 		NewDefaultsByTenant: map[string]map[string]any{
-			"t-db":  {"_cpu": 80},
-			"t-web": {"_cpu": 70},
+			"t-db":  {"_silent_mode": "warning"},
+			"t-web": {"_silent_mode": "critical"},
 		},
 	})
 	if len(got) != 1 {
@@ -272,12 +297,12 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_PrecedesGlobal(t *testing.T
 	// tenants that have one; the global map covers the rest.
 	got := checkRedundantOverrides(CheckInput{
 		TenantOverrides: map[string]map[string]any{
-			"t-specific": {"_cpu": 99},
-			"t-fallback": {"_cpu": 50},
+			"t-specific": {"_silent_mode": "critical"},
+			"t-fallback": {"_silent_mode": "warning"},
 		},
-		NewDefaults: map[string]any{"_cpu": 50}, // t-fallback uses this
+		NewDefaults: map[string]any{"_silent_mode": "warning"}, // t-fallback uses this
 		NewDefaultsByTenant: map[string]map[string]any{
-			"t-specific": {"_cpu": 99}, // t-specific uses this (override per-tenant)
+			"t-specific": {"_silent_mode": "critical"}, // t-specific uses this (override per-tenant)
 		},
 	})
 	tenantsFlagged := make(map[string]bool)
@@ -300,10 +325,10 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_NilEntrySkips(t *testing.T)
 	// "explicit opt-out per tenant" path.
 	got := checkRedundantOverrides(CheckInput{
 		TenantOverrides: map[string]map[string]any{
-			"t1": {"_cpu": 80},
-			"t2": {"_cpu": 80},
+			"t1": {"_silent_mode": "warning"},
+			"t2": {"_silent_mode": "warning"},
 		},
-		NewDefaults: map[string]any{"_cpu": 80},
+		NewDefaults: map[string]any{"_silent_mode": "warning"},
 		NewDefaultsByTenant: map[string]map[string]any{
 			"t1": nil, // explicitly skip t1
 		},
@@ -414,9 +439,9 @@ func TestCheckDefaultsImpact_WarningsAlonePass(t *testing.T) {
 		EffectiveConfigs: map[string]map[string]any{
 			"warned": {"thresholds": map[string]any{"cpu": 0.9}},
 		},
-		NewDefaults: map[string]any{"_thresholds": map[string]any{"_cpu": 0.9}},
+		NewDefaults: map[string]any{"_silent_mode": "warning"},
 		TenantOverrides: map[string]map[string]any{
-			"warned": {"_thresholds": map[string]any{"_cpu": 0.9}},
+			"warned": {"_silent_mode": "warning"},
 		},
 	})
 	if err != nil {
@@ -442,9 +467,9 @@ func TestCheckDefaultsImpact_FindingsSortedErrorsFirst(t *testing.T) {
 			"b": {"thresholds": map[string]any{"cpu": 0.5}},
 		},
 		RequiredFields: []string{"thresholds.cpu"},
-		NewDefaults:    map[string]any{"_thresholds": map[string]any{"_cpu": 0.5}},
+		NewDefaults:    map[string]any{"_silent_mode": "warning"},
 		TenantOverrides: map[string]map[string]any{
-			"b": {"_thresholds": map[string]any{"_cpu": 0.5}},
+			"b": {"_silent_mode": "warning"},
 		},
 	})
 	if err != nil {
@@ -532,9 +557,9 @@ func TestGuardReportMarkdown_RendersBothTablesWhenPresent(t *testing.T) {
 			"warned":  {"thresholds": map[string]any{"cpu": 0.5}},
 		},
 		RequiredFields: []string{"thresholds.cpu"},
-		NewDefaults:    map[string]any{"_thresholds": map[string]any{"_cpu": 0.5}},
+		NewDefaults:    map[string]any{"_silent_mode": "warning"},
 		TenantOverrides: map[string]map[string]any{
-			"warned": {"_thresholds": map[string]any{"_cpu": 0.5}},
+			"warned": {"_silent_mode": "warning"},
 		},
 	})
 	if err != nil {

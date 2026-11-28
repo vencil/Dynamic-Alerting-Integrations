@@ -142,3 +142,65 @@ func TestGuard_RedundantOverrideIsTheCounterfactual(t *testing.T) {
 		})
 	}
 }
+
+// #4331: a reserved key is judged by its value only where the registry names
+// the exporter as its one reader in every layer it can be inherited from —
+// end to end, over a root platform file's `tenants:` entry and a profile.
+func TestGuard_RedundantReservedKeyFollowsTheRegistry(t *testing.T) {
+	t.Parallel()
+	const root = "defaults:\n  pg_connections: 80\n"
+	for _, tc := range []struct {
+		name      string
+		files     map[string]string
+		field     string
+		redundant bool
+	}{
+		{"silent mode repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _silent_mode: warning\n",
+				"tx.yaml": "tenants:\n  tx:\n    _silent_mode: warning\n"},
+			"_silent_mode", true},
+		{"silent mode repeating the profile",
+			map[string]string{"_defaults.yaml": root, "_profiles.yaml": "profiles:\n  std:\n    _silent_mode: warning\n",
+				"tx.yaml": "tenants:\n  tx:\n    _profile: std\n    _silent_mode: warning\n"},
+			"_silent_mode", true},
+		// The route generator reads it too.
+		{"severity dedup repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _severity_dedup: disable\n",
+				"tx.yaml": "tenants:\n  tx:\n    _severity_dedup: disable\n"},
+			"_severity_dedup", false},
+		{"routing profile repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _routing_profile: p1\n",
+				"tx.yaml": "tenants:\n  tx:\n    _routing_profile: p1\n"},
+			"_routing_profile", false},
+		// The exporter does not read `_profile` in a profile.
+		{"profile binding repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_profiles.yaml": "profiles:\n  gold:\n    pg_connections: 70\n",
+				"_platform.yaml": "tenants:\n  tx:\n    _profile: gold\n",
+				"tx.yaml":        "tenants:\n  tx:\n    _profile: gold\n"},
+			"_profile", false},
+		// A list key, here written as a scalar on both sides.
+		{"expected exporters repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _expected_exporters: mysql\n",
+				"tx.yaml": "tenants:\n  tx:\n    _expected_exporters: mysql\n"},
+			"_expected_exporters", false},
+		// The key verdict reports the line (a state filter the root does not
+		// declare): its finding, not a redundancy.
+		{"state key of an undeclared filter repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _state_foo: enable\n",
+				"tx.yaml": "tenants:\n  tx:\n    _state_foo: enable\n"},
+			"_state_foo", false},
+		{"refused silent mode repeating the platform entry",
+			map[string]string{"_defaults.yaml": root, "_platform.yaml": "tenants:\n  tx:\n    _silent_mode: bogus\n",
+				"tx.yaml": "tenants:\n  tx:\n    _silent_mode: bogus\n"},
+			"_silent_mode", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := allFindings(t, "--config-dir", writeReservedConfD(t, tc.files))
+			reported := slices.Contains(got, "warn redundant_override tx "+tc.field)
+			if reported != tc.redundant {
+				t.Errorf("redundant_override on %s = %v, want %v (findings %q)", tc.field, reported, tc.redundant, got)
+			}
+		})
+	}
+}
