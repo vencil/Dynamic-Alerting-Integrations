@@ -1,7 +1,10 @@
 # #3276 G1: every value a da-tools command takes, and what it is.
 # The rules and the kinds: tests/shared/test_caller_path_manifest.py (module docstring).
 # `by` names the reader that judges a `reader` input, or what the tool does with a
-# `runtime` path (documentation; the gate checks pinned_by).
+# `runtime` path (documentation; the gate checks pinned_by). A `runtime` path is
+# the third write class (#3981): what the tool makes there goes through the
+# runtime entry of _lib_output, and only a command declaring one may call it
+# (tests/shared/test_runtime_entry_callers.py).
 # A flag declared with `_lib_input.add_input` (#3446) has no line here: its
 # declaration is on the parser (`action.input_spec`), and the gate reads it there.
 
@@ -157,7 +160,7 @@ commands:
     "--socket": {kind: runtime, by: "_old_socket_at / _prepare_socket_path, at start: an old socket there is replaced by a service that starts; anything else there (a file, a directory, a FIFO, a symlink), or a file on the way to it, refuses to start naming --socket, before --work-dir is touched, and is left as it was; a directory that is not there (it may be the --work-dir this start creates) and a path too long for AF_UNIX are refused by the bind, after --work-dir is prepared", pinned_by: "tests/ops/test_generator_service.py::test_what_is_at_the_socket_path_and_is_no_socket_is_left_as_it_was"}
     "--warm-ref": not_path
     "--warm-seconds": not_path
-    "--work-dir": {kind: runtime, by: "_prepare_work_dir, at start: created if missing, its jobs directory emptied and nothing else in it touched; a path that cannot be a directory, or a jobs entry that is a file or a symlink, refuses to start naming --work-dir with the reason, removes nothing and leaves an old socket at --socket alone; a jobs directory that cannot be emptied whole refuses with rmtree's reason after what could be removed is gone", pinned_by: "tests/ops/test_generator_service.py::test_a_work_dir_that_cannot_be_one_is_named_and_nothing_there_is_removed"}
+    "--work-dir": {kind: runtime, by: "_prepare_work_dir, at start, through the runtime entry (#3981): created 0700 if missing, its jobs directory emptied and nothing else in it touched; a symlink, a directory another uid owns or one with any group/other mode bit, a path that cannot be a directory, or a jobs entry that is a file or a symlink, refuses to start naming --work-dir with the reason, removes nothing and leaves an old socket at --socket alone; a jobs directory that cannot be emptied whole refuses with rmtree's reason after what could be removed is gone", pinned_by: "tests/ops/test_generator_service.py::test_a_work_dir_that_cannot_be_one_is_named_and_nothing_there_is_removed"}
   gitops-check local:
   grafana-import:
     "--name": not_path
