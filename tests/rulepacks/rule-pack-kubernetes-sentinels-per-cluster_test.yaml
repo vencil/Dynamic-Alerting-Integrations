@@ -105,18 +105,18 @@ tests:
         values: '1x80'
       - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="west"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '1000x80'
       # another tenant, healthy in west: its volume-stats are not db-t1's.
       - series: 'user_threshold{tenant="db-t2", component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__disk", name="disk_will_fill", mode="page", severity="warning"}'
         values: '0.15x80'
       - series: 'kube_pod_status_phase{namespace="db-t2", pod="app-1", phase="Running", da_cluster="west"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t2", persistentvolumeclaim="data", da_cluster="west"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t2", persistentvolumeclaim="data", da_cluster="west"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t2", persistentvolumeclaim="data", da_cluster="west"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t2", persistentvolumeclaim="data", da_cluster="west"}'
         values: '1000x80'
     alert_rule_test:
       - eval_time: 16m
@@ -130,8 +130,8 @@ tests:
             exp_annotations:
               summary: "Disk alert declared but no disk data is visible for db-t1 in cluster west"
               summary_zh: "已設定磁碟告警，但偵測不到 db-t1 在叢集 west 的磁碟資料"
-              platform_summary: "[SRE] db-t1 disk recipe inert — volume-stats absent in cluster west. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
-              platform_summary_zh: "[SRE] 租戶 db-t1 disk recipe inert — volume-stats 缺席（叢集 west）。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
+              platform_summary: "[SRE] db-t1 disk recipe inert — volume-stats absent in cluster west. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job (series keep their `namespace`); (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
+              platform_summary_zh: "[SRE] 租戶 db-t1 disk recipe inert — volume-stats 缺席（叢集 west）。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否存在、序列是否保留 `namespace`;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
               description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload in cluster west, so the alert can never fire there. This usually means your service mounts no PersistentVolumeClaim in that cluster — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
               description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載在叢集 west 的磁碟(volume)指標，該告警在該叢集永遠不會觸發。這通常表示您的服務在該叢集沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
               platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
@@ -148,13 +148,13 @@ tests:
         values: '1x80'
       - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="west"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '1000x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="west"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="west"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="west"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="west"}'
         values: '1000x80'
     alert_rule_test:
       - eval_time: 16m
@@ -170,9 +170,9 @@ tests:
         values: '1x80'
       - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="west"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '1000x80'
     alert_rule_test:
       - eval_time: 16m
@@ -186,9 +186,9 @@ tests:
         values: '0.15x80'
       - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="east"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '1000x80'
       # west exists (another tenant runs there), db-t1 does not run in it.
       - series: 'kube_pod_status_phase{namespace="db-t2", pod="app-1", phase="Running", da_cluster="west"}'
@@ -228,9 +228,9 @@ tests:
         values: '1x80'
       - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="west"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '1000x80'
       - series: 'user_state_filter{tenant="db-t1", filter="maintenance"}'
         values: '1x80'
@@ -271,11 +271,11 @@ tests:
         values: '1x80'
       - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="west"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="east"}'
         values: '1000x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data", da_cluster="west"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t1", persistentvolumeclaim="data", da_cluster="west"}'
         values: '800x80'
     promql_expr_test:
       - expr: count without(alertgroup) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
@@ -534,9 +534,9 @@ tests:
         values: '0.15x80'
       - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="east"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t1", persistentvolumeclaim="data"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t1", persistentvolumeclaim="data"}'
         values: '1000x80'
     promql_expr_test:
       - expr: count without(alertgroup) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
@@ -554,9 +554,9 @@ tests:
         values: '1x80'
       - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t1", persistentvolumeclaim="data"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t1", persistentvolumeclaim="data"}'
         values: '1000x80'
     promql_expr_test:
       - expr: count without(alertgroup) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})
@@ -573,9 +573,9 @@ tests:
         values: '0.15x80'
       - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t1", persistentvolumeclaim="data"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t1", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t1", persistentvolumeclaim="data"}'
         values: '1000x80'
       - series: 'kube_pod_status_phase{namespace="db-t1", pod="app-1", phase="Running", da_cluster="west"}'
         values: '1x80'
@@ -585,9 +585,9 @@ tests:
         values: '1x80'
       - series: 'kube_pod_status_phase{namespace="db-t2", pod="app-1", phase="Running", da_cluster="west"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-t2", persistentvolumeclaim="data", da_cluster="west"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-t2", persistentvolumeclaim="data", da_cluster="west"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-t2", persistentvolumeclaim="data", da_cluster="west"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-t2", persistentvolumeclaim="data", da_cluster="west"}'
         values: '1000x80'
     promql_expr_test:
       - expr: count without(alertgroup) (ALERTS{alertname="CustomRecipeDiskInert", alertstate="firing"})

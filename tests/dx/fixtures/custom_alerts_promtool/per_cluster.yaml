@@ -304,13 +304,13 @@ tests:
   #    base record per series, so the label rides through them. ──
   - interval: 1m
     input_series:
-      - series: 'kubelet_volume_stats_available_bytes{tenant="shop-a", da_cluster="west", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+      - series: 'kubelet_volume_stats_available_bytes{da_cluster="west", namespace="shop-a", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
         values: '800-1.2x540'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="shop-a", da_cluster="west", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{da_cluster="west", namespace="shop-a", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
         values: '1000+0x540'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="shop-a", da_cluster="east", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+      - series: 'kubelet_volume_stats_available_bytes{da_cluster="east", namespace="shop-a", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
         values: '9000+0x540'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="shop-a", da_cluster="east", namespace="shop", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{da_cluster="east", namespace="shop-a", persistentvolumeclaim="data-shop-0", instance="10.0.0.1:10250", job="kubelet"}'
         values: '10000+0x540'
       - series: 'user_threshold{component="custom", metric="kubelet_volume_stats_available_bytes", recipe_id="forecast__kubelet_volume_stats_available_bytes__lt__h4h__den_kubelet_volume_stats_capacity_bytes__for30m__gb_persistentvolumeclaim", tenant="shop-a", severity="warning", name="disk_will_fill", mode="page"}'
         values: '0.15+0x540'

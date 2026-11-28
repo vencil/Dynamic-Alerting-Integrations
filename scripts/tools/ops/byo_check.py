@@ -406,9 +406,9 @@ def _judge_step4_disk_recipe_prereq(declaring, err, arriving, arriving_err, runn
     arriving_tenants = {r.get("metric", {}).get("tenant", "?") for r in (arriving or [])}
     running_tenants = {r.get("metric", {}).get("tenant", "?") for r in (running or [])}
     # NOTE: the three tenant sets derive `tenant` differently and only line up under
-    # the 1:1 conf.d-id == namespace convention (ADR-006 §Addendum): declaring =
+    # the 1:1 conf.d-id == namespace convention (ADR-006 §"Tenant attribution of infrastructure metrics"): declaring =
     # user_threshold.tenant (the conf.d id, exporter-emitted); arriving / running =
-    # namespace (via the volume-stats relabel / label_replace). A non-1:1 tenant
+    # namespace (via label_replace; #4178: no scrape writes it). A non-1:1 tenant
     # silently drops out of `candidates` — conservative (under-flags, never
     # false-fails), matching the runtime sentinel's own 1:1-only behavior.
     # Only tenants we can CONFIRM have running pods (the running-pods guard). NO
@@ -431,14 +431,14 @@ def _judge_step4_disk_recipe_prereq(declaring, err, arriving, arriving_err, runn
         }
     elif len(missing) == len(candidates):
         # EVERY running declaring tenant lacks volume-stats → platform-wide rollout
-        # gap (volume-stats job / CSI / relabel missing) — the storm this step catches.
+        # gap (volume-stats job / CSI missing) — the storm this step catches.
         return {
             "check": "step4_disk_recipe_prereq",
             "status": "fail",
             "detail": f"{len(candidates)} running tenant(s) declared a disk recipe but NO "
-                      "tenant-attributed kubelet_volume_stats arrive. Verify (1) CSI "
-                      "NodeGetVolumeStats, (2) a kubelet volume-stats scrape job, (3) the "
-                      "namespace→tenant relabel. CustomRecipeDiskInert will fire for all.",
+                      "kubelet_volume_stats arrive from their namespaces. Verify (1) CSI "
+                      "NodeGetVolumeStats, (2) a kubelet volume-stats scrape job that keeps "
+                      "the db-* namespaces. CustomRecipeDiskInert will fire for all.",
         }
     elif missing:
         return {
@@ -446,14 +446,14 @@ def _judge_step4_disk_recipe_prereq(declaring, err, arriving, arriving_err, runn
             "status": "warn",
             "detail": "volume-stats arrive for some tenants, but these declaring+running "
                       f"tenant(s) have none: {', '.join(missing[:10])} — check PVC mount / "
-                      "CSI / that the relabel value matches the tenant id.",
+                      "CSI / that the tenant's namespace is its id (1:1).",
         }
     else:
         return {
             "check": "step4_disk_recipe_prereq",
             "status": "pass",
             "detail": f"{len(candidates)} running disk-recipe tenant(s) all have "
-                      "tenant-attributed volume-stats",
+                      "volume-stats from their namespaces",
         }
 
 
@@ -493,8 +493,8 @@ def _judge_step5_disk_iops_recipe_prereq(declaring, err, arriving, arriving_err,
             "check": "step5_disk_iops_recipe_prereq",
             "status": "fail",
             "detail": f"{len(candidates)} running tenant(s) declared a disk-IOPS recipe but NO "
-                      "tenant-attributed container_fs arrives. Either container_fs_* is not in "
-                      "the cadvisor scrape keep + namespace→tenant relabel, OR the storage "
+                      "container_fs arrives from their namespaces. Either container_fs_* is "
+                      "not in the cadvisor scrape keep, OR the storage "
                       "bypasses cgroup blkio (network volumes like NFS/EFS report 0) so "
                       "container_fs cannot see it — the IOPS recipe will never fire. Confirm "
                       "with a representative load test before relying on it.",
@@ -505,15 +505,49 @@ def _judge_step5_disk_iops_recipe_prereq(declaring, err, arriving, arriving_err,
             "status": "warn",
             "detail": "container_fs arrives for some tenants, but these declaring+running "
                       f"tenant(s) have none: {', '.join(missing[:10])} — check the cadvisor "
-                      "keep/relabel, or whether their volumes bypass blkio (network storage).",
+                      "keep, or whether their volumes bypass blkio (network storage).",
         }
     else:
         return {
             "check": "step5_disk_iops_recipe_prereq",
             "status": "pass",
             "detail": f"{len(candidates)} running disk-IOPS-recipe tenant(s) all have "
-                      "tenant-attributed container_fs",
+                      "container_fs from their namespaces",
         }
+
+
+#: #4178: a query for cAdvisor / kubelet series that still carry a scrape-written
+#: `tenant` — the namespace→tenant relabel the docs taught before. Read per job.
+STALE_INFRA_TENANT_QUERY = (
+    'count by(job) (container_cpu_usage_seconds_total{tenant!=""}) '
+    'or count by(job) (kubelet_volume_stats_capacity_bytes{tenant!=""})'
+)
+
+
+def _judge_step6_infra_tenant_label(found, err):
+    """Judge Step 6 (#4178): no scrape writes `tenant` on cAdvisor's or the
+    kubelet's series. They name the tenant only as `namespace`; the platform
+    derives `tenant` from it, and a tenant's custom rule pins
+    `namespace="<id>", tenant=""` on them — which selects nothing where a
+    leftover relabel still writes `tenant`."""
+    if err:
+        return _query_failed("step6_infra_tenant_label", err)
+    jobs = sorted({r.get("metric", {}).get("job", "?") for r in (found or [])})
+    if jobs:
+        return {
+            "check": "step6_infra_tenant_label",
+            "status": "warn",
+            "detail": "cAdvisor / kubelet series carry a `tenant` label (job "
+                      f"{', '.join(jobs[:10])}): remove the namespace→tenant relabel from "
+                      "that scrape. They are read by `namespace`; a tenant custom rule that "
+                      "matches namespace=\"<id>\", tenant=\"\" on them selects nothing "
+                      "while the label is written.",
+        }
+    return {
+        "check": "step6_infra_tenant_label",
+        "status": "pass",
+        "detail": "no cAdvisor / kubelet series carry a scrape-written `tenant`",
+    }
 
 
 def check_prometheus(args):
@@ -603,13 +637,13 @@ def check_prometheus(args):
                                                       missing_err))
 
     # Step 4: disk-recipe prerequisite (#692 P0③ W3) — kubelet volume-stats scraped
-    # AND tenant-attributed. Only meaningful if a tenant declared a disk-fill custom
+    # from the tenants' namespaces. Only meaningful if a tenant declared a disk-fill custom
     # alert (forecast/ratio over kubelet_volume_stats_*). This is the onboarding-time
     # shift-left of the runtime CustomRecipeDiskInert sentinel: catch a rollout gap
-    # (disk recipes enabled but the volume-stats scrape job / CSI driver / relabel is
+    # (disk recipes enabled but the volume-stats scrape job / CSI driver is
     # missing) BEFORE the sentinel fires for every declaring tenant. We verify the
     # ACTUAL flow — a static scrape-config lint can't prove CSI NodeGetVolumeStats /
-    # nodes-proxy RBAC / the relabel regex actually match (see test/disk-stats-spike).
+    # nodes-proxy RBAC / the namespace keep actually match (see test/disk-stats-spike).
     # Scope MUST mirror the CustomRecipeDiskInert sentinel EXACTLY, or byo_check and the
     # runtime alert split-brain (Gemini adversarial finding). Two parts: (a) the SAME
     # metric set the sentinel's declared-leg matches — available_bytes OR used_bytes, as
@@ -631,7 +665,14 @@ def check_prometheus(args):
     arriving = arriving_err = running = running_err = None
     if not err and declaring:
         arriving, arriving_err = query_prometheus(
-            prom_url, 'count by(tenant) (kubelet_volume_stats_available_bytes{tenant!=""})'
+            prom_url,
+            # #4178: the kubelet's series name the tenant only as `namespace` (no
+            # scrape writes `tenant`); a series that carries one keeps it — the
+            # recipe compiler's own reading (custom_alert_compile.go tenantRead).
+            'count by(tenant) (label_replace('
+            'kubelet_volume_stats_available_bytes{namespace=~"db-.+", tenant=""}, '
+            '"tenant", "$1", "namespace", "(.+)") '
+            'or kubelet_volume_stats_available_bytes{tenant!=""})'
         )
         running, running_err = query_prometheus(
             prom_url,
@@ -642,8 +683,8 @@ def check_prometheus(args):
     checks.append(_judge_step4_disk_recipe_prereq(declaring, err, arriving, arriving_err, running,
                                                   running_err))
 
-    # Step 5: disk-IOPS-recipe prerequisite (#692 P0④) — container_fs scraped AND
-    # tenant-attributed. Only meaningful if a tenant declared a rate recipe over
+    # Step 5: disk-IOPS-recipe prerequisite (#692 P0④) — container_fs scraped from
+    # the tenants' namespaces. Only meaningful if a tenant declared a rate recipe over
     # container_fs_* (per-CONTAINER disk I/O, NOT per-PVC). Unlike volume-stats, IOPS has
     # NO runtime sentinel (cAdvisor is core-scraped, no CSI dependency → an inert IOPS
     # recipe is ALWAYS platform-side, so a per-tenant page would be noise to the wrong
@@ -667,8 +708,13 @@ def check_prometheus(args):
     if not err and declaring:
         arriving, arriving_err = query_prometheus(
             prom_url,
-            'count by(tenant) (container_fs_reads_total{tenant!=""} '
-            'or container_fs_writes_total{tenant!=""})'
+            # #4178: cAdvisor's series name the tenant only as `namespace`; one
+            # that carries a `tenant` keeps it, as the recipe compiler reads it.
+            'count by(tenant) (label_replace('
+            'container_fs_reads_total{namespace=~"db-.+", tenant=""} '
+            'or container_fs_writes_total{namespace=~"db-.+", tenant=""}, '
+            '"tenant", "$1", "namespace", "(.+)") '
+            'or container_fs_reads_total{tenant!=""} or container_fs_writes_total{tenant!=""})'
         )
         running, running_err = query_prometheus(
             prom_url,
@@ -678,6 +724,10 @@ def check_prometheus(args):
         )
     checks.append(_judge_step5_disk_iops_recipe_prereq(declaring, err, arriving, arriving_err,
                                                        running, running_err))
+
+    # Step 6 (#4178): a leftover namespace→tenant relabel on cAdvisor / kubelet.
+    found, err = query_prometheus(prom_url, STALE_INFRA_TENANT_QUERY)
+    checks.append(_judge_step6_infra_tenant_label(found, err))
 
     return checks
 

@@ -916,7 +916,7 @@ With N tenants and 10,000 Pods, every 15-second evaluation cycle requires Promet
 ```yaml
 # Part 2 Recording Rule (runs in background, produces low-cardinality metrics)
 - record: tenant:cpu_usage:rate5m
-  expr: sum by (tenant) (rate(container_cpu_usage_seconds_total{container!=""}[5m]))
+  expr: sum by (tenant) (label_replace(rate(container_cpu_usage_seconds_total{container!=""}[5m]), "tenant", "$1", "namespace", "(.+)"))
 
 # Part 3 Alert Rule (compares two pre-computed number vectors)
 - alert: TenantCPUHigh

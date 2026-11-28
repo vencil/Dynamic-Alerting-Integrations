@@ -4378,7 +4378,7 @@ WRITER_NAMES_USED_AS_VALUES: dict[tuple[str, str], tuple[int, str]] = {
         1, "a string in LF_PINNING_WRAPPERS: the lint's own list of writers that "
            "pin LF, a name it looks for in other files and never calls."),
     ("ops/_registry_lib.py", "write_repo_artifact"): (
-        7, "handed to `_write_or_stop` as its `write` argument for the generated "
+        8, "handed to `_write_or_stop` as its `write` argument for the generated "
         "surfaces of the threshold registry (fixed repo paths, no flag). The "
         "write is `write_repo_artifact`'s own frame on a stack, so the audit "
         "attributes it when a row runs it; none does today."),

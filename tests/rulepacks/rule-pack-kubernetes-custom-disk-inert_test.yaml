@@ -10,7 +10,7 @@
 #
 # #1168 edge-normalization layering: the pods leg and the volume-stats presence
 # legs are now EDGE recordings (tenant:kube_pods_running:count /
-# tenant:kubelet_volume_stats:count, tenant-labeled → federated) and the alert
+# tenant:kubelet_volume_stats:count, tenant derived from namespace → federated) and the alert
 # reads only recordings + injected config. Alert cases A–K below are the
 # UNCHANGED fire/no-fire contract (behaviour-equivalence regression); the added
 # promql_expr_test samples pin the recordings' tenant-labeled shape — the
@@ -65,14 +65,35 @@ tests:
             exp_annotations:
               summary: "Disk alert declared but no disk data is visible for db-a"
               summary_zh: "已設定磁碟告警，但偵測不到 db-a 的磁碟資料"
-              platform_summary: "[SRE] db-a disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
-              platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
+              platform_summary: "[SRE] db-a disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job (series keep their `namespace`); (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
+              platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否存在、序列是否保留 `namespace`;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
               description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
               description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
               platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
               runbook_url: ""
               owner: ""
               tier: ""
+
+  # ── B2) #4178: the kubelet's series name the tenant only as `namespace`; a
+  # series that ALSO carries a scrape-written `tenant` (a BYO install that kept
+  # the old namespace→tenant relabel) counts the same, and one with no
+  # `namespace` counts for nobody — the tenant comes from `namespace` alone ──
+  - interval: 15s
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-a", tenant="db-a", persistentvolumeclaim="data"}'
+        values: '800x80'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-a", tenant="db-a", persistentvolumeclaim="data"}'
+        values: '1000x80'
+      - series: 'kubelet_volume_stats_available_bytes{tenant="db-b", persistentvolumeclaim="data"}'
+        values: '800x80'
+      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-b", persistentvolumeclaim="data"}'
+        values: '1000x80'
+    promql_expr_test:
+      - expr: tenant:kubelet_volume_stats:count
+        eval_time: 5m
+        exp_samples:
+          - labels: 'tenant:kubelet_volume_stats:count{tenant="db-a"}'
+            value: 1
 
   # ── B) HEALTHY: declared + pods + BOTH volume-stats present → SILENT ──
   - interval: 15s
@@ -81,9 +102,9 @@ tests:
         values: '0.15x80'
       - series: 'kube_pod_status_phase{namespace="db-a", pod="app-1", phase="Running"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-a", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-a", persistentvolumeclaim="data"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-a", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-a", persistentvolumeclaim="data"}'
         values: '1000x80'
     promql_expr_test:
       # #1168: BOTH families present → the presence recording exists per tenant
@@ -106,9 +127,9 @@ tests:
         values: '0.15x80'
       - series: 'kube_pod_status_phase{namespace="db-a", pod="app-a", phase="Running"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-a", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-a", persistentvolumeclaim="data"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-a", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-a", persistentvolumeclaim="data"}'
         values: '1000x80'
       # db-b: declared + pods + NO volume-stats → inert. A global count()==0 would be
       # FALSE here (db-a's series exist) and mask db-b; per-tenant isolates it.
@@ -127,8 +148,8 @@ tests:
             exp_annotations:
               summary: "Disk alert declared but no disk data is visible for db-b"
               summary_zh: "已設定磁碟告警，但偵測不到 db-b 的磁碟資料"
-              platform_summary: "[SRE] db-b disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
-              platform_summary_zh: "[SRE] 租戶 db-b disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
+              platform_summary: "[SRE] db-b disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job (series keep their `namespace`); (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
+              platform_summary_zh: "[SRE] 租戶 db-b disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否存在、序列是否保留 `namespace`;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
               description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
               description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
               platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
@@ -143,7 +164,7 @@ tests:
         values: '0.15x80'
       - series: 'kube_pod_status_phase{namespace="db-a", pod="app-1", phase="Running"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-a", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-a", persistentvolumeclaim="data"}'
         values: '800x80'
       # capacity ABSENT → the forecast ratio's denominator is empty → silent → must fire inert.
     alert_rule_test:
@@ -157,8 +178,8 @@ tests:
             exp_annotations:
               summary: "Disk alert declared but no disk data is visible for db-a"
               summary_zh: "已設定磁碟告警，但偵測不到 db-a 的磁碟資料"
-              platform_summary: "[SRE] db-a disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
-              platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
+              platform_summary: "[SRE] db-a disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job (series keep their `namespace`); (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
+              platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否存在、序列是否保留 `namespace`;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
               description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
               description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
               platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
@@ -225,8 +246,8 @@ tests:
             exp_annotations:
               summary: "Disk alert declared but no disk data is visible for db-a"
               summary_zh: "已設定磁碟告警，但偵測不到 db-a 的磁碟資料"
-              platform_summary: "[SRE] db-a disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
-              platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
+              platform_summary: "[SRE] db-a disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job (series keep their `namespace`); (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
+              platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否存在、序列是否保留 `namespace`;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
               description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
               description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
               platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
@@ -243,9 +264,9 @@ tests:
         values: '0.85x80'
       - series: 'kube_pod_status_phase{namespace="db-a", pod="app-1", phase="Running"}'
         values: '1x80'
-      - series: 'kubelet_volume_stats_available_bytes{tenant="db-a", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="db-a", persistentvolumeclaim="data"}'
         values: '800x80'
-      - series: 'kubelet_volume_stats_capacity_bytes{tenant="db-a", persistentvolumeclaim="data"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="db-a", persistentvolumeclaim="data"}'
         values: '1000x80'
     alert_rule_test:
       - eval_time: 16m
@@ -274,8 +295,8 @@ tests:
             exp_annotations:
               summary: "Disk alert declared but no disk data is visible for db-a"
               summary_zh: "已設定磁碟告警，但偵測不到 db-a 的磁碟資料"
-              platform_summary: "[SRE] db-a disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job + namespace→tenant relabel; (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
-              platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
+              platform_summary: "[SRE] db-a disk recipe inert — volume-stats absent. Check in order: (1) tenant mounts no PVC (most common, tenant-side); (2) kubelet volume-stats scrape job (series keep their `namespace`); (3) CSI NodeGetVolumeStats support (kind's default local-path does not)."
+              platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否存在、序列是否保留 `namespace`;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
               description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
               description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
               platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"

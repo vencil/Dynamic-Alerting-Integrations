@@ -535,9 +535,12 @@ def _pin_lint(tmp_path, expr, records=()):
     'absent(kube_deployment_status_replicas_available{tenant="db-a"})',
     'kube_pod_info{tenant="db-a", namespace="db-a"} > 0',
     '{__name__="kube_pod_info", tenant="db-a"} > 0',  # the name as a matcher (review)
+    'rate(container_cpu_usage_seconds_total{tenant="db-a"}[5m]) > 1',  # cAdvisor (#4178)
+    'kubelet_volume_stats_available_bytes{tenant="db-a"} < 1',          # volume stats (#4178)
 ])
 def test_a_tenant_pin_on_series_without_tenant_is_an_error(tmp_path, expr):
-    """kube-state-metrics' series carry no tenant (its job writes none):
+    """kube-state-metrics', cAdvisor's and the kubelet's series carry no
+    tenant (their jobs write none, #4178):
     the pin selects nothing, so the rule never fires (absent(): always)."""
     found = [m for m in _pin_lint(tmp_path, expr) if "carry no tenant" in m]
     assert len(found) == 1, _pin_lint(tmp_path, expr)
@@ -547,8 +550,8 @@ def test_a_tenant_pin_on_series_without_tenant_is_an_error(tmp_path, expr):
 
 @pytest.mark.parametrize("expr", [
     'kube_pod_container_status_restarts_total{namespace="db-a", tenant=""} > 5',
-    'rate(container_cpu_usage_seconds_total{tenant="db-a"}[5m]) > 1',  # cadvisor: relabelled
-    'kubelet_volume_stats_available_bytes{tenant="db-a"} < 1',          # volume stats: relabelled
+    'rate(container_cpu_usage_seconds_total{namespace="db-a", tenant=""}[5m]) > 1',  # cAdvisor
+    'kubelet_volume_stats_available_bytes{namespace="db-a", tenant=""} < 1',          # volume stats
     'mysql_up{tenant="db-a"} == 0',                                     # a tenant exporter's
     'up{tenant="db-a"} == 0',                                           # per target
 ])

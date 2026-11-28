@@ -238,8 +238,8 @@ data:
         kubernetes_sd_configs:
           - role: node
         relabel_configs:
-          - action: labelmap
-            regex: __meta_kubernetes_node_label_(.+)
+          # No node-label labelmap (#4178): a node labelled `tenant` would write
+          # it on every container series. No rule reads a node label here.
           - target_label: __address__
             replacement: kubernetes.default.svc:443
           - source_labels: [__meta_kubernetes_node_name]
@@ -293,18 +293,15 @@ data:
           - source_labels: [container]
             action: drop
             regex: "|POD"
-          # 1:1 namespace→tenant attribution at SCRAPE (ADR-024 Addendum: disk
-          # metrics map namespace→tenant at scrape time, metric name unchanged).
-          # `namespace` is a native metric label → metric_relabel (not relabel).
-          # SAFE for the CPU/mem recording rules: they `sum by(namespace,pod,container)`
-          # — which DROPS this tenant label — then re-derive tenant via label_replace
-          # (verified: no double-count, no collision). It lets tenant custom recipes
-          # (rate over container_fs_*) join `user_threshold` on `tenant`.
+          # ⛔ NO `tenant` is written here (#4178): cAdvisor's series name the tenant
+          # only as `namespace`, as kube-state-metrics' do, on every install (this
+          # config, BYO, kube-prometheus-stack's kubelet ServiceMonitor). Whatever
+          # needs `tenant` derives it from `namespace` (ADR-006 §"Tenant attribution of infrastructure metrics"): the
+          # kubernetes pack's label_replace, the recipe compiler. Pinned by
+          # tests/lint/test_check_scrape_reachability.py.
           # ⚠ container_fs = cgroup blkio: NETWORK storage (NFS/EFS) bypasses blkio →
           # 0 series (byo_check container_fs step fails loud); per-CONTAINER, NOT
           # per-PVC (cAdvisor #3588). See byo-prometheus-integration.md disk-IOPS §.
-          - source_labels: [namespace]
-            target_label: tenant
 
       # -------------------------------------------------------
       # Scenario C: kubelet volume-stats (per-PVC disk capacity) — #692 P0③
@@ -343,19 +340,14 @@ data:
         metric_relabel_configs:
           # Keep only volume-stats from tenant (db-*) namespaces. The namespace is a
           # NATIVE label on the kubelet metric (not an SD meta label), so the
-          # tenant attribution is a metric_relabel, not a relabel.
+          # keep is a metric_relabel, not a relabel.
           - source_labels: [namespace]
             action: keep
             regex: "db-.+"
           - source_labels: [__name__]
             action: keep
             regex: "kubelet_volume_stats_.*"
-          # 1:1 namespace→tenant attribution (ADR-006 §Addendum: infra metrics are
-          # 1:1 only). MUST mirror the tenant-exporters relabel above — disk recipes'
-          # user_threshold carries `tenant`, and the `group_left`/`unless on(tenant)`
-          # joins (and the inert sentinel) need this side to carry the same `tenant`.
-          - source_labels: [namespace]
-            target_label: tenant
+          # ⛔ NO `tenant` is written here either (#4178): see kubelet-cadvisor.
 
   # ============================================================
   # Recording Rules & Alert Rules — DECOUPLED (v0.4.1)

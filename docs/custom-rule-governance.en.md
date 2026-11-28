@@ -261,14 +261,15 @@ The lint tool's built-in policy **is** the file below (`.github/custom-rule-poli
 >   theirs. A metric with only a namespace, such as kube-state-metrics', is written
 >   `namespace="<tenant>", tenant=""` (namespace alone also selects a series carrying both labels with
 >   different values). A pack's record needs it too, such as `tenant:mysql_up:max{tenant="db-a"}`.
->   Conversely, `tenant="<tenant>"` on a metric whose series carry no `tenant` at all (kube-state-metrics',
->   Prometheus' and Alertmanager's own: the jobs that scrape them write none) is an ERROR too: it selects
+>   Conversely, `tenant="<tenant>"` on a metric whose series carry no `tenant` at all (kube-state-metrics', cAdvisor's,
+>   the kubelet's volume stats', Prometheus' and Alertmanager's own: the jobs that scrape them write none) is an ERROR too: it selects
 >   nothing, so the rule never fires (inside `absent()`, it always does). Where its series name the tenant's
->   namespace (kube-state-metrics' namespaced objects), write `namespace="<tenant>", tenant=""`; where they do
+>   namespace (kube-state-metrics' namespaced objects, cAdvisor, the kubelet's volume stats), write `namespace="<tenant>", tenant=""`; where they do
 >   not (Prometheus' and Alertmanager's own, a node's `kube_node_*`), they are no tenant's to read. ⚠️ The lint
 >   does not know which metrics carry a namespace, so a namespace form that selects nothing is not caught.
 >   Which metrics are such is `_lib_metric_sources.tenant_presence()`'s answer
->   (cadvisor and kubelet volume stats get a tenant at scrape time and are not among them); a name with a colon
+>   (cAdvisor and the kubelet's volume stats are among them: no scrape writes their tenant,
+>   [#4178](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4178)); a name with a colon
 >   (a recording rule's, by Prometheus' naming rule) and a record of the same file are not judged
 >   ([#4275](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4275)).
 > - `tenant` (or `namespace`) in the `labels:` of an alert, a recording rule or the group written as anything
