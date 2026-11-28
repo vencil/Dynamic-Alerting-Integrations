@@ -557,6 +557,20 @@ def test_repo_root_is_not_overridden_by_an_inherited_git_dir(tmp_path, monkeypat
     assert "docs/bad.md:1" in capsys.readouterr().err
 
 
+def test_naming_the_tools_own_tree_does_not_skip_the_git_dir_check(tmp_path, monkeypatch):
+    """`--repo-root <this repo>` with GIT_DIR pointing elsewhere is refused.
+
+    The tool's own tree keeps git's environment (a commit hook's index), so
+    naming it explicitly must not bypass require_git_project_root."""
+    b, _ = _tree(tmp_path / "b", {"docs/ok.md": "x\n"})
+    _git_repo(b)
+    monkeypatch.setenv("GIT_DIR", str(b / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(b))
+    with pytest.raises(SystemExit) as exc:
+        lint.main(["--repo-root", str(REPO), "--ci"])
+    assert exc.value.code == 2
+
+
 # --- the shipped tree ------------------------------------------------------------
 
 @pytest.fixture(scope="module")

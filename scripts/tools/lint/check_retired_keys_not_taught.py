@@ -442,7 +442,12 @@ def main(argv: Optional[list] = None) -> int:
                                    "the git work tree to scan (default: this file's repo)"))
     args = ap.parse_args(argv)
     try:
-        root = Path(args.repo_root) if args.repo_root else require_git_project_root(_THIS_DIR)
+        root = Path(args.repo_root) if args.repo_root else None
+        if root is None or os.path.realpath(str(root)) == os.path.realpath(_GENERATOR_ROOT):
+            # The tool's own tree keeps git's environment (tracked_files), so
+            # it is held to the same check with or without --repo-root: an
+            # inherited GIT_DIR that points at another repository is refused.
+            root = require_git_project_root(_THIS_DIR)
         result = run_check(root)
     except MeasureError as exc:
         print(f"ERROR: check_retired_keys_not_taught: {exc}", file=sys.stderr)
