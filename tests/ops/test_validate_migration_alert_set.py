@@ -391,6 +391,17 @@ class TestRound:
         assert row["status"] == "unverifiable" and "many-to-many" in row["labels"]
         assert vm.round_exit_code(result) == 1 and not vm.is_clean(result)
 
+    def test_an_evaluation_error_is_printed_as_one(self, fake, capsys):
+        """CodeRabbit on #4381: it printed as a legacy alert without tenant."""
+        groups = _groups("migrated")
+        groups[0]["rules"][0]["lastError"] = "many-to-many matching not allowed"
+        fake(counts={(LEGACY, "myapp_queue_depth"): 1, (MIGRATED, _PINNED): 1},
+             rules={LEGACY: _groups("legacy"), MIGRATED: groups})
+        vm.print_summary(vm.run_round(_mapping(), LEGACY, MIGRATED, 60))
+        out = capsys.readouterr().out
+        assert "[QueueDeep] migrated 端規則: 評估錯誤: many-to-many" in out
+        assert "歸不了租戶" not in out
+
     def test_a_query_not_answered_leaves_a_row_the_report_holds(self, tmp_path, fake,
                                                                 monkeypatch):
         """CodeRabbit on #4381: the failed ALERTS query left no row, so a

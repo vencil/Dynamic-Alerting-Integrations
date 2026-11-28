@@ -385,9 +385,12 @@ def print_summary(result):
 
     for row in rows:
         status = row["status"]
-        if status in (report.STATUS_RULE_NOT_LOADED, report.STATUS_WINDOW_TOO_SHORT):
-            side = "legacy" if row["legacy"] else "migrated"
-            print(f"  • [{row['rule']}] {side} 端規則: {row['labels']}")
+        if row["kind"] == report.KIND_RULE or row["labels"].startswith("查詢失敗"):
+            # A rule row (not loaded, a group slower than the window, an
+            # evaluation error) or a query not answered: its own words.
+            side = ("legacy 端" if row["legacy"] else "migrated 端" if row["migrated"] else "")
+            print(f"  • [{row['rule']}] {side}{'規則: ' if row['kind'] == report.KIND_RULE else ''}"
+                  f"{row['labels']}")
         elif status == report.STATUS_PIN_SELECTS_NOTHING:
             print(f"  • [{row['rule']}] 注入後選不到資料: {row['labels']}"
                   f"（legacy {row['legacy']} 條序列，pinned 0 條）")
