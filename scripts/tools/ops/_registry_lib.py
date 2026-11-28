@@ -1277,6 +1277,19 @@ def exporters_problems(doc: dict) -> list[str]:
             want = exporter_text(exporters)
         except (KeyError, TypeError):
             continue   # the schema names a malformed entry
+        for i, e in enumerate(exporters):
+            if not isinstance(e, dict) or not isinstance(e.get("states"), list):
+                continue   # the schema names a malformed entry
+            ident = set(e.get("identity") or {})
+            if ident - set(e["states"]):
+                problems.append(
+                    f"pack {name!r}: exporters[{i}].identity names {sorted(ident - set(e['states']))}, "
+                    f"which are not among its states {e['states']}")
+            if len(e["states"]) > 1 and set(e["states"]) - ident:
+                problems.append(
+                    f"pack {name!r}: exporters[{i}] captures {len(e['states'])} states and gives no "
+                    f"identity for {sorted(set(e['states']) - ident)} — without one a scrape of one "
+                    "state passes for another")
         if meta.get("exporter") != want:
             problems.append(
                 f"pack {name!r}: exporter is {meta.get('exporter')!r}, its exporters: "
@@ -1939,6 +1952,17 @@ _CRITICAL_SECTION_LINES = (
 )
 
 
+def _well_formed_exporter(entry) -> bool:
+    """*entry* has every field the header renders, of the type it renders."""
+    if not isinstance(entry, dict):
+        return False
+    server = entry.get("server")
+    return (all(isinstance(entry.get(k), str) for k in ("name", "image", "tag", "digest"))
+            and isinstance(entry.get("flags"), list) and isinstance(entry.get("states"), list)
+            and isinstance(server, dict)
+            and all(isinstance(server.get(k), str) for k in ("image", "tag")))
+
+
 def render_exporter_capture_lines(doc: dict, pack_name: str) -> list[str]:
     """The pack-header lines that tell a reader which real exporter the pack's
     raw metrics are checked against (#3833): per `exporters:` entry its name,
@@ -1946,7 +1970,9 @@ def render_exporter_capture_lines(doc: dict, pack_name: str) -> list[str]:
     server and the states captured; then the names the pack also reads that
     no capture serves. Empty for a pack without `exporters:`."""
     meta = (doc.get("packs") or {}).get(pack_name) or {}
-    exporters = meta.get("exporters") or []
+    # An entry the schema refuses is not rendered: the schema's message is the
+    # finding, and a KeyError here would replace every message of the run.
+    exporters = [e for e in meta.get("exporters") or [] if _well_formed_exporter(e)]
     if not exporters:
         return []
     lines = [
@@ -1963,6 +1989,8 @@ def render_exporter_capture_lines(doc: dict, pack_name: str) -> list[str]:
             f"#     核對對象：{server['image']} {server['tag']}；狀態：{'、'.join(e['states'])}",
         ]
     for alt in meta.get("unchecked_alternatives") or []:
+        if not (isinstance(alt, dict) and isinstance(alt.get("metric"), str) and "reason" in alt):
+            continue   # the schema names it
         lines.append(f"#   另外也讀、但沒有核對的名稱：{alt['metric']}")
         lines += [f"#       {seg}" for seg in _wrap_comment(str(alt["reason"]), _COMMENT_WIDTH - 8)]
     lines.append("#")

@@ -131,6 +131,30 @@ def test_the_schema_refuses_an_unpinned_or_unknown_shaped_entry() -> None:
     assert registry_lib.validate_registry(_doc(postgresql={"exporters": [no_flags]}))
 
 
+def test_every_state_of_a_multi_state_entry_names_its_identity() -> None:
+    entry = DOC["packs"]["postgresql"]["exporters"][0]
+    assert set(entry["identity"]) == set(entry["states"])
+    one = {**entry, "identity": {"primary": entry["identity"]["primary"]}}
+    assert any("gives no identity for ['replica']" in p
+               for p in registry_lib.exporters_problems(_doc(postgresql={"exporters": [one]})))
+    stray = {**entry, "identity": {**entry["identity"], "standby": {"metric": "pg_x", "value": 1}}}
+    assert any("identity names ['standby']" in p
+               for p in registry_lib.exporters_problems(_doc(postgresql={"exporters": [stray]})))
+
+
+@pytest.mark.parametrize("field", ["flags", "digest", "states", "server"])
+def test_an_entry_missing_a_field_is_a_schema_message_not_a_crash(field) -> None:
+    """The header is rendered from the doc after the schema ran; a field the
+    schema reports missing must not turn the run into a KeyError (exit 2) that
+    hides every message."""
+    entry = DOC["packs"]["postgresql"]["exporters"][0]
+    doc = _doc(postgresql={"exporters": [{k: v for k, v in entry.items() if k != field}]})
+    assert registry_lib.validate_registry(doc)
+    assert registry_lib.render_exporter_capture_lines(doc, "postgresql") == []
+    for spec in registry_lib.surface_specs(doc):
+        assert spec["id"]
+
+
 def test_the_pack_header_states_version_flags_and_states() -> None:
     entry = DOC["packs"]["postgresql"]["exporters"][0]
     text = "\n".join(registry_lib.render_exporter_capture_lines(DOC, "postgresql"))
@@ -149,10 +173,24 @@ def test_parse_exposition_reads_names_labels_and_escapes() -> None:
             'b{l="v",m="q\\"uo\\\\te\\nnl"} 2.5 1700000000000\n'
             'c_bucket{le="+Inf"} 3\n\n')
     assert cec.parse_exposition(text) == [
-        ("a", {}), ("b", {"l": "v", "m": 'q"uo\\te\nnl'}), ("c_bucket", {"le": "+Inf"})]
+        ("a", {}, 1.0), ("b", {"l": "v", "m": 'q"uo\\te\nnl'}, 2.5), ("c_bucket", {"le": "+Inf"}, 3.0)]
     assert cec.series_text("b", {"m": 'q"uo\\te\nnl', "l": "v"}) == 'b{l="v",m="q\\"uo\\\\te\\nnl"}'
     with pytest.raises(cec.CannotRun):
         cec.parse_exposition("<html>not a scrape</html>\n")
+
+
+@pytest.mark.parametrize("line", ["x NaN", "x +Inf", "x -Inf", "x 1e-3", "x .5", 'x{a="1",} 2',
+                                  'x{ a = "1" , b="" } 2 1700000000000', "x{} 0"])
+def test_parse_exposition_takes_every_value_and_label_spelling_of_the_format(line) -> None:
+    assert len(cec.parse_exposition(line + "\n")) == 1
+
+
+@pytest.mark.parametrize("line", ["pg_up not-a-number", "pg_up{broken} 1", 'pg_up{a="1" b="2"} 1',
+                                  'pg_up{a="1"}{b="2"} 1', "pg_up 1_0", 'pg_up{a=1} 1', "pg_up"])
+def test_a_line_that_is_not_a_sample_makes_the_capture_not_a_scrape(line) -> None:
+    """Not a series that serves `pg_up`: exit 2, the file is not a scrape."""
+    with pytest.raises(cec.CannotRun, match="not a /metrics sample line"):
+        cec.parse_exposition(line + "\n")
 
 
 def test_the_captures_must_be_the_ones_the_entry_asks_for(tmp_path) -> None:
@@ -244,6 +282,27 @@ def test_a_stale_unchecked_alternative_fails(tmp_path, da_read_env) -> None:
     assert len(unread) == 1 and "STALE-EXEMPTION" in unread[0]
 
 
+def test_an_or_side_whose_family_is_captured_but_not_selected_is_a_finding(tmp_path, da_read_env) -> None:
+    """The exemption is for a family no capture has. A captured family that
+    the matchers miss is a wrong selector, listed or not."""
+    alt = [{"metric": "demo_old", "reason": "the older name"}]
+    captures = {"0:a": _UP + 'demo_new 1\ndemo_old{role="primary"} 1\n'}
+    out = _findings(tmp_path, ['demo_new or demo_old{role="standby"}'], captures,
+                    unchecked_alternatives=alt)
+    assert any('reads demo_old{role="standby"} as one side of an `or` — no series of demo_old '
+               "matches the matchers; the family was seen in 0:a" in f for f in out), out
+    # … and the entry excuses nothing, so it is stale too
+    assert any("STALE-EXEMPTION" in f for f in out), out
+
+
+def test_a_selector_without_a_metric_name_is_judged(tmp_path, da_read_env) -> None:
+    """`{mode="x"}` could select the exporter's series, so it is answered for."""
+    captures = {"0:a": _UP + 'demo_total{mode="b"} 1\n'}
+    assert _findings(tmp_path, ['{mode="b"}'], captures) == []
+    out = _findings(tmp_path, ['{mode="zzz"}'], captures)
+    assert len(out) == 1 and 'reads {mode="zzz"} — no series of any capture matches' in out[0], out
+
+
 def test_every_capture_must_serve_a_presence_selector(tmp_path, da_read_env) -> None:
     out = _findings(tmp_path, ["demo_new"], {"0:a": _UP + "demo_new 1\n", "0:b": "demo_new 1\n"})
     assert len(out) == 1 and "capture 0:b serves none of the pack's presence selectors" in out[0]
@@ -280,11 +339,21 @@ def test_without_the_registrys_flag_the_restart_alert_has_no_series(da_read_env)
             "pg_postmaster_start_time_seconds is in no capture (0:primary, 0:replica)") in out[0]
 
 
+def test_a_capture_filed_under_the_wrong_state_is_a_finding(da_read_env) -> None:
+    """The registry's identity: a primary's scrape filed as the replica's
+    passes every selector, and is still not a scrape of a replica."""
+    swapped = {"0:primary": _fixture("postgresql.primary.prom"),
+               "0:replica": _fixture("postgresql.primary.prom")}
+    out = cec.capture_findings("postgresql", DOC, swapped)
+    assert out == ["capture 0:replica is not of the state replica: its identity "
+                   "pg_replication_is_replica 1 is not in it (pg_replication_is_replica: 0)"], out
+
+
 def test_reading_only_the_old_lag_name_is_a_finding(tmp_path, da_read_env) -> None:
     """The pack before #4354: the pinned exporter serves no pg_replication_lag."""
     pack = ROOT / DOC["packs"]["postgresql"]["rule_pack_file"]
     text = pack.read_text(encoding="utf-8")
-    new = "pg_replication_lag_seconds or pg_replication_lag\n"
+    new = "pg_replication_lag_seconds or ignoring(server) pg_replication_lag\n"
     assert text.count(new) == 1
     old = tmp_path / pack.name
     old.write_text(text.replace(new, "pg_replication_lag\n"), encoding="utf-8")
@@ -293,3 +362,18 @@ def test_reading_only_the_old_lag_name_is_a_finding(tmp_path, da_read_env) -> No
                "pg_replication_lag is in no capture" in f for f in out), out
     # … and the registry's unchecked alternative is then stale, which is also said
     assert any("STALE-EXEMPTION" in f for f in out)
+
+
+# ── the command line ───────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("argv", [["--json", "--list"], ["--json", "--plan", "postgresql"],
+                                  ["--list", "--pack", "postgresql", "--capture", "0:primary=x"],
+                                  ["--plan", "postgresql", "--pack", "postgresql", "--capture", "0:primary=x"],
+                                  ["--pack", "postgresql"]])
+def test_a_flag_combination_that_would_drop_a_flag_is_exit_2(argv) -> None:
+    """Contradictory flags are refused, not one of them silently ignored."""
+    import subprocess
+    done = subprocess.run([sys.executable, str(ROOT / "scripts/tools/lint/check_exporter_capture.py"), *argv],
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert done.returncode == 2, (argv, done.stdout, done.stderr)
+    assert done.stdout == ""

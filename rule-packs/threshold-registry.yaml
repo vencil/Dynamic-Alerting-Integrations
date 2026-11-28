@@ -96,9 +96,11 @@
 # `retired-key-mention: <key>`（涵蓋該行與下一行；沒有對到任何提及、或沒寫 key 的標記本身就是錯）。
 #
 # packs.<pack>.exporters（#3833）：這個 pack 的原始指標要拿哪一支真實 exporter 核對——
-#   [{name, image, tag, digest, flags, server: {image, tag, digest}, states}]，可以列多支
+#   [{name, image, tag, digest, flags, server: {image, tag, digest}, states, identity}]，可以列多支
 #   （租戶擇一使用）。flags 是 pack 的指標需要、而 exporter 預設不開的啟動旗標（沒有就 []）；
-#   states 是要擷取的對象狀態，各狀態怎麼做出來在 scripts/ops/exporter_capture/<pack>.sh。
+#   states 是要擷取的對象狀態，各狀態怎麼做出來在 scripts/ops/exporter_capture/<pack>.sh；
+#   identity 是每個狀態的抓取裡必須有的一個樣本值（{metric, value}），證明那份抓取真的是
+#   那個狀態，兩個以上狀態時每個都要寫。
 #   scripts/ops/exporter_capture_runtime.sh <pack> 照這一筆啟動並抓 /metrics，
 #   check_exporter_capture.py 要求 pack 規則讀的每個原始選擇器都選得到序列。
 #   有 exporters 的 pack，exporter: 必須等於各筆 name 以「 or 」相連（--ci 檢查），版本與
@@ -138,6 +140,9 @@ packs:
         # primary: the exporter on the primary of a streaming-replication
         # pair; replica: the exporter on its hot standby.
         states: [primary, replica]
+        identity:
+          primary: {metric: pg_replication_is_replica, value: 0}
+          replica: {metric: pg_replication_is_replica, value: 1}
     unchecked_alternatives:
       - metric: pg_replication_lag
         reason: >-

@@ -63,7 +63,11 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                'server': {'image': 'postgres',
                                           'tag': '16.15',
                                           'digest': 'sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657'},
-                               'states': ['primary', 'replica']}],
+                               'states': ['primary', 'replica'],
+                               'identity': {'primary': {'metric': 'pg_replication_is_replica',
+                                                        'value': 0},
+                                            'replica': {'metric': 'pg_replication_is_replica',
+                                                        'value': 1}}}],
                 'unchecked_alternatives': [{'metric': 'pg_replication_lag',
                                             'reason': 'postgres_exporter v0.12.1 以前的名稱，來自它範例 '
                                                       'queries.yaml 的 pg_replication 項目 '

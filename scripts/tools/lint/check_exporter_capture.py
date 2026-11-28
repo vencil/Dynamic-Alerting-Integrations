@@ -28,14 +28,23 @@ here, which fails unless:
     what it is to Prometheus. A finding names the rule, the selector, what is missing
     (the family is in no capture / a matcher's label is on no series of the
     family / no series matches) and the captures the family WAS seen in;
-  * `A or B`: served when either side is. The side no capture serves must be
-    listed under the pack's `unchecked_alternatives:` with its reason — and an
-    entry there that a capture serves, or that no rule reads as an
-    alternative, fails too (exit-locked both ways);
+  * `A or B`: served when either side is. A side whose family is in NO
+    capture must be listed under the pack's `unchecked_alternatives:` with its
+    reason — and an entry there that a capture serves, or that no rule reads
+    as an alternative, fails too (exit-locked both ways). A side whose family
+    IS captured but whose matchers select none of it is a finding, listed or
+    not: that is a wrong selector, not an older exporter's name;
   * every capture serves one of the pack's `presence:` selectors (the series
-    the liveness rules take as "this exporter is answering").
+    the liveness rules take as "this exporter is answering");
+  * every capture holds its state's `identity:` sample (a replica's scrape
+    shows `pg_replication_is_replica 1`), so a scrape of one state filed
+    under another's name does not pass for it.
 
-Run with no `--pack`, it is the static half: every registry pack is checked
+A capture file with a line that is not a text-format sample is exit 2: the
+file is not a scrape.
+
+Run with no `--pack`, it is the static half (pre-commit hook
+exporter-capture-check): every registry pack is checked
 against its real exporter (`exporters:` here, or `queries:` —
 check_exporter_queries.py), or is counted as covered another way
 (COVERED_ELSEWHERE), or is listed in UNVERIFIED with a reason. A new pack with
@@ -191,23 +200,35 @@ def plan_lines(doc: dict, pack: str) -> list[str]:
 
 # ── captures ────────────────────────────────────────────────────────────────
 
-_LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"')
-_SAMPLE = re.compile(r"([a-zA-Z_:][a-zA-Z0-9_:]*)(\{.*\})?\s+\S+(?:\s+-?\d+)?\s*$")
+_LABEL_TEXT = r'[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*"(?:[^"\\\n]|\\[\\"n])*"'
+_LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"((?:[^"\\\n]|\\[\\"n])*)"')
+#: A sample line of the text format, whole: name, an optional label block that
+#: holds only `name="value"` pairs (a trailing comma allowed), a value and an
+#: optional integer timestamp.
+_SAMPLE = re.compile(
+    r"([a-zA-Z_:][a-zA-Z0-9_:]*)"
+    rf"(\{{\s*(?:{_LABEL_TEXT}\s*(?:,\s*{_LABEL_TEXT}\s*)*,?\s*)?\}})?"
+    r"[ \t]+(\S+)(?:[ \t]+-?\d+)?[ \t]*$")
+#: The values the text format takes: a float (Go's ParseFloat spelling, no
+#: `_`), NaN, +Inf, -Inf.
+_VALUE = re.compile(r"[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|[iI]nf|NaN)")
 _UNESCAPE = {"\\\\": "\\", '\\"': '"', "\\n": "\n"}
 
-
-def parse_exposition(text: str) -> list[tuple[str, dict[str, str]]]:
-    """(name, labels) of every sample line of a text-format scrape."""
+def parse_exposition(text: str) -> "list[tuple[str, dict[str, str], float]]":
+    """(name, labels, value) of every sample line of a text-format scrape. A
+    line that is not one — a label block with anything but `name="value"`
+    pairs, a value that is not a number — means the file is not a scrape
+    (CannotRun, exit 2), not a series that serves a selector."""
     out = []
     for line in text.splitlines():
         if not line.strip() or line.startswith("#"):
             continue
         m = _SAMPLE.match(line)
-        if not m:
+        if not m or not _VALUE.fullmatch(m.group(3)):
             raise CannotRun(f"not a /metrics sample line: {line[:120]!r}")
         labels = {k: re.sub(r'\\[\\"n]', lambda e: _UNESCAPE[e.group(0)], v)
                   for k, v in _LABEL.findall(m.group(2) or "")}
-        out.append((m.group(1), labels))
+        out.append((m.group(1), labels, float(m.group(3))))
     return out
 
 
@@ -303,12 +324,12 @@ def _walk(node: dict, served, prefixes):
 
 def _why(node: dict, captures: dict) -> str:
     name = node.get("name") or ""
-    seen_in = [cid for cid, samples in captures.items() if any(n == name for n, _ in samples)]
+    seen_in = [cid for cid, samples in captures.items() if any(n == name for n, _, _ in samples)]
     if not name:
         return "no series of any capture matches"
     if not seen_in:
         return f"the family {name} is in no capture ({', '.join(captures)})"
-    carried = {k for samples in captures.values() for n, lb in samples if n == name for k in lb}
+    carried = {k for samples in captures.values() for n, lb, _ in samples if n == name for k in lb}
     absent = sorted({m["name"] for m in node.get("matchers") or []
                      if m["name"] != "__name__" and m["name"] not in carried})
     what = (f"no series of {name} carries the label {', '.join(absent)}" if absent
@@ -354,7 +375,7 @@ def capture_findings(pack: str, doc: dict, captures: dict, *, rule_pack: "Path |
     matched: set[tuple[int, int]] = set()
     presence_in: dict[str, bool] = dict.fromkeys(captures, not presence)
     for cid, samples in captures.items():
-        for name, labels in samples:
+        for name, labels, _value in samples:
             wanted = (pending.get(name, set()) | pending.get("", set())) - matched
             need_presence = not presence_in[cid] and name in presence_names
             if not (wanted or need_presence):
@@ -375,7 +396,15 @@ def capture_findings(pack: str, doc: dict, captures: dict, *, rule_pack: "Path |
             out.append(f"{rule_pack.name}: rule {rule} reads {_spelling(expr, node)} — "
                        f"{_why(node, captures)}")
         for node in excused:
-            excused_names.setdefault(node.get("name") or _spelling(expr, node), rule)
+            # Only a family no capture has is an alternative the pinned
+            # exporter does not serve. A family that IS captured but that the
+            # selector's matchers do not select is a wrong selector, `or` or not.
+            name = node.get("name") or ""
+            if name and not any(n == name for samples in captures.values() for n, _, _ in samples):
+                excused_names.setdefault(name, rule)
+            else:
+                out.append(f"{rule_pack.name}: rule {rule} reads {_spelling(expr, node)} as one "
+                           f"side of an `or` — {_why(node, captures)}")
     listed = {a["metric"]: a["reason"] for a in meta.get("unchecked_alternatives") or []}
     for name, rule in sorted(excused_names.items()):
         if name not in listed:
@@ -389,6 +418,23 @@ def capture_findings(pack: str, doc: dict, captures: dict, *, rule_pack: "Path |
         if not ok:
             out.append(f"capture {cid} serves none of the pack's presence selectors "
                        f"({', '.join(presence)}) — the liveness rules would read this exporter as absent")
+    out += identity_findings(registry_lib.pack_exporters(doc).get(pack) or [], captures)
+    return out
+
+
+def identity_findings(entries: list[dict], captures: dict) -> list[str]:
+    """A capture is of the state it is filed under: each state with an
+    `identity:` in its registry entry must show that sample value (#3833 — a
+    primary's scrape filed as the replica's would otherwise pass)."""
+    out = []
+    for i, entry in enumerate(entries):
+        for state, want in (entry.get("identity") or {}).items():
+            cid = f"{i}:{state}"
+            values = [v for n, _, v in captures.get(cid, []) if n == want["metric"]]
+            if float(want["value"]) not in values:
+                seen = ", ".join(sorted({f"{v:g}" for v in values})) or "no sample"
+                out.append(f"capture {cid} is not of the state {state}: its identity "
+                           f"{want['metric']} {want['value']:g} is not in it ({want['metric']}: {seen})")
     return out
 
 
@@ -405,11 +451,12 @@ def main() -> "int | Report":
                     help=i18n_text("CI 模式（有發現時 exit 1）", "CI mode (exit 1 on a finding)"))
     ap.add_argument("--json", action="store_true",
                     help=i18n_text("以 JSON 輸出發現", "print findings as JSON"))
-    ap.add_argument("--list", action="store_true",
-                    help=i18n_text("列出有 exporters: 的 pack", "print the packs with `exporters:`"))
-    ap.add_argument("--plan", metavar="PACK",
-                    help=i18n_text("印出執行腳本要啟動的東西", "print what the runtime script must start"))
-    ap.add_argument("--pack", help=i18n_text("搭配 --capture：要比對的 pack",
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--list", action="store_true",
+                      help=i18n_text("列出有 exporters: 的 pack", "print the packs with `exporters:`"))
+    mode.add_argument("--plan", metavar="PACK",
+                      help=i18n_text("印出執行腳本要啟動的東西", "print what the runtime script must start"))
+    mode.add_argument("--pack", help=i18n_text("搭配 --capture：要比對的 pack",
                                              "with --capture: the pack to compare"))
     ap.add_argument("--capture", action="append", default=[], metavar="ID=FILE",
                     help=i18n_text("一份 /metrics 抓取結果，ID 是 <exporter 索引>:<狀態>",
@@ -420,6 +467,10 @@ def main() -> "int | Report":
     args = ap.parse_args()
     if bool(args.pack) != bool(args.capture):
         print(f"{NAME}: --pack and --capture go together", file=sys.stderr)
+        return 2
+    if args.json and (args.list or args.plan):
+        # Their output is the runtime script's input, one value per line.
+        print(f"{NAME}: --json reports findings; --list and --plan print plain lines", file=sys.stderr)
         return 2
     try:
         doc = registry_lib.committed_registry_doc()

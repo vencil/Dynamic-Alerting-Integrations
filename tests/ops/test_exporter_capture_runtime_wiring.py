@@ -20,6 +20,9 @@ Pinned contracts
 4. Infrastructure failing — no docker, an image that cannot be pulled, a
    server that never becomes ready, an exporter that never reports the server
    up — is exit 2 with a message naming it, never exit 1 (a finding).
+5. The static half (no `--pack`) is a pre-commit hook that fires on the
+   registry, the drivers and the checker: without it a pack added with
+   neither `exporters:` nor a ledger row is caught only by pytest.
 
 3–4 run the real script and the real driver with `docker` / `curl` / `sleep`
 and the checker's python replaced by recorders.
@@ -253,3 +256,17 @@ def test_an_unknown_pack_is_a_usage_error() -> None:
     proc = subprocess.run([BASH, str(SCRIPT), "nope"], capture_output=True, text=True, encoding="utf-8",
                           timeout=60)
     assert proc.returncode == 2 and "usage" in proc.stderr
+
+
+def test_the_static_half_is_a_pre_commit_hook() -> None:
+    config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    hooks = [h for repo in config["repos"] for h in repo.get("hooks", [])
+             if "scripts/tools/lint/check_exporter_capture.py" in str(h.get("entry", ""))]
+    assert len(hooks) == 1, hooks
+    hook = hooks[0]
+    assert "--pack" not in hook["entry"] and "--ci" in hook["entry"].split()
+    assert hook.get("pass_filenames") is False and "stages" not in hook
+    import re
+    for path in ("rule-packs/threshold-registry.yaml", "scripts/ops/exporter_capture/postgresql.sh",
+                 "scripts/tools/lint/check_exporter_capture.py", "scripts/tools/ops/_registry_lib.py"):
+        assert re.search(hook["files"], path), path

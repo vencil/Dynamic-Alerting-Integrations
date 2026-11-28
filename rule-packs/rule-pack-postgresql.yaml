@@ -64,13 +64,17 @@ groups:
       #     also reads 0 while the standby has replayed everything it received,
       #     so an idle primary no longer looks like growing lag. The old query
       #     did not.
-      #   - An exporter serving both names on the same labels is read once:
-      #     `or` keeps the left (collector) sample (t-both in
+      #   - One exporter serving both names (a current exporter still given the
+      #     old queries.yaml) is read once, by the collector's value. The two
+      #     differ by one label: a queries.yaml metric carries `server`, the
+      #     collector's does not (measured on v0.21.1). A bare `or` compares
+      #     whole label sets, would keep both and `max` would take the old
+      #     query's growing lag; `ignoring(server)` pairs them (t-both in
       #     tests/rulepacks/rule-pack-postgresql-replication-lag-names_test.yaml).
       - record: tenant:pg_replication_lag:max
         expr: |
           max by(tenant, da_cluster) (
-            pg_replication_lag_seconds or pg_replication_lag
+            pg_replication_lag_seconds or ignoring(server) pg_replication_lag
           )
 
       # Deadlocks in the last 5 minutes — a COUNT, not a per-second rate (#4033).

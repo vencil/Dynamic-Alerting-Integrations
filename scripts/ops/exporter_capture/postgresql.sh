@@ -51,7 +51,9 @@ capture_server_up() {
 }
 
 capture_exporter_args() {
-  printf '%s\n' -e "DATA_SOURCE_NAME=postgresql://monitor:$PG_MONITOR_PW@$CAP-srv-$1:5432/postgres?sslmode=disable"
+  # The exporter's split form: the password never sits in a connection URI.
+  printf '%s\n' -e "DATA_SOURCE_URI=$CAP-srv-$1:5432/postgres?sslmode=disable" \
+    -e DATA_SOURCE_USER=monitor -e "DATA_SOURCE_PASS=$PG_MONITOR_PW"
 }
 
 capture_scrape_ready() {

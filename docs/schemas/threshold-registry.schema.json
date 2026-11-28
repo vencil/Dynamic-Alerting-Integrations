@@ -129,6 +129,20 @@
                     "uniqueItems": true,
                     "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
                     "description": "The server states the exporter is scraped in; a selector must be served in at least one. What a state means is the pack's driver (scripts/ops/exporter_capture/<pack>.sh)."
+                  },
+                  "identity": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "description": "Per state, a sample its capture must hold — what makes the scrape one of that state, not another state's filed under its name (check_exporter_capture.py). Required for every state when there are two or more (check_threshold_registry.py).",
+                    "additionalProperties": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["metric", "value"],
+                      "properties": {
+                        "metric": {"type": "string", "pattern": "^[A-Za-z_:][A-Za-z0-9_:]*$"},
+                        "value": {"type": "number"}
+                      }
+                    }
                   }
                 }
               }

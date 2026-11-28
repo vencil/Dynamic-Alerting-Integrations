@@ -473,3 +473,22 @@ class TestMainCLI:
         assert exc.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "No alerts" in err
+
+
+def test_a_pack_with_exporters_names_its_checked_exporter_and_flags() -> None:
+    """#3833: the flags the registry entry says a pack's alerts need reach the
+    tenant-facing reference, from the registry — not only the pack header."""
+    entry = gar.THRESHOLD_PACKS["postgresql"]["exporters"][0]
+    assert entry["flags"], "the postgresql entry needs a flag for this test to bite"
+    for lang in ("zh", "en"):
+        text = "\n".join(gar.exporter_note("postgresql", lang))
+        assert entry["name"] in text and entry["tag"] in text
+        for flag in entry["flags"]:
+            assert f"`{flag}`" in text, (lang, flag)
+    assert gar.exporter_note("redis", "zh") == []
+    md = gar.generate_markdown_zh({"postgresql": [], "redis": []})
+    section = md.split("## PostgreSQL Rule Pack", 1)[1].split("\n## ", 1)[0]
+    assert "--collector.postmaster" in section
+    md_en = gar.generate_markdown_en({"postgresql": [], "redis": []})
+    section_en = md_en.split("## PostgreSQL Rule Pack", 1)[1].split("\n## ", 1)[0]
+    assert "--collector.postmaster" in section_en

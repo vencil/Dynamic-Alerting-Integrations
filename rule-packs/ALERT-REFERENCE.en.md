@@ -221,6 +221,8 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 
 ## PostgreSQL Rule Pack
 
+> This pack's alerts were checked against what `prometheus-community/postgres_exporter` v0.21.1 serves. Start the exporter with these flags, or some alerts have no data: `--collector.postmaster`.
+
 | Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|---|
 | PostgreSQLDown | critical | fires | pg_up=0 for 15s on {{ $labels.instance }} | Immediately check server status and network connectivity; review system logs | pg_up |

@@ -221,6 +221,8 @@ lang: zh
 
 ## PostgreSQL Rule Pack
 
+> 本 pack 的告警以 `prometheus-community/postgres_exporter` v0.21.1 的實際輸出核對過。exporter 要帶這些啟動旗標，否則有告警沒有資料：`--collector.postmaster`。
+
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
 | PostgreSQLDown | critical | 照常觸發 | pg_up=0 for 15s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | pg_up |

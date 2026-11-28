@@ -8,9 +8,12 @@
 #   t-new   only the collector's name   -> red when the record reads only the
 #                                          old name (the state before #4354)
 #   t-old   only the queries.yaml name  -> red when the old name is dropped
-#   t-both  both, on the same labels    -> the collector's value is read once
-#                                          (`or` keeps the left side), not the
-#                                          larger and not the two added
+#   t-both  both, from one exporter     -> the collector's value is read once,
+#                                          not the larger and not the two added
+#
+# The labels are the real exporter's (postgres_exporter v0.21.1 given the old
+# queries.yaml): a queries.yaml metric carries `server`, the collector's does
+# not. With a bare `or` t-both reads 70 — red.
 rule_files:
   - ../../rule-packs/rule-pack-postgresql.yaml
 
@@ -21,11 +24,11 @@ tests:
     input_series:
       - series: 'pg_replication_lag_seconds{tenant="t-new", instance="db-0"}'
         values: '40x20'
-      - series: 'pg_replication_lag{tenant="t-old", instance="db-0"}'
+      - series: 'pg_replication_lag{tenant="t-old", instance="db-0", server="db-0:5432"}'
         values: '50x20'
       - series: 'pg_replication_lag_seconds{tenant="t-both", instance="db-0"}'
         values: '5x20'
-      - series: 'pg_replication_lag{tenant="t-both", instance="db-0"}'
+      - series: 'pg_replication_lag{tenant="t-both", instance="db-0", server="db-0:5432"}'
         values: '70x20'
       - series: 'user_threshold{tenant="t-new", component="pg", metric="replication_lag", severity="warning"}'
         values: '30x20'
