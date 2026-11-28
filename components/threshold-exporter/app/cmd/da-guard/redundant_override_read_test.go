@@ -18,7 +18,7 @@ import (
 // file quotes them as the schema asks.
 func TestGuard_RedundantOverrideFiresExactlyWhenServedIsUnchanged(t *testing.T) {
 	t.Parallel()
-	const key = "mysql_connections"
+	const key = "mysql_connection_usage_percent"
 	type tc struct{ inherited, tenant string }
 	var cases []tc
 	for _, tenant := range []string{

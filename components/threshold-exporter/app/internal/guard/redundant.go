@@ -16,21 +16,21 @@ package guard
 // PR-1 emits SeverityWarn so reviewers see the cleanup hint without
 // blocking merge. The duplication is harmless at runtime.
 //
-// Equality semantics (leafValuesReadAlike):
-//   - Top-level scalars: as the exporter reads them, so a root `80` and a
-//     tenant `"80"` (the schema's spelling) are the same value.
-//   - Nested scalars (string / int / float / bool): direct ==.
-//   - Nil values: nil == nil. A tenant that explicitly sets a field
-//     to YAML null while the new defaults also have it as null is
-//     redundant (and weird, but we still flag).
-//   - Maps + slices: NOT compared in PR-1. Comparing structured
-//     values needs reflect.DeepEqual or a recursive walker; the
-//     return is marginal (most redundant overrides are scalars)
-//     and the false-positive risk on slice-order drift is real.
-//     PR-2 may extend if customer feedback warrants.
+// What counts as redundant (#4330):
+//   - A threshold key (a top-level key of the tenant's own file not
+//     starting with `_`): CheckInput.RedundantThresholds — deleting the line
+//     leaves what the exporter serves for the tenant the same from now on
+//     (the exporter's own build and resolve), and no other finding owns the
+//     line by that finding's own verdict (the shared key verdict,
+//     value_not_served). No reading of values here.
+//   - A reserved `_` key or a leaf nested under one: its YAML value equals
+//     the inherited one (scalarsEqual). These are read by readers other
+//     than /metrics' rows (the route generator, metadata, ops gauges); their
+//     counterfactual is #4331.
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
@@ -59,9 +59,6 @@ func checkRedundantOverrides(input CheckInput) []Finding {
 	if len(input.TenantOverrides) == 0 {
 		return nil
 	}
-	if input.NewDefaults == nil && len(input.NewDefaultsByTenant) == 0 {
-		return nil
-	}
 
 	// Cache the global flattened defaults so we don't re-walk the
 	// map per tenant when only the legacy single-map field is set.
@@ -72,39 +69,53 @@ func checkRedundantOverrides(input CheckInput) []Finding {
 
 	tenants := sortedTenantIDs(input.TenantOverrides)
 	var out []Finding
-	for _, tenantID := range tenants {
-		defaultLeaves := tenantDefaultsLeaves(input, tenantID, globalLeaves)
-		if defaultLeaves == nil {
-			// No defaults context for this tenant → skip silently.
-			continue
+	var fields []string // this tenant's redundant fields, sorted before they are emitted
+	emit := func(field string) { fields = append(fields, field) }
+	flush := func(tenantID string) {
+		sort.Strings(fields)
+		for _, field := range fields {
+			out = append(out, Finding{
+				Severity: SeverityWarn,
+				Kind:     findingkind.FindingRedundantOverride,
+				TenantID: tenantID,
+				Field:    field,
+				Message: fmt.Sprintf(
+					"tenant %q overrides %q with the same value as the new defaults; remove the override and rely on inheritance",
+					tenantID, field),
+			})
 		}
-		overrideLeaves := flattenLeaves(input.TenantOverrides[tenantID])
-		paths := sortedKeys(overrideLeaves)
-		for _, path := range paths {
-			tenantValue := overrideLeaves[path]
-			defaultValue, exists := defaultLeaves[path]
-			if !exists {
+		fields = nil
+	}
+	for _, tenantID := range tenants {
+		overrides := input.TenantOverrides[tenantID]
+		reserved := map[string]any{}
+		for _, key := range sortedKeys(overrides) {
+			if strings.HasPrefix(key, "_") {
+				reserved[key] = overrides[key]
 				continue
 			}
-			if !leafValuesReadAlike(path, tenantValue, defaultValue) {
+			if !input.RedundantThresholds[tenantID][key] {
+				continue
+			}
+			emit(key)
+		}
+		defaultLeaves := tenantDefaultsLeaves(input, tenantID, globalLeaves)
+		if len(reserved) == 0 || defaultLeaves == nil {
+			flush(tenantID)
+			continue // no reserved key, or no defaults context for this tenant
+		}
+		leaves := flattenLeaves(reserved)
+		for _, path := range sortedKeys(leaves) {
+			defaultValue, exists := defaultLeaves[path]
+			if !exists || !scalarsEqual(leaves[path], defaultValue) {
 				continue
 			}
 			if inheritedFromRefusedSubtreeKey(input, tenantID, path) {
 				continue
 			}
-			if valueNotServedAsWritten(input, tenantID, path) {
-				continue
-			}
-			out = append(out, Finding{
-				Severity: SeverityWarn,
-				Kind:     findingkind.FindingRedundantOverride,
-				TenantID: tenantID,
-				Field:    path,
-				Message: fmt.Sprintf(
-					"tenant %q overrides %q with the same value as the new defaults; remove the override and rely on inheritance",
-					tenantID, path),
-			})
+			emit(path)
 		}
+		flush(tenantID)
 	}
 	return out
 }
@@ -121,17 +132,6 @@ func tenantDefaultsLeaves(input CheckInput, tenantID string, globalLeaves map[st
 		return flattenLeaves(perTenant)
 	}
 	return globalLeaves
-}
-
-// leafValuesReadAlike is the redundancy test: a top-level key compares as the
-// exporter reads it (config.TopLevelValuesReadAlike — a root `80` and a
-// tenant `"80"` are one value, #4288); a nested leaf, whose reader is the
-// structure it sits in, keeps scalarsEqual's same-type comparison.
-func leafValuesReadAlike(path string, tenant, inherited any) bool {
-	if !strings.Contains(path, ".") {
-		return config.TopLevelValuesReadAlike(path, tenant, inherited)
-	}
-	return scalarsEqual(tenant, inherited)
 }
 
 // scalarsEqual is the PR-1 equality test for redundant-override
@@ -155,17 +155,6 @@ func scalarsEqual(a, b any) bool {
 		return false
 	}
 	return a == b
-}
-
-// valueNotServedAsWritten reports whether the tenant's key at path is one
-// value_not_served refuses (the same selection, config.ValueNotServedAsWritten
-// over CheckInput.ValuesNotServed). Such a value is not "the same value as the
-// defaults" even when it is the same text — the exporter serves neither — and
-// the error already tells the tenant what to write (#4288).
-func valueNotServedAsWritten(input CheckInput, tenantID, path string) bool {
-	top, _, _ := strings.Cut(path, ".")
-	ns, ok := input.ValuesNotServed[tenantID][top]
-	return ok && config.ValueNotServedAsWritten(top, ns.Reason)
 }
 
 // inheritedFromRefusedSubtreeKey reports whether the leaf at path belongs to

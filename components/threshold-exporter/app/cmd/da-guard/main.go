@@ -159,6 +159,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -202,6 +203,10 @@ type flags struct {
 	output               string
 	warnAsError          bool
 	showVersion          bool
+	// skipRedundant (no CLI flag): judge no threshold key redundant — for a
+	// caller that reads only error findings (write_worsen's tree validation),
+	// which then pays for neither the counterfactual nor the key verdict.
+	skipRedundant bool
 }
 
 func parseFlags(args []string, errOut io.Writer) (*flags, error) {
@@ -509,7 +514,11 @@ func runDefault(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	// carriers, the /metrics gather verdict (#2031) — is reported with no
 	// tenant exactly as with some. The per-tenant checks find nothing on zero
 	// tenants.
-	input := buildCheckInput(scoped, f, now)
+	input, err := buildCheckInput(scoped, f, now)
+	if err != nil {
+		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
+		return exitCallerErr
+	}
 	report, err := check(input)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: guard run: %v\n", programName, err)
@@ -609,6 +618,113 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 	return false
 }
 
+// redundantThresholds is, for every threshold key of each tenant's own file
+// (a top-level key of overrides not starting with `_`; overrides is
+// TenantOverrides, the double-spelled thresholds already left out), whether
+// the line is redundant (#4330):
+//   - deleting it leaves what the exporter serves for the tenant the same
+//     from now on (config.ScopedTenants.ServedUnchangedWithout — the
+//     exporter's own build and resolve), and
+//   - no other finding reports the line: value_not_served (a refused value,
+//     config.NotServedOwnedElsewhere — which also hands a key nothing of
+//     which is served to the key verdict that reports it), or any finding
+//     the shared key verdict emits naming the tenant and key (a key nothing
+//     reads, a retired key, a `disable` that switches nothing off, a value
+//     the tenant's own base `disable` switches off). The key verdict is asked
+//     whenever a line is left unchanged.
+//
+// A counterfactual or key verdict that cannot be had is named on the process
+// log and judges no threshold key redundant: redundant_override is advice,
+// and advice that could not be confirmed is not given.
+//
+// ⛔ The key verdict walks the tree again, after the run's last bracketing
+// walk (sameWalks in runWith): a tree changed since the run's first walk is
+// the error (#3965 — one run, one tree; the caller ends the run with exit 2),
+// never ownership read from another tree.
+func redundantThresholds(scoped *config.ScopedTenants, f *flags, overrides map[string]map[string]any,
+	notServed map[string]map[string]config.NotServedKey, now time.Time) (map[string]map[string]bool, error) {
+	if f.skipRedundant {
+		return nil, nil
+	}
+	cands := map[string][]string{}
+	for tenant, m := range overrides {
+		for k := range m {
+			if !strings.HasPrefix(k, "_") {
+				cands[tenant] = append(cands[tenant], k)
+			}
+		}
+		sort.Strings(cands[tenant])
+	}
+	if len(cands) == 0 {
+		return nil, nil
+	}
+	out, err := scoped.ServedUnchangedWithout(cands, now)
+	if err != nil {
+		log.Printf("WARN: redundant_override not judged for threshold keys: %v", err)
+		return nil, nil
+	}
+	asks := false // an unchanged line the key verdict may own (a `disable` that switches nothing off)
+	for tenant, keys := range out {
+		for key, same := range keys {
+			if !same {
+				continue
+			}
+			if ns, listed := notServed[tenant][key]; listed && config.NotServedOwnedElsewhere(key, ns.Reason) {
+				keys[key] = false
+				continue
+			}
+			asks = true
+		}
+	}
+	if !asks {
+		return out, nil
+	}
+	if betweenWalks != nil {
+		betweenWalks(scoped.ScanRoot())
+	}
+	root := scoped.ScanRoot() // the tree the counterfactual built, whatever --config-dir spelled
+	opts, err := treeFacts(root)
+	if err != nil || !sameWalks(scoped.TreeIdentity, opts.factsIdentity, io.Discard) {
+		// The facts' walk failed on, or read other than, the tree the run's
+		// first walk read: the tree changed meanwhile.
+		return nil, fmt.Errorf("--config-dir changed during this run (its walks read %s, then %s); nothing was judged — run it again",
+			scoped.TreeIdentity, walkName(opts.factsIdentity))
+	}
+	// keyVerdictOf compares its own walks with the facts' (factsIdentity)
+	// and with each other: a change after this point is its error.
+	opts.scan = config.ScanOptions{SkipDuplicated: true}
+	kv, err := keyVerdictOf(root, opts, now)
+	if err != nil {
+		return nil, err
+	}
+	if !kv.judged {
+		log.Printf("WARN: redundant_override not judged for threshold keys (the key verdict: %v)", kv.why)
+		return nil, nil
+	}
+	// The key verdict's own findings name the lines it reports — whatever
+	// their kind (unread, retired, disable_noop, disable_cascade, …): such a
+	// line is that finding's, one cause one finding, and its redundancy
+	// advice would at best repeat it. A finding spells the key as the file
+	// does; the candidates are the decode's (canonical dimensional) spelling.
+	owned := map[string]map[string]bool{}
+	for _, fd := range kv.tree.Findings {
+		for _, tenant := range fd.Tenants {
+			if owned[tenant] == nil {
+				owned[tenant] = map[string]bool{}
+			}
+			owned[tenant][config.CanonicalDimensionalKey(fd.Key)] = true
+		}
+	}
+	for tenant, keys := range out {
+		for key := range keys {
+			if owned[tenant][config.CanonicalDimensionalKey(key)] {
+				keys[key] = false
+			}
+		}
+	}
+	return out, nil
+}
+
 // buildCheckInput assembles a guard.CheckInput from the scoped
 // resolution. It's where the YAML-shape → guard-input mapping lives:
 //
@@ -630,7 +746,10 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 // guard.CheckInput documentation for the resolution rule.
 //
 // now is the run's instant, the one ScopeEffective resolved at (#3368).
-func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guard.CheckInput {
+//
+// The error is a tree changed during the run (redundantThresholds): the
+// caller ends the run with exit 2 and no document.
+func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) (guard.CheckInput, error) {
 	effective := make(map[string]map[string]any, len(scoped.Tenants))
 	tenantOverrides := make(map[string]map[string]any)
 	newDefaultsByTenant := make(map[string]map[string]any)
@@ -663,6 +782,10 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guar
 		}
 	}
 	refused, rejected, blockErrs := customAlertVerdicts(scoped)
+	redundant, err := redundantThresholds(scoped, f, tenantOverrides, notServed, now)
+	if err != nil {
+		return guard.CheckInput{}, err
+	}
 	var rowCounts map[string]int
 	exporterCap := 0
 	if f.cardinalityLimit > 0 {
@@ -677,8 +800,10 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guar
 	return guard.CheckInput{
 		EffectiveConfigs: effective,
 		// runWith refuses a routing path here (exit 2) before this runs.
-		RequiredFields:       splitNonEmpty(f.requiredFields),
-		TenantOverrides:      tenantOverrides,
+		RequiredFields:  splitNonEmpty(f.requiredFields),
+		TenantOverrides: tenantOverrides,
+		// #4330: redundant_override's counterfactual for threshold keys.
+		RedundantThresholds:  redundant,
 		NewDefaultsByTenant:  newDefaultsByTenant,
 		CardinalityLimit:     f.cardinalityLimit,
 		CardinalityWarnRatio: f.cardinalityWarnRatio,
@@ -712,7 +837,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guar
 		// #2031: the whole tree, whatever the scope — one series two keys
 		// share fails the scrape for every tenant.
 		MetricsNotGatherable: gatherVerdict(scoped.Config, now, writtenNamer(scoped.WrittenKeys)),
-	}
+	}, nil
 }
 
 // spellFindingsAsWritten re-spells, in place, each finding's Field and
