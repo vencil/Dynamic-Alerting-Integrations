@@ -183,6 +183,11 @@ type ScheduledValue struct {
 	// MergePartialConfigs (bench-gate #871). Honored only on base standard metrics
 	// (those in _defaults.yaml); ignored elsewhere (v1).
 	Expiry *ExpiryMeta
+	// fold is what the decode's #1231 fold did to this line (foldSpellings,
+	// #4253): nil for a line written under the canonical key with no other
+	// spelling beside it — every line but a retired spelling's. Behind a
+	// pointer for Expiry's reason.
+	fold *valueFold
 	// deleted marks a reserved (`_`) key a `tenants:` / `profiles:` body
 	// wrote as null: "delete the inherited value" (#3341,
 	// reservedNullMarker). Its Default is "", so a reader that does not ask

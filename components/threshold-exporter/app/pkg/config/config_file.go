@@ -129,8 +129,11 @@ func decodeConfigFile(data []byte, generic bool) (ThresholdConfig, error) {
 		}
 		keepReservedMappings(&cfg, data)
 		dropNullThresholds(&cfg, data)
-		foldConfigSpellings(&cfg)
 		normalizeConfigKeys(&cfg)
+		// After the dimensional re-spelling: two spellings of one threshold
+		// whose labels are written differently are one threshold to the fold.
+		twins := foldConfigSpellings(&cfg)
+		cfg.spelled = cfg.spelled || twins
 	}
 	return cfg, err
 }
@@ -162,8 +165,12 @@ func normalizeBodies(m map[string]map[string]ScheduledValue) bool {
 // foldConfigSpellings is the decode's #1231 fold (foldSpellings, #4253):
 // after it no map of cfg holds a retired spelling. Every decode runs it; a
 // config assembled by hand (a test's) runs it to be one a decode produced.
-func foldConfigSpellings(cfg *ThresholdConfig) {
-	foldRootSpellings(cfg)
+// It reports whether some map wrote one threshold under both spellings —
+// the second is a duplicate the spelling readers name (cfg.spelled).
+func foldConfigSpellings(cfg *ThresholdConfig) bool {
+	twins := foldRootSpellings(cfg)
+	twins = foldBodies(cfg.Tenants) || twins
+	return foldBodies(cfg.Profiles) || twins
 }
 
 // foldRootSpellings folds the root `defaults:` map's retired #1231
@@ -173,8 +180,9 @@ func foldConfigSpellings(cfg *ThresholdConfig) {
 // so beside the other spelling's value that value is the threshold's, the
 // same whatever the refused text looks like. (A null never reaches here:
 // dropNullThresholds runs first.) The folds are kept in cfg.rootFolds.
-func foldRootSpellings(cfg *ThresholdConfig) {
+func foldRootSpellings(cfg *ThresholdConfig) bool {
 	cfg.Defaults, cfg.rootFolds = foldSpellings(cfg.Defaults, func(_ string, v float64) bool { return rootTakes(v) })
+	return anyTwin(cfg.rootFolds)
 }
 
 // rootTakes reports whether a decoded root `defaults:` value is one the root

@@ -81,3 +81,78 @@ func TestSpellingFold_RootDecodeHoldsOnlyTheCanonicalKey(t *testing.T) {
 		}
 	}
 }
+
+// #4253: a tenant writing both spellings. The line the tenant layer takes is
+// a threshold-shaped one: beside a value no reader takes (`abc`) the other
+// spelling's value is the tenant's own — not the root's 30 — and a `disable`
+// is a line it takes (canonical wins, the threshold is off).
+func TestSpellingFold_TenantTwinIsTheLineTheTenantTakes(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ current, want string }{
+		{`"abc"`, "mysql_threads_running warning 7"},
+		{`"9"`, "mysql_threads_running warning 9"},
+		{`"disable"`, ""},
+	} {
+		cfg := loadTree(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+			"t.yaml":         "tenants:\n  tx:\n    mysql_threads_running: " + c.current + "\n    " + retiredSpelling + ": \"7\"\n",
+		})
+		if got := threadsRows(cfg); got != c.want {
+			t.Errorf("tenant %s beside %s 7: %q, want %q", c.current, retiredSpelling, got, c.want)
+		}
+	}
+}
+
+// #4253 with #4263: the canonical line wins the fold but is time-boxed; once
+// its `expires:` passes it is as deleted, and the retired spelling's line —
+// which the tenant layer takes — is what the tenant then writes.
+func TestSpellingFold_AnExpiredCanonicalLineGivesWayToTheOtherSpelling(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+		"t.yaml": "tenants:\n  tx:\n    mysql_threads_running:\n      default: \"9\"\n      expires: \"2026-06-01T00:00:00Z\"\n" +
+			"    " + retiredSpelling + ": \"7\"\n",
+	}
+	before := loadTreeAt(t, files, fixedNow.AddDate(-1, 0, 0))
+	var rows []string
+	for _, r := range offRows(before, "tx", "mysql", fixedNow.AddDate(-1, 0, 0)) {
+		if strings.HasPrefix(r, "mysql_threads_running") {
+			rows = append(rows, r)
+		}
+	}
+	if got := strings.Join(rows, "|"); got != "mysql_threads_running warning 9" {
+		t.Errorf("before expires: %q, want the canonical line's 9", got)
+	}
+	if got := threadsRows(loadTreeAt(t, files, fixedNow)); got != "mysql_threads_running warning 7" {
+		t.Errorf("after expires: %q, want the other spelling's 7", got)
+	}
+	// The tenant-api merge reads the wall clock — past the June expires:.
+	m := MergeTenantWithRootDefaults(writeUndeliverableTree(t, files), "tx", []byte(files["t.yaml"]))
+	if got := threadsRows(&m.ThresholdConfig); got != "mysql_threads_running warning 7" {
+		t.Errorf("tenant-api after expires: %q, want /metrics' 7", got)
+	}
+}
+
+// #4253: the decode folds the retired spelling, and what was written is
+// still told — the deprecated-keys count and the rename notices.
+func TestSpellingFold_WhatWasWrittenIsStillTold(t *testing.T) {
+	t.Parallel()
+	cfg := loadTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+		"t.yaml": "tenants:\n  tx:\n    " + retiredSpelling + ": \"7\"\n" +
+			"  ty:\n    mysql_threads_running: \"abc\"\n    " + retiredSpelling + ": \"7\"\n",
+	})
+	if _, st := cfg.ResolveAtWithStats(fixedNow); st.PerTenantDeprecatedKeys["tx"] != 1 || st.PerTenantDeprecatedKeys["ty"] != 1 {
+		got := st.PerTenantDeprecatedKeys
+		t.Errorf("deprecated keys %v, want 1 for tx and ty", got)
+	}
+	notices := strings.Join(cfg.ValidateTenantKeys().Notices, "\n")
+	for _, want := range []string{
+		`tenant=tx: key "` + retiredSpelling + `" was renamed to "mysql_threads_running"`,
+		`tenant=ty: "mysql_threads_running" has no value this layer takes, so the deprecated "` + retiredSpelling + `" beside it is served`,
+	} {
+		if !strings.Contains(notices, want) {
+			t.Errorf("notices lack %q:\n%s", want, notices)
+		}
+	}
+}

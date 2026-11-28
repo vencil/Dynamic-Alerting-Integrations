@@ -204,7 +204,8 @@ func TestGuard_SubtreeNonThresholdSpellingIsNoWrite(t *testing.T) {
 			if with != "50" || without != "50" {
 				t.Fatalf("%s: precondition — /metrics with=%s without=%s, want 50 both", name, with, without)
 			}
-			if !aliasRedundant(t, dir)[kept] {
+			// #4253: the finding is the threshold's, under its canonical key.
+			if !aliasRedundant(t, dir)[C] {
 				t.Errorf("%s: %s at 50 is redundant (deleting it keeps /metrics at 50) but was not reported", name, kept)
 			}
 		}

@@ -1903,6 +1903,23 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 		}
 
 		for key, sv := range overrides {
+			// #4253: the decode folded the retired spelling into the
+			// canonical key (foldSpellings); what was written is the line's
+			// fold record. Notices only, never an error.
+			if f := sv.fold; f != nil {
+				switch {
+				case f.written != "" && f.folded != "":
+					keyCheck(newKeyCheck(KeyCheckRenamedOverRefused, tenant, f.written, key, ""))
+				case f.written != "":
+					if head, labels := splitKeyHead(key); labels != "" && DimensionBaseRefused(head) {
+						keyCheck(newKeyCheck(KeyCheckRenamedCriticalDimensional, tenant, f.written, key, ""))
+					} else {
+						keyCheck(newKeyCheck(KeyCheckRenamed, tenant, f.written, key, ""))
+					}
+				case f.folded != "":
+					keyCheck(newKeyCheck(KeyCheckRenamedShadowed, tenant, f.folded, key, ""))
+				}
+			}
 			// #1231 alias canonicalization — BEFORE any other check, mirroring
 			// the resolve boundary. Aliased keys get a notice (never an error);
 			// validation below then runs on the canonical spelling.

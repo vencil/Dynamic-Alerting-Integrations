@@ -291,11 +291,13 @@ func sameConfig(a, b ThresholdConfig) bool {
 			return false
 		}
 	}
-	// rootFolds is the decode's record of what it folded, not content: the
+	// rootFolds and spelled are the decode's record of what it folded and
+	// re-spelled, not content: the
 	// folds themselves are decodeFolds' (the record is pinned by
 	// spelling_fold_test.go).
 	a.Defaults, b.Defaults = nil, nil
 	a.rootFolds, b.rootFolds = nil, nil
+	a.spelled, b.spelled = false, false
 	return reflect.DeepEqual(a, b)
 }
 

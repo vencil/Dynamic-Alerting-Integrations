@@ -43,6 +43,10 @@ const (
 	// KeyCheckRenamed: a retired spelling, still resolved during the
 	// transition window.
 	KeyCheckRenamed KeyCheckKind = "renamed"
+	// KeyCheckRenamedOverRefused: a retired spelling served because the
+	// replacement the same map also sets is not a value the layer takes
+	// (#4253).
+	KeyCheckRenamedOverRefused KeyCheckKind = "renamed_over_refused"
 )
 
 // KeyCheckKinds is every KeyCheckKind, in declaration order.
@@ -50,6 +54,7 @@ func KeyCheckKinds() []KeyCheckKind {
 	return []KeyCheckKind{
 		KeyCheckVersionRegex, KeyCheckVersionEmpty, KeyCheckVersionDefault, KeyCheckVersionCharset,
 		KeyCheckRenamedShadowed, KeyCheckRenamedCriticalDimensional, KeyCheckRenamed,
+		KeyCheckRenamedOverRefused,
 	}
 }
 
@@ -57,7 +62,8 @@ func KeyCheckKinds() []KeyCheckKind {
 // KeyValidation.Notices) rather than a `version` label (KeyValidation.Errors).
 func (k KeyCheckKind) IsRenamed() bool {
 	switch k {
-	case KeyCheckRenamedShadowed, KeyCheckRenamedCriticalDimensional, KeyCheckRenamed:
+	case KeyCheckRenamedShadowed, KeyCheckRenamedCriticalDimensional, KeyCheckRenamed,
+		KeyCheckRenamedOverRefused:
 		return true
 	}
 	return false
@@ -83,6 +89,8 @@ var keyCheckReasons = map[KeyCheckKind]string{
 		"the value \"N:critical\", declared for the base under the root `dimensions:`",
 	KeyCheckRenamed: "a retired spelling (#1231): the old name still resolves during the 2-release " +
 		"transition window; update it to the replacement",
+	KeyCheckRenamedOverRefused: "a retired spelling (#1231), served because its replacement is also " +
+		"set but with no value the layer takes (#4253): fix the replacement and remove this one",
 }
 
 // KeyCheck is one key check on one tenant key.
@@ -148,6 +156,10 @@ func (c KeyCheck) Message() string {
 		return fmt.Sprintf(
 			"WARN: tenant=%s: version %q in key %q violates %s "+
 				"(ADR-024 OQ-6; pilot-calibratable)", c.Tenant, c.label, c.judged, versionLabelPattern)
+	case KeyCheckRenamedOverRefused:
+		return fmt.Sprintf(
+			"NOTICE: tenant=%s: %q has no value this layer takes, so the deprecated %q beside it is served — fix %q and remove %q (#1231 rename)",
+			c.Tenant, c.judged, c.Key, c.judged, c.Key)
 	case KeyCheckRenamedShadowed:
 		return fmt.Sprintf(
 			"NOTICE: tenant=%s: deprecated key %q is ignored because its replacement %q is also set — remove %q (#1231 rename)",

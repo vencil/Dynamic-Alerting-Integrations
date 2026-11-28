@@ -175,12 +175,13 @@ func TestNotServed_Table(t *testing.T) {
 			"sub/tw.yaml":        "tenants:\n  tw:\n    mysql_connections: \"70\"\n",
 			// #4163: the root writes no spelling of mysql_threads_running, but
 			// the built-in layer values it off, so the base phase reads tx's
-			// value and drops it as unreadable (no default to fall back to) —
-			// under both spellings the effective config shows; still no
-			// value_rejected.
+			// value and drops it as unreadable (no default to fall back to);
+			// still no value_rejected. #4253: the decode folds the subtree's
+			// retired spelling into the canonical key, so the two lines are
+			// one threshold and the platform entry's — the layer above the
+			// subtree — is the one shown.
 		}, want: map[string]NotServedKey{
 			"mysql_threads_running": ns(NotServedValueUnparsedDropped, "_platform.yaml"),
-			retiredCPU:              ns(NotServedValueUnparsedDropped, "sub/_defaults.yaml"),
 		}},
 		{name: "F3 retired spelling in the tenant", files: map[string]string{
 			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_threads_running: 80\n",

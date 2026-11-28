@@ -146,7 +146,7 @@ func newPlatformProfiles(files []profileSourceFile) *PlatformProfiles {
 			if n, ok := nodes.Profiles[name]; ok {
 				withThresholdLeaves(m, resolveAlias(&n)) // #3250
 			}
-			m, spell := normalizeKeys(m) // #2031
+			m, spell := normalizeKeysTaking(m, levelTakes) // #2031, #4253
 			if spell != nil {
 				if pp.spell == nil {
 					pp.spell = make(map[string]map[string]*keySpellings)

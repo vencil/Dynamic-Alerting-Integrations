@@ -233,6 +233,16 @@ func filterPartials(configs map[string]ThresholdConfig, keep expiryKeep) map[str
 	return out
 }
 
+// lapseOf is the line the layer writes in sv's place once sv's `expires:`
+// passes: the other spelling's line sv was folded over (valueFold.other),
+// when the layer takes it; and whether there is one.
+func lapseOf(sv ScheduledValue) (ScheduledValue, bool) {
+	if sv.fold == nil || sv.fold.other == nil || !isThresholdShaped(*sv.fold.other) {
+		return ScheduledValue{}, false
+	}
+	return *sv.fold.other, true
+}
+
 // bodiesHoldTimed is whether any threshold value of bodies (not a `_` key)
 // carries an `expires:`.
 func bodiesHoldTimed(bodies map[string]map[string]ScheduledValue) bool {
@@ -259,6 +269,20 @@ func filterBodies(bodies map[string]map[string]ScheduledValue, keep expiryKeep) 
 			// A `_` key is no threshold: it never lapses (eachTimed skips
 			// it, the readers ignore its `expires:`), so it is never cut.
 			if baseRowsSkipKey(k) || keep(sv) {
+				continue
+			}
+			// #4253: a line folded over another spelling's gives way to it
+			// (lapseOf) — the other line is what the layer writes with this
+			// one deleted.
+			lapse, hasLapse := lapseOf(sv)
+			if hasLapse && keep(lapse) {
+				if kept == nil {
+					kept = make(map[string]ScheduledValue, len(body))
+					for k2, v2 := range body {
+						kept[k2] = v2
+					}
+				}
+				kept[k] = lapse
 				continue
 			}
 			if kept == nil {

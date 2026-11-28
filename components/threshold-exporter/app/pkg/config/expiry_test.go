@@ -406,8 +406,13 @@ func TestExpiry_DescribedTenantsSpellings(t *testing.T) {
 		if _, a := d["tx"][canon]; !a {
 			t.Fatalf("tx: %s missing from %v", canon, d["tx"])
 		}
-		if _, b := d["tx"][retired]; !b {
-			t.Fatalf("tx: %s missing from %v (both spellings are written and served)", retired, d["tx"])
+		// #4253: the decode folds both lines into the canonical key; the
+		// one kept is the canonical (the layer takes both).
+		if v, b := d["tx"][retired]; b {
+			t.Fatalf("tx: %s = %+v described: the decode folds it into %s", retired, v, canon)
+		}
+		if v := d["tx"][canon]; v.Default != "9" {
+			t.Fatalf("tx: %s = %+v, want the canonical line's 9", canon, v)
 		}
 		if v, ok := d["ty"][canon]; !ok || v.Default != "70" {
 			t.Fatalf("ty: %s = %+v %v, want the profile's 70 served in the expired line's place", canon, v, ok)

@@ -764,10 +764,11 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) (gua
 		// per-tenant entry out of the map, which the guard treats
 		// as "skip this tenant for redundant-override".
 		if ec.TenantOverridesRaw != nil {
-			// #2368: a threshold the tenant writes under BOTH #1231
-			// spellings is not judged — deleting either spelling serves the
-			// other one's value, which no inherited value can stand for.
-			tenantOverrides[ec.TenantID] = config.WithoutDoubleSpelledThresholds(ec.TenantOverridesRaw)
+			// #2368, #4253: a threshold the tenant writes twice (both #1231
+			// spellings, folded into one at the decode) is not judged —
+			// deleting the kept line serves the other one's value, which no
+			// inherited value can stand for.
+			tenantOverrides[ec.TenantID] = ec.JudgeableTenantOverrides()
 		}
 		if ec.MergedDefaults != nil {
 			newDefaultsByTenant[ec.TenantID] = ec.MergedDefaults

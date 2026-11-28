@@ -116,7 +116,7 @@ func TestRejectedShownCache_AnotherTenantDoesNotMoveTheVerdict(t *testing.T) {
 	var cold RejectedShownCache
 	wantB := map[string]map[string]string{
 		"ty": {"mysql_connections": NotServedValueRejected},
-		"tw": {"mysql_cpu": NotServedValueRejected},
+		"tw": {"mysql_threads_running": NotServedValueRejected}, // #4253: the decode folds the spelling
 	}
 	got := cold.Shown(scan, built)
 	if !reflect.DeepEqual(got, wantB) {

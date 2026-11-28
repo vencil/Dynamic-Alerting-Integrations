@@ -1412,6 +1412,11 @@ func unservedOf(dst map[string]any, cfg *config.ThresholdConfig, overrides map[s
 		// served, so the alias's own value is not.
 		_, canonWritten := overrides[canon]
 		shadowed := isAlias && canonWritten
+		// #4253: the decode folded the other spelling's line away beside
+		// this one; it is not served.
+		if spelling, line, ok := config.FoldedLine(sv); ok {
+			dst[spelling] = rawScheduledValue(line)
+		}
 		if served(canon) && !shadowed {
 			continue
 		}
