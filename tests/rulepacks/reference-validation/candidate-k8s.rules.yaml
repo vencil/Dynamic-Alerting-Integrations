@@ -59,6 +59,8 @@ groups:
       # Shipped scopes node-down to nodes OWNING tenant pods (kube_pod_info and-join);
       # the direct predicate fires on any NotReady node — declared in the ledger (the
       # library injects no kube_pod_info series; ownership is tenant plumbing).
+      # The shipped keep_firing_for is not reproduced either (declared in the
+      # ledger); NodeReadinessFlapping is not mirrored (absent_from_candidate).
       - alert: NodeNotReady
         expr: kube_node_status_condition{condition="Ready", status="true"} == 0
         for: 3m

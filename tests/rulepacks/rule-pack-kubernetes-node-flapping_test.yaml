@@ -1,0 +1,886 @@
+# promtool unit test — node readiness on a flapping node (#1177).
+# Run: promtool test rules tests/rulepacks/rule-pack-kubernetes-node-flapping_test.yaml
+#
+# Two rules of the kubernetes-node-health group:
+#   NodeNotReady           for: 3m + keep_firing_for: 10m — a node that is NotReady
+#                          4m / Ready 1m for an hour is ONE firing episode, not 12.
+#   NodeReadinessFlapping  more than 2 changes of the Ready=true gauge in 15m, held
+#                          15m (kubernetes-mixin KubeNodeReadinessFlapping core, tenant-
+#                          wrapped) — the flapping that is too short for NodeNotReady.
+#
+# Reading the times: every node is Ready for the first 20m and the waveform starts
+# at 20m ("T+0"); comments give T+ offsets, eval_time is absolute. The 20m lead is
+# there because MetricsQL counts a series' first sample as a change for the next
+# 15m, and this fixture also runs on vmalert-tool (test_vm_alert_parity.py).
+# Every assertion sits at least 30s (two evaluations) away from a measured
+# pending/firing/resolved edge on BOTH engines; vmalert-tool fires and resolves
+# NodeNotReady one evaluation later than promtool. Rules and their recordings are
+# in one group, so the evaluation order at a tick is fixed.
+# The "never fired" / "one unbroken episode" checks read ALERTS over a range, so
+# they cover every evaluation, not just the sampled eval_times.
+rule_files:
+  - ../../rule-packs/rule-pack-kubernetes.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── NodeNotReady, node-1 NotReady 4m / Ready 1m from T+0 to T+60m. Measured:
+  #    firing T+3m .. T+68m45s (vmalert-tool T+3m15s .. T+69m). Without
+  #    keep_firing_for it fired 12 times, 45s each (T+3m, T+8m, ...).
+  #      T+2m     pending (first fire is still at 3m)
+  #      T+4m     firing, annotations checked
+  #      T+4m30s  firing in the first Ready stretch (was resolved at T+4m)
+  #      T+65m    240 firing samples in the last 60m = no gap since T+5m
+  #      T+68m    firing 9m after the last NotReady ended (T+59m)
+  #      T+70m    resolved
+  #    NodeReadinessFlapping also fires on this node (6 changes per 15m). ──
+  - name: notready-4m-1m-one-episode
+    interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '1x79 0x15 1x3 0x15 1x3 0x15 1x3 0x15 1x3 0x15 1x3 0x15 1x3 0x15 1x3 0x15 1x3 0x15 1x3 0x15 1x3 0x15 1x3 0x15 1x64'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-0", uid="u-db-x-app-0", node="node-1"}'
+        values: '1x380'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-0", uid="u-db-x-app-0", phase="Running"}'
+        values: '1x380'
+      - series: 'tenant_metadata_info{tenant="db-x", runbook_url="http://rb/db-x", owner="team-db-x", tier="gold"}'
+        values: '1x380'
+    alert_rule_test:
+      - eval_time: 22m
+        alertname: NodeNotReady
+        exp_alerts: []
+      - eval_time: 24m
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-x"
+              platform_summary: "[gold] db-x: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[gold] db-x: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: "http://rb/db-x"
+              owner: "team-db-x"
+              tier: "gold"
+      - eval_time: 24m30s
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-x"
+              platform_summary: "[gold] db-x: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[gold] db-x: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: "http://rb/db-x"
+              owner: "team-db-x"
+              tier: "gold"
+      - eval_time: 88m
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-x"
+              platform_summary: "[gold] db-x: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[gold] db-x: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: "http://rb/db-x"
+              owner: "team-db-x"
+              tier: "gold"
+      - eval_time: 90m
+        alertname: NodeNotReady
+        exp_alerts: []
+      - eval_time: 42m
+        alertname: NodeReadinessFlapping
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 readiness is flapping — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 的就緒狀態反覆變動 — 影響 db-x"
+              platform_summary: "[gold] db-x: node node-1 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[gold] db-x: 節點 node-1 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: "http://rb/db-x"
+              owner: "team-db-x"
+              tier: "gold"
+    promql_expr_test:
+      - expr: max by(tenant, node) (count_over_time(ALERTS{alertstate="firing", alertname="NodeNotReady"}[60m]))
+        eval_time: 85m
+        exp_samples:
+          - labels: '{node="node-1", tenant="db-x"}'
+            value: 240
+
+  # ── NodeNotReady, one outage each:
+  #      node-1 (db-x)  NotReady T+0 .. T+3m30s   firing T+3m .. T+13m15s
+  #                                               (vmalert-tool T+3m15s .. T+13m30s)
+  #      node-2 (db-y)  NotReady from T+0 on      firing from T+3m
+  #    T+2m30s neither (pending); T+3m45s both — first fire unchanged at 3m;
+  #    T+12m30s node-1 still firing 9m after it recovered (keep_firing_for);
+  #    T+14m30s node-1 resolved, node-2 still firing. ──
+  - name: notready-single-outage-and-sustained
+    interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '1x79 0x13 1x50'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-0", uid="u-db-x-app-0", node="node-1"}'
+        values: '1x144'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-0", uid="u-db-x-app-0", phase="Running"}'
+        values: '1x144'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="true"}'
+        values: '1x79 0x64'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-0", uid="u-db-y-app-0", node="node-2"}'
+        values: '1x144'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-0", uid="u-db-y-app-0", phase="Running"}'
+        values: '1x144'
+    alert_rule_test:
+      - eval_time: 22m30s
+        alertname: NodeNotReady
+        exp_alerts: []
+      - eval_time: 23m45s
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-x"
+              platform_summary: "[] db-x: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-x: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-y
+              node: node-2
+            exp_annotations:
+              summary: "Kubernetes node node-2 NotReady — affects db-y"
+              summary_zh: "Kubernetes 節點 node-2 NotReady — 影響 db-y"
+              platform_summary: "[] db-y: node node-2 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-y: 節點 node-2 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 32m30s
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-x"
+              platform_summary: "[] db-x: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-x: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-y
+              node: node-2
+            exp_annotations:
+              summary: "Kubernetes node node-2 NotReady — affects db-y"
+              summary_zh: "Kubernetes 節點 node-2 NotReady — 影響 db-y"
+              platform_summary: "[] db-y: node node-2 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-y: 節點 node-2 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 34m30s
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-y
+              node: node-2
+            exp_annotations:
+              summary: "Kubernetes node node-2 NotReady — affects db-y"
+              summary_zh: "Kubernetes 節點 node-2 NotReady — 影響 db-y"
+              platform_summary: "[] db-y: node node-2 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-y: 節點 node-2 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── NodeNotReady, the tenant's pod leaves the node mid-fault: node-1 NotReady
+  #    from T+0 on, the pod stops Running at T+6m (the owner mapping drops).
+  #    Measured firing T+3m .. T+15m45s (vmalert-tool .. T+16m15s): the alert
+  #    outlives the mapping by ~10m.
+  #      T+5m firing; T+15m still firing; T+17m15s resolved. ──
+  - name: notready-pod-leaves-node
+    interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '1x79 0x76'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-0", uid="u-db-x-app-0", node="node-1"}'
+        values: '1x156'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-0", uid="u-db-x-app-0", phase="Running"}'
+        values: '1x103 0x52'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-x"
+              platform_summary: "[] db-x: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-x: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 35m
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-x"
+              platform_summary: "[] db-x: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-x: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 37m15s
+        alertname: NodeNotReady
+        exp_alerts: []
+
+  # ── NodeNotReady, maintenance entered while firing: node-1 NotReady from T+0
+  #    on, db-x enters maintenance at T+10m. ACCEPTED BEHAVIOUR, pinned on purpose:
+  #    the `unless` empties the expr and keep_firing_for holds the alert 10m more
+  #    (measured firing .. T+19m45s on both engines). #4348 tracks the platform
+  #    policy for keep_firing_for versus maintenance.
+  #      T+11m still firing (1m into maintenance); T+19m still firing;
+  #      T+21m resolved. A tenant already in maintenance never fires (node-2). ──
+  - name: notready-maintenance-while-firing
+    interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '1x79 0x92'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-0", uid="u-db-x-app-0", node="node-1"}'
+        values: '1x172'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-0", uid="u-db-x-app-0", phase="Running"}'
+        values: '1x172'
+      - series: 'user_state_filter{tenant="db-x", filter="maintenance"}'
+        values: '_x119 1x52'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="true"}'
+        values: '1x79 0x92'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-0", uid="u-db-y-app-0", node="node-2"}'
+        values: '1x172'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-0", uid="u-db-y-app-0", phase="Running"}'
+        values: '1x172'
+      - series: 'user_state_filter{tenant="db-y", filter="maintenance"}'
+        values: '1x172'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-x"
+              platform_summary: "[] db-x: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-x: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 31m
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-x"
+              platform_summary: "[] db-x: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-x: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 39m
+        alertname: NodeNotReady
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 NotReady — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-x"
+              platform_summary: "[] db-x: node node-1 NotReady — check node health / pod rescheduling"
+              platform_summary_zh: "[] db-x: 節點 node-1 NotReady — 請檢查節點健康 / Pod 重新調度"
+              description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 41m
+        alertname: NodeNotReady
+        exp_alerts: []
+    promql_expr_test:
+      - expr: count_over_time(ALERTS{alertname="NodeNotReady", tenant="db-y"}[42m])
+        eval_time: 42m
+        exp_samples: []
+
+  # ── NodeReadinessFlapping, sustained flapping from T+0 to T+60m (NotReady/Ready):
+  #      node-1 (db-x)  30s / 30s   firing T+16m .. T+73m     (9 changes per 15m)
+  #      node-2 (db-y)  1m / 4m     firing T+20m .. T+65m30s  (6)
+  #      node-3 (db-z)  2m / 3m     firing T+20m .. T+66m30s  (6)
+  #    (vmalert-tool resolves each 15s later.) None of them ever holds NotReady
+  #    for 3m, so NodeNotReady never gets past pending (no firing sample at any
+  #    evaluation).
+  #      T+10m  none firing (pending)
+  #      T+22m  all three firing, annotations checked
+  #      T+55m  each has 120 firing samples in the last 30m = one unbroken episode
+  #      T+64m  all three still firing
+  #      T+69m  only node-1 (its last change was at T+59m30s)
+  #      T+75m  all resolved ──
+  - name: flapping-sustained
+    interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '1x79 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x82'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-0", uid="u-db-x-app-0", node="node-1"}'
+        values: '1x400'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-0", uid="u-db-x-app-0", phase="Running"}'
+        values: '1x400'
+      - series: 'tenant_metadata_info{tenant="db-x", runbook_url="http://rb/db-x", owner="team-db-x", tier="gold"}'
+        values: '1x400'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="true"}'
+        values: '1x79 0x3 1x15 0x3 1x15 0x3 1x15 0x3 1x15 0x3 1x15 0x3 1x15 0x3 1x15 0x3 1x15 0x3 1x15 0x3 1x15 0x3 1x15 0x3 1x96'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-0", uid="u-db-y-app-0", node="node-2"}'
+        values: '1x400'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-0", uid="u-db-y-app-0", phase="Running"}'
+        values: '1x400'
+      - series: 'kube_node_status_condition{node="node-3", condition="Ready", status="true"}'
+        values: '1x79 0x7 1x11 0x7 1x11 0x7 1x11 0x7 1x11 0x7 1x11 0x7 1x11 0x7 1x11 0x7 1x11 0x7 1x11 0x7 1x11 0x7 1x11 0x7 1x92'
+      - series: 'kube_pod_info{namespace="db-z", pod="app-0", uid="u-db-z-app-0", node="node-3"}'
+        values: '1x400'
+      - series: 'kube_pod_status_phase{namespace="db-z", pod="app-0", uid="u-db-z-app-0", phase="Running"}'
+        values: '1x400'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: NodeReadinessFlapping
+        exp_alerts: []
+      - eval_time: 42m
+        alertname: NodeReadinessFlapping
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 readiness is flapping — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 的就緒狀態反覆變動 — 影響 db-x"
+              platform_summary: "[gold] db-x: node node-1 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[gold] db-x: 節點 node-1 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: "http://rb/db-x"
+              owner: "team-db-x"
+              tier: "gold"
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-y
+              node: node-2
+            exp_annotations:
+              summary: "Kubernetes node node-2 readiness is flapping — affects db-y"
+              summary_zh: "Kubernetes 節點 node-2 的就緒狀態反覆變動 — 影響 db-y"
+              platform_summary: "[] db-y: node node-2 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[] db-y: 節點 node-2 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-z
+              node: node-3
+            exp_annotations:
+              summary: "Kubernetes node node-3 readiness is flapping — affects db-z"
+              summary_zh: "Kubernetes 節點 node-3 的就緒狀態反覆變動 — 影響 db-z"
+              platform_summary: "[] db-z: node node-3 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[] db-z: 節點 node-3 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 84m
+        alertname: NodeReadinessFlapping
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 readiness is flapping — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 的就緒狀態反覆變動 — 影響 db-x"
+              platform_summary: "[gold] db-x: node node-1 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[gold] db-x: 節點 node-1 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: "http://rb/db-x"
+              owner: "team-db-x"
+              tier: "gold"
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-y
+              node: node-2
+            exp_annotations:
+              summary: "Kubernetes node node-2 readiness is flapping — affects db-y"
+              summary_zh: "Kubernetes 節點 node-2 的就緒狀態反覆變動 — 影響 db-y"
+              platform_summary: "[] db-y: node node-2 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[] db-y: 節點 node-2 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-z
+              node: node-3
+            exp_annotations:
+              summary: "Kubernetes node node-3 readiness is flapping — affects db-z"
+              summary_zh: "Kubernetes 節點 node-3 的就緒狀態反覆變動 — 影響 db-z"
+              platform_summary: "[] db-z: node node-3 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[] db-z: 節點 node-3 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 89m
+        alertname: NodeReadinessFlapping
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+            exp_annotations:
+              summary: "Kubernetes node node-1 readiness is flapping — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 的就緒狀態反覆變動 — 影響 db-x"
+              platform_summary: "[gold] db-x: node node-1 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[gold] db-x: 節點 node-1 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: "http://rb/db-x"
+              owner: "team-db-x"
+              tier: "gold"
+      - eval_time: 95m
+        alertname: NodeReadinessFlapping
+        exp_alerts: []
+    promql_expr_test:
+      - expr: max by(tenant, node) (count_over_time(ALERTS{alertstate="firing", alertname="NodeReadinessFlapping"}[30m]))
+        eval_time: 75m
+        exp_samples:
+          - labels: '{node="node-1", tenant="db-x"}'
+            value: 120
+          - labels: '{node="node-2", tenant="db-y"}'
+            value: 120
+          - labels: '{node="node-3", tenant="db-z"}'
+            value: 120
+      - expr: count_over_time(ALERTS{alertstate="firing", alertname="NodeNotReady"}[98m])
+        eval_time: 98m
+        exp_samples: []
+
+  # ── NodeReadinessFlapping must stay silent (no ALERTS sample, pending or
+  #    firing, over the whole 70m of the test for the last three; no FIRING sample
+  #    for any):
+  #      node-1   two 30s dips 10m apart (4 changes: `> 2` holds < 15m)
+  #      node-2   one 2m dip
+  #      node-3   healthy
+  #      node-4   a NEW node: its series start at T+0, NotReady for 60s, then one
+  #               30s dip at T+5m. PromQL counts 3 changes, MetricsQL 4 (it counts
+  #               the first sample) — neither holds `> 2` for 15m.
+  #      roll-1..6  rolling upgrade: each NotReady 90s, one after another
+  #      node-7   30s/30s flapping, but no db-* pod runs on it (kube-system only)
+  #      node-8   30s/30s flapping, tenant db-m in maintenance
+  #    Non-vacuous: node-7 has 9 changes per 15m and node-8's tenant owns it. ──
+  - name: flapping-must-stay-silent
+    interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '1x79 0x1 1x37 0x1 1x158'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-0", uid="u-db-x-app-0", node="node-1"}'
+        values: '1x280'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-0", uid="u-db-x-app-0", phase="Running"}'
+        values: '1x280'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="true"}'
+        values: '1x79 0x7 1x192'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-1", uid="u-db-x-app-1", node="node-2"}'
+        values: '1x280'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-1", uid="u-db-x-app-1", phase="Running"}'
+        values: '1x280'
+      - series: 'kube_node_status_condition{node="node-3", condition="Ready", status="true"}'
+        values: '1x280'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-2", uid="u-db-x-app-2", node="node-3"}'
+        values: '1x280'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-2", uid="u-db-x-app-2", phase="Running"}'
+        values: '1x280'
+      - series: 'kube_node_status_condition{node="node-4", condition="Ready", status="true"}'
+        values: '_x79 0x3 1x15 0x1 1x178'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-3", uid="u-db-x-app-3", node="node-4"}'
+        values: '_x79 1x200'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-3", uid="u-db-x-app-3", phase="Running"}'
+        values: '_x79 1x200'
+      - series: 'kube_node_status_condition{node="roll-1", condition="Ready", status="true"}'
+        values: '1x79 0x5 1x194'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-0", uid="u-db-y-app-0", node="roll-1"}'
+        values: '1x280'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-0", uid="u-db-y-app-0", phase="Running"}'
+        values: '1x280'
+      - series: 'kube_node_status_condition{node="roll-2", condition="Ready", status="true"}'
+        values: '1x85 0x5 1x188'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-1", uid="u-db-y-app-1", node="roll-2"}'
+        values: '1x280'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-1", uid="u-db-y-app-1", phase="Running"}'
+        values: '1x280'
+      - series: 'kube_node_status_condition{node="roll-3", condition="Ready", status="true"}'
+        values: '1x91 0x5 1x182'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-2", uid="u-db-y-app-2", node="roll-3"}'
+        values: '1x280'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-2", uid="u-db-y-app-2", phase="Running"}'
+        values: '1x280'
+      - series: 'kube_node_status_condition{node="roll-4", condition="Ready", status="true"}'
+        values: '1x97 0x5 1x176'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-3", uid="u-db-y-app-3", node="roll-4"}'
+        values: '1x280'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-3", uid="u-db-y-app-3", phase="Running"}'
+        values: '1x280'
+      - series: 'kube_node_status_condition{node="roll-5", condition="Ready", status="true"}'
+        values: '1x103 0x5 1x170'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-4", uid="u-db-y-app-4", node="roll-5"}'
+        values: '1x280'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-4", uid="u-db-y-app-4", phase="Running"}'
+        values: '1x280'
+      - series: 'kube_node_status_condition{node="roll-6", condition="Ready", status="true"}'
+        values: '1x109 0x5 1x164'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-5", uid="u-db-y-app-5", node="roll-6"}'
+        values: '1x280'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-5", uid="u-db-y-app-5", phase="Running"}'
+        values: '1x280'
+      - series: 'kube_node_status_condition{node="node-7", condition="Ready", status="true"}'
+        values: '1x79 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0'
+      - series: 'kube_pod_info{namespace="kube-system", pod="coredns-0", uid="u-kube-system-coredns-0", node="node-7"}'
+        values: '1x280'
+      - series: 'kube_pod_status_phase{namespace="kube-system", pod="coredns-0", uid="u-kube-system-coredns-0", phase="Running"}'
+        values: '1x280'
+      - series: 'kube_node_status_condition{node="node-8", condition="Ready", status="true"}'
+        values: '1x79 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0'
+      - series: 'kube_pod_info{namespace="db-m", pod="app-0", uid="u-db-m-app-0", node="node-8"}'
+        values: '1x280'
+      - series: 'kube_pod_status_phase{namespace="db-m", pod="app-0", uid="u-db-m-app-0", phase="Running"}'
+        values: '1x280'
+      - series: 'user_state_filter{tenant="db-m", filter="maintenance"}'
+        values: '1x280'
+    alert_rule_test:
+      - eval_time: 36m
+        alertname: NodeReadinessFlapping
+        exp_alerts: []
+      - eval_time: 40m30s
+        alertname: NodeReadinessFlapping
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: NodeReadinessFlapping
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: NodeReadinessFlapping
+        exp_alerts: []
+    promql_expr_test:
+      - expr: count_over_time(ALERTS{alertstate="firing", alertname="NodeReadinessFlapping"}[70m])
+        eval_time: 70m
+        exp_samples: []
+      - expr: count_over_time(ALERTS{alertname="NodeReadinessFlapping", node=~"node-[378]"}[70m])
+        eval_time: 70m
+        exp_samples: []
+
+  # ── NodeReadinessFlapping, three dips in 15m (settled behaviour) ──
+  # Upstream's definition, kept as is: three NotReady dips inside 15m ARE
+  # flapping. `> 2` then holds for 15m plus the length of the SECOND dip, so the
+  # alert fires ~15m after the second dip starts and lasts about as long as that
+  # dip. Measured (dips 5m apart, starting T+0):
+  #      node-1 (db-x)  3 x 30s   fires for ONE evaluation, T+20m (vmalert-tool
+  #                               two: T+20m, T+20m15s)
+  #      node-2 (db-y)  3 x 2m    firing T+20m .. T+21m30s
+  #      node-3 (db-z)  4 x 30s   firing T+20m .. T+25m
+  # node-1's single evaluation cannot be asserted at an eval_time with a margin,
+  # so it is pinned as "fired at some point in the 5m up to T+24m"; node-2 is the
+  # case that pins "three dips fire" at a fixed time.
+  #      T+19m     none firing
+  #      T+20m45s  node-2 and node-3 firing (node-1 already resolved)
+  #      T+23m     only node-3
+  #      T+27m     none
+  # Changing the threshold or `for:` moves exactly these numbers. ──
+  - name: flapping-three-dips-in-15m
+    interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true"}'
+        values: '1x79 0x1 1x17 0x1 1x17 0x1 1x78'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-0", uid="u-db-x-app-0", node="node-1"}'
+        values: '1x200'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-0", uid="u-db-x-app-0", phase="Running"}'
+        values: '1x200'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="true"}'
+        values: '1x79 0x7 1x11 0x7 1x11 0x7 1x72'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-0", uid="u-db-y-app-0", node="node-2"}'
+        values: '1x200'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-0", uid="u-db-y-app-0", phase="Running"}'
+        values: '1x200'
+      - series: 'kube_node_status_condition{node="node-3", condition="Ready", status="true"}'
+        values: '1x79 0x1 1x17 0x1 1x17 0x1 1x17 0x1 1x58'
+      - series: 'kube_pod_info{namespace="db-z", pod="app-0", uid="u-db-z-app-0", node="node-3"}'
+        values: '1x200'
+      - series: 'kube_pod_status_phase{namespace="db-z", pod="app-0", uid="u-db-z-app-0", phase="Running"}'
+        values: '1x200'
+    alert_rule_test:
+      - eval_time: 39m
+        alertname: NodeReadinessFlapping
+        exp_alerts: []
+      - eval_time: 40m45s
+        alertname: NodeReadinessFlapping
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-y
+              node: node-2
+            exp_annotations:
+              summary: "Kubernetes node node-2 readiness is flapping — affects db-y"
+              summary_zh: "Kubernetes 節點 node-2 的就緒狀態反覆變動 — 影響 db-y"
+              platform_summary: "[] db-y: node node-2 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[] db-y: 節點 node-2 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-z
+              node: node-3
+            exp_annotations:
+              summary: "Kubernetes node node-3 readiness is flapping — affects db-z"
+              summary_zh: "Kubernetes 節點 node-3 的就緒狀態反覆變動 — 影響 db-z"
+              platform_summary: "[] db-z: node node-3 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[] db-z: 節點 node-3 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 43m
+        alertname: NodeReadinessFlapping
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-z
+              node: node-3
+            exp_annotations:
+              summary: "Kubernetes node node-3 readiness is flapping — affects db-z"
+              summary_zh: "Kubernetes 節點 node-3 的就緒狀態反覆變動 — 影響 db-z"
+              platform_summary: "[] db-z: node node-3 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[] db-z: 節點 node-3 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 47m
+        alertname: NodeReadinessFlapping
+        exp_alerts: []
+    promql_expr_test:
+      - expr: max by(tenant, node) (max_over_time(ALERTS{alertstate="firing", alertname="NodeReadinessFlapping", node="node-1"}[5m]))
+        eval_time: 44m
+        exp_samples:
+          - labels: '{node="node-1", tenant="db-x"}'
+            value: 1
+
+  # ── NodeReadinessFlapping, two clusters with a node of the SAME name: node-1 in
+  #    cluster-a flaps 30s/30s, node-1 in cluster-b is healthy; db-x runs a pod on
+  #    both. Only cluster-a's node alerts (the join is on (node, da_cluster)). ──
+  - name: flapping-two-clusters
+    interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true", da_cluster="cluster-a"}'
+        values: '1x79 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-0", uid="u-db-x-app-0", node="node-1", da_cluster="cluster-a"}'
+        values: '1x180'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-0", uid="u-db-x-app-0", phase="Running", da_cluster="cluster-a"}'
+        values: '1x180'
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true", da_cluster="cluster-b"}'
+        values: '1x180'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-1", uid="u-db-x-app-1", node="node-1", da_cluster="cluster-b"}'
+        values: '1x180'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-1", uid="u-db-x-app-1", phase="Running", da_cluster="cluster-b"}'
+        values: '1x180'
+    alert_rule_test:
+      - eval_time: 42m
+        alertname: NodeReadinessFlapping
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-x
+              node: node-1
+              da_cluster: cluster-a
+            exp_annotations:
+              summary: "Kubernetes node node-1 readiness is flapping — affects db-x"
+              summary_zh: "Kubernetes 節點 node-1 的就緒狀態反覆變動 — 影響 db-x"
+              platform_summary: "[] db-x: node node-1 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[] db-x: 節點 node-1 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── NodeReadinessFlapping, kube-state-metrics seen twice — same answer as once:
+  #      node-1 (db-x)  two 30s dips 10m apart, scraped from TWO KSM replicas
+  #                     -> silent (summing the replicas reads 8 changes and
+  #                     fires T+15m30s .. T+24m30s)
+  #      node-2 (db-y)  30s/30s flapping, two KSM replicas -> firing from T+16m
+  #      node-3 (db-z)  healthy; KSM is replaced at T+0 (ksm-0 goes stale, ksm-1
+  #                     appears 60s later) -> silent
+  #    T+10m none; T+22m node-2 only; no firing sample for node-1 / node-3 over
+  #    the whole test. ──
+  - name: flapping-two-ksm-replicas
+    interval: 15s
+    input_series:
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true", instance="ksm-0"}'
+        values: '1x79 0x1 1x37 0x1 1x78'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-0", uid="u-db-x-app-0", node="node-1", instance="ksm-0"}'
+        values: '1x200'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-0", uid="u-db-x-app-0", phase="Running", instance="ksm-0"}'
+        values: '1x200'
+      - series: 'kube_node_status_condition{node="node-1", condition="Ready", status="true", instance="ksm-1"}'
+        values: '1x79 0x1 1x37 0x1 1x78'
+      - series: 'kube_pod_info{namespace="db-x", pod="app-0", uid="u-db-x-app-0", node="node-1", instance="ksm-1"}'
+        values: '1x200'
+      - series: 'kube_pod_status_phase{namespace="db-x", pod="app-0", uid="u-db-x-app-0", phase="Running", instance="ksm-1"}'
+        values: '1x200'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="true", instance="ksm-0"}'
+        values: '1x79 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-0", uid="u-db-y-app-0", node="node-2", instance="ksm-0"}'
+        values: '1x200'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-0", uid="u-db-y-app-0", phase="Running", instance="ksm-0"}'
+        values: '1x200'
+      - series: 'kube_node_status_condition{node="node-2", condition="Ready", status="true", instance="ksm-1"}'
+        values: '1x79 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0x1 1x1 0'
+      - series: 'kube_pod_info{namespace="db-y", pod="app-0", uid="u-db-y-app-0", node="node-2", instance="ksm-1"}'
+        values: '1x200'
+      - series: 'kube_pod_status_phase{namespace="db-y", pod="app-0", uid="u-db-y-app-0", phase="Running", instance="ksm-1"}'
+        values: '1x200'
+      - series: 'kube_node_status_condition{node="node-3", condition="Ready", status="true", instance="ksm-0"}'
+        values: '1x79 stale _x119'
+      - series: 'kube_pod_info{namespace="db-z", pod="app-0", uid="u-db-z-app-0", node="node-3", instance="ksm-0"}'
+        values: '1x79 stale _x119'
+      - series: 'kube_pod_status_phase{namespace="db-z", pod="app-0", uid="u-db-z-app-0", phase="Running", instance="ksm-0"}'
+        values: '1x79 stale _x119'
+      - series: 'kube_node_status_condition{node="node-3", condition="Ready", status="true", instance="ksm-1"}'
+        values: '_x83 1x116'
+      - series: 'kube_pod_info{namespace="db-z", pod="app-0", uid="u-db-z-app-0", node="node-3", instance="ksm-1"}'
+        values: '_x83 1x116'
+      - series: 'kube_pod_status_phase{namespace="db-z", pod="app-0", uid="u-db-z-app-0", phase="Running", instance="ksm-1"}'
+        values: '_x83 1x116'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: NodeReadinessFlapping
+        exp_alerts: []
+      - eval_time: 42m
+        alertname: NodeReadinessFlapping
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-y
+              node: node-2
+            exp_annotations:
+              summary: "Kubernetes node node-2 readiness is flapping — affects db-y"
+              summary_zh: "Kubernetes 節點 node-2 的就緒狀態反覆變動 — 影響 db-y"
+              platform_summary: "[] db-y: node node-2 readiness flapping, more than 2 changes in 15m — check kubelet / node network / node pressure"
+              platform_summary_zh: "[] db-y: 節點 node-2 就緒狀態反覆變動（15 分鐘內超過 2 次）— 請檢查 kubelet／節點網路／節點資源壓力"
+              description: "A Kubernetes node hosting this tenant's running pod(s) keeps switching between Ready and NotReady; the workload on it is intermittently unreachable and may be rescheduled."
+              description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點在 Ready 與 NotReady 之間反覆切換；其上的工作負載會間歇性無法連線，並可能被重新調度。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+    promql_expr_test:
+      - expr: count_over_time(ALERTS{alertstate="firing", alertname="NodeReadinessFlapping", node=~"node-[13]"}[50m])
+        eval_time: 50m
+        exp_samples: []

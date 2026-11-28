@@ -116,6 +116,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | PodStateMetricsMissing | warning | muted | [tier] {{ $labels.tenant }}: {{ $value }} container(s) reporting but kube-state-metrics shows no pod | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:container_metrics:count |
 | CustomRecipeDiskInert | warning | muted | [SRE] {{ $labels.tenant }} disk recipe inert  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kube_pods_running:count |
 | NodeNotReady | warning | muted | [tier] {{ $labels.tenant }}: node {{ $labels.node }} NotReady  | Check alert metrics and review related logs; contact platform team for assistance if needed | rule_pack_kubernetes:node_not_ready:core |
+| NodeReadinessFlapping | warning | muted | [tier] {{ $labels.tenant }}: node {{ $labels.node }} readiness flapping, more than 2 changes in 15m  | Check alert metrics and review related logs; contact platform team for assistance if needed | rule_pack_kubernetes:node_readiness_flapping:core |
 | TenantHAReplicasDegraded | warning | muted | [tier] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2)  | Check alert metrics and review related logs; contact platform team for assistance if needed | rule_pack_kubernetes:ha_replicas_degraded:by_kind |
 
 ---
