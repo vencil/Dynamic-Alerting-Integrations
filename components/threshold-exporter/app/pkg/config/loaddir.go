@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 // RejectDuplicateTenant is the issue-#127 hard reject shared by every full
@@ -160,6 +161,14 @@ type LoadReport struct {
 	DefaultsFiles   []DefaultsFile
 }
 
+// LoadDirAt is LoadDir answering for the instant at: a threshold value whose
+// `expires:` has passed at at is merged as if not written (expiry.go, #4263).
+// LoadDir answers for time.Now(). The config holds until its ValidUntil.
+func LoadDirAt(dir string, logger *log.Logger, at time.Time) (*ThresholdConfig, []string, error) {
+	cfg, rep, _, _, err := loadDirReport(dir, logger, at)
+	return cfg, rep.ParseFailed, err
+}
+
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
 // (LoadReport.NoTenant), the files the walk could not stat or read
 // (LoadReport.Unreadable) and the inherited subtree keys the build could not
@@ -174,7 +183,7 @@ type LoadReport struct {
 // RootStatUnreadable when the root cannot even be stat'ed for a reason other
 // than a wrong path (StatErrIsWrongPath) (#2627).
 func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, err error) {
-	cfg, rep, _, _, err = loadDirReport(dir, logger)
+	cfg, rep, _, _, err = loadDirReport(dir, logger, time.Time{})
 	return cfg, rep, err
 }
 
@@ -185,14 +194,20 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 // served-values` spells its keys through it (WrittenKey), as `da-guard
 // effective` does.
 func LoadDirReportWritten(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, written map[string]map[string]string, err error) {
-	cfg, rep, scan, built, err := loadDirReport(dir, logger)
+	return LoadDirReportWrittenAt(dir, logger, time.Time{})
+}
+
+// LoadDirReportWrittenAt is LoadDirReportWritten answering for at (zero =
+// time.Now(); FlatBuildInput.At, #4263).
+func LoadDirReportWrittenAt(dir string, logger *log.Logger, at time.Time) (cfg *ThresholdConfig, rep LoadReport, written map[string]map[string]string, err error) {
+	cfg, rep, scan, built, err := loadDirReport(dir, logger, at)
 	if err != nil || built == nil {
 		return cfg, rep, nil, err
 	}
 	return cfg, rep, writtenKeys(scan, built), nil
 }
 
-func loadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, scan *TreeScan, built *FlatBuild, err error) {
+func loadDirReport(dir string, logger *log.Logger, at time.Time) (cfg *ThresholdConfig, rep LoadReport, scan *TreeScan, built *FlatBuild, err error) {
 	if logger == nil {
 		logger = discardLogger
 	}
@@ -212,7 +227,7 @@ func loadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	if err != nil {
 		return nil, LoadReport{}, nil, nil, err
 	}
-	cfg, rep, built, err = loadDirFromScan(scan, dir, logger, reported)
+	cfg, rep, built, err = loadDirFromScan(scan, dir, logger, reported, at)
 	return cfg, rep, scan, built, err
 }
 
@@ -224,10 +239,17 @@ func loadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 // what names the tree in the build and in errors (LoadDirReport's argument).
 func LoadDirFromScan(scan *TreeScan, dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport,
 	written map[string]map[string]string, err error) {
+	return LoadDirFromScanAt(scan, dir, logger, time.Time{})
+}
+
+// LoadDirFromScanAt is LoadDirFromScan answering for at (zero = time.Now();
+// FlatBuildInput.At, #4263).
+func LoadDirFromScanAt(scan *TreeScan, dir string, logger *log.Logger, at time.Time) (cfg *ThresholdConfig, rep LoadReport,
+	written map[string]map[string]string, err error) {
 	if logger == nil {
 		logger = discardLogger
 	}
-	cfg, rep, built, err := loadDirFromScan(scan, dir, logger, rootListReported(scan, nil))
+	cfg, rep, built, err := loadDirFromScan(scan, dir, logger, rootListReported(scan, nil), at)
 	if err != nil || built == nil {
 		return cfg, rep, nil, err
 	}
@@ -241,7 +263,7 @@ func LoadDirFromScan(scan *TreeScan, dir string, logger *log.Logger) (cfg *Thres
 // loadDirFromScan is the one post-walk half of loadDirReport and
 // LoadDirFromScan. reported: the root could not be listed and RootListErr
 // says so (rootListReported).
-func loadDirFromScan(scan *TreeScan, dir string, logger *log.Logger, reported bool) (cfg *ThresholdConfig,
+func loadDirFromScan(scan *TreeScan, dir string, logger *log.Logger, reported bool, at time.Time) (cfg *ThresholdConfig,
 	rep LoadReport, built *FlatBuild, err error) {
 	defer func() { rep.TreeIdentity = scan.Composite }() // every return, #3965
 	if err := RejectDuplicateTenant(scan); err != nil {
@@ -256,6 +278,7 @@ func loadDirFromScan(scan *TreeScan, dir string, logger *log.Logger, reported bo
 		return nil, LoadReport{Unreadable: scan.Unreadable}, nil, fmt.Errorf("%w in %s", ErrNoYAMLFiles, dir)
 	}
 	in := loadDirBuildInput(scan, dir, logger, nil)
+	in.At = at
 	b, err := BuildFlatConfig(scan, in)
 	if err != nil {
 		return nil, LoadReport{}, nil, err
@@ -353,9 +376,12 @@ func (f *rootWarnFilter) release(drop bool) {
 // when the duplicate is outside its scope), so no subtree chain applies.
 // Per-file parse verdicts do not depend on the chain.
 //
-// profileLogf is FlatBuildInput.ProfileLogf (nil = logger.Printf).
-func loadDirBuild(scan *TreeScan, dir string, logger *log.Logger, profileLogf func(format string, args ...any)) (FlatBuild, error) {
-	return BuildFlatConfig(scan, loadDirBuildInput(scan, dir, logger, profileLogf))
+// profileLogf is FlatBuildInput.ProfileLogf (nil = logger.Printf); at is
+// FlatBuildInput.At.
+func loadDirBuild(scan *TreeScan, dir string, logger *log.Logger, profileLogf func(format string, args ...any), at time.Time) (FlatBuild, error) {
+	in := loadDirBuildInput(scan, dir, logger, profileLogf)
+	in.At = at
+	return BuildFlatConfig(scan, in)
 }
 
 // loadDirBuildInput is loadDirBuild's input: the subtree defaults chain and

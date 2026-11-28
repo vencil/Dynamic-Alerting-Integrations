@@ -197,6 +197,8 @@ _THRESHOLD_EXPORTER_METRICS = (
     "da_config_unreadable_files",
     "da_config_defaults_unusable",
     "da_config_builtin_defaults_info",  # #3831: internal/scrape/config_metrics.go
+    # #4263: internal/scrape/config_metrics.go, read by ConfigExpiryRebuildOverdue
+    "da_config_valid_until_unixtime_seconds",
     "da_tenant_metrics_over_limit",
     "user_severity_dedup",
     "user_silent_mode",

@@ -98,9 +98,10 @@ func builtinRows() int { return len(config.BuiltinDefaults()) }
 
 func loadTree(t *testing.T, dir string) *config.ThresholdConfig {
 	t.Helper()
-	cfg, pf, err := config.LoadDir(dir, log.New(io.Discard, "", 0))
+	// #4263: the config answers for the instant the tests resolve at.
+	cfg, pf, err := config.LoadDirAt(dir, log.New(io.Discard, "", 0), fixedNow)
 	if err != nil || len(pf) > 0 {
-		t.Fatalf("LoadDir: err=%v parseFailed=%v", err, pf)
+		t.Fatalf("LoadDirAt: err=%v parseFailed=%v", err, pf)
 	}
 	return cfg
 }

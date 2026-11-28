@@ -763,7 +763,7 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 		}
 	}
 
-	cfg, rep, written, allUnreadable, ok := loadJSONTree(f.configDir, servedValuesCmd, errOut)
+	cfg, rep, written, allUnreadable, ok := loadJSONTree(f.configDir, servedValuesCmd, errOut, at)
 	if !ok {
 		return exitCallerErr
 	}
@@ -885,12 +885,12 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 // walk cannot list too, named as "." (walk_error). Only a tree with no
 // config file at all is refused. ok=false: refused, the reason already on
 // errOut (exit 2).
-func loadJSONTree(dir, cmd string, errOut io.Writer) (cfg *config.ThresholdConfig, rep config.LoadReport,
+func loadJSONTree(dir, cmd string, errOut io.Writer, at time.Time) (cfg *config.ThresholdConfig, rep config.LoadReport,
 	written map[string]map[string]string, allUnreadable, ok bool) {
 	if refuseNonUTF8Tree(dir, programName+" "+cmd, errOut) {
 		return nil, rep, nil, false, false
 	}
-	cfg, rep, written, err := config.LoadDirReportWritten(dir, log.New(errOut, "", 0))
+	cfg, rep, written, err := config.LoadDirReportWrittenAt(dir, log.New(errOut, "", 0), at)
 	allUnreadable = errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) > 0
 	if err != nil && !allUnreadable {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, cmd, err)
@@ -1370,7 +1370,9 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
 		view := cfg.FamilyView(tenant)
-		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at, recordedReasons(cfg, tenant, at),
+		// #4263: keys are the tenant's lines as written — an expired one
+		// included, which the merge at --at left out of what is served.
+		tv.Keys = servedKeys(tv, cfg.DescribedTenant(tenant), undeliverable[tenant], at, recordedReasons(cfg, tenant, at),
 			func(k string) bool { return view.SwitchedOffWithBase(k, at, at) })
 		addRootRefused(tv, overrides, rootRefused)
 		addRootDisabled(tv, cfg, tenant, at)
@@ -1662,7 +1664,11 @@ func addRootRefused(tv servedTenantValues, overrides map[string]config.Scheduled
 // --disable-effects decides.
 func addRootDisabled(tv servedTenantValues, cfg *config.ThresholdConfig, tenant string, at time.Time) {
 	for _, k := range cfg.InheritedRootDisables(tenant, at) {
-		if _, listed := tv.Keys[k]; !listed {
+		e, listed := tv.Keys[k]
+		// #4333 review: a tenant line that expired and gave way is read as
+		// deleted — the root's `disable` is what the tenant is served, not
+		// the no_row servedKeys made of the line as written.
+		if !listed || (e.Reason == keyReasonNoRow && cfg.GaveWay(tenant, k)) {
 			tv.Keys[k] = servedKey{Reason: keyReasonDisabled}
 		}
 	}
