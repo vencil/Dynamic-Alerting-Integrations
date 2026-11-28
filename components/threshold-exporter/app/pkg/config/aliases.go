@@ -122,6 +122,74 @@ func canonicalKeyFor(key string) (string, bool) {
 	return key, false
 }
 
+// spellingFold is what foldSpellings did to one threshold of one map: the
+// spelling the kept line was written in when it was not the canonical one
+// (written), and the spelling of the other line it folded away when the map
+// wrote both (folded). Keyed by the canonical key.
+type spellingFold struct{ written, folded string }
+
+// foldSpellings is m with every retired #1231 spelling folded into its
+// canonical key (#4253) — the one rule for which line of a map a threshold
+// is: with one spelling written, that line, now under the canonical key;
+// with both, the line the layer adopts (adopts: the layer's own reading — a
+// refused, null or non-finite value is a line it does not take), and the
+// canonical one when it adopts both or neither. The folds record, per
+// canonical key, what was written, for every reader that reports a retired
+// spelling. m itself, and nil, when m writes no retired spelling: m is never
+// written to.
+func foldSpellings[V any](m map[string]V, adopts func(key string, v V) bool) (map[string]V, map[string]spellingFold) {
+	var out map[string]V
+	var folds map[string]spellingFold
+	for k := range m {
+		if !touchesAlias(k) {
+			continue
+		}
+		canon, isAlias := canonicalKeyFor(k)
+		if !isAlias {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]V, len(m))
+			for k2, v2 := range m {
+				out[k2] = v2
+			}
+			folds = map[string]spellingFold{}
+		}
+		delete(out, k)
+		av := m[k]
+		cv, both := m[canon]
+		switch {
+		case !both:
+			out[canon] = av
+			folds[canon] = spellingFold{written: k}
+		case adopts(canon, cv) || !adopts(k, av):
+			folds[canon] = spellingFold{folded: k}
+		default:
+			out[canon] = av
+			folds[canon] = spellingFold{written: k, folded: canon}
+		}
+	}
+	if out == nil {
+		return m, nil
+	}
+	return out, folds
+}
+
+// mergeRootFold carries partial's fold record of root key k into merged, as
+// the merge carries the value: the later file's line replaces the earlier
+// one's, and with it what was folded beside it.
+func mergeRootFold(merged *ThresholdConfig, partial ThresholdConfig, k string) {
+	f, folded := partial.rootFolds[k]
+	if !folded {
+		delete(merged.rootFolds, k)
+		return
+	}
+	if merged.rootFolds == nil {
+		merged.rootFolds = map[string]spellingFold{}
+	}
+	merged.rootFolds[k] = f
+}
+
 // legacySpellingFor is the inverse of canonicalKeyFor over the same shapes:
 // given a canonical-spelled key, it returns the deprecated spelling (if the
 // key's head is an alias target, exactly or with `_critical`). Used by

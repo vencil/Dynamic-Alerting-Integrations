@@ -624,6 +624,7 @@ func mergeTenantConfig(root rootPlatform, tenantCfg ThresholdConfig) TenantMerge
 			defaults := c.parsed.cfg
 			for k, v := range defaults.Defaults {
 				merged.Defaults[k] = v
+				mergeRootFold(&merged, defaults, k)
 			}
 			// Carried for the same reason as Defaults: this function is the
 			// whole of what the tenant-api write path knows about the platform

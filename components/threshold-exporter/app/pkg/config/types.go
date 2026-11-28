@@ -303,6 +303,13 @@ type ThresholdConfig struct {
 	// every merge).
 	notes *fileNotes
 
+	// rootFolds is what the decode folded in `defaults:` (foldSpellings,
+	// #4253), per canonical key: the spelling the kept line was written in,
+	// and the line folded away beside it. Merged with Defaults, key by key,
+	// for the readers that report what the root wrote (defaultsKeyNotices,
+	// RootSpellingKept). nil when no root file writes a retired spelling.
+	rootFolds map[string]spellingFold
+
 	// expiry is what the build decided about `expires:` at its instant
 	// (expiry.go, #4263): nil for a config assembled by hand or one file's
 	// decode, which read `expires:` at resolve time against the root alone.

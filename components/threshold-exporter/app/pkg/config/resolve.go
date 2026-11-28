@@ -1804,16 +1804,22 @@ func (c *ThresholdConfig) defaultsKeyNotices() []string {
 	// (A defaults map carrying ONLY the old spelling is the expected
 	// pre-migration state during the transition window — no notice for that;
 	// the platform-side rename is its own tracked commit in #1231.)
-	for legacy, canon := range deprecatedKeyAliases {
-		if _, hasLegacy := c.Defaults[legacy]; !hasLegacy {
-			continue
-		}
-		if _, hasCanon := c.Defaults[canon]; hasCanon {
+	// #4253: the decode folded both lines into one (foldSpellings); the fold
+	// record says which was kept and which was folded away.
+	for canon, f := range c.rootFolds {
+		switch {
+		case f.folded == "":
+		case f.written == "":
 			out = append(out, fmt.Sprintf(
 				"NOTICE: defaults: deprecated key %q is ignored because its replacement %q is also set — remove %q (#1231 rename)",
-				legacy, canon, legacy))
+				f.folded, canon, f.folded))
+		default:
+			out = append(out, fmt.Sprintf(
+				"NOTICE: defaults: %q is refused, so the deprecated %q beside it is served — fix %q and remove %q (#1231 rename)",
+				canon, f.written, canon, f.written))
 		}
 	}
+	sort.Strings(out)
 	return out
 }
 

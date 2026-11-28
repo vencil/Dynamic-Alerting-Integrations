@@ -114,6 +114,14 @@ var decodeDrops = map[string][]string{
 	"profile threshold null":                      {"profiles/std/cpu"},
 }
 
+// decodeFolds is where the oracle moves a retired #1231 spelling into its
+// canonical key, as the root decode folds it (foldSpellings, #4253) — after
+// decodeDrops, in decodeDrops' notation (the retired key's ref).
+var decodeFolds = map[string][]string{
+	"defaults canonical null beside legacy value": {"defaults/" + legacyThreadsRunning},
+	"defaults canonical .inf beside legacy value": {"defaults/" + legacyThreadsRunning},
+}
+
 // decodeNullMarks is the other place the oracle departs from yaml.Unmarshal:
 // per corpus row, the reserved entries written as null that ParseConfigFile
 // keeps as reservedNullMarker (#3341), in decodeDrops' notation.
@@ -193,6 +201,12 @@ func oracleDecode(name string, data []byte) (ThresholdConfig, error) {
 	for _, ref := range decodeNullMarks[name] {
 		parts := strings.SplitN(ref, "/", 3)
 		cfg.Tenants[parts[1]][parts[2]] = reservedNullMarker
+	}
+	for _, ref := range decodeFolds[name] {
+		key := strings.TrimPrefix(ref, "defaults/")
+		canon, _ := canonicalKeyFor(key)
+		cfg.Defaults[canon] = cfg.Defaults[key]
+		delete(cfg.Defaults, key)
 	}
 	return cfg, nil
 }
@@ -277,7 +291,11 @@ func sameConfig(a, b ThresholdConfig) bool {
 			return false
 		}
 	}
+	// rootFolds is the decode's record of what it folded, not content: the
+	// folds themselves are decodeFolds' (the record is pinned by
+	// spelling_fold_test.go).
 	a.Defaults, b.Defaults = nil, nil
+	a.rootFolds, b.rootFolds = nil, nil
 	return reflect.DeepEqual(a, b)
 }
 
@@ -292,6 +310,9 @@ func TestConfigFileCorpus_ExceptionRowsDifferFromThePlainDecode(t *testing.T) {
 		exceptions[name] = append(exceptions[name], refs...)
 	}
 	for name, refs := range decodeNullMarks {
+		exceptions[name] = append(exceptions[name], refs...)
+	}
+	for name, refs := range decodeFolds {
 		exceptions[name] = append(exceptions[name], refs...)
 	}
 	for name, refs := range exceptions {
@@ -491,10 +512,12 @@ func TestTreeScan_PartialsAreLazyAndReleased(t *testing.T) {
 
 // TestParseConfigFile_NullDoesNotShadowTheOtherSpelling pins #2418 at the
 // decode: inside one `defaults:` block the canonical-wins dedup is among the
-// spellings the file WRITES (levelWritesSpelling). A null beside the other
-// spelling's value is dropped so that value is served; since #2518 a null is
-// dropped with no twin too (it is no write, not a 0 threshold); every other
-// shape decodes exactly as a plain yaml.Unmarshal does.
+// lines the root TAKES (foldSpellings, #4253). A null or non-finite line
+// beside the other spelling's value is no line, so that value is the
+// threshold's — under the canonical key, as every retired spelling is folded;
+// since #2518 a null is dropped with no twin too (it is no write, not a 0
+// threshold); every other shape decodes exactly as a plain yaml.Unmarshal
+// does.
 func TestParseConfigFile_NullDoesNotShadowTheOtherSpelling(t *testing.T) {
 	t.Parallel()
 	C, L := "mysql_threads_running", "mysql_cpu"
@@ -502,19 +525,19 @@ func TestParseConfigFile_NullDoesNotShadowTheOtherSpelling(t *testing.T) {
 		name, body string
 		want       map[string]float64
 	}{
-		{"canonical null, legacy value", C + ": null\n  " + L + ": 30", map[string]float64{L: 30}},
+		{"canonical null, legacy value", C + ": null\n  " + L + ": 30", map[string]float64{C: 30}},
 		{"legacy null, canonical value", L + ": ~\n  " + C + ": 30", map[string]float64{C: 30}},
-		{"critical: canonical null, legacy value", C + "_critical: null\n  " + L + "_critical: 30", map[string]float64{L + "_critical": 30}},
+		{"critical: canonical null, legacy value", C + "_critical: null\n  " + L + "_critical: 30", map[string]float64{C + "_critical": 30}},
 		// A non-finite number is no threshold either (levelWritesSpelling).
-		{"canonical .inf, legacy value", C + ": .inf\n  " + L + ": 30", map[string]float64{L: 30}},
-		{"canonical -.inf, legacy value", C + ": -.inf\n  " + L + ": 30", map[string]float64{L: 30}},
-		{"canonical .nan, legacy value", C + ": .nan\n  " + L + ": 30", map[string]float64{L: 30}},
+		{"canonical .inf, legacy value", C + ": .inf\n  " + L + ": 30", map[string]float64{C: 30}},
+		{"canonical -.inf, legacy value", C + ": -.inf\n  " + L + ": 30", map[string]float64{C: 30}},
+		{"canonical .nan, legacy value", C + ": .nan\n  " + L + ": 30", map[string]float64{C: 30}},
 		// #2518: a null is no write, twin or not.
 		{"both null", C + ": null\n  " + L + ": null", map[string]float64{}},
 		{"canonical null alone", C + ": null", map[string]float64{}},
 		{"non-aliased null", "pg_connections: null", map[string]float64{}},
 		// Unchanged shapes: plain yaml.Unmarshal.
-		{"both values", C + ": 40\n  " + L + ": 30", map[string]float64{C: 40, L: 30}},
+		{"both values", C + ": 40\n  " + L + ": 30", map[string]float64{C: 40}},
 		{"zero is a value", C + ": 0", map[string]float64{C: 0}},
 	}
 	for _, tc := range cases {
